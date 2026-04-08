@@ -1,0 +1,6 @@
+-- 代码资产：按热表结构创建归档历史表的动态 DDL 模板。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/archive.archiveCreateHistoryTableSQL；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：history_table 与 source_table 来自归档配置生成，并在 Go 侧完成标识符转义。
+-- 安全边界：仅允许 CREATE TABLE LIKE 已校验表名；不承载用户输入字段或过滤条件。
+CREATE TABLE IF NOT EXISTS {{history_table}} LIKE {{source_table}}

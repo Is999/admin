@@ -1,0 +1,6 @@
+-- 代码资产：用户标签 full 结果分片原子切表模板，用于 tmp/live/old 表一次性重命名。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/usertag/repository.userTagRenameTableSQL；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：rename_items 由 Go 侧根据分片表路由构造，所有表名均完成标识符转义。
+-- 安全边界：仅允许受控分片表参与 RENAME；切表前由上层确认分片结果完整。
+RENAME TABLE {{rename_items}}

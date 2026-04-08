@@ -1,0 +1,6 @@
+-- 代码资产：用户标签结果临时表清空模板，用于 full/recalculate 前准备干净写入面。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/usertag/repository.userTagTruncateTableSQL；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：table_name 来自标签分片表路由，并在 Go 侧完成标识符转义。
+-- 安全边界：仅允许清空受控临时或目标分片表；调用方负责在切表流程边界内执行。
+TRUNCATE TABLE {{table_name}}

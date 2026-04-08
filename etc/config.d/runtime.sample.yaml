@@ -1,0 +1,141 @@
+# 运行期大列表配置；由 config_files.runtime 引入并参与热加载。
+
+# 归档任务列表；database 指定热表和历史表所在数据库。
+archive_jobs:
+  - name: "admin_log"
+    # 是否启用该归档任务。
+    enabled: true
+    # 热表/历史表所属逻辑库：admin|config|game|log。
+    database: "admin"
+    # 归档热表名。
+    table_name: "admin_log"
+    # 热表保留天数。
+    hot_keep_days: 32
+    # 归档延迟天数；2 表示按调度窗口归档两天前的对应时间段，<=0 时默认等于 hot_keep_days。
+    archive_delay_days: 2
+    # 单个归档窗口秒数；900=15 分钟，3600=1 小时，<=0 时按 split_unit 规划历史区间。
+    archive_window_seconds: 3600
+    # 单次运行最多归档窗口数；生产按 2 个 worker 配置为 2，兼顾轻微积压追赶和主库压力控制。
+    archive_max_windows_per_run: 2
+    # 窗口推进模式；auto 会让空窗口和稀疏窗口继续追赶，遇到重窗口自动停止本轮。
+    archive_window_mode: "auto"
+    # auto 模式单轮最多追赶窗口数，代码硬上限为 1000。
+    archive_auto_max_windows: 200
+    # auto 模式轻量窗口行数阈值；删除阶段还受 delete_batch_size 限制。
+    archive_auto_light_rows: 20000
+    # auto 模式轻量窗口耗时阈值，单位毫秒。
+    archive_auto_light_ms: 3000
+    # 是否禁用热表删除；false 表示已归档且达到删除窗口后会按主键小批次删除。
+    delete_disabled: false
+    # 单次运行最多删除已归档窗口数；auto 模式下旧空窗口或稀疏窗口可继续追赶。
+    delete_max_windows_per_run: 2
+    # 单批搬迁条数；降低单事务行数，避免管理员审计日志大表归档时长时间持锁。
+    batch_size: 3000
+    # 单批删除条数；删除比插入更容易制造锁等待，生产默认更小批次。
+    delete_batch_size: 1000
+    # 最大历史表数量；按月归档默认保留最近 12 张月表，旧历史表需结合审计保留策略评估后再清。
+    max_history_tables: 12
+
+# 工作流配置。
+workflows:
+  # 用户标签工作流默认参数。
+  user_tag:
+    # 是否启用用户标签能力。
+    enabled: false
+    # 是否启用用户标签事件同步；当前骨架默认不生成具体事件。
+    marketing_sync_enabled: false
+    # 默认标签分片总数。
+    default_shard_total: 10
+    # 默认单批处理数量。
+    default_batch_size: 2000
+    # 运行期 UID 分片数；当前骨架不再初始化 profile 表。
+    profile_shard_total: 10
+    # 标签差异比对批次大小。
+    diff_batch_size: 10000
+    # Kafka 标签变更推送批次大小。
+    kafka_batch_size: 500
+
+# 周期任务列表；name 和 unique_key 必须唯一。
+task_periodic:
+  # 管理员审计日志归档和热表删除。
+  - name: "archive-admin-log-hourly"
+    # 每小时第 5 分钟触发。
+    cron: "5 * * * *"
+    # 触发的工作流名称。
+    workflow: "archive.run"
+    # 投递队列名。
+    queue: "maintenance"
+    # 目标 job；无后缀表示归档后再安全删除。
+    targets:
+      - "admin_log"
+    # 分片总数；归档任务会按分片并行推进。
+    shard_total: 2
+    # 任务级失败重试次数。
+    retry: 2
+    # 单次调度超时，单位秒。
+    timeout_seconds: 7200
+    # 周期任务唯一键，避免同一调度窗口重复投递。
+    unique_key: "periodic:archive.run:admin_log"
+    # 唯一键保留时间，单位秒。
+    unique_ttl_seconds: 3300
+
+  # 用户标签增量刷新；full/recalculate/targeted 由人工触发。
+  - name: "user-tag-delta-daily"
+    # 是否启用该任务。
+    enabled: false
+    # Cron 表达式；支持 5 段或 6 段。
+    cron: "15 3 * * *"
+    # 触发的工作流名称。
+    workflow: "user_tag.delta.refresh"
+    # 投递队列名。
+    queue: "maintenance"
+    # 目标列表；增量默认为空。
+    targets: [ ]
+    # 分片总数；通常与用户标签分表数量保持一致。
+    shard_total: 10
+    # 失败自动重试次数。
+    retry: 2
+    # 单次任务超时，单位秒；0 表示不限制。
+    timeout_seconds: 0
+    # 周期任务唯一键，避免同一调度窗口重复投递。
+    unique_key: "periodic:user_tag.delta.refresh"
+    # 唯一键保留时间，单位秒。
+    unique_ttl_seconds: 82800
+
+  # 用户标签运行期辅助表清理。
+  - name: "user-tag-runtime-cleanup"
+    # 是否启用该任务。
+    enabled: false
+    # 每 6 小时清理一次。
+    cron: "25 */6 * * *"
+    # 触发的工作流名称。
+    workflow: "user_tag.runtime.cleanup"
+    # 投递队列名。
+    queue: "maintenance"
+    # 失败自动重试次数。
+    retry: 2
+    # 单次任务超时时间，单位秒。
+    timeout_seconds: 3600
+    # 周期任务唯一键，避免同一调度窗口重复投递。
+    unique_key: "periodic:user_tag.runtime.cleanup"
+    # 唯一键保留时间，单位秒。
+    unique_ttl_seconds: 7200
+
+  # 用户标签 Kafka outbox 异常重推。
+  - name: "user-tag-kafka-outbox-retry-scan"
+    # 是否启用该任务。
+    enabled: false
+    # 每 10 分钟扫描一次异常 outbox。
+    cron: "*/10 * * * *"
+    # 触发的工作流名称。
+    workflow: "user_tag.kafka_outbox.retry_scan"
+    # 投递队列名。
+    queue: "maintenance"
+    # 扫描任务重试次数。
+    retry: 1
+    # 单次任务超时时间，单位秒。
+    timeout_seconds: 540
+    # 周期任务唯一键，避免同一调度窗口重复投递。
+    unique_key: "periodic:user_tag.kafka_outbox.retry_scan"
+    # 唯一键保留时间，单位秒。
+    unique_ttl_seconds: 540

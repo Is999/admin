@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>项目文档中心</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/api/docs/vendor/docsify/vue.css">
+  <style>
+    .ai-prompt-copy-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      padding: 6px 14px;
+      border: 1px solid #42b983;
+      border-radius: 4px;
+      background: #42b983;
+      color: #fff;
+      font-size: 14px;
+      line-height: 1.4;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .ai-prompt-copy-button:hover {
+      background: #369870;
+      border-color: #369870;
+    }
+
+    .ai-prompt-copy-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.75;
+    }
+
+    .lazy-search {
+      margin-bottom: 20px;
+      padding: 6px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .lazy-search .input-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .lazy-search input {
+      width: 100%;
+      padding: 0.6em 7px;
+      border: 1px solid transparent;
+      outline: none;
+      font-size: inherit;
+      cursor: text;
+      appearance: none;
+    }
+
+    .lazy-search input:focus {
+      border: 1px solid var(--theme-color, #42b983);
+      box-shadow: 0 0 5px var(--theme-color, #42b983);
+    }
+
+    .lazy-search .clear-button {
+      padding: 0 6px;
+      border: 0;
+      background: transparent;
+      color: #999;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .lazy-search .search-status {
+      min-height: 18px;
+      margin-top: 6px;
+      color: #999;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .lazy-search .results-panel {
+      display: none;
+      max-height: 50vh;
+      margin-top: 8px;
+      overflow: auto;
+    }
+
+    .lazy-search .results-panel.show {
+      display: block;
+    }
+
+    .lazy-search .matching-post {
+      padding: 8px 0;
+      border-top: 1px solid #eee;
+    }
+
+    .lazy-search .matching-post a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .lazy-search .matching-post h2 {
+      margin: 0 0 4px;
+      font-size: 15px;
+      line-height: 1.4;
+    }
+
+    .lazy-search .matching-post p {
+      margin: 0;
+      color: #666;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .lazy-search .empty {
+      color: #999;
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .lazy-search em {
+      color: var(--theme-color, #42b983);
+      font-style: normal;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    (function () {
+      var docRoots = ['角色文档', '功能模块', '接口文档'];
+      var navLinkTargets = {
+        '首页': '#/',
+        '文档首页': '#/',
+        '运维文档': '#/角色文档/运维/部署发布指南',
+        '后端开发': '#/角色文档/后端开发/开发扩展指南',
+        '前端与测试': '#/角色文档/前端与测试/接口联调与验收说明',
+        '接口文档': '#/接口文档/接口文档首页',
+        '部署发布指南': '#/角色文档/运维/部署发布指南',
+        '任务系统与用户标签排障手册': '#/功能模块/用户标签/任务系统与用户标签排障手册',
+        '用户标签骨架排障手册': '#/功能模块/用户标签/任务系统与用户标签排障手册',
+        '开发扩展指南': '#/角色文档/后端开发/开发扩展指南',
+        '配置字段说明': '#/角色文档/后端开发/配置字段说明',
+        'AI开发规范': '#/角色文档/后端开发/AI开发规范',
+        '任务队列与工作流指南': '#/角色文档/后端开发/任务队列与工作流指南',
+        '接口联调与验收说明': '#/角色文档/前端与测试/接口联调与验收说明',
+        '前端权限码与管理员权限映射说明': '#/角色文档/前端与测试/前端权限码与管理员权限映射说明',
+        '任务系统首页': '#/功能模块/任务系统/任务系统首页',
+        '任务系统使用手册': '#/功能模块/任务系统/任务系统使用手册',
+        '用户标签首页': '#/功能模块/用户标签/用户标签首页',
+        '用户标签操作手册': '#/功能模块/用户标签/用户标签操作手册',
+        '用户标签实现与调度说明': '#/功能模块/用户标签/用户标签实现与调度说明',
+        '用户标签骨架验证指南': '#/功能模块/用户标签/用户标签骨架验证指南',
+        '用户标签骨架验收指南': '#/功能模块/用户标签/用户标签骨架验收指南',
+        '接口文档首页': '#/接口文档/接口文档首页',
+        '接口文档统一规范': '#/接口文档/接口文档统一规范',
+        '后台系统接口总览': '#/接口文档/后台系统/后台系统接口',
+        '基础规范与认证接口': '#/接口文档/后台系统/基础规范与认证接口',
+        '个人信息接口': '#/接口文档/后台系统/个人信息接口',
+        '管理员管理接口': '#/接口文档/后台系统/管理员管理接口',
+        '角色管理接口': '#/接口文档/后台系统/角色管理接口',
+        '权限管理接口': '#/接口文档/后台系统/权限管理接口',
+        '系统配置接口': '#/接口文档/后台系统/系统配置接口',
+        '缓存管理接口': '#/接口文档/后台系统/缓存管理接口',
+        '日志管理接口': '#/接口文档/后台系统/日志管理接口',
+        '秘钥管理接口': '#/接口文档/后台系统/秘钥管理接口',
+        '文件传输接口': '#/接口文档/后台系统/文件传输接口',
+        '安全调试接口': '#/接口文档/后台系统/安全调试接口',
+        '任务系统接口总览': '#/接口文档/任务系统/任务系统接口',
+        '任务总控接口': '#/接口文档/任务系统/任务总控接口',
+        '任务队列接口': '#/接口文档/任务系统/任务队列接口',
+        '任务列表接口': '#/接口文档/任务系统/任务列表接口',
+        '任务监控接口': '#/接口文档/任务系统/任务监控接口',
+        '任务注册表接口': '#/接口文档/任务系统/任务注册表接口',
+        '用户标签接口总览': '#/接口文档/用户标签/用户标签接口',
+        '用户标签工作流接口': '#/接口文档/用户标签/用户标签工作流接口',
+        '指定标签重算接口': '#/接口文档/用户标签/指定标签重算接口',
+        '用户标签内网接口': '#/接口文档/用户标签/内网接口'
+      };
+      var searchState = {
+        active: false,
+        done: false,
+        index: [],
+        loaded: 0,
+        loading: false,
+        paths: [],
+        query: '',
+        total: 0
+      };
+
+      function isExternalHref(href) {
+        return /^(https?:|mailto:|tel:|file:)/i.test(href);
+      }
+
+      function parseInternalDocHref(href) {
+        if (!href || href.startsWith('#/') || href.startsWith('/api/docs#/') || isExternalHref(href)) {
+          return null;
+        }
+
+        var anchor = '';
+        var target = href;
+        var hashIndex = target.indexOf('#');
+        if (hashIndex >= 0) {
+          anchor = target.slice(hashIndex);
+          target = target.slice(0, hashIndex);
+        }
+
+        if (!target || !/\.md$/i.test(target)) {
+          return null;
+        }
+
+        return {
+          path: target.replace(/^\//, ''),
+          anchor: anchor
+        };
+      }
+
+      function toRootHashHref(href) {
+        var parsed = parseInternalDocHref(href);
+        if (!parsed) {
+          return null;
+        }
+
+        var normalizedPath = parsed.path.replace(/\.md$/i, '');
+        if (normalizedPath === 'README' || normalizedPath === '文档首页') {
+          return '#/' + parsed.anchor;
+        }
+
+        return '#/' + normalizedPath.split('/').map(encodeURIComponent).join('/') + parsed.anchor;
+      }
+
+      function isHomeRoute() {
+        return !window.location.hash || window.location.hash === '#/' || window.location.hash === '#';
+      }
+
+      function rewriteRenderedLinks() {
+        var selectors = ['.sidebar-nav a', '.app-nav a'];
+        if (isHomeRoute()) {
+          selectors.push('.markdown-section a');
+        }
+
+        for (var i = 0; i < selectors.length; i++) {
+          var links = document.querySelectorAll(selectors[i]);
+          for (var j = 0; j < links.length; j++) {
+            var link = links[j];
+            var sourceHref = link.getAttribute('href');
+            var label = (link.textContent || '').trim();
+            var targetHref = navLinkTargets[label] || toRootHashHref(sourceHref);
+            if (targetHref && targetHref !== sourceHref) {
+              link.setAttribute('href', targetHref);
+            }
+          }
+        }
+      }
+
+      function copyTextToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          return navigator.clipboard.writeText(text);
+        }
+
+        return new Promise(function (resolve, reject) {
+          var textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.setAttribute('readonly', 'readonly');
+          textarea.style.position = 'fixed';
+          textarea.style.left = '-9999px';
+          textarea.style.top = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          try {
+            if (document.execCommand('copy')) {
+              resolve();
+            } else {
+              reject(new Error('copy command returned false'));
+            }
+          } catch (err) {
+            reject(err);
+          } finally {
+            document.body.removeChild(textarea);
+          }
+        });
+      }
+
+      function findPromptCodeElement(button) {
+        var anchor = button;
+        if (button.parentElement && button.parentElement.tagName === 'P') {
+          anchor = button.parentElement;
+        }
+        var current = anchor.nextElementSibling;
+        while (current) {
+          if (current.tagName === 'PRE') {
+            return current.querySelector('code') || current;
+          }
+          current = current.nextElementSibling;
+        }
+        return null;
+      }
+
+      function resetCopyButton(button, label) {
+        window.setTimeout(function () {
+          button.textContent = label;
+          button.disabled = false;
+        }, 1800);
+      }
+
+      function handlePromptCopyClick(event) {
+        var button = event.target && event.target.closest ? event.target.closest('.ai-prompt-copy-button') : null;
+        if (!button) {
+          return;
+        }
+
+        event.preventDefault();
+        var defaultLabel = button.getAttribute('data-default-label') || button.textContent || '复制 AI 提示词';
+        var code = findPromptCodeElement(button);
+        var text = code ? (code.textContent || '').trim() : '';
+        if (!text) {
+          button.textContent = '未找到提示词';
+          button.disabled = true;
+          resetCopyButton(button, defaultLabel);
+          return;
+        }
+
+        button.disabled = true;
+        copyTextToClipboard(text).then(function () {
+          button.textContent = '已复制';
+          resetCopyButton(button, defaultLabel);
+        }).catch(function () {
+          button.textContent = '复制失败';
+          resetCopyButton(button, defaultLabel);
+        });
+      }
+
+      function handleCanonicalLinkClick(event) {
+        var anchor = event.target && event.target.closest ? event.target.closest('a') : null;
+        if (!anchor) {
+          return;
+        }
+
+        var containers = ['.sidebar-nav', '.app-nav'];
+        if (isHomeRoute()) {
+          containers.push('.markdown-section');
+        }
+
+        var inManagedContainer = false;
+        for (var i = 0; i < containers.length; i++) {
+          if (anchor.closest(containers[i])) {
+            inManagedContainer = true;
+            break;
+          }
+        }
+
+        if (!inManagedContainer) {
+          return;
+        }
+
+        var label = (anchor.textContent || '').trim();
+        var targetHref = navLinkTargets[label] || toRootHashHref(anchor.getAttribute('href'));
+        if (!targetHref) {
+          return;
+        }
+
+        event.preventDefault();
+        if (window.location.hash !== targetHref) {
+          window.location.hash = targetHref;
+        }
+      }
+
+      function normalizeDocsHash() {
+        var hash = window.location.hash || '#/';
+        if (!hash.startsWith('#/')) {
+          return;
+        }
+
+        var rawPath = hash.slice(2);
+        if (!rawPath) {
+          return;
+        }
+
+        var decodedPath = rawPath;
+        try {
+          decodedPath = decodeURIComponent(rawPath);
+        } catch (e) {
+          decodedPath = rawPath;
+        }
+
+        var segments = decodedPath.split('/').filter(Boolean);
+        if (segments.length < 2) {
+          return;
+        }
+
+        var lastRootIndex = -1;
+        for (var i = 0; i < segments.length; i++) {
+          if (docRoots.indexOf(segments[i]) >= 0) {
+            lastRootIndex = i;
+          }
+        }
+
+        if (lastRootIndex <= 0) {
+          return;
+        }
+
+        var normalizedPath = segments.slice(lastRootIndex).join('/');
+        var targetHash = '#/' + normalizedPath.split('/').map(encodeURIComponent).join('/');
+        if (targetHash !== hash) {
+          window.location.replace(window.location.pathname + window.location.search + targetHash);
+        }
+      }
+
+      function scheduleRewriteRenderedLinks() {
+        if (rewriteTimer) {
+          window.clearTimeout(rewriteTimer);
+        }
+        rewriteTimer = window.setTimeout(rewriteRenderedLinks, 120);
+      }
+
+      function escapeHTML(text) {
+        var map = {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        };
+        return String(text || '').replace(/[&<>"']/g, function (char) {
+          return map[char];
+        });
+      }
+
+      function decodeDocPath(path) {
+        try {
+          return decodeURIComponent(path);
+        } catch (e) {
+          return path;
+        }
+      }
+
+      function docPathFromHref(href) {
+        if (!href || isExternalHref(href)) {
+          return null;
+        }
+
+        if (href.indexOf('/api/docs#/') === 0) {
+          href = '#' + href.split('#')[1];
+        }
+
+        if (href.charAt(0) === '#') {
+          var hashPath = href.slice(1).replace(/^\//, '').split('?')[0];
+          if (!hashPath) {
+            return '文档首页.md';
+          }
+          return decodeDocPath(hashPath).replace(/\/$/, '') + '.md';
+        }
+
+        var parsed = parseInternalDocHref(href);
+        return parsed ? parsed.path : null;
+      }
+
+      function hashForDocPath(path) {
+        var normalizedPath = String(path || '').replace(/\.md$/i, '');
+        if (normalizedPath === 'README' || normalizedPath === '文档首页') {
+          return '#/';
+        }
+        return '#/' + normalizedPath.split('/').map(encodeURIComponent).join('/');
+      }
+
+      function docFetchURL(path) {
+        return '/api/docs/' + String(path || '').split('/').map(encodeURIComponent).join('/');
+      }
+
+      function plainText(markdown) {
+        return String(markdown || '')
+          .replace(/```[\s\S]*?```/g, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/[#>*_`~[\]()!|-]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+
+      function titleFromMarkdown(markdown, fallback) {
+        var matched = String(markdown || '').match(/^#{1,3}\s+(.+)$/m);
+        if (!matched) {
+          return fallback;
+        }
+        return matched[1].replace(/[#`*_]/g, '').trim() || fallback;
+      }
+
+      function collectSearchPaths() {
+        var docs = [];
+        var seen = {};
+        var links = document.querySelectorAll('.sidebar-nav a:not(.section-link), .app-nav a');
+        for (var i = 0; i < links.length; i++) {
+          var path = docPathFromHref(links[i].getAttribute('href'));
+          if (!path || !/\.md$/i.test(path) || path.indexOf('_') === 0) {
+            continue;
+          }
+          if (seen[path]) {
+            continue;
+          }
+          seen[path] = true;
+          docs.push({
+            path: path,
+            title: (links[i].textContent || '').trim() || path.replace(/\.md$/i, '')
+          });
+        }
+        if (!seen['文档首页.md']) {
+          docs.unshift({ path: '文档首页.md', title: '文档首页' });
+        }
+        return docs;
+      }
+
+      function setSearchStatus(message) {
+        var status = document.querySelector('.lazy-search .search-status');
+        if (status) {
+          status.textContent = message || '';
+        }
+      }
+
+      function searchWords(query) {
+        return String(query || '').trim().toLowerCase().split(/[\s\-，,\\/]+/).filter(Boolean);
+      }
+
+      function highlighted(text, words) {
+        var result = escapeHTML(text || '');
+        for (var i = 0; i < words.length; i++) {
+          var word = words[i].replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+          if (!word) {
+            continue;
+          }
+          result = result.replace(new RegExp(word, 'gi'), function (matched) {
+            return '<em>' + matched + '</em>';
+          });
+        }
+        return result;
+      }
+
+      function renderSearchResults(query) {
+        var panel = document.querySelector('.lazy-search .results-panel');
+        if (!panel) {
+          return;
+        }
+        searchState.query = String(query || '').trim();
+        var words = searchWords(searchState.query);
+        if (!words.length) {
+          panel.classList.remove('show');
+          panel.innerHTML = '';
+          if (searchState.loading) {
+            setSearchStatus('正在建立索引 ' + searchState.loaded + '/' + searchState.total);
+          } else if (searchState.done) {
+            setSearchStatus('已索引 ' + searchState.total + ' 篇文档');
+          } else {
+            setSearchStatus('输入关键词后开始建立索引');
+          }
+          return;
+        }
+
+        var hits = [];
+        for (var i = 0; i < searchState.index.length; i++) {
+          var item = searchState.index[i];
+          var score = 0;
+          var matched = true;
+          for (var j = 0; j < words.length; j++) {
+            if (item.titleText.indexOf(words[j]) >= 0) {
+              score += 3;
+              continue;
+            }
+            if (item.bodyText.indexOf(words[j]) >= 0) {
+              score += 1;
+              continue;
+            }
+            matched = false;
+            break;
+          }
+          if (matched) {
+            hits.push({ item: item, score: score });
+          }
+        }
+
+        hits.sort(function (left, right) {
+          return right.score - left.score;
+        });
+        panel.classList.add('show');
+        if (!hits.length) {
+          panel.innerHTML = '<p class="empty">' + (searchState.loading ? '正在索引，暂无匹配结果' : '无匹配结果') + '</p>';
+          return;
+        }
+
+        var html = '';
+        hits.slice(0, 12).forEach(function (hit) {
+          var item = hit.item;
+          html += '<div class="matching-post"><a href="' + item.url + '"><h2>' +
+            highlighted(item.title, words) + '</h2><p>' +
+            highlighted(item.summary, words) + '</p></a></div>';
+        });
+        panel.innerHTML = html;
+      }
+
+      function startSearchIndex() {
+        if (searchState.loading || searchState.done) {
+          return;
+        }
+        if (!window.fetch) {
+          setSearchStatus('当前浏览器不支持搜索');
+          return;
+        }
+        searchState.active = true;
+        searchState.loading = true;
+        searchState.paths = collectSearchPaths();
+        searchState.total = searchState.paths.length;
+        searchState.loaded = 0;
+        searchState.index = [];
+        if (!searchState.total) {
+          searchState.loading = false;
+          searchState.done = true;
+          setSearchStatus('暂无可索引文档');
+          return;
+        }
+
+        var cursor = 0;
+        var active = 0;
+        var concurrency = 2;
+
+        function settleOne() {
+          active--;
+          searchState.loaded++;
+          if (searchState.query) {
+            renderSearchResults(searchState.query);
+          } else {
+            setSearchStatus('正在建立索引 ' + searchState.loaded + '/' + searchState.total);
+          }
+          if (cursor >= searchState.paths.length && active === 0) {
+            searchState.loading = false;
+            searchState.done = true;
+            if (searchState.query) {
+              renderSearchResults(searchState.query);
+            } else {
+              setSearchStatus('已索引 ' + searchState.total + ' 篇文档');
+            }
+            return;
+          }
+          window.setTimeout(pump, 0);
+        }
+
+        function indexDoc(doc) {
+            active++;
+            window.fetch(docFetchURL(doc.path), { credentials: 'same-origin' }).then(function (resp) {
+              return resp.ok ? resp.text() : '';
+            }).then(function (text) {
+              if (!text) {
+                return;
+              }
+              var title = titleFromMarkdown(text, doc.title);
+              var body = plainText(text);
+              searchState.index.push({
+                bodyText: body.toLowerCase(),
+                summary: body.slice(0, 120),
+                title: title,
+                titleText: title.toLowerCase(),
+                url: hashForDocPath(doc.path)
+              });
+            }).catch(function () {
+              // 单篇文档索引失败不影响其它文档搜索。
+            }).then(settleOne);
+        }
+
+        function pump() {
+          while (active < concurrency && cursor < searchState.paths.length) {
+            indexDoc(searchState.paths[cursor++]);
+          }
+        }
+
+        setSearchStatus('正在建立索引 0/' + searchState.total);
+        pump();
+      }
+
+      function installLazySearchBox() {
+        var aside = document.querySelector('aside.sidebar') || document.querySelector('aside');
+        if (!aside || document.querySelector('.lazy-search')) {
+          return;
+        }
+        var search = document.createElement('div');
+        search.className = 'search lazy-search';
+        search.innerHTML = '<div class="input-wrap"><input type="search" aria-label="搜索文档" placeholder="输入关键词搜索文档..." /><button type="button" class="clear-button" aria-label="清空搜索">×</button></div><div class="search-status">输入关键词后开始建立索引</div><div class="results-panel"></div>';
+        var input = search.querySelector('input');
+        var clear = search.querySelector('.clear-button');
+        input.addEventListener('focus', startSearchIndex);
+        input.addEventListener('input', function () {
+          startSearchIndex();
+          renderSearchResults(input.value);
+        });
+        clear.addEventListener('click', function () {
+          input.value = '';
+          input.focus();
+          renderSearchResults('');
+        });
+        aside.insertBefore(search, aside.firstChild);
+      }
+
+      var rewriteTimer = null;
+      window.addEventListener('hashchange', normalizeDocsHash);
+      window.addEventListener('load', function () {
+        scheduleRewriteRenderedLinks();
+        installLazySearchBox();
+      });
+      document.addEventListener('click', handleCanonicalLinkClick, true);
+      document.addEventListener('click', handlePromptCopyClick, true);
+      normalizeDocsHash();
+
+      window.__docsifyScheduleRewriteRenderedLinks = scheduleRewriteRenderedLinks;
+      window.__docsifyInstallLazySearchBox = installLazySearchBox;
+    })();
+
+    var docsifyPlugins = [
+      function (hook) {
+        hook.mounted(function () {
+          if (window.__docsifyInstallLazySearchBox) {
+            window.__docsifyInstallLazySearchBox();
+          }
+        });
+        hook.doneEach(function () {
+          if (window.__docsifyScheduleRewriteRenderedLinks) {
+            window.__docsifyScheduleRewriteRenderedLinks();
+          }
+          if (window.__docsifyInstallLazySearchBox) {
+            window.__docsifyInstallLazySearchBox();
+          }
+        });
+      }
+    ];
+
+    window.$docsify = {
+      name: '项目文档中心',
+      repo: '',
+      homepage: '文档首页.md',
+      basePath: '/api/docs/',
+      relativePath: false,
+      alias: {
+        '/.*/_sidebar.md': '/_sidebar.md',
+        '/.*/_navbar.md': '/_navbar.md'
+      },
+      loadSidebar: true,
+      loadNavbar: true,
+      mergeNavbar: true,
+      maxLevel: 3,
+      subMaxLevel: 2,
+      auto2top: true,
+      routerMode: 'hash',
+      notFoundPage: '404.md',
+      search: false,
+      plugins: docsifyPlugins,
+      coverpage: false,
+      onlyCover: false
+    };
+  </script>
+  <script src="/api/docs/vendor/docsify/docsify.min.js"></script>
+</body>
+</html>

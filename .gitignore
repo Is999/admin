@@ -1,0 +1,19 @@
+dist
+logs
+/etc/config.yaml
+/etc/config.d/runtime.yaml
+/etc/config.*.runtime.yaml
+/etc/values.*.local.yaml
+/etc/keys/
+.env
+.env.*
+*.pem
+*.key
+.idea/
+/go.sum
+/data/
+.DS_Store
+
+
+# 代码资产保护：*.sql.tmpl 是 go:embed 原生 SQL 模板，*.lua 是 Redis Lua 脚本源码，禁止加入忽略或清理规则。
+/.cursor/rules/ark-admin-cron.mdc

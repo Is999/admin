@@ -1,0 +1,15 @@
+-- 代码资产：归档水位控制表建表模板，用于保存每个归档任务已完整复制的排他上界。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/archive.Service.EnsureSchema/renderArchiveSQLTemplate；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：table_name 来自归档任务固定元数据表名，并在 Go 侧完成标识符转义。
+-- 安全边界：仅执行初始化 DDL；水位推进逻辑在事务内由服务层控制。
+CREATE TABLE IF NOT EXISTS {{table_name}} (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  job_name VARCHAR(128) NOT NULL COMMENT '归档任务名',
+  table_name VARCHAR(128) NOT NULL COMMENT '热表名',
+  watermark_time DATETIME(6) NULL COMMENT '已完整复制到历史表的排他上界',
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_job_name (job_name),
+  KEY idx_table_name (table_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='归档水位线表'

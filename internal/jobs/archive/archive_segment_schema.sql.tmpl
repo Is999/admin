@@ -1,0 +1,29 @@
+-- 代码资产：归档区间 checkpoint 控制表建表模板，用于记录领取、租约、水位和删除状态。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/archive.Service.EnsureSchema/renderArchiveSQLTemplate；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：table_name 来自归档任务固定元数据表名，并在 Go 侧完成标识符转义。
+-- 安全边界：仅执行初始化 DDL；表结构字段固定，避免运行期拼接列定义。
+CREATE TABLE IF NOT EXISTS {{table_name}} (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  job_name VARCHAR(128) NOT NULL COMMENT '归档任务名',
+  table_name VARCHAR(128) NOT NULL COMMENT '热表名',
+  history_table_name VARCHAR(128) NOT NULL COMMENT '历史表名',
+  range_start DATETIME(6) NOT NULL COMMENT '区间起点含边界',
+  range_end DATETIME(6) NOT NULL COMMENT '区间终点排他边界',
+  status VARCHAR(16) NOT NULL COMMENT '区间状态，done表示已归档，deleted表示热表已删',
+  worker_id VARCHAR(128) NOT NULL DEFAULT '' COMMENT '当前持有worker',
+  lease_expires_at DATETIME(6) NULL COMMENT '租约过期时间',
+  last_archived_id BIGINT NOT NULL DEFAULT 0 COMMENT '最近归档主键游标',
+  last_archived_time DATETIME(6) NULL COMMENT '最近归档时间游标',
+  rows_archived BIGINT NOT NULL DEFAULT 0 COMMENT '累计归档行数',
+  attempt_count INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '领取次数',
+  error_message VARCHAR(500) NOT NULL DEFAULT '' COMMENT '失败摘要',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+  completed_at DATETIME(6) NULL COMMENT '完成时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_job_range (job_name, range_start, range_end),
+  KEY idx_job_status_lease (job_name, status, lease_expires_at),
+  KEY idx_job_range (job_name, range_start, range_end),
+  KEY idx_history_table (history_table_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='归档区间与checkpoint控制表'

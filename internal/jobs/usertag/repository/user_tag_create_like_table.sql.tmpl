@@ -1,0 +1,6 @@
+-- 代码资产：用户标签分片表自愈建表模板，用于缺失临时表或目标表时按基表结构补齐。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/usertag/repository.userTagCreateLikeTableSQL；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：target_table 与 source_table 来自标签分片表路由，并在 Go 侧完成标识符转义。
+-- 安全边界：仅执行 CREATE TABLE LIKE 受控分片表；不拼接任意列定义或过滤条件。
+CREATE TABLE IF NOT EXISTS {{target_table}} LIKE {{source_table}}

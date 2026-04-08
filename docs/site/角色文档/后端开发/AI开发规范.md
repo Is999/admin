@@ -1,0 +1,155 @@
+# AI开发规范
+
+本文档用于约束 AI 参与 `admin-cron` 开发、重构、补测试和补文档时的输出标准。目标是让 AI 生成代码与人工代码保持同一风格、质量门槛和可维护性。
+
+> **重要提醒**：每次让 AI 修改 `admin-cron` 或 `admin-cron-vue` 前，必须先让 AI 阅读本文档。
+
+## 1. 总原则
+
+- 先读现有代码和文档，再改代码；不能只凭通用经验生成实现。
+- 优先延续当前项目模式，不新增无必要抽象、目录、框架或依赖。
+- 代码必须简洁、逻辑清晰、命名统一、边界明确。
+- 代码注释、配置注释和文档说明必须简洁清晰；不能啰嗦堆砌，也不能含糊到无法指导排障或维护。
+- 重构必须保证原有能力不遗漏，并说明迁移后的入口、影响范围和验证方式。
+- 文档、接口、测试和配置必须与代码同步；发现旧文档与代码不一致时要一并修正。
+- 配置热加载必须区分运行参数和启动期注册开关；handler、workflow、任务插件、组件注册和基础设施连接不在线补注册或重建，变更后必须通过 `restartRequired/restartReason` 暴露重启原因。
+
+## 2. 命名要求
+
+- 命名必须短而准确，贴合当前领域语境；禁止随意取名、过度缩写或堆很长的描述性名字。
+- Go 包名短小、全小写，不使用下划线。
+- 方法名使用“动词 + 对象/结果”表达行为，例如 `BuildPayload`、`SyncPeriodicTasks`；私有 helper 只覆盖当前意图，避免 `handleData`、`doProcess` 这类泛名。
+- 变量名按作用域控制长度：短作用域可用 `ctx`、`err`、`tx`、`db`、`uid`、`rows`；跨多段逻辑的变量必须写清领域含义。
+- 结构体使用名词或领域对象命名；请求以 `Req` 结尾，响应以 `Resp` 结尾，列表项以 `Item` 结尾。
+- 接口按能力命名，优先使用 `Reader`、`Writer`、`Repository`、`Provider` 等自然后缀；只有一个实现且无替换点时不要强行抽接口。
+- 常量按领域前缀集中定义，名称表达稳定业务含义或枚举语义；禁止魔法字符串、随意数字和含糊的 `DefaultValue`。
+- 切片、map 命名体现内容和单位，例如 `adminIDs`、`queueWeights`、`workflowByName`。
+- 路由别名使用 `domain.resource.action`，例如 `task.workflow.trigger`。
+- Redis Key 必须集中在 `common/rediskeys`，禁止业务代码临时拼接高基数通配 Key。
+- 工作流和批处理链路统一使用 `workflowID`、`mode`、`node`、`shardIndex`、`shardTotal`、`uid` 等命名。
+
+## 3. 注释要求
+
+新增或重构以下内容必须补中文注释：变量、常量、方法、结构体、结构体字段、map 字段含义、路由、GORM Model、接口和方法内部关键逻辑。
+
+注释必须说明业务意图、数据来源、边界条件、性能保护点或降级策略。禁止重复代码本身，也禁止只写“优化”“兜底”“处理数据”这类含糊描述。一句话能说明白的不要写成长段。
+
+`*.yaml` 配置注释同样要求精简准确：只说明字段用途、取值边界、默认行为或风险点，不重复字段名，不写背景故事。
+
+## 4. 数据库与缓存规范
+
+- MySQL 读写优先使用 GORM 链式调用；读操作使用 `ReadDB`，写操作使用 `WriteDB`，事务内必须沿用同一个 `tx`。
+- 原生 SQL 仅允许用于动态 DDL、批量切表、ClickHouse 聚合和 GORM 难以表达的高性能聚合。
+- 原生 SQL 必须保存为 `*.sql.tmpl` 并通过 `go:embed` 加载；禁止在 Go 业务代码中内联多行 SQL、`fmt.Sprintf("SELECT ...")` 或模板外 `Exec("RENAME TABLE ...")`。
+- `.lua` 是 `go:embed` 加载的 Redis Lua 脚本代码资产，必须提交仓库；禁止在 Go 业务代码中使用 `redis.NewScript(...)` 内联 Lua。
+- 新增或移动 `*.sql.tmpl`、`.lua` 时，必须同步检查 Go 侧 `//go:embed`、渲染方法和最小单测。
+- Go 调用侧必须使用 `embedasset.StripLeadingLineComments(template, "--")` 或当前包 helper 剥离文件头说明，再交给 MySQL、ClickHouse 或 Redis 执行。
+- 不允许在业务接口中执行 Redis 全库 `SCAN` 或模板通配扫描；高基数缓存必须通过索引集合、精确 Key、白名单模板、登记模板或异步离线任务处理。
+- 重构时优先复用现有 helper、模板渲染器、分页游标、去重和错误包装方法；同类逻辑重复时抽到当前包公共 helper。
+
+`*.sql.tmpl` 文件头使用连续 SQL 行注释，保持简洁：
+
+```sql
+-- 代码资产：说明该 SQL 模板解决什么问题。
+-- SQL 方言：MySQL / ClickHouse / ANSI SQL，必要时补充版本或方言特性。
+-- 调用方：说明 Go 侧函数或方法名，以及 go:embed 加载后会先剥离本说明再执行。
+-- 参数来源：说明占位符、绑定参数、动态表名或条件片段来自哪里。
+-- 安全边界：说明白名单、转义、参数绑定、批量上限、事务或幂等边界。
+```
+
+`.lua` 文件头使用连续 Lua 行注释；涉及删除、释放锁、续租等敏感操作必须写清 owner 比对或防误删策略：
+
+```lua
+-- 代码资产：说明该 Redis Lua 脚本解决什么问题。
+-- 调用方：说明 Go 侧函数或方法名，以及 go:embed 加载后会先剥离本说明再发送 Redis。
+-- KEYS[1]：说明 Redis Key 来源、所属 Redis Key 模板和是否高基数。
+-- ARGV[1]：说明参数来源、类型和边界。
+-- 原子性边界：说明脚本内原子操作范围、owner 校验、TTL 或幂等策略。
+```
+
+## 5. 错误处理规范
+
+- 底层错误必须使用 `github.com/Is999/go-utils/errors` 的 `errors.Tag`、`errors.Wrap` 或 `errors.Wrapf` 包装。
+- 业务中间层只返回错误，不打印 `error` 级日志；禁止在 logic、repository、service、model、helper 等内层随意调用 `loggerx.Errorw`、`loggerx.ErrorTextw` 或 `logx.Error*`。
+- 顶层 handler、worker、scheduler 或不可返回错误的兜底协程统一打印 `error` 级日志；同一错误链路只能在最外层打印一次。
+- 底层需要补排障信息时只能通过 `errors.Wrapf` 写入上下文字段，不能用多处 `error` 日志替代错误链。
+- 错误上下文必须带可追踪字段，例如 `workflow_id`、`mode`、`node`、`shard`、`uid`、`task_id`、`event_id`。
+
+```go
+if err != nil {
+    return errors.Wrapf(err, "工作流节点执行失败 workflow_id=%s mode=%s node=%s shard=%d/%d", workflowID, mode, node, shardIndex, shardTotal)
+}
+```
+
+## 6. 日志规范
+
+- 日志统一使用 `loggerx.Infow`、`loggerx.Debugw`、`loggerx.Errorw`。
+- 正常流程只打印关键节点，不刷屏。
+- `error` 级日志只在最外层打印一次；底层通过错误返回和错误包装保留上下文。
+- 任务系统、收集器和批处理日志必须包含链路字段，例如 `workflow_id`、`mode`、`node`、`shard`、`task_id`、`event_id`。
+- 日志字段类型必须稳定；时间窗口和间隔字段使用带单位的字段名，例如 `window_start_unix`、`interval_seconds`。
+
+```go
+loggerx.Infow(ctx, "工作流节点开始处理",
+    logx.Field("workflow_id", workflowID),
+    logx.Field("mode", mode),
+    logx.Field("node", node),
+    logx.Field("shard", shardIndex),
+)
+```
+
+## 7. 接口与业务码规范
+
+- API 响应必须使用统一结构：`status/code/message/data`。
+- 不同业务错误必须返回不同业务码；业务码要表达上下文和失败节点，但 `message` 不能暴露 SQL、密钥、内部表名或真实下游错误。
+- 新增业务码必须补中文和英文文案。
+- 新增接口必须补接口文档，文档格式遵循 [接口文档统一规范](../../接口文档/接口文档统一规范.md)。
+- 新增路由必须补 `RouteMeta`、审计动作和中文说明；需要权限控制的路由必须补权限码。
+- 仅 token 白名单路由可不配置权限码，但必须写清白名单原因和 token 校验边界，例如个人收件箱能力、`/api/permissions/max-uuid`。
+- 接口文档如果发现与代码不一致，必须同步修正，不能继续保留误导性描述。
+
+## 8. 大数据查询与批处理规范
+
+- 涉及大表、大结果集或高频查询时，必须先评估数据量、索引、执行计划、并发量和目标库压力，不能直接上线试跑。
+- 在线接口禁止无上限全表查询、深分页 `OFFSET`、`SELECT *`、无索引排序/聚合/JOIN、一次性加载超大 ID 集合。
+- 查询必须有明确边界，优先按时间窗口、主键游标、分片或状态分页推进；`batch_size`、最大批次数、超时、并发和 `sleep/backoff` 必须可控。
+- 大聚合、历史回补、跨库对账、批量修复和导出应走后台任务、维护队列、汇总表、ClickHouse 或数仓，禁止放在 HTTP 请求内长时间执行。
+- 批量写入和删除必须小批次按主键或索引推进，避免长事务、大锁、超大 `IN/NOT IN`；任务要支持幂等、断点续跑、进度水位和可中止。
+- 优先使用读库、分析库或离线链路承载重查询；必要时增加限流、队列、熔断或降级，避免拖垮业务库、Redis、Kafka 或 ClickHouse。
+- 新增大数据查询必须补充索引依据、保护阈值、关键日志/指标和最小测试；无法验证执行计划时，要说明风险和上线观察方式。
+- 管理后台列表不默认实时统计超大总数；确需统计时使用缓存、异步汇总或受控近似值，并在接口文档说明口径。
+
+## 9. 前端联动规范
+
+- 接口字段命名优先延续现有前端调用习惯，必要时兼容 snake_case 和 camelCase。
+- 敏感操作必须支持 MFA 二次票据。
+- 加密、签名、秘钥版本配置变更后，必须同步更新前端配置说明和接口文档。
+- RSA 私钥生成和下载只允许由前端本地完成，禁止新增后端生成私钥、下载私钥或返回私钥明文的接口。
+- 前端展示错误优先使用后端业务码和国际化消息，不硬编码后端内部错误。
+
+## 10. 质量门槛
+
+AI 每次改动完成后必须运行对应测试；能跑全量时至少执行：
+
+```bash
+go test ./...
+```
+
+如果改动范围较小或受环境限制无法跑全量，也至少执行对应包测试，并说明未跑全量测试的原因。
+
+提交前必须自查：
+
+- 是否误删功能。
+- 是否引入未使用代码或重复抽象。
+- 是否保持 GORM 链式优先。
+- 是否使用 `errors.Tag` 或 `errors.Wrapf`。
+- 是否把 `error` 级日志留在 handler、worker、scheduler 等最外层。
+- 是否让 `*.sql.tmpl`、`.lua` 文件头说明在执行前通过 `embedasset` 或当前包 helper 剥离。
+- 是否补简洁清晰的中文注释、配置注释和文档。
+- 是否补接口文档、开发文档和必要测试。
+
+## 11. AI 入口与提示词
+
+- 可复制 AI 提示词：同目录 [AI开发提示词](AI开发提示词.md)。
+
+本文档只保留开发规范正文；需要投喂给 AI 的短硬约束统一维护在 `AI开发提示词.md`，避免规范正文和提示词混在一起导致上下文过长。

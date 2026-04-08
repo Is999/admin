@@ -1,0 +1,389 @@
+# admin_cron 配置示例。DNMP 环境参考 config.dnmp.sample.yaml。
+
+# 服务名称，用于日志、监控和服务标识。
+Name: admin_cron
+# HTTP 服务监听地址。
+Host: 0.0.0.0
+# HTTP 服务监听端口。
+Port: 8899
+# 服务环境：dev / test / rt / pre / pro。
+Mode: pro
+# HTTP 接口统一响应超时，单位毫秒。
+Timeout: 100000
+# HTTP 请求体最大字节数。
+# 50MB，避免上传分片被 413 拦截。
+MaxBytes: 52428800
+
+# 启动模式位掩码：1=api，2=worker，4=scheduler，可组合。
+run_mode: 7
+
+# 站点/应用 ID，例如 1。
+app_id: "1"
+# 全局应用密钥；使用强随机字符串。
+app_key: "3768559472499dbdfa97a1f2707402f781bfe874c81e14c8542a5734e180a43b"
+
+# JWT 密钥，请替换为强随机字符串。
+jwt_secret: "65aad1b2cd6e3293fca3f0cc0a9b96a82c57b1c88b716c29e251890553650fbe"
+# JWT 过期时间，单位秒。
+jwt_expires_in: 86400
+
+# 后台接口安全配置。
+# AppID 命中 app_id 时使用本地密钥，否则回源表和缓存。
+security:
+  # 当前 app_id 的秘钥路由和版本材料配置。
+  secret_key:
+    # 签名验签状态：1启用，0停用。
+    sign_status: 1
+    # 加密解密状态：1启用，0停用。
+    crypto_status: 1
+    # 密钥版本，对应 X-Key-Version。
+    key_version: "v1"
+    # AES KEY。
+    aes_key: "a824eeabb98fb71b9848f582b60245ed"
+    # AES KEY 文件路径。
+    # aes_key_ref: "/etc/admin-cron/keys/1/v1/aes_key.txt"
+    # AES IV。
+    aes_iv: "011de98f9004b3ac"
+    # AES IV 文件绝对路径。
+    # aes_iv_ref: "/etc/admin-cron/keys/1/v1/aes_iv.txt"
+    # 客户端 RSA 公钥。
+    rsa_public_key_user: "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk85EZbnLFXOZQNtSIhEX\n/yfQWAP98Sq/noX69zzfBlAbOMsRN5M8PUKnyAPCLlV63YCCoxIHtgB6CxxHWNFA\nrYL3Fe5aybzQ/Zx3Iye9LIFL/pCFgdFXDqeO2V4ulaCjuqH3CYdwQ2h8YpCx6H1B\nnfnUTUSiqjWL09KdJo9yhKTyZbwDdVHSZmxtJkl+ASdpBNcKqammnOMOnKiZboXl\n7nHMxV2MAPaYTRbf7gUINhmHq9QpViOyunEE7Lw7sjajl5nZX1H8bOXExFMH4cyt\nqVR8Do0Bhe/CyX/JhrkSl+pdCQKq9nCniO2+85C2/0P9WzZvinIfgp3QgHum94jV\nDQIDAQAB\n-----END PUBLIC KEY-----"
+    # 客户端 RSA 公钥路径。
+    # rsa_public_key_user_ref: "/etc/admin-cron/keys/1/v1/user_public.pem"
+    # 服务端 RSA 私钥。
+    rsa_private_key_server: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA5DO4OJ6eaO/UyRDzOEN07RFQcrvcH2jV6etgkml9Iqn0fzDT\nmxmBojns7s8Rn62YKi9Q8Z3WNpr5TkP7R7tOWliu7fHdTb36PWAc4Z58Tp0+5A2r\nQWjVdMPtBq7NKr86F9FOq2Y/DdcBZmx229rF5TmIB5T54isbJ4sZJAy7ZHfNIZyf\nbUM3QoTAIt9pxyheJ1YQLswhxnKOBUp2Bbh4cDAnZB0TZsZ9hOwsMpNCXvCWFuV+\nz4EIKhLgKnUYdVZ+gOdTjFqWinf+fAsJHfd7jRRPGa6WQih1+wNEKFy+plFyk/n5\nHvTCpB5/MLs3FW0CNyDLwfIScoguLuSre6PVvQIDAQABAoIBAEHDb98NQxx9pSYu\nltELi5o4J6Vw4v5AQYlQdjurX88KCHZRFWI4pwWfyNqHXQ5VwijCCwMeV9nTrm3y\nJGunHGzn6r2SupKJYaCnXptch3lGUpX5JHXMptsoDVokLOcZRb4QaSn25MvxvqsM\nLfKs6OPmwP9iXOLjRkeOi/e6HZTVcD5rrO5T+KXPGUqgbHilmkm3htAhE8a1hwqM\naEWiKQvOuBOMGq++Li/dGtm1cX6RNwyeZpsIA5Rj81I8BVpm4/WcZeYg7SSlVoMe\nzBnNMkDw84RZ0c8BWVEFn09subOiNaWMuaKEqFHHphqnm4muu+gN4Y8VcS0rGhhf\nTkhfDwcCgYEA8dWn12QvmiQMw1aWZcHa+frk/26AvlpCM8ZB1883d7XLFHLI0iEj\nZMjGd8aPSCxh/bzI3q9aUZcx0h+e6m684kc+uk7UKVEWYvDDGUNfEO6KA65riQEU\n5UpDevE/HkLkGIqaeaAPfnIcoHMDxFErza5ATI4gNVDGW1Y961s9kLMCgYEA8ZGk\nSgEUqGSHhQ9UlVGiZLfeC2GjFNzbmv0vk5efupOQXMO3Gxxn1+jCK4d65Xcq94IH\n7KtuMuzqXu1e9yTe/dwBL1Zi/3UjIc2x0qmgCkxNJLIunbAuipezdBrfxmCRfcwL\n9wfoqf3c6/IrlPz6LXgC1EyM3Dxat3Bq224VV88CgYEA47DN/jYNu4sFmUUFBXmn\nuoVG5lgcTxycCDM5+v7WspcvRWltOqqIsHN4qX0BmmpvOH9ugHuJBhjch4HOFdt9\na2642KEvkFcQRMd6aWbNMxvkReMKzEuAaQGq1y4cx1kjeRfGqYzSCbNW0Jp5iXUD\nUPwm/e0y1f/fQk/IrLeTF5ECgYEAvzMndeulDiODoC2iJQ2YG1/sv9Vn3vtwVhxP\nq+I26tYhTUsbgrnY92ujRBDXlQfdWknxO8H0Vxpt5vS6VaM5XHTl+zHE6a0tQXQt\nazAXHA+If6MIgocQT2IDB8K9m6aTgZ4fWkdIQEROt/HVzPbujU6P7rkoRKkApHC2\nIzfebMECgYAnZRhy1fmKI0T98B2r6e90iOBiLxdhABQqTyasH9183z8MvAmNK8QI\nE98xSdtVckS4AZ0cIzMBOdWdncsHshJ8bpTinS7UGDmQtr7ty+lfZ+aLuwh4HfDa\nnftmkdcUhmQQWV2OnPTuWKcC60AyjBans+FJVD+nlE2greIyWSOMdw==\n-----END RSA PRIVATE KEY-----"
+    # 服务端 RSA 私钥路径。
+    # rsa_private_key_server_ref: "/etc/admin-cron/keys/1/v1/server_private.pem"
+
+# 配置热加载；只刷新运行期配置，不重建基础设施连接。
+hot_reload:
+  # 是否启用配置热加载。
+  enabled: true
+  # 配置文件轮询间隔，单位秒。
+  check_interval_seconds: 5
+
+# 外部运行期配置文件，参与热加载。
+config_files:
+  # 运行期配置文件路径。
+  runtime: "config.d/runtime.yaml"
+
+# 文件存储配置：local 或 s3。
+file_storage:
+  # 存储类型：local | s3。
+  type: "local"
+  # 默认上传模式：server=服务端中转，direct=S3前端直传。
+  upload_mode: "server"
+  # 本地文件存储配置。
+  local:
+    # 本地文件根目录；为空时回退到系统临时目录。
+    root_dir: "./data/storage"
+    # 本地公开域名。
+    domain: ""
+  # S3 / 对象存储配置。
+  s3:
+    # 是否启用 S3。
+    enabled: false
+    # S3 对象 key 前缀。
+    path_prefix: ""
+    # Bucket 名称。
+    bucket: ""
+    # 区域。
+    region: "ap-southeast-1"
+    # AccessKey。
+    access_key: ""
+    # SecretKey。
+    secret_key: ""
+    # 自定义访问域名。
+    domain: ""
+    # 自定义 Endpoint；原生 AWS 可留空。
+    endpoint: ""
+    # 是否启用 path-style。
+    use_path_style: false
+    # 直传预签名有效期，单位秒。
+    presign_expire_seconds: 900
+  # 病毒扫描配置。
+  virus_scanner:
+    # 扫描器名称；noop 表示不扫描。
+    name: "noop"
+  # 断点续传会话配置。
+  upload_session:
+    # 断点续传本地临时根目录；为空时回退到系统临时目录。
+    root_dir: ""
+    # 上传会话保留时间，单位秒；<=0 时默认 24 小时。
+    ttl_seconds: 86400
+
+# 日志输出配置。
+# `mode=file` 时日志写入 `path` 目录。
+log:
+  # 日志级别：debug / info / warn / error。
+  level: debug
+  # 输出模式：console / file。
+  mode: file
+  # 日志文件目录。
+  path: logs
+  # 编码格式：plain / json。
+  encoding: plain
+  # 切割策略：size / time。
+  rotation: size
+  # 单个日志文件最大体积，单位 MB。
+  max_size: 100
+  # 最大保留归档数量。
+  max_backups: 7
+  # 日志保留天数。
+  keep_days: 14
+  # 是否压缩归档日志。
+  compress: true
+
+# MySQL 主库配置。
+# 默认所有业务表使用该连接。
+mysql:
+  # 主库 DSN。
+  write_data_source: "user:password@tcp(127.0.0.1:3306)/admin_cron?charset=utf8mb4&parseTime=true&loc=Local"
+  # 读库 DSN 列表；不需要读写分离时留空。
+  read_data_sources: []
+  # 最大打开连接数。
+  max_open_conns: 20
+  # 最大空闲连接数。
+  max_idle_conns: 10
+  # 单个连接最大存活时间，单位秒。
+  conn_max_lifetime: 300
+  # 是否开启 SQL 调试日志。
+  debug: false
+
+# 命名扩展库示例；默认不配置。
+# site_mysql:
+#   archive:
+#     write_data_source: "user:password@tcp(127.0.0.1:3306)/admin_cron_archive"
+#     read_data_sources: []
+
+# Redis 配置。
+# 单机填 1 个地址；集群填多个地址。
+# 容器地址不可直连时配置 addr_map。
+redis:
+  # Redis 模式：single=单节点，cluster=集群。
+  type: "cluster"
+  # Redis 节点地址列表；单机填 1 个，集群可填多个。
+  addrs:
+    - "127.0.0.1:7001"
+    - "127.0.0.1:7002"
+    - "127.0.0.1:7003"
+    - "127.0.0.1:7004"
+    - "127.0.0.1:7005"
+    - "127.0.0.1:7006"
+  # Redis Cluster 地址改写示例。
+  # addr_map:
+  #   redis-cluster-7001: "127.0.0.1"
+  # Redis 认证密码；无密码可留空。
+  password: ""
+  # Redis DB 编号；Cluster 模式通常固定为 0。
+  db: 0
+  # Redis 连接池大小。
+  pool_size: 20
+  # 是否启用 TLS。
+  tls: false
+  # 是否跳过 TLS 证书校验；仅测试使用。
+  tls_insecure_skip_verify: false
+
+# Kafka 公共配置。
+# Collector 未配置 broker、批次和写超时时会继承这里。
+kafka:
+  # 是否启用 Kafka 生产者。
+  enabled: true
+  # Kafka broker 地址列表。
+  brokers:
+    - "127.0.0.1:9092"
+  # 单批次最大发送消息数。
+  batch_size: 500
+  # 写超时时间，单位秒。
+  write_timeout: 10
+  # 按业务划分的 Topic。
+  topics:
+    # 用户标签事件 Topic。
+    user_tag: "203_user_tag_event"
+
+# 通用收集器；Kafka/Redis 不可用时落 DB outbox。
+# 批次按压测调整，running 租约需大于单批处理耗时。
+collector:
+  # 是否启用通用收集器。
+  enabled: false
+  # 载体：auto、kafka、redis、db；失败落 DB outbox。
+  transport: "auto"
+  # Kafka 载体配置。
+  kafka:
+    # 是否启用 Kafka 载体。
+    enabled: false
+    # broker、批次和写超时默认继承顶层 kafka。
+    # Collector 事件主题名。
+    topic: "admin_cron_collector_events"
+    # Collector 消费组 ID。
+    group_id: "admin_cron_collector"
+    # Kafka 读超时时间，单位秒。
+    read_timeout: 10
+  # Redis Stream 载体配置。
+  redis:
+    # 是否启用 Redis Stream 载体。
+    enabled: false
+    # Redis Stream 名称。
+    stream: "collector:events"
+    # Redis Stream 消费组名称。
+    group: "collector"
+    # 消费者名前缀，实例后缀自动追加。
+    consumer: "collector"
+    # XREADGROUP 阻塞等待时长，单位毫秒。
+    block_ms: 1000
+    # 单次读取或认领消息数量。
+    count: 500
+  # DB outbox 兜底消费配置。
+  db:
+    # 单轮领取事件上限。
+    runner_batch_size: 500
+    # DB worker 轮询间隔，单位秒。
+    runner_interval_seconds: 1
+    # running 事件租约时间，单位秒。
+    running_lease_seconds: 600
+    # 最大失败重试次数。
+    max_retry_times: 8
+
+# 任务系统与调度器配置。
+# 角色由 -mode 位掩码控制：1=api，2=worker，4=scheduler。
+task:
+  # 是否启用任务系统。
+  enabled: true
+  # 默认投递队列名。
+  default_queue: "default"
+  # Worker 并发数。
+  concurrency: 16
+  # 是否启用严格优先级消费。
+  strict_priority: false
+  # 队列权重配置。
+  queues:
+    # 高优先级队列权重。
+    critical: 6
+    # 默认队列权重。
+    default: 3
+    # 运维 / 后台任务队列权重。
+    maintenance: 1
+  # 任务专用 Redis；不配则复用全局 redis。
+  redis:
+    # Redis 模式：single=单节点，cluster=集群。
+    type: "single"
+    # 任务 Redis 地址列表。
+    addrs:
+      - "127.0.0.1:6380"
+    # 任务 Redis 密码。
+    password: ""
+    # 任务 Redis DB 编号。
+    db: 0
+    # 任务 Redis 连接池大小。
+    pool_size: 20
+    # 是否启用 TLS。
+    tls: false
+    # 是否跳过 TLS 证书校验。
+    tls_insecure_skip_verify: false
+  # 默认重试次数。
+  default_retry: 3
+  # 默认任务超时时间，单位秒。
+  default_timeout_seconds: 120
+  # 默认任务唯一键 TTL，单位秒。
+  default_unique_ttl_seconds: 60
+  # 已完成任务保留时长，单位秒。
+  completed_retention_seconds: 86400
+  # 归档失败任务保留时长，单位秒。
+  archived_retention_seconds: 604800
+  # Worker 优雅退出等待时间，单位秒。
+  shutdown_timeout_seconds: 15
+  # 普通任务轮询间隔，单位秒。
+  task_check_seconds: 1
+  # 延迟任务检查间隔，单位秒。
+  delayed_task_check_seconds: 5
+  # 任务分组聚合等待窗口，单位秒。
+  group_grace_period_seconds: 5
+  # 任务分组聚合最大等待时间，单位秒。
+  group_max_delay_seconds: 20
+  # 单次聚合最大任务数。
+  group_max_size: 100
+  # 工作流状态保留时长，单位秒。
+  workflow_retention_seconds: 86400
+  # 调度器配置。
+  scheduler:
+    # 是否启用调度器 leader。
+    enabled: true
+    # 调度器 leader 锁 key。
+    lease_key: "task:scheduler:leader"
+    # leader 锁过期时间，单位秒。
+    lease_ttl_seconds: 30
+    # leader 续约间隔，单位秒。
+    renew_interval_seconds: 10
+    # 周期任务配置同步间隔，单位秒。
+    sync_interval_seconds: 60
+    # 调度器心跳间隔，单位秒。
+    heartbeat_interval_seconds: 10
+    # 周期投递积压上限；0 表示关闭。
+    max_queue_backlog: 0
+
+# 通用归档配置。
+# 单表策略见运行期 archive_jobs。
+archive:
+  # 是否启用通用归档模块。
+  enabled: true
+  # 安全时间延迟，单位分钟。
+  safe_delay_minutes: 10
+  # 归档规划锁 TTL，单位秒。
+  lock_ttl_seconds: 30
+  # 区间租约 TTL，单位秒。
+  lease_ttl_seconds: 120
+  # 单次归档工作流允许并发执行的 job 数。
+  max_concurrent_jobs: 2
+  # 默认单批归档条数。
+  default_batch_size: 5000
+  # 默认单批删除条数。
+  default_delete_batch_size: 5000
+  # 批次间隔，单位毫秒。
+  batch_delay_milliseconds: 200
+  # 默认最大历史表数量。
+  default_max_history_tables: 6
+
+# 可观测性配置。
+# trace_enabled=true 时上报 OTLP。
+observability:
+  # 可观测性服务名。
+  service_name: "admin_cron"
+  # 环境标识。
+  environment: "dev"
+  # 是否启用 trace 上报。
+  trace_enabled: true
+  # OTLP 上报协议：grpc/http-protobuf；为空默认 grpc。
+  otlp_protocol: "grpc"
+  # OTLP 上报地址。
+  otlp_endpoint: "127.0.0.1:4317"
+  # 是否使用明文连接 OTLP。
+  otlp_insecure: true
+  # trace 采样率，0~1。
+  sample_ratio: 1
+  # 慢 SQL 阈值，单位毫秒。
+  slow_sql_ms: 2000
+  # 慢 Redis 阈值，单位毫秒。
+  redis_slow_ms: 200
+  # 审计日志请求体最大保留字节数。
+  log_body_max_bytes: 8192
+
+# 外部告警配置。
+alert:
+  # Lark 群机器人告警。
+  lark:
+    # 是否启用 Lark 告警。
+    enabled: false
+    # Lark webhook URL；为空时读取 webhook_url_ref。
+    webhook_url: ""
+    # Lark webhook URL 文件路径。
+    webhook_url_ref: ""
+    # Lark 签名密钥；为空时读取 secret_ref。
+    secret: ""
+    # Lark 签名密钥文件路径。
+    secret_ref: ""
+    # HTTP 请求超时，单位秒。
+    timeout_seconds: 5
+    # 是否在告警中 @所有人。
+    at_all: false
+    # 错误摘要最大字节数。
+    max_error_bytes: 800

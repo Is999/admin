@@ -1,0 +1,15 @@
+-- 代码资产：用户标签 full 切表前复制系统标签，避免自动计算覆盖人工或系统维护标签。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/usertag/repository.TagRepository.copySystemTagsToTmp；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：源表/目标表来自分片路由校验，tag_source 与 tag_type 列表通过 GORM 参数绑定传入。
+-- 安全边界：仅复制指定系统标签类型；ON DUPLICATE 只更新标签内容字段，不扩大 UID 范围。
+INSERT INTO {{target_table}} (uid, tag_type, tag_source, tag_data, tag_category, created_at, updated_at)
+SELECT uid, tag_type, tag_source, tag_data, tag_category, created_at, updated_at
+FROM {{source_table}}
+WHERE tag_source = ? AND tag_type IN ?
+ON DUPLICATE KEY UPDATE
+  tag_source = VALUES(tag_source),
+  tag_data = VALUES(tag_data),
+  tag_category = VALUES(tag_category),
+  created_at = VALUES(created_at),
+  updated_at = VALUES(updated_at)

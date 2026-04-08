@@ -1,0 +1,6 @@
+-- 代码资产：归档保留期外历史表淘汰的动态 DDL 模板。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/archive.archiveDropHistoryTableSQL；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：table_name 来自归档历史表命名规则和保留期扫描结果，并在 Go 侧完成标识符转义。
+-- 安全边界：仅删除归档命名空间内的历史表；执行前由保留期和表名校验约束范围。
+DROP TABLE IF EXISTS {{table_name}}

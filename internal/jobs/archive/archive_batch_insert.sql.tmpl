@@ -1,0 +1,11 @@
+-- 代码资产：归档 worker 将热表主键窗口批量复制到历史表的 INSERT 模板。
+-- SQL 方言：MySQL
+-- 调用方：internal/jobs/archive.archiveBatchInsertSQL；go:embed 加载后由 embedasset 剥离本说明再执行。
+-- 参数来源：表名、字段、主键、时间列来自已校验归档配置，ID 集合和时间窗口来自已领取 checkpoint。
+-- 安全边界：仅对受控热表/历史表执行 INSERT IGNORE；batchSize 和归档区间限制单次写入规模。
+INSERT IGNORE INTO {{history_table}} ({{columns}})
+SELECT {{columns}}
+FROM {{source_table}}
+WHERE {{primary_key}} IN ?
+  AND {{time_column}} >= ?
+  AND {{time_column}} < ?{{archive_condition}}

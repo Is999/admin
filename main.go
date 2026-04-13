@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 
 // configFile 支持通过 -f 指定配置文件，便于区分本地、测试和线上环境。
 var configFile = flag.String("f", "./etc/config.yaml", "the config file")
+
+// buildVersion 由构建阶段通过 -ldflags 注入，用于发布排查。
+var buildVersion = "dev"
+
+// showVersion 控制是否只输出二进制版本并退出。
+var showVersion = flag.Bool("version", false, "print build version and exit")
 
 // runMode 使用位掩码控制启动模块：
 // 1=api, 2=worker, 4=scheduler，支持组合（3/5/6/7）。
@@ -39,6 +46,10 @@ func resolveExplicitRunMode(flagSet *flag.FlagSet, mode *int) *int {
 
 func main() {
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(buildVersion)
+		return
+	}
 	os.Exit(runApp(context.Background(), *configFile, resolveExplicitRunMode(flag.CommandLine, runMode)))
 }
 

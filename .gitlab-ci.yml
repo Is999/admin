@@ -1,0 +1,41 @@
+stages:
+  - test
+  - build
+
+variables:
+  GOMODCACHE: "$CI_PROJECT_DIR/.cache/go/pkg/mod"
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cache/go/pkg/mod
+    - .cache/go-build
+
+test:
+  image: golang:1.26
+  stage: test
+  script:
+    - make fmt-check
+    - make test
+    - make secret-scan
+
+prometheus-rules:
+  image:
+    name: prom/prometheus:v2.55.1
+    entrypoint: [""]
+  stage: test
+  script:
+    - promtool check rules docs/prometheus/*.yml
+
+build:
+  image: golang:1.26
+  stage: build
+  script:
+    - make build build-tools package VERSION="$CI_COMMIT_SHORT_SHA"
+  artifacts:
+    paths:
+      - bin/admin-cron
+      - bin/admin-cron-migrate
+      - dist/*.tar.gz
+    expire_in: 7 days

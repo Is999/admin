@@ -19,3 +19,16 @@ func TestVerifyFailureHTTPStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestDuplicateBusinessHTTPStatus 验证新增类唯一性冲突不会落成 500。
+func TestDuplicateBusinessHTTPStatus(t *testing.T) {
+	for _, code := range []int{
+		UserAlreadyExists,
+		AdminRoleAlreadyExists,
+		AdminPermissionAlreadyExists,
+	} {
+		if got := HTTPStatus(code); got != BadRequest {
+			t.Fatalf("HTTPStatus(%d) = %d, want %d", code, got, BadRequest)
+		}
+	}
+}

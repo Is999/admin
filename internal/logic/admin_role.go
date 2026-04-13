@@ -162,6 +162,9 @@ func (l *AdminRoleLogic) Create(req *types.SaveRoleReq) *types.BizResult {
 			}
 			return nil
 		}); err != nil {
+			if errors.Is(err, errRoleTitleAlreadyExists) || isMySQLDuplicateEntryError(err) {
+				return roleTitleAlreadyExistsResult(req.Title, err)
+			}
 			return types.DBError(i18n.MsgKeyDBError, err,
 				"AdminRoleLogic.Create 创建角色[%s]失败", req.Title).ToBizResult()
 		}
@@ -252,6 +255,9 @@ func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
 			}
 			return nil
 		}); err != nil {
+			if errors.Is(err, errRoleTitleAlreadyExists) || isMySQLDuplicateEntryError(err) {
+				return roleTitleAlreadyExistsResult(req.Title, err)
+			}
 			if errors.Is(err, errRolePermissionUnusable) {
 				return types.ServerError(i18n.MsgKeyUpdateFail, err,
 					"AdminRoleLogic.Update 更新角色ID[%d]权限失败", req.ID).ToBizResult()
@@ -1441,7 +1447,7 @@ func (l *AdminRoleLogic) ensureRoleTitleUniqueTx(tx *gorm.DB, title string, igno
 		return errors.Wrapf(err, "AdminRoleLogic.ensureRoleTitleUniqueTx 检查角色名称[%s]唯一失败", strings.TrimSpace(title))
 	}
 	if count > 0 {
-		return errors.Errorf("AdminRoleLogic.ensureRoleTitleUniqueTx 角色名称[%s]已存在", strings.TrimSpace(title))
+		return errors.Wrapf(errRoleTitleAlreadyExists, "AdminRoleLogic.ensureRoleTitleUniqueTx 角色名称[%s]已存在", strings.TrimSpace(title))
 	}
 	return nil
 }

@@ -133,6 +133,9 @@ func (l *AdminPermissionLogic) Create(req *types.SavePermissionReq) *types.BizRe
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errPermissionUUIDAlreadyExists) || isMySQLDuplicateEntryError(err) {
+			return permissionUUIDAlreadyExistsResult(req.UUID, err)
+		}
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminPermissionLogic.Create 创建权限[%s]失败", req.Title).ToBizResult()
 	}
@@ -205,6 +208,9 @@ func (l *AdminPermissionLogic) Update(req *types.SavePermissionReq) *types.BizRe
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errPermissionUUIDAlreadyExists) || isMySQLDuplicateEntryError(err) {
+			return permissionUUIDAlreadyExistsResult(nextUUID, err)
+		}
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminPermissionLogic.Update 更新权限ID[%d]失败", req.ID).ToBizResult()
 	}
@@ -677,7 +683,7 @@ func (l *AdminPermissionLogic) ensurePermissionUUIDUniqueTx(tx *gorm.DB, uuid st
 		return errors.Wrapf(err, "AdminPermissionLogic.ensurePermissionUUIDUniqueTx 检查权限UUID[%s]唯一失败", strings.TrimSpace(uuid))
 	}
 	if count > 0 {
-		return errors.Errorf("AdminPermissionLogic.ensurePermissionUUIDUniqueTx 权限UUID[%s]已存在", strings.TrimSpace(uuid))
+		return errors.Wrapf(errPermissionUUIDAlreadyExists, "AdminPermissionLogic.ensurePermissionUUIDUniqueTx 权限UUID[%s]已存在", strings.TrimSpace(uuid))
 	}
 	return nil
 }

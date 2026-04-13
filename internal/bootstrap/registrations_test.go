@@ -9,7 +9,7 @@ func TestValidateDefaultRegistrationManifest(t *testing.T) {
 	}
 }
 
-// TestDefaultRegistrationManifestHasBuiltinEntries 确保清单至少覆盖组件、路由和任务插件三类内置注册。
+// TestDefaultRegistrationManifestHasBuiltinEntries 确保清单至少覆盖组件、路由、任务插件和运行时扩展四类内置注册。
 func TestDefaultRegistrationManifestHasBuiltinEntries(t *testing.T) {
 	items := DefaultRegistrationManifest()
 	if len(items) == 0 {
@@ -20,7 +20,7 @@ func TestDefaultRegistrationManifestHasBuiltinEntries(t *testing.T) {
 	for _, item := range items {
 		kindSet[item.Kind] = struct{}{}
 	}
-	for _, kind := range []string{registrationKindComponent, registrationKindRoute, registrationKindTaskPlugin} {
+	for _, kind := range []string{registrationKindComponent, registrationKindRoute, registrationKindTaskPlugin, registrationKindRuntimeRegistry} {
 		if _, ok := kindSet[kind]; !ok {
 			t.Fatalf("默认注册清单缺少 kind=%s", kind)
 		}
@@ -34,7 +34,7 @@ func TestValidateNameListUniqueRejectsDuplicate(t *testing.T) {
 	}
 }
 
-// TestResolveRegistrationsPreservesBuiltinOrder 确保 bootstrap 统一清单维护内置路由和任务插件顺序。
+// TestResolveRegistrationsPreservesBuiltinOrder 确保 bootstrap 统一清单维护内置路由、任务插件和运行时扩展顺序。
 func TestResolveRegistrationsPreservesBuiltinOrder(t *testing.T) {
 	routes := defaultRouteModules()
 	if len(routes) == 0 || routes[0].Name() != "health" || routes[len(routes)-1].Name() != "docs" {
@@ -44,5 +44,10 @@ func TestResolveRegistrationsPreservesBuiltinOrder(t *testing.T) {
 	plugins := defaultTaskPlugins()
 	if len(plugins) == 0 || plugins[0].Name() != "core" || plugins[len(plugins)-1].Name() != "user_tag" {
 		t.Fatalf("内置任务插件顺序不符合预期: %+v", pluginNames(plugins))
+	}
+
+	runtimes := defaultRuntimeRegistryNames()
+	if len(runtimes) == 0 || runtimes[0] != "object_storage" || runtimes[len(runtimes)-1] != "collector_processor" {
+		t.Fatalf("内置运行时扩展顺序不符合预期: %+v", runtimes)
 	}
 }

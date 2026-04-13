@@ -184,9 +184,7 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 			"AdminLogic.Create 账号[%s]", req.Username).ToBizResult()
 	}
 	if exists {
-		return types.NewBizResult(codes.UserAlreadyExists).
-			SetI18nMessage(i18n.MsgKeyUserExistsFormat, req.Username).
-			WithError(errors.Errorf("AdminLogic.Create 账号[%s]已存在", req.Username))
+		return adminNameAlreadyExistsResult(req.Username, errAdminNameAlreadyExists)
 	}
 	encryptedMFASecret := ""
 	if strings.TrimSpace(req.MfaSecureKey) != "" {
@@ -248,6 +246,9 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 		}
 		return nil
 	}); err != nil {
+		if isMySQLDuplicateEntryError(err) {
+			return adminNameAlreadyExistsResult(req.Username, err)
+		}
 		return types.DBError(i18n.MsgKeyInternalErrorFormat, err,
 			"AdminLogic.Create 账号[%s]事务执行失败", req.Username).ToBizResult()
 	}

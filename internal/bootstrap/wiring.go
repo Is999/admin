@@ -29,8 +29,23 @@ func LoadConfig(file string) (config.Config, error) {
 // validateBootstrapConfig 校验启动与热加载阶段必须立即失败的基础配置。
 // 这里放置跨组件安全约束，避免错误配置进入运行态后才在后台组件里表现为半生效。
 func validateBootstrapConfig(c config.Config) error {
+	if err := validateCoreConfig(c); err != nil {
+		return errors.Tag(err)
+	}
 	if err := validateTaskRedisConfig(c.Task.Redis); err != nil {
 		return errors.Wrap(err, "校验任务系统 Redis 配置失败")
+	}
+	if err := validateAdminCollectorConfig(c.Collector); err != nil {
+		return errors.Tag(err)
+	}
+	if err := validateAlertConfig(c.Alert); err != nil {
+		return errors.Tag(err)
+	}
+	if err := validateSecurityConfig(c); err != nil {
+		return errors.Tag(err)
+	}
+	if err := validateProductionConfig(c); err != nil {
+		return errors.Tag(err)
 	}
 	return nil
 }

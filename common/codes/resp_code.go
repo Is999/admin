@@ -98,6 +98,13 @@ const (
 )
 
 const (
+	// AdminRoleAlreadyExists 表示后台角色名称已存在。
+	AdminRoleAlreadyExists = CodeAdminBase + 1
+	// AdminPermissionAlreadyExists 表示后台权限标识已存在。
+	AdminPermissionAlreadyExists = CodeAdminBase + 2
+)
+
+const (
 	// UserTagWorkflowLeaseNotFound 表示用户标签工作流互斥租约不存在，可能已经过期或已释放。
 	UserTagWorkflowLeaseNotFound = CodeUserTagBase + 1
 	// UserTagWorkflowLeaseOwnerMismatch 表示用户标签工作流互斥租约 owner 与请求 workflowID/mode 不一致。
@@ -119,31 +126,34 @@ var successCodeSet = map[int]struct{}{
 
 var codeHTTPStatusMap = map[int]int{
 	// codeHTTPStatusMap 维护业务码到 HTTP 状态码的统一映射，响应出口和测试用例共用。
-	CheckMFABind:          OK,
-	CheckMFACode:          OK,
-	CheckPasswordReset:    OK,
-	CheckMFAAgain:         BadRequest,
-	BadRequest:            BadRequest,
-	Unauthorized:          Unauthorized,
-	Forbidden:             Forbidden,
-	NotFound:              NotFound,
-	ServerError:           ServerError,
-	ServiceBusy:           ServiceBusy,
-	Timeout:               Timeout,
-	ParamError:            BadRequest,
-	AuthFailed:            Unauthorized,
-	RateLimit:             429,
-	InternalError:         ServerError,
-	DBError:               ServerError,
-	InvalidPassword:       BadRequest,
-	InvalidMFACode:        BadRequest,
-	DependencyUnavailable: ServiceBusy,
-	MySQLUnavailable:      ServiceBusy,
-	RedisUnavailable:      ServiceBusy,
-	ClickHouseUnavailable: ServiceBusy,
-	KafkaUnavailable:      ServiceBusy,
-	TaskQueueUnavailable:  ServiceBusy,
-	CollectorUnavailable:  ServiceBusy,
+	CheckMFABind:                 OK,
+	CheckMFACode:                 OK,
+	CheckPasswordReset:           OK,
+	CheckMFAAgain:                BadRequest,
+	BadRequest:                   BadRequest,
+	Unauthorized:                 Unauthorized,
+	Forbidden:                    Forbidden,
+	NotFound:                     NotFound,
+	ServerError:                  ServerError,
+	ServiceBusy:                  ServiceBusy,
+	Timeout:                      Timeout,
+	ParamError:                   BadRequest,
+	AuthFailed:                   Unauthorized,
+	RateLimit:                    429,
+	InternalError:                ServerError,
+	DBError:                      ServerError,
+	UserAlreadyExists:            BadRequest,
+	AdminRoleAlreadyExists:       BadRequest,
+	AdminPermissionAlreadyExists: BadRequest,
+	InvalidPassword:              BadRequest,
+	InvalidMFACode:               BadRequest,
+	DependencyUnavailable:        ServiceBusy,
+	MySQLUnavailable:             ServiceBusy,
+	RedisUnavailable:             ServiceBusy,
+	ClickHouseUnavailable:        ServiceBusy,
+	KafkaUnavailable:             ServiceBusy,
+	TaskQueueUnavailable:         ServiceBusy,
+	CollectorUnavailable:         ServiceBusy,
 
 	UserTagWorkflowLeaseNotFound:      NotFound,
 	UserTagWorkflowLeaseOwnerMismatch: BadRequest,

@@ -1,0 +1,19 @@
+[Unit]
+Description=admin-cron control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin-cron
+Group=admin-cron
+WorkingDirectory=/opt/admin-cron
+ExecStart=/opt/admin-cron/bin/admin-cron -f /etc/admin-cron/config.yaml -mode 5
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+LimitNOFILE=65535
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

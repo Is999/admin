@@ -188,6 +188,13 @@ func DefaultRegistrationManifest() []RegistrationManifestItem {
 			Method:      "logic.RegisterFileUploadPolicy",
 			Description: "注册文件上传业务策略",
 		},
+		{
+			Kind:        registrationKindRuntimeRegistry,
+			Name:        "collector_processor",
+			File:        "internal/collector/types.go + internal/collector/manager.go",
+			Method:      "collector.Manager.RegisterProcessor / RegisterProcessorFunc",
+			Description: "按 bizType 注册批量消费 Processor",
+		},
 	}
 }
 
@@ -227,6 +234,15 @@ func ValidateDefaultRegistrationManifest() error {
 		return errors.Tag(err)
 	}
 	if err := validateManifestKindNames(registrationKindTaskPlugin, manifestNames[registrationKindTaskPlugin], actualPluginNames); err != nil {
+		return errors.Tag(err)
+	}
+
+	// 校验运行时扩展入口：包级注册表虽然不参与启动组件顺序，也必须和清单文档保持一致。
+	actualRuntimeNames := defaultRuntimeRegistryNames()
+	if err := validateNameListUnique(registrationKindRuntimeRegistry, actualRuntimeNames); err != nil {
+		return errors.Tag(err)
+	}
+	if err := validateManifestKindNames(registrationKindRuntimeRegistry, manifestNames[registrationKindRuntimeRegistry], actualRuntimeNames); err != nil {
 		return errors.Tag(err)
 	}
 	return nil
@@ -276,6 +292,16 @@ func defaultTaskPlugins() []taskruntime.Plugin {
 // resolveTaskPlugins 合并内置任务插件与外部注入插件。
 func resolveTaskPlugins(options Options) []taskruntime.Plugin {
 	return taskruntime.ComposePlugins(defaultTaskPlugins(), options.TaskPlugins)
+}
+
+// defaultRuntimeRegistryNames 返回清单需要覆盖的包级运行时扩展入口。
+func defaultRuntimeRegistryNames() []string {
+	return []string{
+		"object_storage",
+		"virus_scanner",
+		"file_upload_policy",
+		"collector_processor",
+	}
 }
 
 // validateManifestItems 校验注册清单项本身的结构完整性和唯一性。

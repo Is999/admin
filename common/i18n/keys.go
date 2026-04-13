@@ -147,6 +147,14 @@ const (
 	MsgKeyRoleFetchFail = "admin.role_fetch_fail"
 	// MsgKeyRolePermFetchFail 表示获取角色权限失败的文案 key。
 	MsgKeyRolePermFetchFail = "admin.role_perm_fetch_fail"
+	// MsgKeyRoleAlreadyExists 表示角色名称已存在的文案 key。
+	MsgKeyRoleAlreadyExists = "admin.role_already_exists"
+	// MsgKeyRoleExistsFormat 表示角色名称已存在动态详情模板 key。
+	MsgKeyRoleExistsFormat = "fmt.role_exists"
+	// MsgKeyPermissionAlreadyExists 表示权限标识已存在的文案 key。
+	MsgKeyPermissionAlreadyExists = "admin.permission_already_exists"
+	// MsgKeyPermissionExistsFormat 表示权限标识已存在动态详情模板 key。
+	MsgKeyPermissionExistsFormat = "fmt.permission_exists"
 	// MsgKeyPermCodeFetchFail 表示获取权限码失败的文案 key。
 	MsgKeyPermCodeFetchFail = "admin.perm_code_fetch_fail"
 	// MsgKeyAdminInfoFetchFail 表示获取管理员资料失败的文案 key。

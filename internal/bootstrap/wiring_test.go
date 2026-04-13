@@ -456,7 +456,8 @@ func minimalConfigYAML(extra string) string {
 name: test
 host: 127.0.0.1
 port: 8888
-jwt_secret: test-secret
+Mode: dev
+jwt_secret: test-secret-0123456789abcdef
 mysql:
   write_data_source: "root:pass@tcp(127.0.0.1:3306)/admin"
   read_data_sources: []

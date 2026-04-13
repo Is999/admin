@@ -2,9 +2,13 @@ package handler
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"admin_cron/internal/config"
+	"admin_cron/internal/middleware"
 	"admin_cron/internal/svc"
 
 	"github.com/zeromicro/go-zero/rest"
@@ -20,114 +24,20 @@ func TestRegisterHandlersRegistersExpectedRoutes(t *testing.T) {
 
 	RegisterHandlers(server, svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
 	routes := server.Routes()
-	if len(routes) != 125 {
-		t.Fatalf("expected 125 routes, got %d", len(routes))
-	}
-
-	expected := []string{
-		http.MethodGet + " /api/health",
-		http.MethodGet + " /api/live",
-		http.MethodGet + " /api/ready",
-		http.MethodGet + " /api/metrics",
-		http.MethodPost + " /api/docs/session",
-		http.MethodGet + " /api/docs",
-		http.MethodGet + " /api/docs/:path",
-		http.MethodGet + " /api/docs/:path/:sub",
-		http.MethodGet + " /api/docs/:path/:sub/:file",
-		http.MethodGet + " /api/auth/captcha",
-		http.MethodPost + " /api/auth/login",
-		http.MethodGet + " /api/admin/mine",
-		http.MethodPost + " /api/admin/checkMfaSecure",
-		http.MethodGet + " /api/admins",
-		http.MethodPost + " /api/admins",
-		http.MethodPost + " /api/admins/exports",
-		http.MethodGet + " /api/admins/exports/status/:jobId",
-		http.MethodGet + " /api/admins/exports/download/:jobId",
-		http.MethodPost + " /api/file-transfer/upload/init",
-		http.MethodGet + " /api/file-transfer/upload/status",
-		http.MethodPut + " /api/file-transfer/upload/chunk",
-		http.MethodGet + " /api/file-transfer/download",
-		http.MethodPost + " /api/file-transfer/upload/complete",
-		http.MethodGet + " /api/file-transfer/access",
-		http.MethodGet + " /api/admins/:id",
-		http.MethodPatch + " /api/admins/:id",
-		http.MethodDelete + " /api/admins/:id",
-		http.MethodPatch + " /api/admins/status/:id",
-		http.MethodPost + " /api/admins/password/reset/:id",
-		http.MethodPost + " /api/admins/initial-state/reset/:id",
-		http.MethodGet + " /api/admins/roles/:id",
-		http.MethodPatch + " /api/admins/roles/:id",
-		http.MethodPatch + " /api/admins/mfa-status/:id",
-		http.MethodGet + " /api/admins/mfa-secret-key-url/:id",
-		http.MethodPost + " /api/admin/updatePassword",
-		http.MethodPost + " /api/admin/refreshMfaSecretKey",
-		http.MethodGet + " /api/roles/tree",
-		http.MethodGet + " /api/roles/tree-options",
-		http.MethodPatch + " /api/roles/permissions/:id",
-		http.MethodGet + " /api/permissions/max-uuid",
-		http.MethodPatch + " /api/permissions/:id",
-		http.MethodGet + " /api/dicts/export",
-		http.MethodPost + " /api/dicts/import",
-		http.MethodPost + " /api/dicts/cache/refresh/:uuid",
-		http.MethodPost + " /api/caches/refresh-all",
-		http.MethodPost + " /api/caches/warmup",
-		http.MethodGet + " /api/admin-logs",
-		http.MethodGet + " /api/admin-messages",
-		http.MethodGet + " /api/admin-messages/sent",
-		http.MethodGet + " /api/admin-messages/:id/receivers",
-		http.MethodGet + " /api/admin-messages/unread-count",
-		http.MethodGet + " /api/admin-messages/notifications",
-		http.MethodPatch + " /api/admin-messages/read",
-		http.MethodPost + " /api/admin-messages/delete",
-		http.MethodPost + " /api/admin-messages/send",
-		http.MethodPost + " /api/admin-messages/handle",
-		http.MethodGet + " /api/secret-keys/:id",
-		http.MethodPost + " /api/secret-keys/validate",
-		http.MethodPost + " /api/secret-keys/self-check/:uuid",
-		http.MethodPost + " /api/security/debug/sign",
-		http.MethodPost + " /api/security/debug/verify",
-		http.MethodPost + " /api/security/debug/encrypt",
-		http.MethodPost + " /api/security/debug/decrypt",
-		http.MethodPost + " /api/tasks",
-		http.MethodGet + " /api/tasks/overview",
-		http.MethodPost + " /api/tasks/workflows",
-		http.MethodGet + " /api/tasks/workflows/:workflowId",
-		http.MethodGet + " /api/tasks/queues",
-		http.MethodGet + " /api/tasks/registry/task-types",
-		http.MethodGet + " /api/tasks/registry/workflows",
-		http.MethodGet + " /api/tasks/config-reload",
-		http.MethodGet + " /api/tasks/config-reload/items",
-		http.MethodPost + " /api/tasks/config-reload",
-		http.MethodGet + " /api/tasks/:taskId",
-		http.MethodPost + " /api/tasks/queues/pause/:queue",
-		http.MethodPost + " /api/tasks/run/:taskId",
-		http.MethodDelete + " /api/tasks/:taskId",
-		http.MethodPost + " /api/tasks/queues/resume/:queue",
-		http.MethodGet + " /api/collector/overview",
-		http.MethodGet + " /api/collector/tasks",
-		http.MethodPost + " /api/collector/run",
-		http.MethodPost + " /api/collector/tasks/retry",
-		http.MethodPost + " /api/user-tags/workflows",
-		http.MethodPost + " /api/user-tags/recalculations",
-		http.MethodPost + " /api/user-tags/workflow-lease/release",
-		http.MethodPost + " /internal/auth/init-admin-bootstrap",
-		http.MethodPost + " /internal/user-tags/workflows",
-		http.MethodPost + " /internal/user-tags/recalculations",
+	contracts := DefaultRouteContracts()
+	if len(routes) != len(contracts) {
+		t.Fatalf("expected %d routes, got %d", len(contracts), len(routes))
 	}
 
 	routeSet := make(map[string]struct{}, len(routes))
-	for _, route := range routes {
+	for index, route := range routes {
 		key := route.Method + " " + route.Path
 		if _, ok := routeSet[key]; ok {
 			t.Fatalf("路由重复注册: %s", key)
 		}
 		routeSet[key] = struct{}{}
-	}
-
-	// 重点校验登录、审计、任务和用户标签关键路由，防止裁剪时路径漂移。
-	for _, item := range expected {
-		if _, ok := routeSet[item]; !ok {
-			t.Fatalf("missing route %s", item)
+		if want := contracts[index].Key(); key != want {
+			t.Fatalf("路由注册顺序或契约不一致: index=%d got=%s want=%s", index, key, want)
 		}
 	}
 
@@ -144,6 +54,114 @@ func TestRegisterHandlersRegistersExpectedRoutes(t *testing.T) {
 			t.Fatalf("固定任务路由 %s 必须排在参数路由 %s 之前", fixedRoute, taskDetailRoute)
 		}
 	}
+}
+
+// TestDefaultRouteContractsAreSelfConsistent 确保契约清单具备最小治理信息。
+func TestDefaultRouteContractsAreSelfConsistent(t *testing.T) {
+	seen := make(map[string]struct{})
+	for _, contract := range DefaultRouteContracts() {
+		if contract.Module == "" {
+			t.Fatalf("路由契约缺少模块: %+v", contract)
+		}
+		if contract.Method == "" || contract.Path == "" {
+			t.Fatalf("路由契约缺少 method/path: %+v", contract)
+		}
+		if contract.Description == "" {
+			t.Fatalf("路由契约缺少描述: %s", contract.Key())
+		}
+		if _, ok := seen[contract.Key()]; ok {
+			t.Fatalf("路由契约重复: %s", contract.Key())
+		}
+		seen[contract.Key()] = struct{}{}
+		if strings.HasPrefix(contract.Path, "/internal/") && contract.Access != RouteAccessInternal {
+			t.Fatalf("内网路由必须标记 internal: %+v", contract)
+		}
+		if contract.Access == RouteAccessInternal && !strings.HasPrefix(contract.Path, "/internal/") {
+			t.Fatalf("internal 契约路径必须使用 /internal 前缀: %+v", contract)
+		}
+		if contract.Access == RouteAccessDocs && !strings.HasPrefix(contract.Path, "/api/docs") {
+			t.Fatalf("docs 契约路径必须使用 /api/docs 前缀: %+v", contract)
+		}
+	}
+}
+
+// TestDefaultRouteContractsAreDocumented 确保真实路由路径在接口文档站中可检索。
+func TestDefaultRouteContractsAreDocumented(t *testing.T) {
+	docs := readDocsSiteMarkdown(t, filepath.Join("..", "..", "docs", "site"))
+	for _, contract := range DefaultRouteContracts() {
+		if !strings.Contains(docs, contract.Path) {
+			t.Fatalf("接口文档缺少路由模板: %s", contract.Key())
+		}
+	}
+}
+
+func readDocsSiteMarkdown(t *testing.T, root string) string {
+	t.Helper()
+	var builder strings.Builder
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		builder.Write(body)
+		builder.WriteByte('\n')
+		return nil
+	}); err != nil {
+		t.Fatalf("读取接口文档失败: %v", err)
+	}
+	return builder.String()
+}
+
+// TestDefaultRouteContractsHaveAccessPolicyAliases 确保受保护路由具备明确权限或豁免边界。
+func TestDefaultRouteContractsHaveAccessPolicyAliases(t *testing.T) {
+	for _, contract := range DefaultRouteContracts() {
+		switch contract.Access {
+		case RouteAccessAuth, RouteAccessInternal:
+			if strings.TrimSpace(contract.Alias) == "" {
+				t.Fatalf("受保护路由缺少权限/审计别名: %+v", contract)
+			}
+		}
+		if contract.Alias == string(middleware.Ignore) {
+			continue
+		}
+		if strings.ContainsAny(contract.Alias, " \t\r\n") {
+			t.Fatalf("路由别名不能包含空白字符: %+v", contract)
+		}
+	}
+}
+
+// TestActionLogRegistryAliasesAreContracted 确保审计动作绑定到已公开的路由契约。
+func TestActionLogRegistryAliasesAreContracted(t *testing.T) {
+	aliases := make(map[string]struct{}, len(DefaultRouteContracts()))
+	for _, contract := range DefaultRouteContracts() {
+		if contract.Alias == "" || contract.Alias == string(middleware.Ignore) {
+			continue
+		}
+		aliases[contract.Alias] = struct{}{}
+	}
+	for name, meta := range actionLogRegistry {
+		if meta.Action == "" {
+			continue
+		}
+		alias := string(meta.Alias)
+		if _, ok := contractlessActionLogAliases[alias]; ok {
+			continue
+		}
+		if _, ok := aliases[alias]; !ok {
+			t.Fatalf("审计方法 %s 的路由别名未进入契约清单: %s", name, alias)
+		}
+	}
+}
+
+var contractlessActionLogAliases = map[string]struct{}{
+	"admin.role.add":    {},
+	"admin.role.delete": {},
 }
 
 // routeIndex 返回路由在 go-zero 注册顺序中的下标，用于保护固定路由优先于参数路由。

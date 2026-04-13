@@ -38,22 +38,14 @@ security:
     crypto_status: 1
     # 密钥版本，对应 X-Key-Version。
     key_version: "v1"
-    # AES KEY。
-    aes_key: "a824eeabb98fb71b9848f582b60245ed"
-    # AES KEY 文件路径。
-    # aes_key_ref: "/etc/admin-cron/keys/1/v1/aes_key.txt"
-    # AES IV。
-    aes_iv: "011de98f9004b3ac"
+    # AES KEY 文件路径，生产环境不要在 YAML 内联密钥材料。
+    aes_key_ref: "/etc/admin-cron/keys/1/v1/aes_key.txt"
     # AES IV 文件绝对路径。
-    # aes_iv_ref: "/etc/admin-cron/keys/1/v1/aes_iv.txt"
-    # 客户端 RSA 公钥。
-    rsa_public_key_user: "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk85EZbnLFXOZQNtSIhEX\n/yfQWAP98Sq/noX69zzfBlAbOMsRN5M8PUKnyAPCLlV63YCCoxIHtgB6CxxHWNFA\nrYL3Fe5aybzQ/Zx3Iye9LIFL/pCFgdFXDqeO2V4ulaCjuqH3CYdwQ2h8YpCx6H1B\nnfnUTUSiqjWL09KdJo9yhKTyZbwDdVHSZmxtJkl+ASdpBNcKqammnOMOnKiZboXl\n7nHMxV2MAPaYTRbf7gUINhmHq9QpViOyunEE7Lw7sjajl5nZX1H8bOXExFMH4cyt\nqVR8Do0Bhe/CyX/JhrkSl+pdCQKq9nCniO2+85C2/0P9WzZvinIfgp3QgHum94jV\nDQIDAQAB\n-----END PUBLIC KEY-----"
+    aes_iv_ref: "/etc/admin-cron/keys/1/v1/aes_iv.txt"
     # 客户端 RSA 公钥路径。
-    # rsa_public_key_user_ref: "/etc/admin-cron/keys/1/v1/user_public.pem"
-    # 服务端 RSA 私钥。
-    rsa_private_key_server: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA5DO4OJ6eaO/UyRDzOEN07RFQcrvcH2jV6etgkml9Iqn0fzDT\nmxmBojns7s8Rn62YKi9Q8Z3WNpr5TkP7R7tOWliu7fHdTb36PWAc4Z58Tp0+5A2r\nQWjVdMPtBq7NKr86F9FOq2Y/DdcBZmx229rF5TmIB5T54isbJ4sZJAy7ZHfNIZyf\nbUM3QoTAIt9pxyheJ1YQLswhxnKOBUp2Bbh4cDAnZB0TZsZ9hOwsMpNCXvCWFuV+\nz4EIKhLgKnUYdVZ+gOdTjFqWinf+fAsJHfd7jRRPGa6WQih1+wNEKFy+plFyk/n5\nHvTCpB5/MLs3FW0CNyDLwfIScoguLuSre6PVvQIDAQABAoIBAEHDb98NQxx9pSYu\nltELi5o4J6Vw4v5AQYlQdjurX88KCHZRFWI4pwWfyNqHXQ5VwijCCwMeV9nTrm3y\nJGunHGzn6r2SupKJYaCnXptch3lGUpX5JHXMptsoDVokLOcZRb4QaSn25MvxvqsM\nLfKs6OPmwP9iXOLjRkeOi/e6HZTVcD5rrO5T+KXPGUqgbHilmkm3htAhE8a1hwqM\naEWiKQvOuBOMGq++Li/dGtm1cX6RNwyeZpsIA5Rj81I8BVpm4/WcZeYg7SSlVoMe\nzBnNMkDw84RZ0c8BWVEFn09subOiNaWMuaKEqFHHphqnm4muu+gN4Y8VcS0rGhhf\nTkhfDwcCgYEA8dWn12QvmiQMw1aWZcHa+frk/26AvlpCM8ZB1883d7XLFHLI0iEj\nZMjGd8aPSCxh/bzI3q9aUZcx0h+e6m684kc+uk7UKVEWYvDDGUNfEO6KA65riQEU\n5UpDevE/HkLkGIqaeaAPfnIcoHMDxFErza5ATI4gNVDGW1Y961s9kLMCgYEA8ZGk\nSgEUqGSHhQ9UlVGiZLfeC2GjFNzbmv0vk5efupOQXMO3Gxxn1+jCK4d65Xcq94IH\n7KtuMuzqXu1e9yTe/dwBL1Zi/3UjIc2x0qmgCkxNJLIunbAuipezdBrfxmCRfcwL\n9wfoqf3c6/IrlPz6LXgC1EyM3Dxat3Bq224VV88CgYEA47DN/jYNu4sFmUUFBXmn\nuoVG5lgcTxycCDM5+v7WspcvRWltOqqIsHN4qX0BmmpvOH9ugHuJBhjch4HOFdt9\na2642KEvkFcQRMd6aWbNMxvkReMKzEuAaQGq1y4cx1kjeRfGqYzSCbNW0Jp5iXUD\nUPwm/e0y1f/fQk/IrLeTF5ECgYEAvzMndeulDiODoC2iJQ2YG1/sv9Vn3vtwVhxP\nq+I26tYhTUsbgrnY92ujRBDXlQfdWknxO8H0Vxpt5vS6VaM5XHTl+zHE6a0tQXQt\nazAXHA+If6MIgocQT2IDB8K9m6aTgZ4fWkdIQEROt/HVzPbujU6P7rkoRKkApHC2\nIzfebMECgYAnZRhy1fmKI0T98B2r6e90iOBiLxdhABQqTyasH9183z8MvAmNK8QI\nE98xSdtVckS4AZ0cIzMBOdWdncsHshJ8bpTinS7UGDmQtr7ty+lfZ+aLuwh4HfDa\nnftmkdcUhmQQWV2OnPTuWKcC60AyjBans+FJVD+nlE2greIyWSOMdw==\n-----END RSA PRIVATE KEY-----"
+    rsa_public_key_user_ref: "/etc/admin-cron/keys/1/v1/user_public.pem"
     # 服务端 RSA 私钥路径。
-    # rsa_private_key_server_ref: "/etc/admin-cron/keys/1/v1/server_private.pem"
+    rsa_private_key_server_ref: "/etc/admin-cron/keys/1/v1/server_private.pem"
 
 # 配置热加载；只刷新运行期配置，不重建基础设施连接。
 hot_reload:

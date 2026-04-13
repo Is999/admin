@@ -57,6 +57,20 @@ go test ./...
 go build -o bin/admin-cron .
 ```
 
+仓库提供统一检查入口：
+
+```bash
+make ci
+```
+
+数据库迁移使用独立工具：
+
+```bash
+make migrate-status MIGRATE_CONFIG=./etc/config.yaml
+make migrate-dry-run MIGRATE_CONFIG=./etc/config.yaml
+make migrate-up MIGRATE_CONFIG=./etc/config.yaml
+```
+
 ## 部署入口
 
 生产推荐拆成控制面和执行面：
@@ -67,6 +81,8 @@ go build -o bin/admin-cron .
 ```
 
 完整流程见 [部署发布指南](docs/site/角色文档/运维/部署发布指南.md)。
+
+发布模板位于 `deploy/`，包括 Dockerfile、systemd 单元和集成依赖 Compose；Prometheus 告警规则位于 `docs/prometheus/admin-cron-alerts.yml`。
 
 > **首次上线重点**：如果后台无法登录，先确认数据库里已有超级管理员账号，再通过内网接口 `POST /internal/auth/init-admin-bootstrap` 重置该账号为首次登录状态。该接口只允许内网访问，不创建新账号，不提升角色。详细步骤见 [内网初始化管理员接口](docs/site/接口文档/后台系统/内网初始化管理员接口.md)。
 
@@ -121,6 +137,8 @@ admin-cron
 - 默认使用单一 MySQL 主库；扩展库、多缓存、多队列连接必须通过已有配置结构和 `ServiceContext` 注入，不在调用路径临时创建连接。
 - 可观测配置集中在配置文件中管理，日志、Trace、慢查询和指标按统一入口初始化。
 - 初始化 SQL、嵌入 SQL 模板和脚本资产应保留在仓库中，改名、移动或删除时同步更新 `//go:embed` 和测试。
+- 数据库变更先登记到 `internal/database.DefaultMigrations()`；现有后台基线迁移是 bootstrap-only/destructive，只能用于空库初始化。
+- HTTP 路由新增或调整时同步更新 `internal/handler/route_contract.go`，并运行 `go test ./internal/handler`。
 
 ## 开发流程
 
@@ -148,6 +166,7 @@ go build -o bin/admin-cron .
 - `docs/开发规范.md`
 - `docs/质量审计.md`
 - `docs/site/接口文档/接口文档统一规范.md`
+- `docs/site/角色文档/运维/数据库迁移治理.md`
 
 ## License
 

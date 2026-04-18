@@ -17,6 +17,7 @@ import (
 	"admin_cron/internal/infra/loggerx"
 	redislock "admin_cron/internal/infra/redsync"
 	"admin_cron/internal/svc"
+	"admin_cron/internal/taskstats"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"
@@ -99,6 +100,15 @@ const (
 	archiveRunModeArchive = "archive"
 	// archiveRunModeDelete 表示本轮只做已归档热表删除。
 	archiveRunModeDelete = "delete"
+)
+
+const (
+	// traceArchive 表示归档任务处理量明细前缀。
+	traceArchive = "archive"
+	// traceArchiveTarget 表示归档目标数量明细。
+	traceArchiveTarget = "target"
+	// traceArchiveHistory 表示历史表写入明细。
+	traceArchiveHistory = "history"
 )
 
 const (
@@ -288,6 +298,14 @@ func NewService(svcCtx *svc.ServiceContext, opts ...Option) *Service {
 	return s
 }
 
+// archiveTraceName 拼接归档任务处理量明细名称。
+func archiveTraceName(parts ...string) string {
+	values := make([]string, 0, len(parts)+1)
+	values = append(values, traceArchive)
+	values = append(values, parts...)
+	return taskstats.JoinDetailName(values...)
+}
+
 // EnsureSchema 确保归档控制表存在。
 func (s *Service) EnsureSchema(ctx context.Context, db *gorm.DB) error {
 	if db == nil {
@@ -318,7 +336,11 @@ func (s *Service) RunTargets(ctx context.Context, targets []string, workerID str
 	// 先把目标名解析成标准化任务配置和执行动作，避免后续执行期反复读取原始配置。
 	runs := s.resolveTargets(targets)
 	if len(runs) == 0 {
+		taskstats.RecordSkip(ctx, archiveTraceName(traceArchiveTarget, taskstats.DetailPartSkipped), 1)
 		return nil
+	}
+	if len(runs) > 0 {
+		taskstats.RecordRead(ctx, archiveTraceName(traceArchiveTarget), int64(len(runs)))
 	}
 	concurrency := s.maxConcurrentJobs()
 	if concurrency <= 1 || len(runs) == 1 {
@@ -582,6 +604,9 @@ func (s *Service) processSegment(ctx context.Context, job jobConfig, sourceDB *g
 		if err != nil {
 			return result, errors.Tag(err)
 		}
+		if len(rows) > 0 {
+			taskstats.RecordRead(ctx, archiveTraceName(job.Name, archiveRunModeArchive, taskstats.DetailPartRows), int64(len(rows)))
+		}
 		if len(rows) == 0 {
 			// 只有确认区间内已经没有待复制热数据，才能把该区间标记为 done；热表删除由独立删除窗口继续推进。
 			return result, s.markSegmentDone(ctx, controlDB, segment.ID, workerID)
@@ -589,6 +614,7 @@ func (s *Service) processSegment(ctx context.Context, job jobConfig, sourceDB *g
 		if err = s.archiveBatch(ctx, sourceDB, controlDB, job, segment, rows, workerID); err != nil {
 			return result, errors.Tag(err)
 		}
+		taskstats.RecordInsert(ctx, archiveTraceName(job.Name, traceArchiveHistory, taskstats.DetailPartRows), int64(len(rows)))
 		result.RowsArchived += int64(len(rows))
 		batchSize := job.BatchSize
 		if batchSize <= 0 {
@@ -827,6 +853,9 @@ func (s *Service) processDeleteSegment(ctx context.Context, job jobConfig, sourc
 		if err != nil {
 			return result, errors.Tag(err)
 		}
+		if len(rows) > 0 {
+			taskstats.RecordRead(ctx, archiveTraceName(job.Name, archiveRunModeDelete, taskstats.DetailPartRows), int64(len(rows)))
+		}
 		if len(rows) == 0 {
 			if deleteRangeEnd.Before(segment.RangeEnd) {
 				if err := s.markSegmentDeletePartial(ctx, controlDB, segment.ID, workerID); err != nil {
@@ -848,6 +877,7 @@ func (s *Service) processDeleteSegment(ctx context.Context, job jobConfig, sourc
 		if err = s.deleteBatchChunk(ctx, sourceDB, job, segment, deleteRangeEnd, ids); err != nil {
 			return result, errors.Tag(err)
 		}
+		taskstats.RecordDelete(ctx, archiveTraceName(job.Name, archiveRunModeDelete, taskstats.DetailPartRows), int64(len(rows)))
 		result.RowsDeleted += int64(len(rows))
 		if len(rows) >= deleteBatchSize {
 			if err = waitArchiveBatch(ctx, s.batchDelay()); err != nil {

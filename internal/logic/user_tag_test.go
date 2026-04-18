@@ -50,10 +50,12 @@ func TestBuildUserTagWorkflowReqTargetedUIDs(t *testing.T) {
 
 // TestBuildUserTagWorkflowReqRecalculate 验证对应场景。
 func TestBuildUserTagWorkflowReqRecalculate(t *testing.T) {
+	retry := 3
 	req := &types.TriggerUserTagWorkflowReq{
 		Mode:      usertagtask.ModeRecalculate,
 		TagTypes:  []int{30, 5},
 		BatchSize: 500,
+		Retry:     &retry,
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("校验 recalculate 请求失败: %v", err)
@@ -65,6 +67,9 @@ func TestBuildUserTagWorkflowReqRecalculate(t *testing.T) {
 	}
 	if !strings.HasPrefix(got.UniqueKey, "user_tag:recalculate:") {
 		t.Fatalf("期望 recalculate 唯一键符合预期，实际为 %q", got.UniqueKey)
+	}
+	if got.Retry == nil || *got.Retry != retry {
+		t.Fatalf("期望透传 retry=%d，实际为 %#v", retry, got.Retry)
 	}
 	for _, want := range []string{
 		"mode=recalculate",

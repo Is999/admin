@@ -262,8 +262,8 @@ func TestListTasksOverviewTimeRangeAggregatesExecutedStates(t *testing.T) {
 
 	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?page=1&pageSize=20", nil), svcCtx)
 	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{
-		TimeStart: "2026-05-25T12:00:00Z",
-		TimeEnd:   "2026-05-25T14:00:00Z",
+		StartTime: "2026-05-25T12:00:00Z",
+		EndTime:   "2026-05-25T14:00:00Z",
 		Page:      1,
 		PageSize:  20,
 	})

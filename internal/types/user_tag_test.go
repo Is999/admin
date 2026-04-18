@@ -7,6 +7,7 @@ import "testing"
 // TestRecalculateUserTagReqValidate 验证对应场景。
 func TestRecalculateUserTagReqValidate(t *testing.T) {
 	ttl := 60
+	retry := 2
 	timeout := 300
 	req := &RecalculateUserTagReq{
 		TagTypes:              []int{30, 5, 30, -1},
@@ -16,6 +17,7 @@ func TestRecalculateUserTagReqValidate(t *testing.T) {
 		WorkerCountSnake:      4,
 		DryRunSnake:           true,
 		UniqueTTLSecondsSnake: &ttl,
+		Retry:                 &retry,
 		TimeoutSecondsSnake:   &timeout,
 	}
 	if err := req.Validate(); err != nil {
@@ -30,7 +32,7 @@ func TestRecalculateUserTagReqValidate(t *testing.T) {
 	if req.ShardTotal != 10 || req.BatchSize != 2000 || req.WorkerCount != 4 {
 		t.Fatalf("snake_case 参数未正确归一化: shard=%d batch=%d worker=%d", req.ShardTotal, req.BatchSize, req.WorkerCount)
 	}
-	if !req.DryRun || req.UniqueTTLSeconds == nil || *req.UniqueTTLSeconds != ttl || req.TimeoutSeconds == nil || *req.TimeoutSeconds != timeout {
+	if !req.DryRun || req.UniqueTTLSeconds == nil || *req.UniqueTTLSeconds != ttl || req.Retry == nil || *req.Retry != retry || req.TimeoutSeconds == nil || *req.TimeoutSeconds != timeout {
 		t.Fatalf("snake_case 开关字段未正确归一化")
 	}
 }
@@ -40,6 +42,19 @@ func TestRecalculateUserTagReqValidateRequiresTagTypes(t *testing.T) {
 	req := &RecalculateUserTagReq{}
 	if err := req.Validate(); err == nil {
 		t.Fatalf("期望返回 tag_types 必填错误")
+	}
+}
+
+// TestUserTagReqValidateRejectsNegativeRetry 验证用户标签触发和重算入口都会拒绝非法重试次数。
+func TestUserTagReqValidateRejectsNegativeRetry(t *testing.T) {
+	retry := -1
+	triggerReq := &TriggerUserTagWorkflowReq{Mode: "full", Retry: &retry}
+	if err := triggerReq.Validate(); err == nil {
+		t.Fatalf("期望触发工作流拒绝负数 retry")
+	}
+	recalculateReq := &RecalculateUserTagReq{TagTypes: []int{30}, Retry: &retry}
+	if err := recalculateReq.Validate(); err == nil {
+		t.Fatalf("期望标签重算拒绝负数 retry")
 	}
 }
 

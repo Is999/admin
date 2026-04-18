@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"hash/fnv"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"admin_cron/helper"
+	"admin_cron/internal/taskstats"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
@@ -50,11 +52,18 @@ const (
 	// workflowNodeInstanceFieldPrefix 是节点 hash 内部的分片终态去重字段前缀。
 	// 去重标记与成功/失败计数放在同一个 Redis hash 中，避免 Redis Cluster Lua 跨 slot 写多 key。
 	workflowNodeInstanceFieldPrefix = "__instance_done:"
+	// workflowNodeTraceFieldPrefix 是节点 hash 内部的分片处理量快照字段前缀。
+	workflowNodeTraceFieldPrefix = "executionTrace:shard:"
 )
 
 // workflowNodeInstanceField 返回节点 hash 中单个分片的终态去重字段名。
 func workflowNodeInstanceField(shardIndex int) string {
 	return fmt.Sprintf("%s%d", workflowNodeInstanceFieldPrefix, shardIndex)
+}
+
+// workflowNodeTraceField 返回节点 hash 中单个分片的处理量快照字段名。
+func workflowNodeTraceField(shardIndex int) string {
+	return fmt.Sprintf("%s%d", workflowNodeTraceFieldPrefix, shardIndex)
 }
 
 // WorkflowStartSpec 表示工作流实例的启动参数。
@@ -66,6 +75,7 @@ type WorkflowStartSpec struct {
 	ShardTotal        int           // 分片总数
 	GrayPercent       int           // 灰度执行百分比
 	Source            string        // 触发来源
+	PeriodicName      string        // 周期任务原始名称
 	TriggeredByUserID int           // 触发人用户 ID
 	TriggeredByUser   string        // 触发人用户名
 	TraceID           string        // 上游链路追踪 ID
@@ -128,18 +138,30 @@ type WorkflowMetaRecord struct {
 
 // WorkflowNodeRecord 是节点状态在 Redis 中的快照结构。
 type WorkflowNodeRecord struct {
-	Name         string   `json:"name"`                   // 节点名称
-	TaskType     string   `json:"taskType"`               // 节点任务类型
-	Queue        string   `json:"queue"`                  // 节点队列
-	Status       string   `json:"status"`                 // 当前节点状态
-	DependsOn    []string `json:"dependsOn,omitempty"`    // 依赖节点列表
-	Expected     int      `json:"expected"`               // 预期执行实例数
-	Succeeded    int      `json:"succeeded"`              // 已成功实例数
-	Failed       int      `json:"failed"`                 // 已失败实例数
-	Skipped      int      `json:"skipped"`                // 已跳过实例数
-	ErrorMessage string   `json:"errorMessage,omitempty"` // 节点错误摘要
-	StartedAt    string   `json:"startedAt,omitempty"`    // 首次开始时间
-	FinishedAt   string   `json:"finishedAt,omitempty"`   // 完成时间
+	Name           string                       `json:"name"`                     // 节点名称
+	TaskType       string                       `json:"taskType"`                 // 节点任务类型
+	Queue          string                       `json:"queue"`                    // 节点队列
+	Status         string                       `json:"status"`                   // 当前节点状态
+	DependsOn      []string                     `json:"dependsOn,omitempty"`      // 依赖节点列表
+	Expected       int                          `json:"expected"`                 // 预期执行实例数
+	Succeeded      int                          `json:"succeeded"`                // 已成功实例数
+	Failed         int                          `json:"failed"`                   // 已失败实例数
+	Skipped        int                          `json:"skipped"`                  // 已跳过实例数
+	ErrorMessage   string                       `json:"errorMessage,omitempty"`   // 节点错误摘要
+	StartedAt      string                       `json:"startedAt,omitempty"`      // 首次开始时间
+	FinishedAt     string                       `json:"finishedAt,omitempty"`     // 完成时间
+	Progress       *taskstats.Progress          `json:"progress,omitempty"`       // 节点实例执行进度
+	ExecutionTrace *taskstats.Snapshot          `json:"executionTrace,omitempty"` // 节点处理量聚合摘要
+	ShardTraces    []WorkflowNodeShardTraceItem `json:"shardTraces,omitempty"`    // 分片处理量明细
+}
+
+// WorkflowNodeShardTraceItem 表示工作流节点中单个分片的处理量快照。
+type WorkflowNodeShardTraceItem struct {
+	ShardIndex     int                 `json:"shardIndex"`               // 分片下标
+	ShardTotal     int                 `json:"shardTotal"`               // 分片总数
+	Status         string              `json:"status,omitempty"`         // 分片状态
+	Progress       *taskstats.Progress `json:"progress,omitempty"`       // 分片执行进度
+	ExecutionTrace *taskstats.Snapshot `json:"executionTrace,omitempty"` // 分片处理量摘要
 }
 
 // startWorkflow 创建工作流实例元数据，并调度所有根节点。
@@ -207,20 +229,28 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 	// Redis Cluster 下 MULTI/EXEC 不能跨 slot；工作流 meta、nodes、node hash key 不保证同 slot。
 	// 初始化写入使用普通 pipeline，由完整性检查负责清理并重建极端情况下的半初始化数据。
 	pipe := m.redis.Pipeline()
-	pipe.HSet(ctx, metaKey,
-		"workflowId", spec.WorkflowID,
-		"workflowName", spec.Name,
-		"status", WorkflowStatusPending,
-		"source", spec.Source,
-		"queue", spec.Queue,
-		"targets", mustJSON(spec.Targets),
-		"shardTotal", spec.ShardTotal,
-		"grayPercent", spec.GrayPercent,
-		"errorMessage", "",
-		"createdAt", now,
-		"updatedAt", now,
-		"finishedAt", "",
-	)
+	metaValues := map[string]any{
+		"workflowId":   spec.WorkflowID,
+		"workflowName": spec.Name,
+		"status":       WorkflowStatusPending,
+		"source":       spec.Source,
+		"periodicName": spec.PeriodicName,
+		"queue":        spec.Queue,
+		"targets":      mustJSON(spec.Targets),
+		"shardTotal":   spec.ShardTotal,
+		"grayPercent":  spec.GrayPercent,
+		"errorMessage": "",
+		"createdAt":    now,
+		"updatedAt":    now,
+		"finishedAt":   "",
+	}
+	if spec.RetryOverride != nil {
+		metaValues["retryOverride"] = *spec.RetryOverride
+	}
+	if spec.TimeoutOverride > 0 {
+		metaValues["timeoutOverrideSeconds"] = int64(spec.TimeoutOverride / time.Second)
+	}
+	pipe.HSet(ctx, metaKey, metaValues)
 	pipe.Expire(ctx, metaKey, m.workflowRetention())
 	for _, nodeName := range nodeNames {
 		node := def.Nodes[nodeName]
@@ -309,14 +339,19 @@ func (m *Manager) scheduleNode(ctx context.Context, def *WorkflowDefinition, spe
 		if buildErr != nil {
 			return errors.Wrapf(buildErr, "构建节点负载失败 node=%s shard=%d", nodeName, shardIndex)
 		}
-		task := m.newTask(ctx, node.TaskType, payload, map[string]string{
+		headers := map[string]string{
 			headerTaskName:     workflowNodeTaskName(spec.Name, nodeName, node.TaskType),
 			headerWorkflowID:   spec.WorkflowID,
 			headerWorkflowName: spec.Name,
 			headerWorkflowNode: nodeName,
 			headerShardIndex:   fmt.Sprintf("%d", shardIndex),
 			headerShardTotal:   fmt.Sprintf("%d", effectiveShardTotal(node, spec)),
-		})
+		}
+		if spec.PeriodicName != "" {
+			headers[HeaderPeriodicName] = spec.PeriodicName
+			headers[headerTaskSource] = spec.Source
+		}
+		task := m.newTask(ctx, node.TaskType, payload, headers)
 		opts := []asynq.Option{
 			asynq.Queue(m.namespacedQueueName(queue)),
 			asynq.MaxRetry(effectiveRetry(node, spec)),
@@ -368,19 +403,19 @@ func (m *Manager) markTaskSuccess(ctx context.Context, meta WorkflowTaskMeta) er
 }
 
 // markTaskFailure 记录单个节点分片任务失败，并把工作流整体标记为失败。
-func (m *Manager) markTaskFailure(ctx context.Context, meta WorkflowTaskMeta, err error) error {
+// 返回值 failureRecorded 表示本次失败是否首次写入节点终态；重复晚到失败返回 false。
+func (m *Manager) markTaskFailure(ctx context.Context, meta WorkflowTaskMeta, err error) (bool, error) {
 	if meta.WorkflowID == "" || meta.WorkflowNode == "" {
-		return nil
+		return meta.WorkflowID != "" && meta.WorkflowNode == "", nil
 	}
 	result, setErr := recordNodeOutcomeScript.Run(ctx, m.redis, []string{
 		m.workflowNodeKey(meta.WorkflowID, meta.WorkflowNode),
 	}, workflowNodeInstanceField(meta.ShardIndex), m.workflowRetention().Milliseconds(), "failed").Result()
 	if setErr != nil {
-		return setErr
+		return false, setErr
 	}
-	// 分片已成功后的迟到失败回执会被 Lua 判定为重复噪声，避免已完成节点被回滚为失败。
-	if toInt(result) == 0 {
-		return nil
+	if toInt(result) <= 0 {
+		return false, nil
 	}
 	message := ""
 	if err != nil {
@@ -391,9 +426,35 @@ func (m *Manager) markTaskFailure(ctx context.Context, meta WorkflowTaskMeta, er
 		"errorMessage": message,
 		"finishedAt":   time.Now().Format(time.RFC3339),
 	}); incErr != nil {
-		return incErr
+		return false, incErr
 	}
-	return m.failWorkflow(ctx, meta.WorkflowID, fmt.Sprintf("节点执行失败 node=%s shard=%d err=%s", meta.WorkflowNode, meta.ShardIndex, message))
+	if failErr := m.failWorkflow(ctx, meta.WorkflowID, fmt.Sprintf("节点执行失败 node=%s shard=%d err=%s", meta.WorkflowNode, meta.ShardIndex, message)); failErr != nil {
+		return true, failErr
+	}
+	return true, nil
+}
+
+// recordWorkflowTaskStats 保存单个节点分片的处理量快照，供工作流状态页按节点和分片聚合展示。
+func (m *Manager) recordWorkflowTaskStats(ctx context.Context, meta WorkflowTaskMeta, snapshot *taskstats.Snapshot) error {
+	if m == nil || snapshot == nil || snapshot.Empty() || strings.TrimSpace(meta.WorkflowID) == "" || strings.TrimSpace(meta.WorkflowNode) == "" {
+		return nil
+	}
+	shardTotal := meta.ShardTotal
+	if shardTotal <= 0 {
+		shardTotal = 1
+	}
+	payload := WorkflowNodeShardTraceItem{
+		ShardIndex:     meta.ShardIndex,
+		ShardTotal:     shardTotal,
+		ExecutionTrace: snapshot,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return errors.Wrapf(err, "序列化工作流节点处理量失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
+	}
+	return m.updateWorkflowNode(ctx, meta.WorkflowID, meta.WorkflowNode, map[string]any{
+		workflowNodeTraceField(meta.ShardIndex): string(raw),
+	})
 }
 
 // onNodeCompleted 在节点全部完成后推进下游节点，并判断工作流是否整体结束。
@@ -757,8 +818,158 @@ func (m *Manager) readWorkflowStatus(ctx context.Context, workflowID string) (*W
 			StartedAt:    vals["startedAt"],
 			FinishedAt:   vals["finishedAt"],
 		})
+		current := &nodes[len(nodes)-1]
+		current.ShardTraces = decodeWorkflowNodeShardTraces(vals)
+		current.ExecutionTrace = aggregateWorkflowNodeStats(current.Name, current.ShardTraces)
+		current.Progress = workflowNodeProgress(*current, 0)
 	}
 	return meta, nodes, nil
+}
+
+// decodeWorkflowNodeShardTraces 从节点 hash 中解析所有已记录的分片处理量快照和分片终态。
+func decodeWorkflowNodeShardTraces(values map[string]string) []WorkflowNodeShardTraceItem {
+	if len(values) == 0 {
+		return nil
+	}
+	shardMap := make(map[int]WorkflowNodeShardTraceItem)
+	for key, raw := range values {
+		shardValue := strings.TrimPrefix(key, workflowNodeTraceFieldPrefix)
+		if shardValue == key {
+			continue
+		}
+		shardIndex, err := strconv.Atoi(shardValue)
+		if err != nil {
+			continue
+		}
+		var shardTrace WorkflowNodeShardTraceItem
+		if err = json.Unmarshal([]byte(raw), &shardTrace); err == nil && shardTrace.ExecutionTrace != nil && !shardTrace.ExecutionTrace.Empty() {
+			if shardTrace.ShardTotal <= 0 {
+				shardTrace.ShardTotal = 1
+			}
+			shardMap[shardIndex] = shardTrace
+			continue
+		}
+		statsSnapshot := taskExecutionStatsFromJSON([]byte(raw))
+		if statsSnapshot == nil {
+			continue
+		}
+		shardMap[shardIndex] = WorkflowNodeShardTraceItem{
+			ShardIndex:     shardIndex,
+			ShardTotal:     1,
+			ExecutionTrace: statsSnapshot,
+		}
+	}
+	for key, raw := range values {
+		shardValue := strings.TrimPrefix(key, workflowNodeInstanceFieldPrefix)
+		if shardValue == key {
+			continue
+		}
+		shardIndex, err := strconv.Atoi(shardValue)
+		if err != nil {
+			continue
+		}
+		shardTrace := shardMap[shardIndex]
+		shardTrace.ShardIndex = shardIndex
+		if shardTrace.ShardTotal <= 0 {
+			shardTrace.ShardTotal = 1
+		}
+		shardTrace.Status = workflowShardStatus(raw, shardTrace.ExecutionTrace != nil)
+		shardMap[shardIndex] = shardTrace
+	}
+	shards := make([]WorkflowNodeShardTraceItem, 0, len(shardMap))
+	for _, shardTrace := range shardMap {
+		if shardTrace.ShardTotal <= 0 {
+			shardTrace.ShardTotal = 1
+		}
+		if shardTrace.Status == "" {
+			shardTrace.Status = workflowShardStatus("", shardTrace.ExecutionTrace != nil)
+		}
+		shardTrace.Progress = workflowShardProgress(shardTrace.Status)
+		shards = append(shards, shardTrace)
+	}
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].ShardIndex < shards[j].ShardIndex
+	})
+	return shards
+}
+
+// aggregateWorkflowNodeStats 聚合单个节点下所有分片处理量。
+func aggregateWorkflowNodeStats(nodeName string, shards []WorkflowNodeShardTraceItem) *taskstats.Snapshot {
+	if len(shards) == 0 {
+		return nil
+	}
+	snapshots := make([]*taskstats.Snapshot, 0, len(shards))
+	for i := range shards {
+		snapshots = append(snapshots, shards[i].ExecutionTrace)
+	}
+	return taskstats.MergeSnapshots("workflow.node."+strings.TrimSpace(nodeName), snapshots...)
+}
+
+// workflowNodeProgress 计算单个节点的分片执行进度。
+func workflowNodeProgress(node WorkflowNodeRecord, planned int) *taskstats.Progress {
+	total := int64(planned)
+	if total <= 0 {
+		total = int64(node.Expected)
+	}
+	if total <= 0 && node.Skipped > 0 {
+		total = int64(node.Skipped)
+	}
+	return taskstats.NewProgress(taskstats.ProgressUnitShard, node.Status, total, int64(node.Succeeded), int64(node.Failed), int64(node.Skipped))
+}
+
+// plannedWorkflowNodeInstances 根据工作流定义计算节点本次计划实例数。
+func plannedWorkflowNodeInstances(def *WorkflowDefinition, meta *WorkflowMetaRecord, node WorkflowNodeRecord) int {
+	if node.Expected > 0 {
+		return node.Expected
+	}
+	if node.Skipped > 0 {
+		return node.Skipped
+	}
+	if def == nil || meta == nil {
+		return 0
+	}
+	nodeDef := def.Nodes[node.Name]
+	if nodeDef == nil {
+		return 0
+	}
+	shardTotal := effectiveShardTotal(nodeDef, WorkflowStartSpec{ShardTotal: meta.ShardTotal})
+	return len(selectedShardIndexes(meta.WorkflowID, node.Name, shardTotal, meta.GrayPercent, nodeDef.SupportsGray))
+}
+
+// workflowShardStatus 根据分片终态和处理量快照推导分片状态。
+func workflowShardStatus(raw string, hasTrace bool) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "succeeded", NodeStatusSuccess:
+		return NodeStatusSuccess
+	case NodeStatusFailed:
+		return NodeStatusFailed
+	case NodeStatusSkipped:
+		return NodeStatusSkipped
+	case NodeStatusRunning:
+		return NodeStatusRunning
+	case NodeStatusPending:
+		return NodeStatusPending
+	}
+	if hasTrace {
+		return NodeStatusRunning
+	}
+	return NodeStatusPending
+}
+
+// workflowShardProgress 生成单个分片的执行进度。
+func workflowShardProgress(status string) *taskstats.Progress {
+	switch workflowShardStatus(status, false) {
+	case NodeStatusSuccess:
+		return taskstats.NewProgress(taskstats.ProgressUnitShard, NodeStatusSuccess, 1, 1, 0, 0)
+	case NodeStatusFailed:
+		return taskstats.NewProgress(taskstats.ProgressUnitShard, NodeStatusFailed, 1, 0, 1, 0)
+	case NodeStatusSkipped:
+		return taskstats.NewProgress(taskstats.ProgressUnitShard, NodeStatusSkipped, 1, 0, 0, 1)
+	case NodeStatusRunning:
+		return taskstats.NewProgress(taskstats.ProgressUnitShard, NodeStatusRunning, 1, 0, 0, 0)
+	default:
+		return taskstats.NewProgress(taskstats.ProgressUnitShard, NodeStatusPending, 1, 0, 0, 0)
+	}
 }
 
 // workflowSpecByID 根据工作流实例 ID 还原其启动参数摘要。
@@ -770,15 +981,24 @@ func (m *Manager) workflowSpecByID(ctx context.Context, workflowID string) (Work
 	if len(metaMap) == 0 {
 		return WorkflowStartSpec{}, redis.Nil
 	}
-	return WorkflowStartSpec{
-		WorkflowID:  metaMap["workflowId"],
-		Name:        metaMap["workflowName"],
-		Queue:       metaMap["queue"],
-		Targets:     decodeStringList(metaMap["targets"]),
-		ShardTotal:  toInt(metaMap["shardTotal"]),
-		GrayPercent: toInt(metaMap["grayPercent"]),
-		Source:      metaMap["source"],
-	}, nil
+	spec := WorkflowStartSpec{
+		WorkflowID:   metaMap["workflowId"],
+		Name:         metaMap["workflowName"],
+		Queue:        metaMap["queue"],
+		Targets:      decodeStringList(metaMap["targets"]),
+		ShardTotal:   toInt(metaMap["shardTotal"]),
+		GrayPercent:  toInt(metaMap["grayPercent"]),
+		Source:       metaMap["source"],
+		PeriodicName: metaMap["periodicName"],
+	}
+	if rawRetry, ok := metaMap["retryOverride"]; ok {
+		retry := toInt(rawRetry)
+		spec.RetryOverride = &retry
+	}
+	if timeoutSeconds := toInt(metaMap["timeoutOverrideSeconds"]); timeoutSeconds > 0 {
+		spec.TimeoutOverride = time.Duration(timeoutSeconds) * time.Second
+	}
+	return spec, nil
 }
 
 // workflowMetadataComplete 校验工作流初始化元数据是否完整。

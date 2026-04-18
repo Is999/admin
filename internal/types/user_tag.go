@@ -24,6 +24,7 @@ type TriggerUserTagWorkflowReq struct {
 	SyncSnapshotOnly bool    `json:"syncSnapshotOnly,optional"` // 只初始化同步快照，不推 Kafka 事件
 	UniqueKey        string  `json:"uniqueKey,optional"`        // 去重键
 	UniqueTTLSeconds *int    `json:"uniqueTTLSeconds,optional"` // 去重 TTL 秒
+	Retry            *int    `json:"retry,optional"`            // 覆盖默认重试次数
 	TimeoutSeconds   *int    `json:"timeoutSeconds,optional"`   // 触发任务超时时间
 }
 
@@ -51,6 +52,7 @@ type RecalculateUserTagReq struct {
 	DryRunSnake           bool   `json:"dry_run,optional"`            // 只计算不落库，兼容 snake_case
 	UniqueTTLSeconds      *int   `json:"uniqueTTLSeconds,optional"`   // 去重 TTL 秒
 	UniqueTTLSecondsSnake *int   `json:"unique_ttl_seconds,optional"` // 去重 TTL 秒，兼容 snake_case
+	Retry                 *int   `json:"retry,optional"`              // 覆盖默认重试次数
 	TimeoutSeconds        *int   `json:"timeoutSeconds,optional"`     // 触发任务超时时间
 	TimeoutSecondsSnake   *int   `json:"timeout_seconds,optional"`    // 触发任务超时时间，兼容 snake_case
 }
@@ -94,6 +96,9 @@ func (r *RecalculateUserTagReq) Validate() error {
 	}
 	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds <= 0 {
 		return errors.Errorf("uniqueTTLSeconds 必须大于 0")
+	}
+	if r.Retry != nil && *r.Retry < 0 {
+		return errors.Errorf("retry 不能小于 0")
 	}
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")
@@ -223,6 +228,9 @@ func (r *TriggerUserTagWorkflowReq) Validate() error {
 	}
 	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds <= 0 {
 		return errors.Errorf("uniqueTTLSeconds 必须大于 0")
+	}
+	if r.Retry != nil && *r.Retry < 0 {
+		return errors.Errorf("retry 不能小于 0")
 	}
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")

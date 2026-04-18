@@ -61,6 +61,7 @@ func (l *UserTagLogic) RecalculateByTagTypes(req *types.RecalculateUserTagReq) *
 		WorkerCount:      req.WorkerCount,
 		DryRun:           req.DryRun,
 		UniqueTTLSeconds: req.UniqueTTLSeconds,
+		Retry:            req.Retry,
 		TimeoutSeconds:   req.TimeoutSeconds,
 	}
 
@@ -250,6 +251,7 @@ func buildUserTagWorkflowReq(req *types.TriggerUserTagWorkflowReq, cfg config.Us
 		GrayPercent:      100,
 		UniqueKey:        uniqueKey,
 		UniqueTTLSeconds: req.UniqueTTLSeconds,
+		Retry:            req.Retry,
 		TimeoutSeconds:   req.TimeoutSeconds,
 	}
 }

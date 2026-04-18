@@ -22,6 +22,7 @@ import (
 	"admin_cron/internal/jobs/archive"
 	"admin_cron/internal/requestctx"
 	"admin_cron/internal/svc"
+	"admin_cron/internal/taskstats"
 	"admin_cron/internal/types"
 
 	"github.com/google/uuid"
@@ -60,6 +61,7 @@ const (
 	headerUserName     = "x-app-user-name"
 	headerTaskName     = "x-app-task-name"
 	headerTaskSource   = "x-app-task-source"
+	HeaderPeriodicName = "x-app-periodic-name" // 周期任务原始名称
 	headerWorkflowID   = "x-app-workflow-id"
 	headerWorkflowName = "x-app-workflow-name"
 	headerWorkflowNode = "x-app-workflow-node"
@@ -75,6 +77,8 @@ const (
 	taskSearchFieldTaskSource   = "taskSource"   // 任务来源字段，用于区分 api/periodic/internal 等触发来源
 	taskSearchFieldMode         = "mode"         // 用户标签等任务的运行模式字段，用于保留 full/delta 等排查入口
 	taskSearchFieldUniqueKey    = "uniqueKey"    // 工作流或任务幂等键字段，便于按周期 unique_key 反查任务
+
+	taskExecutionStatusSuccess = "success" // 普通任务执行结果成功状态
 
 	taskFinalWriteTimeout  = 5 * time.Second // 任务收尾写 Redis 的短超时，避免业务 ctx 超时后失败状态无法落库
 	taskListFilterPageSize = 100             // 任务列表二次过滤单批读取量，和接口最大页大小保持一致
@@ -100,10 +104,18 @@ type WorkflowTriggerPayload struct {
 	Source            string   `json:"source,omitempty"`            // 触发来源
 	TriggeredByUserID int      `json:"triggeredByUserId,omitempty"` // 触发人用户 ID
 	TriggeredByUser   string   `json:"triggeredByUser,omitempty"`   // 触发人用户名
+	PeriodicName      string   `json:"periodicName,omitempty"`      // 周期任务原始名称
 	Retry             *int     `json:"retry,omitempty"`             // 重试次数覆盖值
 	TimeoutSeconds    int      `json:"timeoutSeconds,omitempty"`    // 超时时间，单位秒
 	UniqueKey         string   `json:"uniqueKey,omitempty"`         // 幂等键
 	UniqueTTLSeconds  int      `json:"uniqueTTLSeconds,omitempty"`  // 幂等锁有效期，单位秒
+}
+
+// periodicNextRun 表示一个有效周期任务的下一次触发摘要。
+type periodicNextRun struct {
+	PeriodicName  string // 周期任务展示名，对应 x-app-periodic-name
+	WorkflowName  string // 关联工作流名称
+	NextProcessAt string // 下一次触发时间，RFC3339
 }
 
 // CacheRefreshPayload 是缓存刷新任务的负载。
@@ -122,39 +134,41 @@ type NoopPayload struct {
 // TaskExecutionResult 表示任务执行成功后写回到 Asynq 的结果摘要。
 // 管理后台的“任务结果”优先展示该结构，便于直接看到本次执行的关键产物。
 type TaskExecutionResult struct {
-	Status       string   `json:"status"`                 // 执行状态，当前统一写 success
-	TraceID      string   `json:"traceId,omitempty"`      // 链路追踪 ID
-	TaskID       string   `json:"taskId,omitempty"`       // 任务 ID
-	TaskType     string   `json:"taskType,omitempty"`     // 任务类型
-	TaskName     string   `json:"taskName,omitempty"`     // 任务名称/脚本名称
-	TaskSource   string   `json:"taskSource,omitempty"`   // 任务来源（如 api/periodic/internal）
-	TaskQueue    string   `json:"taskQueue,omitempty"`    // 所属队列
-	Queue        string   `json:"queue,omitempty"`        // payload 中声明的业务执行队列
-	LatencyMS    int64    `json:"latencyMs,omitempty"`    // 执行耗时（毫秒）
-	BizCode      int      `json:"bizCode,omitempty"`      // 统一业务状态码
-	BizMessage   string   `json:"bizMessage,omitempty"`   // 统一业务结果说明
-	WorkflowID   string   `json:"workflowId,omitempty"`   // 工作流实例 ID
-	WorkflowName string   `json:"workflowName,omitempty"` // 工作流名称
-	WorkflowNode string   `json:"workflowNode,omitempty"` // 工作流节点名称
-	ShardIndex   int      `json:"shardIndex,omitempty"`   // 分片索引
-	ShardTotal   int      `json:"shardTotal,omitempty"`   // 分片总数
-	GrayPercent  int      `json:"grayPercent,omitempty"`  // 灰度执行百分比
-	Operation    string   `json:"operation,omitempty"`    // 业务动作，如缓存刷新操作名
-	Mode         string   `json:"mode,omitempty"`         // 业务模式，如 full/delta/targeted
-	TargetCount  int      `json:"targetCount,omitempty"`  // 目标数量
-	UIDCount     int      `json:"uidCount,omitempty"`     // UID 数量
-	TagTypeCount int      `json:"tagTypeCount,omitempty"` // 标签类型数量
-	Targets      []string `json:"targets,omitempty"`      // 目标预览，避免结果过长仅保留前几项
-	PayloadKeys  []string `json:"payloadKeys,omitempty"`  // payload 顶层字段摘要，便于快速判断本次入参结构
-	StartedAt    string   `json:"startedAt,omitempty"`    // 开始执行时间
-	FinishedAt   string   `json:"finishedAt,omitempty"`   // 结果写回时间
+	Status         string              `json:"status"`                   // 执行状态，当前统一写 success
+	TraceID        string              `json:"traceId,omitempty"`        // 链路追踪 ID
+	TaskID         string              `json:"taskId,omitempty"`         // 任务 ID
+	TaskType       string              `json:"taskType,omitempty"`       // 任务类型
+	TaskName       string              `json:"taskName,omitempty"`       // 任务名称/脚本名称
+	TaskSource     string              `json:"taskSource,omitempty"`     // 任务来源（如 api/periodic/internal）
+	TaskQueue      string              `json:"taskQueue,omitempty"`      // 所属队列
+	Queue          string              `json:"queue,omitempty"`          // payload 中声明的业务执行队列
+	LatencyMS      int64               `json:"latencyMs,omitempty"`      // 执行耗时（毫秒）
+	BizCode        int                 `json:"bizCode,omitempty"`        // 统一业务状态码
+	BizMessage     string              `json:"bizMessage,omitempty"`     // 统一业务结果说明
+	WorkflowID     string              `json:"workflowId,omitempty"`     // 工作流实例 ID
+	WorkflowName   string              `json:"workflowName,omitempty"`   // 工作流名称
+	WorkflowNode   string              `json:"workflowNode,omitempty"`   // 工作流节点名称
+	ShardIndex     int                 `json:"shardIndex,omitempty"`     // 分片索引
+	ShardTotal     int                 `json:"shardTotal,omitempty"`     // 分片总数
+	GrayPercent    int                 `json:"grayPercent,omitempty"`    // 灰度执行百分比
+	Operation      string              `json:"operation,omitempty"`      // 业务动作，如缓存刷新操作名
+	Mode           string              `json:"mode,omitempty"`           // 业务模式，如 full/delta/targeted
+	TargetCount    int                 `json:"targetCount,omitempty"`    // 目标数量
+	UIDCount       int                 `json:"uidCount,omitempty"`       // UID 数量
+	TagTypeCount   int                 `json:"tagTypeCount,omitempty"`   // 标签类型数量
+	Targets        []string            `json:"targets,omitempty"`        // 目标预览，避免结果过长仅保留前几项
+	PayloadKeys    []string            `json:"payloadKeys,omitempty"`    // payload 顶层字段摘要，便于快速判断本次入参结构
+	StartedAt      string              `json:"startedAt,omitempty"`      // 开始执行时间
+	FinishedAt     string              `json:"finishedAt,omitempty"`     // 结果写回时间
+	ExecutionTrace *taskstats.Snapshot `json:"executionTrace,omitempty"` // 本次任务处理量统计摘要
 }
 
 // taskRuntimeRecord 表示任务运行时耗时快照。
 type taskRuntimeRecord struct {
-	StartedAt  string // 开始执行时间
-	FinishedAt string // 完成执行时间
-	DurationMS int64  // 执行耗时，毫秒
+	StartedAt      string              // 开始执行时间
+	FinishedAt     string              // 完成执行时间
+	DurationMS     int64               // 执行耗时，毫秒
+	ExecutionTrace *taskstats.Snapshot // 本次任务处理量统计摘要
 }
 
 // GroupAggregator 定义单个聚合分组的批处理器。
@@ -397,6 +411,7 @@ func (m *Manager) RegisterHandler(pattern string, handler asynq.Handler) (err er
 		}
 	}()
 	m.mux.Handle(pattern, handler)
+	allowTaskMetricTaskTypeLabel(pattern)
 	return nil
 }
 
@@ -659,6 +674,25 @@ func taskLogFields(task *asynq.Task) []logx.LogField {
 	return fields
 }
 
+// taskStatsLogFields 返回任务执行统计摘要字段，字段名保持稳定便于日志平台聚合。
+func taskStatsLogFields(snapshot *taskstats.Snapshot) []logx.LogField {
+	if snapshot == nil || snapshot.Empty() {
+		return nil
+	}
+	return []logx.LogField{
+		logx.Field("trace_total_count", snapshot.TotalCount),
+		logx.Field("trace_read_count", snapshot.ReadCount),
+		logx.Field("trace_insert_count", snapshot.InsertCount),
+		logx.Field("trace_update_count", snapshot.UpdateCount),
+		logx.Field("trace_delete_count", snapshot.DeleteCount),
+		logx.Field("trace_upsert_count", snapshot.UpsertCount),
+		logx.Field("trace_skip_count", snapshot.SkipCount),
+		logx.Field("trace_error_count", snapshot.ErrorCount),
+		logx.Field("trace_detail_count", len(snapshot.Details)),
+		logx.Field("trace_duration_ms", snapshot.DurationMS),
+	}
+}
+
 // taskLogMessage 构造任务生命周期日志正文，方便只看 message 列时也能定位任务。
 func taskLogMessage(action string, meta *requestctx.Meta) string {
 	action = strings.TrimSpace(action)
@@ -696,10 +730,11 @@ func appendTextKV(parts []string, key string, value string) []string {
 }
 
 // buildTaskExecutionResult 组装任务成功后的统一结果摘要，供任务详情页直接展示。
-func buildTaskExecutionResult(task *asynq.Task, meta *requestctx.Meta, startedAt time.Time) TaskExecutionResult {
+func buildTaskExecutionResult(task *asynq.Task, meta *requestctx.Meta, startedAt time.Time, statsSnapshot *taskstats.Snapshot) TaskExecutionResult {
 	result := TaskExecutionResult{
-		Status:     "success",
-		FinishedAt: time.Now().Format(time.RFC3339),
+		Status:         taskExecutionStatusSuccess,
+		FinishedAt:     time.Now().Format(time.RFC3339),
+		ExecutionTrace: statsSnapshot,
 	}
 	if !startedAt.IsZero() {
 		result.StartedAt = startedAt.Format(time.RFC3339)
@@ -855,11 +890,11 @@ func limitPreviewStrings(values []string, limit int) []string {
 }
 
 // writeTaskResult 把任务执行结果写回 Asynq，便于管理后台查看成功记录的结果摘要。
-func (m *Manager) writeTaskResult(ctx context.Context, task *asynq.Task, meta *requestctx.Meta, startedAt time.Time) {
+func (m *Manager) writeTaskResult(ctx context.Context, task *asynq.Task, meta *requestctx.Meta, startedAt time.Time, statsSnapshot *taskstats.Snapshot) {
 	if task == nil || task.ResultWriter() == nil {
 		return
 	}
-	resultBytes, err := json.Marshal(buildTaskExecutionResult(task, meta, startedAt))
+	resultBytes, err := json.Marshal(buildTaskExecutionResult(task, meta, startedAt, statsSnapshot))
 	if err != nil {
 		loggerx.Errorw(ctx, "任务结果 序列化失败", err, taskLogFields(task)...)
 		return
@@ -997,7 +1032,7 @@ func (m *Manager) recordTaskRuntimeStart(ctx context.Context, taskID string, beg
 }
 
 // recordTaskRuntimeFinish 记录任务完成耗时，成功和失败都会保留。
-func (m *Manager) recordTaskRuntimeFinish(ctx context.Context, taskID string, begin time.Time, runErr error) {
+func (m *Manager) recordTaskRuntimeFinish(ctx context.Context, taskID string, begin time.Time, runErr error, statsSnapshot *taskstats.Snapshot) {
 	taskID = strings.TrimSpace(taskID)
 	if m == nil || m.redis == nil || taskID == "" {
 		return
@@ -1023,6 +1058,19 @@ func (m *Manager) recordTaskRuntimeFinish(ctx context.Context, taskID string, be
 		"updatedAt":    finishedAt.Format(time.RFC3339),
 		"finishedAtMs": finishedAt.UnixMilli(),
 	}
+	if statsSnapshot != nil && !statsSnapshot.Empty() {
+		if rawStats, err := json.Marshal(statsSnapshot); err == nil {
+			values["executionTrace"] = string(rawStats)
+			values["traceTotalCount"] = statsSnapshot.TotalCount
+			values["traceReadCount"] = statsSnapshot.ReadCount
+			values["traceInsertCount"] = statsSnapshot.InsertCount
+			values["traceUpdateCount"] = statsSnapshot.UpdateCount
+			values["traceDeleteCount"] = statsSnapshot.DeleteCount
+			values["traceUpsertCount"] = statsSnapshot.UpsertCount
+			values["traceSkipCount"] = statsSnapshot.SkipCount
+			values["traceErrorCount"] = statsSnapshot.ErrorCount
+		}
+	}
 	if runErr != nil {
 		values["lastErr"] = runErr.Error()
 	}
@@ -1044,9 +1092,10 @@ func (m *Manager) readTaskRuntime(ctx context.Context, taskID string) taskRuntim
 		return taskRuntimeRecord{}
 	}
 	return taskRuntimeRecord{
-		StartedAt:  strings.TrimSpace(values["startedAt"]),
-		FinishedAt: strings.TrimSpace(values["finishedAt"]),
-		DurationMS: toInt64(values["durationMs"]),
+		StartedAt:      strings.TrimSpace(values["startedAt"]),
+		FinishedAt:     strings.TrimSpace(values["finishedAt"]),
+		DurationMS:     toInt64(values["durationMs"]),
+		ExecutionTrace: taskExecutionStatsFromJSON([]byte(strings.TrimSpace(values["executionTrace"]))),
 	}
 }
 
@@ -1079,6 +1128,32 @@ func taskStartedAtFromResult(result []byte) string {
 		return ""
 	}
 	return startedAt
+}
+
+// taskExecutionStatsFromJSON 从 JSON 字节中读取任务处理量快照，兼容空值和旧数据。
+func taskExecutionStatsFromJSON(raw []byte) *taskstats.Snapshot {
+	if len(raw) == 0 {
+		return nil
+	}
+	var snapshot taskstats.Snapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil || snapshot.Empty() {
+		return nil
+	}
+	return &snapshot
+}
+
+// taskExecutionStatsFromResult 从任务结果中提取处理量快照。
+func taskExecutionStatsFromResult(result []byte) *taskstats.Snapshot {
+	if len(result) == 0 {
+		return nil
+	}
+	var payload struct {
+		ExecutionTrace *taskstats.Snapshot `json:"executionTrace"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil || payload.ExecutionTrace == nil || payload.ExecutionTrace.Empty() {
+		return nil
+	}
+	return payload.ExecutionTrace
 }
 
 // taskTypeUsageHint 返回任务类型使用提示。
@@ -1624,23 +1699,48 @@ func (m *Manager) GetWorkflowStatus(ctx context.Context, workflowID string) (*ty
 		DurationMS:   durationBetweenRFC3339(meta.CreatedAt, meta.FinishedAt),
 		Nodes:        make([]types.TaskWorkflowNodeItem, 0, len(nodes)),
 	}
+	workflowStatsSnapshots := make([]*taskstats.Snapshot, 0, len(nodes))
+	workflowProgressItems := make([]*taskstats.Progress, 0, len(nodes))
+	def, _ := m.workflowDefinition(meta.WorkflowName)
 	for _, node := range nodes {
+		nodeProgress := workflowNodeProgress(node, plannedWorkflowNodeInstances(def, meta, node))
+		if nodeProgress != nil {
+			workflowProgressItems = append(workflowProgressItems, nodeProgress)
+		}
+		shardTraces := make([]types.TaskWorkflowShardTraceItem, 0, len(node.ShardTraces))
+		for _, shardTrace := range node.ShardTraces {
+			shardTraces = append(shardTraces, types.TaskWorkflowShardTraceItem{
+				ShardIndex:     shardTrace.ShardIndex,
+				ShardTotal:     shardTrace.ShardTotal,
+				Status:         shardTrace.Status,
+				Progress:       shardTrace.Progress,
+				ExecutionTrace: shardTrace.ExecutionTrace,
+			})
+		}
+		if node.ExecutionTrace != nil && !node.ExecutionTrace.Empty() {
+			workflowStatsSnapshots = append(workflowStatsSnapshots, node.ExecutionTrace)
+		}
 		resp.Nodes = append(resp.Nodes, types.TaskWorkflowNodeItem{
-			Name:         node.Name,
-			TaskType:     node.TaskType,
-			Queue:        m.displayQueueName(node.Queue),
-			Status:       node.Status,
-			DependsOn:    node.DependsOn,
-			Expected:     node.Expected,
-			Succeeded:    node.Succeeded,
-			Failed:       node.Failed,
-			Skipped:      node.Skipped,
-			ErrorMessage: node.ErrorMessage,
-			StartedAt:    node.StartedAt,
-			FinishedAt:   node.FinishedAt,
-			DurationMS:   durationBetweenRFC3339(node.StartedAt, node.FinishedAt),
+			Name:           node.Name,
+			TaskType:       node.TaskType,
+			Queue:          m.displayQueueName(node.Queue),
+			Status:         node.Status,
+			DependsOn:      node.DependsOn,
+			Expected:       node.Expected,
+			Succeeded:      node.Succeeded,
+			Failed:         node.Failed,
+			Skipped:        node.Skipped,
+			ErrorMessage:   node.ErrorMessage,
+			StartedAt:      node.StartedAt,
+			FinishedAt:     node.FinishedAt,
+			DurationMS:     durationBetweenRFC3339(node.StartedAt, node.FinishedAt),
+			Progress:       nodeProgress,
+			ExecutionTrace: node.ExecutionTrace,
+			ShardTraces:    shardTraces,
 		})
 	}
+	resp.Progress = taskstats.MergeProgress(taskstats.ProgressUnitNodeInstance, meta.Status, workflowProgressItems...)
+	resp.ExecutionTrace = taskstats.MergeSnapshots("workflow."+strings.TrimSpace(meta.WorkflowName), workflowStatsSnapshots...)
 	return resp, nil
 }
 
@@ -1812,9 +1912,9 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 	workflowID := strings.TrimSpace(req.WorkflowID)
 	// taskName 是任务名称关键字筛选条件，空值时保留 Asynq 原生分页路径。
 	taskName := strings.TrimSpace(req.TaskName)
-	timeStart := strings.TrimSpace(req.TimeStart)
-	timeEnd := strings.TrimSpace(req.TimeEnd)
-	timeRange, err := parseTaskListTimeRange(timeStart, timeEnd)
+	startTime := strings.TrimSpace(req.StartTime)
+	endTime := strings.TrimSpace(req.EndTime)
+	timeRange, err := parseTaskListTimeRange(startTime, endTime)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -1826,13 +1926,14 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 		Group:      group,
 		WorkflowID: workflowID,
 		TaskName:   taskName,
-		TimeStart:  timeStart,
-		TimeEnd:    timeEnd,
+		StartTime:  startTime,
+		EndTime:    endTime,
 		Page:       req.Page,
 		PageSize:   req.PageSize,
 		Tasks:      make([]types.TaskItem, 0),
 	}
 	needsItemScan := workflowID != "" || taskName != "" || taskTimeRangeNeedsItemScan(state, timeRange)
+	periodicNextRuns := m.periodicNextRuns(time.Now())
 	if !needsItemScan {
 		items, total, err := m.listTaskInfoPage(ctx, internalQueue, internalGroup, state, req.Page, req.PageSize, timeRange)
 		if err != nil {
@@ -1841,11 +1942,11 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 		resp.Total = total
 		resp.Tasks = make([]types.TaskItem, 0, len(items))
 		for _, item := range items {
-			resp.Tasks = append(resp.Tasks, m.toTaskItem(ctx, item))
+			resp.Tasks = append(resp.Tasks, m.toTaskItemWithPeriodicNextRuns(ctx, item, periodicNextRuns))
 		}
 		return resp, nil
 	}
-	filteredTasks, total, err := m.listTaskItemsByFilters(ctx, internalQueue, internalGroup, state, workflowID, taskName, req.Page, req.PageSize, timeRange)
+	filteredTasks, total, err := m.listTaskItemsByFilters(ctx, internalQueue, internalGroup, state, workflowID, taskName, req.Page, req.PageSize, timeRange, periodicNextRuns)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -2127,7 +2228,7 @@ func asynqTaskZSetKey(queue string, state string) (string, error) {
 
 // listTaskItemsByFilters 在指定队列和状态下扫描任务，并按时间倒序过滤后分页。
 // 管理接口层补充倒序和时间段过滤，保证列表排序稳定。
-func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue string, internalGroup string, state string, workflowID string, taskName string, page int, pageSize int, timeRange taskListTimeRange) ([]types.TaskItem, int64, error) {
+func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue string, internalGroup string, state string, workflowID string, taskName string, page int, pageSize int, timeRange taskListTimeRange, periodicNextRuns []periodicNextRun) ([]types.TaskItem, int64, error) {
 	matchedTasks := make([]types.TaskItem, 0)
 	workflowID = strings.TrimSpace(workflowID)
 	taskName = strings.TrimSpace(taskName)
@@ -2140,7 +2241,7 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 			break
 		}
 		for _, item := range items {
-			taskItem := m.toTaskItem(ctx, item)
+			taskItem := m.toTaskItemWithPeriodicNextRuns(ctx, item, periodicNextRuns)
 			if !taskItemMatchesListFilters(taskItem, workflowID, taskName) {
 				continue
 			}
@@ -2320,6 +2421,7 @@ func taskItemSearchCandidates(item types.TaskItem) []string {
 		item.Group,
 		item.Headers[headerTaskName],
 		item.Headers[headerTaskSource],
+		item.Headers[HeaderPeriodicName],
 		item.Headers[headerWorkflowID],
 		item.Headers[headerWorkflowName],
 		item.Headers[headerWorkflowNode],
@@ -2331,6 +2433,7 @@ func taskItemSearchCandidates(item types.TaskItem) []string {
 		taskSearchFieldWorkflowName,
 		taskSearchFieldWorkflowNode,
 		taskSearchFieldTaskSource,
+		"periodicName",
 		taskSearchFieldMode,
 		taskSearchFieldUniqueKey,
 	)
@@ -2341,6 +2444,7 @@ func taskItemSearchCandidates(item types.TaskItem) []string {
 		taskSearchFieldWorkflowName,
 		taskSearchFieldWorkflowNode,
 		taskSearchFieldTaskSource,
+		"periodicName",
 		taskSearchFieldMode,
 		taskSearchFieldUniqueKey,
 	)
@@ -2368,6 +2472,118 @@ func appendTaskSearchJSONFields(candidates *[]string, raw json.RawMessage, field
 		}
 		*candidates = append(*candidates, value)
 	}
+}
+
+// periodicNextRuns 计算当前有效周期任务的下一次触发时间，用于列表补齐 completed/archived 的 nextProcessAt。
+func (m *Manager) periodicNextRuns(now time.Time) []periodicNextRun {
+	if m == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	items := m.allPeriodicTasks()
+	result := make([]periodicNextRun, 0, len(items))
+	for _, item := range items {
+		normalized, invalidReason := m.validatePeriodicTaskConfig(item)
+		if invalidReason != "" {
+			continue
+		}
+		cronspec, err := periodicTaskCronspec(normalized)
+		if err != nil {
+			continue
+		}
+		schedule, err := periodicCronParser.Parse(cronspec)
+		if err != nil {
+			continue
+		}
+		nextAt := schedule.Next(now)
+		if nextAt.IsZero() {
+			continue
+		}
+		result = append(result, periodicNextRun{
+			PeriodicName:  periodicTaskDisplayName(normalized),
+			WorkflowName:  strings.TrimSpace(normalized.Workflow),
+			NextProcessAt: nextAt.Format(time.RFC3339),
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].NextProcessAt == result[j].NextProcessAt {
+			return result[i].PeriodicName < result[j].PeriodicName
+		}
+		return result[i].NextProcessAt < result[j].NextProcessAt
+	})
+	return result
+}
+
+// periodicNextProcessAtForTaskItem 从周期任务配置中为历史任务补齐下一次触发时间。
+func periodicNextProcessAtForTaskItem(item types.TaskItem, periodicNextRuns []periodicNextRun) string {
+	if len(periodicNextRuns) == 0 || !taskItemHasPeriodicSource(item) {
+		return ""
+	}
+	periodicName := taskItemPeriodicName(item)
+	if periodicName != "" {
+		for _, nextRun := range periodicNextRuns {
+			if nextRun.PeriodicName == periodicName {
+				return nextRun.NextProcessAt
+			}
+		}
+	}
+	workflowName := taskItemWorkflowName(item)
+	if workflowName == "" {
+		return ""
+	}
+	for _, nextRun := range periodicNextRuns {
+		if nextRun.WorkflowName == workflowName {
+			return nextRun.NextProcessAt
+		}
+	}
+	return ""
+}
+
+// taskItemHasPeriodicSource 判断任务是否由周期调度触发。
+func taskItemHasPeriodicSource(item types.TaskItem) bool {
+	if taskItemPeriodicName(item) != "" {
+		return true
+	}
+	source := helper.FirstNonEmptyString(
+		strings.TrimSpace(item.Headers[headerTaskSource]),
+		taskItemJSONField(item.Payload, "source"),
+		taskItemJSONField(item.Payload, taskSearchFieldTaskSource),
+		taskItemJSONField(item.Result, taskSearchFieldTaskSource),
+	)
+	return source == WorkflowSourcePeriodic
+}
+
+// taskItemPeriodicName 从任务头或 JSON 字段中读取周期任务名称。
+func taskItemPeriodicName(item types.TaskItem) string {
+	return helper.FirstNonEmptyString(
+		strings.TrimSpace(item.Headers[HeaderPeriodicName]),
+		taskItemJSONField(item.Payload, "periodicName"),
+		taskItemJSONField(item.Result, "periodicName"),
+	)
+}
+
+// taskItemWorkflowName 从任务头或 JSON 字段中读取工作流名称。
+func taskItemWorkflowName(item types.TaskItem) string {
+	return helper.FirstNonEmptyString(
+		strings.TrimSpace(item.Headers[headerWorkflowName]),
+		taskItemJSONField(item.Payload, taskSearchFieldWorkflowName),
+		taskItemJSONField(item.Result, taskSearchFieldWorkflowName),
+	)
+}
+
+// taskItemJSONField 从任务 JSON 对象读取首层字符串字段。
+func taskItemJSONField(raw json.RawMessage, fieldName string) string {
+	fieldName = strings.TrimSpace(fieldName)
+	if len(raw) == 0 || fieldName == "" {
+		return ""
+	}
+	var payloadMap map[string]any
+	if err := json.Unmarshal(raw, &payloadMap); err != nil || len(payloadMap) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(anyToString(payloadMap[fieldName]))
 }
 
 // GetTaskInfo 查询单个任务的详情。
@@ -2584,12 +2800,14 @@ func (m *Manager) handleTaskError(ctx context.Context, task *asynq.Task, err err
 	ctx = m.enrichTaskContext(ctx, task)
 	retried, _ := asynq.GetRetryCount(ctx)
 	maxRetry, _ := asynq.GetMaxRetry(ctx)
+	taskID, _ := asynq.GetTaskID(ctx)
 	meta := workflowTaskMetaFromTask(task)
 	fields := append(loggerx.FieldsFromContext(ctx),
 		logx.Field("retried", retried),
 		logx.Field("max_retry", maxRetry),
 	)
 	fields = append(fields, taskLogFields(task)...)
+	fields = append(fields, taskStatsLogFields(m.readTaskRuntime(ctx, taskID).ExecutionTrace)...)
 	loggerx.Errorw(ctx, "任务处理失败", err, fields...)
 	if taskWillArchive(ctx, err) {
 		if markErr := m.markTaskFailureWithFinalContext(ctx, meta, err); markErr != nil {
@@ -2604,7 +2822,8 @@ func (m *Manager) handleTaskError(ctx context.Context, task *asynq.Task, err err
 func (m *Manager) markTaskFailureWithFinalContext(ctx context.Context, meta WorkflowTaskMeta, err error) error {
 	writeCtx, cancel := m.taskFinalWriteContext(ctx)
 	defer cancel()
-	return errors.Tag(m.markTaskFailure(writeCtx, meta, err))
+	_, markErr := m.markTaskFailure(writeCtx, meta, err)
+	return errors.Tag(markErr)
 }
 
 // runTaskFinalFailureHooks 在任务终态失败后触发业务清理钩子。
@@ -2672,6 +2891,7 @@ func (m *Manager) traceAndLogMiddleware() asynq.MiddlewareFunc {
 		return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 			// 先把任务上下文基础字段补齐，保证后续成功/失败日志都复用同一套元数据。
 			ctx = m.enrichTaskContext(ctx, task)
+			ctx, _ = taskstats.WithTracker(ctx, taskNameFromTask(task))
 			meta := requestctx.FromContext(ctx)
 
 			// 开始 consumer span，并把 trace_id/span_id 回写到上下文供日志复用。
@@ -2690,14 +2910,22 @@ func (m *Manager) traceAndLogMiddleware() asynq.MiddlewareFunc {
 
 			// 执行业务 handler，并在工作流状态回写完成后统一确认最终任务结果。
 			err := next.ProcessTask(ctx, task)
+			requestctx.SetLatency(ctx, time.Since(begin))
+			statsSnapshot := taskstats.SnapshotFromContext(ctx)
+			statsWriteCtx, statsWriteCancel := m.taskFinalWriteContext(ctx)
+			statsErr := m.recordWorkflowTaskStats(statsWriteCtx, workflowTaskMetaFromTask(task), statsSnapshot)
+			statsWriteCancel()
+			if statsErr != nil {
+				loggerx.Errorw(ctx, "工作流节点处理量记录失败", statsErr, taskLogFields(task)...)
+			}
 			if err == nil {
 				// 成功则回写工作流节点状态，推动 DAG 继续执行后继节点。
 				if markErr := m.markTaskSuccess(ctx, workflowTaskMetaFromTask(task)); markErr != nil {
 					err = markErr
 				}
 			}
-			requestctx.SetLatency(ctx, time.Since(begin))
-			m.recordTaskRuntimeFinish(ctx, taskID, begin, err)
+			m.recordTaskRuntimeFinish(ctx, taskID, begin, err, statsSnapshot)
+			recordTaskExecutionMetrics(queue, task.Type(), err, time.Since(begin), statsSnapshot)
 			if err != nil {
 				requestctx.SetError(ctx, err, err.Error())
 				requestctx.SetResponse(ctx, 500, 2, err.Error(), err.Error())
@@ -2706,11 +2934,12 @@ func (m *Manager) traceAndLogMiddleware() asynq.MiddlewareFunc {
 			}
 			fields := []logx.LogField{logx.Field("latency_ms", requestctx.FromContext(ctx).LatencyMS)}
 			fields = append(fields, taskLogFields(task)...)
+			fields = append(fields, taskStatsLogFields(statsSnapshot)...)
 			if err != nil {
 				span.SetStatus(otelcodes.Error, err.Error())
 				span.RecordError(err)
 			} else {
-				m.writeTaskResult(ctx, task, requestctx.FromContext(ctx), begin)
+				m.writeTaskResult(ctx, task, requestctx.FromContext(ctx), begin, statsSnapshot)
 				loggerx.Infow(ctx, taskLogMessage("任务 执行完成", requestctx.FromContext(ctx)), fields...)
 				span.SetStatus(otelcodes.Ok, "ok")
 			}
@@ -2857,9 +3086,15 @@ func (m *Manager) periodicConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 			ShardTotal:       max(item.ShardTotal, 1),
 			GrayPercent:      item.GrayPercent,
 			Source:           WorkflowSourcePeriodic,
+			PeriodicName:     periodicTaskDisplayName(item),
 			TimeoutSeconds:   item.TimeoutSeconds,
 			UniqueKey:        item.UniqueKey,
 			UniqueTTLSeconds: item.UniqueTTLSeconds,
+		}
+		var retryOverride *int
+		if item.Retry > 0 {
+			retryOverride = new(item.Retry)
+			payload.Retry = retryOverride
 		}
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -2868,12 +3103,9 @@ func (m *Manager) periodicConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 		task := asynq.NewTaskWithHeaders(TypeWorkflowTrigger, body, map[string]string{
 			headerTaskName:     periodicTaskDisplayName(item),
 			headerTaskSource:   WorkflowSourcePeriodic,
+			HeaderPeriodicName: periodicTaskDisplayName(item),
 			headerWorkflowName: item.Workflow,
 		})
-		var retryOverride *int
-		if item.Retry > 0 {
-			retryOverride = new(item.Retry)
-		}
 		opts := []asynq.Option{
 			asynq.Queue(m.namespacedQueueName(helper.FirstNonEmptyString(item.Queue, m.defaultWorkflowQueue()))),
 			asynq.MaxRetry(m.defaultRetry(retryOverride)),
@@ -3527,6 +3759,11 @@ func clampPercent(percent int) int {
 // toTaskItem 把 Asynq 任务详情转换成对外返回结构。
 // 返回前把内部队列名和聚合分组还原成逻辑名称。
 func (m *Manager) toTaskItem(ctx context.Context, info *asynq.TaskInfo) types.TaskItem {
+	return m.toTaskItemWithPeriodicNextRuns(ctx, info, nil)
+}
+
+// toTaskItemWithPeriodicNextRuns 在任务基础字段之外补齐周期任务下一次触发时间。
+func (m *Manager) toTaskItemWithPeriodicNextRuns(ctx context.Context, info *asynq.TaskInfo, periodicNextRuns []periodicNextRun) types.TaskItem {
 	if info == nil {
 		return types.TaskItem{}
 	}
@@ -3544,29 +3781,38 @@ func (m *Manager) toTaskItem(ctx context.Context, info *asynq.TaskInfo) types.Ta
 	if durationMS <= 0 {
 		durationMS = taskDurationFromResult(info.Result)
 	}
-	return types.TaskItem{
-		ID:            info.ID,
-		Queue:         m.displayQueueName(info.Queue),
-		TaskType:      info.Type,
-		TaskName:      taskInfoDisplayName(info),
-		WorkflowID:    strings.TrimSpace(info.Headers[headerWorkflowID]),
-		State:         info.State.String(),
-		Group:         m.displayGroupName(info.Group),
-		MaxRetry:      info.MaxRetry,
-		Retried:       info.Retried,
-		LastErr:       info.LastErr,
-		TimeoutSec:    int64(info.Timeout.Seconds()),
-		StartedAt:     startedAt,
-		DurationMS:    durationMS,
-		Deadline:      formatTime(info.Deadline),
-		NextProcessAt: formatTime(info.NextProcessAt),
-		CompletedAt:   formatTime(info.CompletedAt),
-		LastFailedAt:  formatTime(info.LastFailedAt),
-		IsOrphaned:    info.IsOrphaned,
-		Headers:       info.Headers,
-		Payload:       append([]byte(nil), info.Payload...),
-		Result:        append([]byte(nil), info.Result...),
+	executionTrace := runtimeRecord.ExecutionTrace
+	if executionTrace == nil {
+		executionTrace = taskExecutionStatsFromResult(info.Result)
 	}
+	item := types.TaskItem{
+		ID:             info.ID,
+		Queue:          m.displayQueueName(info.Queue),
+		TaskType:       info.Type,
+		TaskName:       taskInfoDisplayName(info),
+		WorkflowID:     strings.TrimSpace(info.Headers[headerWorkflowID]),
+		State:          info.State.String(),
+		Group:          m.displayGroupName(info.Group),
+		MaxRetry:       info.MaxRetry,
+		Retried:        info.Retried,
+		LastErr:        info.LastErr,
+		TimeoutSec:     int64(info.Timeout.Seconds()),
+		StartedAt:      startedAt,
+		DurationMS:     durationMS,
+		Deadline:       formatTime(info.Deadline),
+		NextProcessAt:  formatTime(info.NextProcessAt),
+		CompletedAt:    formatTime(info.CompletedAt),
+		LastFailedAt:   formatTime(info.LastFailedAt),
+		IsOrphaned:     info.IsOrphaned,
+		Headers:        info.Headers,
+		Payload:        append([]byte(nil), info.Payload...),
+		Result:         append([]byte(nil), info.Result...),
+		ExecutionTrace: executionTrace,
+	}
+	if item.NextProcessAt == "" {
+		item.NextProcessAt = periodicNextProcessAtForTaskItem(item, periodicNextRuns)
+	}
+	return item
 }
 
 // queueInfoTotalByState 根据任务状态返回队列中对应的统计总数。

@@ -15,6 +15,7 @@ import (
 	"admin_cron/internal/config"
 	"admin_cron/internal/requestctx"
 	"admin_cron/internal/svc"
+	"admin_cron/internal/taskstats"
 	"admin_cron/internal/types"
 
 	"github.com/alicebob/miniredis/v2"
@@ -228,6 +229,49 @@ func TestRegisterHandlerRecoversServeMuxPanic(t *testing.T) {
 		if item.TaskType == "demo:mux-only" {
 			t.Fatalf("期望本地注册表已回滚，实际仍存在: %+v", item)
 		}
+	}
+}
+
+// TestPeriodicNextProcessAtForTaskItem 验证周期任务历史记录能按周期名称或工作流名称补齐下一次执行时间。
+func TestPeriodicNextProcessAtForTaskItem(t *testing.T) {
+	nextRuns := []periodicNextRun{
+		{
+			PeriodicName:  "daily-user-tag",
+			WorkflowName:  "user_tag.full.rebuild",
+			NextProcessAt: "2026-06-08T12:00:00Z",
+		},
+		{
+			PeriodicName:  "archive-admin-log",
+			WorkflowName:  "archive.run",
+			NextProcessAt: "2026-06-08T13:00:00Z",
+		},
+	}
+
+	item := types.TaskItem{
+		Headers: map[string]string{
+			HeaderPeriodicName: "daily-user-tag",
+			headerTaskSource:   WorkflowSourcePeriodic,
+		},
+	}
+	if got := periodicNextProcessAtForTaskItem(item, nextRuns); got != "2026-06-08T12:00:00Z" {
+		t.Fatalf("期望按周期任务名称补齐下一次执行时间，实际=%q", got)
+	}
+
+	item = types.TaskItem{
+		Headers: map[string]string{
+			headerTaskSource:   WorkflowSourcePeriodic,
+			headerWorkflowName: "archive.run",
+		},
+	}
+	if got := periodicNextProcessAtForTaskItem(item, nextRuns); got != "2026-06-08T13:00:00Z" {
+		t.Fatalf("期望按工作流名称兜底补齐下一次执行时间，实际=%q", got)
+	}
+
+	item = types.TaskItem{
+		Payload: json.RawMessage(`{"source":"manual","workflowName":"archive.run"}`),
+	}
+	if got := periodicNextProcessAtForTaskItem(item, nextRuns); got != "" {
+		t.Fatalf("非周期任务不应补齐下一次执行时间，实际=%q", got)
 	}
 }
 
@@ -559,7 +603,7 @@ func TestRecordTaskRuntimeFinishUsesDetachedContext(t *testing.T) {
 	requestctx.SetTask(ctx, "task-timeout", "demo:timeout", QueueMaintenance)
 	cancel()
 
-	manager.recordTaskRuntimeFinish(ctx, "task-timeout", time.Now().Add(-time.Second), errors.New("boom"))
+	manager.recordTaskRuntimeFinish(ctx, "task-timeout", time.Now().Add(-time.Second), errors.New("boom"), nil)
 
 	values, err := manager.redis.HGetAll(context.Background(), manager.taskRuntimeKey("task-timeout")).Result()
 	if err != nil {
@@ -640,6 +684,41 @@ func TestEffectiveRetryNodeCanBlockWorkflowRetryOverride(t *testing.T) {
 	got := effectiveRetry(&WorkflowNodeDefinition{MaxRetry: -1}, WorkflowStartSpec{RetryOverride: new(3)})
 	if got != 0 {
 		t.Fatalf("期望非幂等节点强制关闭重试，实际为 %d", got)
+	}
+}
+
+// TestWorkflowSpecByIDRestoresSchedulingOverrides 验证工作流推进后仍能继承触发时的重试和超时覆盖。
+func TestWorkflowSpecByIDRestoresSchedulingOverrides(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := testWorkflowDefinition("demo.restore.overrides")
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	retry := 0
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{
+		Name:            def.Name,
+		PeriodicName:    "daily-demo",
+		RetryOverride:   &retry,
+		TimeoutOverride: 37 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+
+	got, err := manager.workflowSpecByID(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("还原工作流启动参数失败: %v", err)
+	}
+	if got.RetryOverride == nil || *got.RetryOverride != retry {
+		t.Fatalf("期望保留 retryOverride=%d，实际为 %#v", retry, got.RetryOverride)
+	}
+	if got.TimeoutOverride != 37*time.Second {
+		t.Fatalf("期望保留 timeoutOverride=37s，实际为 %v", got.TimeoutOverride)
+	}
+	if got.PeriodicName != "daily-demo" {
+		t.Fatalf("期望保留周期任务名称，实际为 %q", got.PeriodicName)
 	}
 }
 
@@ -726,6 +805,101 @@ func TestWorkflowShardedSuccessDedupesDuplicateShardAck(t *testing.T) {
 	}
 }
 
+// TestWorkflowShardedStatsVisibleInStatus 验证分片处理量会写入工作流状态并按节点聚合。
+func TestWorkflowShardedStatsVisibleInStatus(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.sharded.stats.status",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {
+				Name:             "root",
+				TaskType:         TypeWorkflowNoop,
+				SupportsSharding: true,
+				BuildPayload:     testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{
+		Name:       def.Name,
+		ShardTotal: 2,
+	})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+
+	shardSnapshots := []*taskstats.Snapshot{
+		{
+			Name:       "root.0",
+			TotalCount: 3,
+			ReadCount:  3,
+			Details: []taskstats.Detail{
+				{Action: taskstats.ActionRead, Name: "source.rows", Count: 3, Times: 1},
+			},
+		},
+		{
+			Name:        "root.1",
+			TotalCount:  5,
+			UpdateCount: 5,
+			Details: []taskstats.Detail{
+				{Action: taskstats.ActionUpdate, Name: "target.rows", Count: 5, Times: 1},
+			},
+		},
+	}
+	for shard, snapshot := range shardSnapshots {
+		meta := WorkflowTaskMeta{
+			WorkflowID:   workflowID,
+			WorkflowName: def.Name,
+			WorkflowNode: "root",
+			ShardIndex:   shard,
+			ShardTotal:   2,
+		}
+		if err := manager.recordWorkflowTaskStats(context.Background(), meta, snapshot); err != nil {
+			t.Fatalf("记录分片 %d 处理量失败: %v", shard, err)
+		}
+		if err := manager.markTaskSuccess(context.Background(), meta); err != nil {
+			t.Fatalf("标记分片 %d 成功失败: %v", shard, err)
+		}
+	}
+
+	meta, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取工作流状态失败: %v", err)
+	}
+	if meta.Status != WorkflowStatusSuccess {
+		t.Fatalf("期望工作流最终成功，实际为 %s", meta.Status)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("期望只有 root 节点，实际为 %+v", nodes)
+	}
+	node := nodes[0]
+	if node.Progress == nil || node.Progress.Total != 2 || node.Progress.Succeeded != 2 || node.Progress.Percent != 100 {
+		t.Fatalf("期望节点进度按 2 个成功分片聚合，实际为 %+v", node.Progress)
+	}
+	if node.ExecutionTrace == nil || node.ExecutionTrace.TotalCount != 8 || node.ExecutionTrace.ReadCount != 3 || node.ExecutionTrace.UpdateCount != 5 {
+		t.Fatalf("期望节点处理量按分片聚合，实际为 %+v", node.ExecutionTrace)
+	}
+	if len(node.ShardTraces) != 2 {
+		t.Fatalf("期望返回 2 个分片处理量明细，实际为 %+v", node.ShardTraces)
+	}
+	for shard, trace := range node.ShardTraces {
+		if trace.ShardIndex != shard || trace.ShardTotal != 2 || trace.Status != NodeStatusSuccess {
+			t.Fatalf("期望分片 %d 终态和索引正确，实际为 %+v", shard, trace)
+		}
+		if trace.Progress == nil || trace.Progress.Succeeded != 1 || trace.Progress.Percent != 100 {
+			t.Fatalf("期望分片 %d 进度成功完成，实际为 %+v", shard, trace.Progress)
+		}
+		if trace.ExecutionTrace == nil || trace.ExecutionTrace.TotalCount != shardSnapshots[shard].TotalCount {
+			t.Fatalf("期望分片 %d 保留原始处理量，实际为 %+v", shard, trace.ExecutionTrace)
+		}
+	}
+}
+
 // TestWorkflowShardFailureThenSuccessRepairsCounters 验证同一分片失败后成功回写会纠正失败计数并推进工作流。
 func TestWorkflowShardFailureThenSuccessRepairsCounters(t *testing.T) {
 	manager, cleanup := newTestManager(t)
@@ -759,8 +933,12 @@ func TestWorkflowShardFailureThenSuccessRepairsCounters(t *testing.T) {
 		ShardIndex:   0,
 		ShardTotal:   1,
 	}
-	if err := manager.markTaskFailure(context.Background(), meta, errors.New("first failed")); err != nil {
+	failureRecorded, err := manager.markTaskFailure(context.Background(), meta, errors.New("first failed"))
+	if err != nil {
 		t.Fatalf("标记分片失败失败: %v", err)
+	}
+	if !failureRecorded {
+		t.Fatal("首次分片失败应记录终态")
 	}
 	if err := manager.markTaskSuccess(context.Background(), meta); err != nil {
 		t.Fatalf("失败后标记分片成功失败: %v", err)
@@ -810,8 +988,12 @@ func TestWorkflowShardSuccessIgnoresLateFailureAck(t *testing.T) {
 	if err := manager.markTaskSuccess(context.Background(), meta); err != nil {
 		t.Fatalf("标记分片成功失败: %v", err)
 	}
-	if err := manager.markTaskFailure(context.Background(), meta, errors.New("late failed")); err != nil {
+	failureRecorded, err := manager.markTaskFailure(context.Background(), meta, errors.New("late failed"))
+	if err != nil {
 		t.Fatalf("迟到失败回写不应返回错误: %v", err)
+	}
+	if failureRecorded {
+		t.Fatal("成功后的迟到失败不应重复记录终态")
 	}
 	wf, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
 	if err != nil {
@@ -849,14 +1031,18 @@ func TestWorkflowArchivedRerunRepairsMultipleFailedShards(t *testing.T) {
 		t.Fatalf("启动工作流失败: %v", err)
 	}
 	for shard := 0; shard < 2; shard++ {
-		if err := manager.markTaskFailure(context.Background(), WorkflowTaskMeta{
+		failureRecorded, err := manager.markTaskFailure(context.Background(), WorkflowTaskMeta{
 			WorkflowID:   workflowID,
 			WorkflowName: def.Name,
 			WorkflowNode: "root",
 			ShardIndex:   shard,
 			ShardTotal:   2,
-		}, errors.Errorf("boom shard=%d", shard)); err != nil {
+		}, errors.Errorf("boom shard=%d", shard))
+		if err != nil {
 			t.Fatalf("标记分片 %d 失败失败: %v", shard, err)
+		}
+		if !failureRecorded {
+			t.Fatalf("首次标记分片 %d 失败应记录终态", shard)
 		}
 	}
 	for shard := 0; shard < 2; shard++ {
@@ -1903,8 +2089,8 @@ func TestListTasksScheduledTimeDescAndRange(t *testing.T) {
 	rangeResp, err := manager.ListTasks(context.Background(), &types.ListTaskItemsReq{
 		Queue:     QueueDefault,
 		State:     "scheduled",
-		TimeStart: middleAt.Add(-time.Second).Format(time.RFC3339),
-		TimeEnd:   middleAt.Add(time.Second).Format(time.RFC3339),
+		StartTime: middleAt.Add(-time.Second).Format(time.RFC3339),
+		EndTime:   middleAt.Add(time.Second).Format(time.RFC3339),
 		Page:      1,
 		PageSize:  10,
 	})

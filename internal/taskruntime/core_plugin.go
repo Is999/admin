@@ -63,6 +63,7 @@ func (r *Runtime) handleWorkflowTrigger(ctx context.Context, task *asynq.Task) e
 		ShardTotal:        payload.ShardTotal,
 		GrayPercent:       payload.GrayPercent,
 		Source:            payload.Source,
+		PeriodicName:      payload.PeriodicName,
 		TriggeredByUserID: payload.TriggeredByUserID,
 		TriggeredByUser:   payload.TriggeredByUser,
 		UniqueKey:         payload.UniqueKey,

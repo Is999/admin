@@ -11,8 +11,18 @@ import (
 	"admin_cron/internal/jobs/usertag/stage"
 	"admin_cron/internal/jobs/usertag/types"
 	"admin_cron/internal/svc"
+	"admin_cron/internal/taskstats"
 
 	"github.com/Is999/go-utils/errors"
+)
+
+const (
+	// traceUserTag 表示用户标签处理量明细前缀。
+	traceUserTag = "user_tag"
+	// traceUserTagScanned 表示用户标签阶段扫描数量明细。
+	traceUserTagScanned = "scanned"
+	// traceUserTagUpdated 表示用户标签阶段更新数量明细。
+	traceUserTagUpdated = "updated"
 )
 
 // Service 是 usertag 工作流编排服务。
@@ -121,16 +131,36 @@ func (s *Service) RunStage(payload types.WorkflowPayload) (stage.Result, error) 
 	runtimeCtx.Infof("阶段开始")
 	result, err := item.Run(runtimeCtx, nil)
 	if err != nil {
+		recordStageTrace(runtimeCtx, result)
 		runtimeCtx.Errorf("阶段失败 err=%v", err)
 		return result, errors.Tag(err)
 	}
 	if runtimeCtx.Node == types.NodeSyncKafka {
 		if err := s.releaseWorkflowLease(runtimeCtx); err != nil {
+			recordStageTrace(runtimeCtx, result)
 			return result, runtimeCtx.Wrap(err, "释放工作流互斥租约失败")
 		}
 	}
+	recordStageTrace(runtimeCtx, result)
 	runtimeCtx.Infof("阶段完成 scanned=%d updated=%d skipped=%v", result.Scanned, result.Updated, result.Skipped)
 	return result, nil
+}
+
+// recordStageTrace 记录用户标签阶段处理量，供任务详情和日志统一展示。
+func recordStageTrace(ctx *runtimectx.Context, result stage.Result) {
+	if ctx == nil {
+		return
+	}
+	name := taskstats.JoinDetailName(traceUserTag, ctx.Node)
+	if result.Scanned > 0 {
+		taskstats.RecordRead(ctx.Context, taskstats.JoinDetailName(name, traceUserTagScanned), result.Scanned)
+	}
+	if result.Updated > 0 {
+		taskstats.RecordUpdate(ctx.Context, taskstats.JoinDetailName(name, traceUserTagUpdated), result.Updated)
+	}
+	if result.Skipped {
+		taskstats.RecordSkip(ctx.Context, taskstats.JoinDetailName(name, taskstats.DetailPartSkipped), 1)
+	}
 }
 
 // ensureWorkflowLease 确保当前节点满足用户标签工作流租约约束。

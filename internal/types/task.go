@@ -4,9 +4,10 @@ package types
 
 import (
 	"encoding/json"
-
 	"strings"
 	"time"
+
+	"admin_cron/internal/taskstats"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -120,8 +121,8 @@ type ListTaskItemsReq struct {
 	Group      string `json:"group,optional" form:"group,optional"`           // 聚合组名称，仅 aggregating 状态使用
 	WorkflowID string `json:"workflowId,optional" form:"workflowId,optional"` // 工作流实例 ID；填写后仅返回该链路下的任务
 	TaskName   string `json:"taskName,optional" form:"taskName,optional"`     // 任务名称关键字；支持按周期任务名或展示名包含匹配
-	TimeStart  string `json:"timeStart,optional" form:"timeStart,optional"`   // 任务活动时间开始，RFC3339；scheduled 按 nextProcessAt 过滤
-	TimeEnd    string `json:"timeEnd,optional" form:"timeEnd,optional"`       // 任务活动时间结束，RFC3339；scheduled 按 nextProcessAt 过滤
+	StartTime  string `json:"startTime,optional" form:"startTime,optional"`   // 任务活动时间开始，RFC3339；scheduled 按 nextProcessAt 过滤
+	EndTime    string `json:"endTime,optional" form:"endTime,optional"`       // 任务活动时间结束，RFC3339；scheduled 按 nextProcessAt 过滤
 	Page       int    `json:"page,optional" form:"page,optional"`             // 页码，从 1 开始
 	PageSize   int    `json:"pageSize,optional" form:"pageSize,optional"`     // 每页条数
 }
@@ -143,7 +144,7 @@ func (r *ListTaskItemsReq) Validate() error {
 	if len([]rune(strings.TrimSpace(r.TaskName))) > 128 {
 		return errors.Errorf("taskName 不能超过 128 个字符")
 	}
-	if err := validateTaskListTimeRange(r.TimeStart, r.TimeEnd); err != nil {
+	if err := validateTaskListTimeRange(r.StartTime, r.EndTime); err != nil {
 		return err
 	}
 	if r.Page <= 0 {
@@ -166,8 +167,8 @@ type ListTaskItemsOverviewReq struct {
 	Group              string `json:"group,optional" form:"group,optional"`                  // 聚合组名称，仅 aggregating 使用
 	WorkflowID         string `json:"workflowId,optional" form:"workflowId,optional"`        // 工作流实例 ID；填写后仅返回该链路下的任务
 	TaskName           string `json:"taskName,optional" form:"taskName,optional"`            // 任务名称关键字；支持按周期任务名或展示名包含匹配
-	TimeStart          string `json:"timeStart,optional" form:"timeStart,optional"`          // 任务活动时间开始，RFC3339；scheduled 按 nextProcessAt 过滤
-	TimeEnd            string `json:"timeEnd,optional" form:"timeEnd,optional"`              // 任务活动时间结束，RFC3339；scheduled 按 nextProcessAt 过滤
+	StartTime          string `json:"startTime,optional" form:"startTime,optional"`          // 任务活动时间开始，RFC3339；scheduled 按 nextProcessAt 过滤
+	EndTime            string `json:"endTime,optional" form:"endTime,optional"`              // 任务活动时间结束，RFC3339；scheduled 按 nextProcessAt 过滤
 	Page               int    `json:"page,optional" form:"page,optional"`                    // 页码，从 1 开始
 	PageSize           int    `json:"pageSize,optional" form:"pageSize,optional"`            // 每页条数
 	IncludeAggregating bool   `json:"includeAggregating,optional" form:"includeAggregating"` // 状态为空时，是否把 aggregating 纳入聚合范围
@@ -187,7 +188,7 @@ func (r *ListTaskItemsOverviewReq) Validate() error {
 	if len([]rune(strings.TrimSpace(r.TaskName))) > 128 {
 		return errors.Errorf("taskName 不能超过 128 个字符")
 	}
-	if err := validateTaskListTimeRange(r.TimeStart, r.TimeEnd); err != nil {
+	if err := validateTaskListTimeRange(r.StartTime, r.EndTime); err != nil {
 		return err
 	}
 	if r.Page <= 0 {
@@ -211,19 +212,19 @@ func validateTaskListTimeRange(start, end string) error {
 	if start != "" {
 		parsed, err := time.Parse(time.RFC3339, start)
 		if err != nil {
-			return errors.Errorf("timeStart 必须为 RFC3339 时间")
+			return errors.Errorf("startTime 必须为 RFC3339 时间")
 		}
 		startTime = parsed
 	}
 	if end != "" {
 		parsed, err := time.Parse(time.RFC3339, end)
 		if err != nil {
-			return errors.Errorf("timeEnd 必须为 RFC3339 时间")
+			return errors.Errorf("endTime 必须为 RFC3339 时间")
 		}
 		endTime = parsed
 	}
 	if !startTime.IsZero() && !endTime.IsZero() && startTime.After(endTime) {
-		return errors.Errorf("timeStart 不能晚于 timeEnd")
+		return errors.Errorf("startTime 不能晚于 endTime")
 	}
 	return nil
 }
@@ -348,27 +349,28 @@ type TaskEnqueueResp struct {
 
 // TaskItem 表示队列中单个任务的状态快照。
 type TaskItem struct {
-	ID            string            `json:"id"`                      // 任务 ID
-	Queue         string            `json:"queue"`                   // 所属队列
-	TaskType      string            `json:"taskType"`                // 任务类型
-	TaskName      string            `json:"taskName,omitempty"`      // 任务名称/脚本名称
-	WorkflowID    string            `json:"workflowId,omitempty"`    // 关联工作流实例 ID
-	State         string            `json:"state"`                   // 当前状态
-	Group         string            `json:"group,omitempty"`         // 聚合分组
-	MaxRetry      int               `json:"maxRetry"`                // 最大重试次数
-	Retried       int               `json:"retried"`                 // 已重试次数
-	LastErr       string            `json:"lastErr,omitempty"`       // 最后一次错误
-	TimeoutSec    int64             `json:"timeoutSec"`              // 超时时间（秒）
-	StartedAt     string            `json:"startedAt,omitempty"`     // 开始执行时间
-	DurationMS    int64             `json:"durationMs,omitempty"`    // 执行耗时（毫秒）；执行中任务表示已运行时长
-	Deadline      string            `json:"deadline,omitempty"`      // 截止时间
-	NextProcessAt string            `json:"nextProcessAt,omitempty"` // 下次计划执行时间
-	CompletedAt   string            `json:"completedAt,omitempty"`   // 完成时间
-	LastFailedAt  string            `json:"lastFailedAt,omitempty"`  // 最近失败时间
-	IsOrphaned    bool              `json:"isOrphaned"`              // Active 任务是否已孤儿化
-	Headers       map[string]string `json:"headers,omitempty"`       // 任务头信息
-	Payload       json.RawMessage   `json:"payload"`                 // 原始任务负载
-	Result        json.RawMessage   `json:"result,omitempty"`        // 任务结果
+	ID             string              `json:"id"`                       // 任务 ID
+	Queue          string              `json:"queue"`                    // 所属队列
+	TaskType       string              `json:"taskType"`                 // 任务类型
+	TaskName       string              `json:"taskName,omitempty"`       // 任务名称/脚本名称
+	WorkflowID     string              `json:"workflowId,omitempty"`     // 关联工作流实例 ID
+	State          string              `json:"state"`                    // 当前状态
+	Group          string              `json:"group,omitempty"`          // 聚合分组
+	MaxRetry       int                 `json:"maxRetry"`                 // 最大重试次数
+	Retried        int                 `json:"retried"`                  // 已重试次数
+	LastErr        string              `json:"lastErr,omitempty"`        // 最后一次错误
+	TimeoutSec     int64               `json:"timeoutSec"`               // 超时时间（秒）
+	StartedAt      string              `json:"startedAt,omitempty"`      // 开始执行时间
+	DurationMS     int64               `json:"durationMs,omitempty"`     // 执行耗时（毫秒）；执行中任务表示已运行时长
+	Deadline       string              `json:"deadline,omitempty"`       // 截止时间
+	NextProcessAt  string              `json:"nextProcessAt,omitempty"`  // 下次计划执行时间
+	CompletedAt    string              `json:"completedAt,omitempty"`    // 完成时间
+	LastFailedAt   string              `json:"lastFailedAt,omitempty"`   // 最近失败时间
+	IsOrphaned     bool                `json:"isOrphaned"`               // Active 任务是否已孤儿化
+	Headers        map[string]string   `json:"headers,omitempty"`        // 任务头信息
+	Payload        json.RawMessage     `json:"payload"`                  // 原始任务负载
+	Result         json.RawMessage     `json:"result,omitempty"`         // 任务结果
+	ExecutionTrace *taskstats.Snapshot `json:"executionTrace,omitempty"` // 本次任务处理量统计摘要
 }
 
 // TaskListResp 表示任务列表响应。
@@ -378,8 +380,8 @@ type TaskListResp struct {
 	Group      string     `json:"group,omitempty"`      // 聚合分组
 	WorkflowID string     `json:"workflowId,omitempty"` // 工作流实例 ID 筛选条件
 	TaskName   string     `json:"taskName,omitempty"`   // 任务名称关键字筛选条件
-	TimeStart  string     `json:"timeStart,omitempty"`  // 时间范围开始
-	TimeEnd    string     `json:"timeEnd,omitempty"`    // 时间范围结束
+	StartTime  string     `json:"startTime,omitempty"`  // 时间范围开始
+	EndTime    string     `json:"endTime,omitempty"`    // 时间范围结束
 	Page       int        `json:"page"`                 // 当前页码
 	PageSize   int        `json:"pageSize"`             // 当前页大小
 	Total      int64      `json:"total"`                // 该状态任务总数
@@ -394,8 +396,8 @@ type TaskListOverviewResp struct {
 	Group          string           `json:"group,omitempty"`          // 聚合分组
 	WorkflowID     string           `json:"workflowId,omitempty"`     // 工作流实例 ID 筛选条件
 	TaskName       string           `json:"taskName,omitempty"`       // 任务名称关键字筛选条件
-	TimeStart      string           `json:"timeStart,omitempty"`      // 时间范围开始
-	TimeEnd        string           `json:"timeEnd,omitempty"`        // 时间范围结束
+	StartTime      string           `json:"startTime,omitempty"`      // 时间范围开始
+	EndTime        string           `json:"endTime,omitempty"`        // 时间范围结束
 	Page           int              `json:"page"`                     // 当前页码
 	PageSize       int              `json:"pageSize"`                 // 当前页大小
 	Total          int64            `json:"total"`                    // 当前结果总数
@@ -436,37 +438,51 @@ type WorkflowRegistryResp struct {
 
 // TaskWorkflowNodeItem 表示工作流中单个节点的执行状态。
 type TaskWorkflowNodeItem struct {
-	Name         string   `json:"name"`                   // 节点名称
-	TaskType     string   `json:"taskType"`               // 实际执行的任务类型
-	Queue        string   `json:"queue"`                  // 节点执行队列
-	Status       string   `json:"status"`                 // 节点状态：pending/running/success/failed/skipped
-	DependsOn    []string `json:"dependsOn,omitempty"`    // 依赖节点列表
-	Expected     int      `json:"expected"`               // 期望执行实例数（含分片）
-	Succeeded    int      `json:"succeeded"`              // 已成功实例数
-	Failed       int      `json:"failed"`                 // 已失败实例数
-	Skipped      int      `json:"skipped"`                // 被灰度跳过的实例数
-	ErrorMessage string   `json:"errorMessage,omitempty"` // 节点失败信息
-	StartedAt    string   `json:"startedAt,omitempty"`    // 节点开始执行时间
-	FinishedAt   string   `json:"finishedAt,omitempty"`   // 节点完成时间
-	DurationMS   int64    `json:"durationMs,omitempty"`   // 节点执行耗时（毫秒）；运行中节点表示已运行时长
+	Name           string                       `json:"name"`                     // 节点名称
+	TaskType       string                       `json:"taskType"`                 // 实际执行的任务类型
+	Queue          string                       `json:"queue"`                    // 节点执行队列
+	Status         string                       `json:"status"`                   // 节点状态：pending/running/success/failed/skipped
+	DependsOn      []string                     `json:"dependsOn,omitempty"`      // 依赖节点列表
+	Expected       int                          `json:"expected"`                 // 期望执行实例数（含分片）
+	Succeeded      int                          `json:"succeeded"`                // 已成功实例数
+	Failed         int                          `json:"failed"`                   // 已失败实例数
+	Skipped        int                          `json:"skipped"`                  // 被灰度跳过的实例数
+	ErrorMessage   string                       `json:"errorMessage,omitempty"`   // 节点失败信息
+	StartedAt      string                       `json:"startedAt,omitempty"`      // 节点开始执行时间
+	FinishedAt     string                       `json:"finishedAt,omitempty"`     // 节点完成时间
+	DurationMS     int64                        `json:"durationMs,omitempty"`     // 节点执行耗时（毫秒）；运行中节点表示已运行时长
+	Progress       *taskstats.Progress          `json:"progress,omitempty"`       // 节点实例执行进度
+	ExecutionTrace *taskstats.Snapshot          `json:"executionTrace,omitempty"` // 节点处理量聚合摘要
+	ShardTraces    []TaskWorkflowShardTraceItem `json:"shardTraces,omitempty"`    // 节点分片处理量明细
+}
+
+// TaskWorkflowShardTraceItem 表示工作流节点中单个分片的处理量快照。
+type TaskWorkflowShardTraceItem struct {
+	ShardIndex     int                 `json:"shardIndex"`               // 分片下标
+	ShardTotal     int                 `json:"shardTotal"`               // 分片总数
+	Status         string              `json:"status,omitempty"`         // 分片状态
+	Progress       *taskstats.Progress `json:"progress,omitempty"`       // 分片执行进度
+	ExecutionTrace *taskstats.Snapshot `json:"executionTrace,omitempty"` // 分片处理量摘要
 }
 
 // TaskWorkflowStatusResp 表示工作流实例的整体状态。
 type TaskWorkflowStatusResp struct {
-	WorkflowID   string                 `json:"workflowId"`             // 工作流实例 ID
-	WorkflowName string                 `json:"workflowName"`           // 工作流名称
-	Status       string                 `json:"status"`                 // 工作流状态：pending/running/success/failed
-	Source       string                 `json:"source"`                 // 触发来源：api/periodic/internal
-	Queue        string                 `json:"queue"`                  // 默认执行队列
-	Targets      []string               `json:"targets,omitempty"`      // 执行目标列表
-	ShardTotal   int                    `json:"shardTotal"`             // 分片总数
-	GrayPercent  int                    `json:"grayPercent"`            // 灰度比例
-	ErrorMessage string                 `json:"errorMessage,omitempty"` // 工作流失败原因
-	CreatedAt    string                 `json:"createdAt"`              // 创建时间
-	UpdatedAt    string                 `json:"updatedAt"`              // 最近更新时间
-	FinishedAt   string                 `json:"finishedAt,omitempty"`   // 完成时间
-	DurationMS   int64                  `json:"durationMs,omitempty"`   // 工作流总耗时（毫秒）；执行中工作流表示已运行时长
-	Nodes        []TaskWorkflowNodeItem `json:"nodes"`                  // 节点明细
+	WorkflowID     string                 `json:"workflowId"`               // 工作流实例 ID
+	WorkflowName   string                 `json:"workflowName"`             // 工作流名称
+	Status         string                 `json:"status"`                   // 工作流状态：pending/running/success/failed
+	Source         string                 `json:"source"`                   // 触发来源：api/periodic/internal
+	Queue          string                 `json:"queue"`                    // 默认执行队列
+	Targets        []string               `json:"targets,omitempty"`        // 执行目标列表
+	ShardTotal     int                    `json:"shardTotal"`               // 分片总数
+	GrayPercent    int                    `json:"grayPercent"`              // 灰度比例
+	ErrorMessage   string                 `json:"errorMessage,omitempty"`   // 工作流失败原因
+	CreatedAt      string                 `json:"createdAt"`                // 创建时间
+	UpdatedAt      string                 `json:"updatedAt"`                // 最近更新时间
+	FinishedAt     string                 `json:"finishedAt,omitempty"`     // 完成时间
+	DurationMS     int64                  `json:"durationMs,omitempty"`     // 工作流总耗时（毫秒）；执行中工作流表示已运行时长
+	Progress       *taskstats.Progress    `json:"progress,omitempty"`       // 工作流执行进度
+	ExecutionTrace *taskstats.Snapshot    `json:"executionTrace,omitempty"` // 工作流处理量聚合摘要
+	Nodes          []TaskWorkflowNodeItem `json:"nodes"`                    // 节点明细
 }
 
 // TaskQueueItem 表示单个队列的当前快照。

@@ -325,7 +325,7 @@ func (l *SecurityLogic) checkAdminMFA(admin *model.Admin) error {
 	if l.ForceLoginMFAEnabled() && admin.MfaStatus != 1 {
 		return ErrAdminMFABindRequired
 	}
-	flag, err := l.Redis().Get(l.Context(), fmt.Sprintf(keys.LoginCheckMFAFlag, admin.ID)).Int64()
+	flag, err := l.Redis().Get(l.Context(), l.loginMFAFlagKey(admin.ID)).Int64()
 	if errors.Is(err, redis.Nil) {
 		return ErrAdminMFARequired
 	}

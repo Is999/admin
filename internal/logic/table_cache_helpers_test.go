@@ -101,7 +101,7 @@ func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(
 		fmt.Sprintf(keys.AdminRolesDetail, 8),
 		fmt.Sprintf(keys.AdminPermissionIDs, 8),
 		fmt.Sprintf(keys.AdminPermissionUUIDs, 8),
-		fmt.Sprintf(keys.AdminInfo, 7),
+		base.AppRedisKey(fmt.Sprintf(keys.AdminInfo, 7)),
 		fmt.Sprintf(keys.AdminProfile, 7),
 	}
 	for _, key := range append(targetKeys, untouchedKeys...) {

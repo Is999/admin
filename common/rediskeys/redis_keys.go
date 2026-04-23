@@ -138,7 +138,7 @@ const (
 
 	// CacheRebuildLock 表示缓存回源重建互斥锁 key 模板。
 	// Redis 类型：String（由 redsync 管理）。
-	// `%s` 位置填充真实缓存 key，用于短时间串行化同一 key 的数据库回源。
+	// `%s` 位置填充真实缓存 key 的业务段，实际 Redis key 通过 AppScopedKey 追加 app_id 前缀。
 	CacheRebuildLock = "cache:rebuild:lock:%s"
 
 	// AdminExportJob 表示管理员列表导出任务状态缓存键模板。
@@ -206,8 +206,8 @@ const (
 
 	// SignatureReplayRequest 表示请求签名防重放缓存键模板。
 	// Redis 类型：String。
-	// 第一个 `%s` 位置填充 AppID，第二个 `%s` 位置填充 RequestID。
-	SignatureReplayRequest = "signature:request:%s:%s"
+	// `%s` 位置填充 RequestID，实际 Redis key 通过 AppScopedKey 追加 app_id 前缀。
+	SignatureReplayRequest = "signature:request:%s"
 
 	// LoginCaptcha 表示登录图形验证码缓存键模板。
 	// Redis 类型：String。
@@ -216,13 +216,13 @@ const (
 
 	// UserTagWorkflowLeaseKeyPrefix 表示用户标签写工作流全局互斥租约 key 前缀。
 	// Redis 类型：String。
-	// 后缀固定拼接 app_id，值为 `workflowID|mode`，释放时必须按完整 owner 精确比较。
-	UserTagWorkflowLeaseKeyPrefix = "user_tag:workflow:write_lock:"
+	// 实际 Redis key 通过 AppScopedKey 追加 app_id 前缀，值为 `workflowID|mode`，释放时必须按完整 owner 精确比较。
+	UserTagWorkflowLeaseKeyPrefix = "user_tag:workflow:write_lock"
 
 	// UserTagWorkflowSyncDoneKeyPrefix 表示用户标签 sync_kafka 分片完成屏障 key 前缀。
 	// Redis 类型：Set。
-	// 后缀固定拼接 app_id 与 workflow_id，用于 full 工作流所有 sync_kafka 分片完成后再释放互斥租约。
-	UserTagWorkflowSyncDoneKeyPrefix = "user_tag:workflow:sync_done:"
+	// 实际 Redis key 通过 AppScopedKey 追加 app_id 前缀，后缀拼接 workflow_id。
+	UserTagWorkflowSyncDoneKeyPrefix = "user_tag:workflow:sync_done"
 
 	// UserTagRuntimeCleanupLock 表示用户标签运行期辅助表清理互斥锁。
 	// Redis 类型：String（由 redsync 管理）。

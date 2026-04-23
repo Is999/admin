@@ -38,7 +38,7 @@ func TestBuildLoginCaptchaAndVerify(t *testing.T) {
 	if strings.TrimSpace(data.Key) == "" || strings.TrimSpace(data.Image) == "" {
 		t.Fatalf("BuildLoginCaptcha() returned empty key or image: %#v", data)
 	}
-	cacheKey := fmt.Sprintf(keys.LoginCaptcha, data.Key)
+	cacheKey := logicObj.AppRedisKey(fmt.Sprintf(keys.LoginCaptcha, data.Key))
 	code, err := logicObj.Redis().Get(context.Background(), cacheKey).Result()
 	if err != nil {
 		t.Fatalf("Get(%s) error = %v", cacheKey, err)
@@ -62,7 +62,7 @@ func TestVerifyLoginCaptchaRejectsWrongCode(t *testing.T) {
 	if verifyResp == nil || verifyResp.Code != codes.InvalidCaptcha {
 		t.Fatalf("VerifyLoginCaptcha(wrong) = %#v, want invalid captcha", verifyResp)
 	}
-	cacheKey := fmt.Sprintf(keys.LoginCaptcha, data.Key)
+	cacheKey := logicObj.AppRedisKey(fmt.Sprintf(keys.LoginCaptcha, data.Key))
 	if logicObj.Redis().Exists(context.Background(), cacheKey).Val() != 0 {
 		t.Fatalf("VerifyLoginCaptcha(wrong) should consume captcha key %s", cacheKey)
 	}

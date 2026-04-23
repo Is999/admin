@@ -38,14 +38,15 @@ func emptyCacheTTL() time.Duration {
 	return jitterTTL(2 * time.Minute)
 }
 
-// cacheLockKey 返回缓存重建锁的 Redis 键。
-func cacheLockKey(cacheKey string) string {
-	return fmt.Sprintf(keys.CacheRebuildLock, cacheKey)
-}
-
 // cacheIsEmptyMarker 判断当前缓存字段是否为统一空值占位符。
 func cacheIsEmptyMarker(value string) bool {
 	return value == keys.EmptyValueMarker
+}
+
+// cacheLockKey 返回当前 app_id 作用域下的缓存重建锁 Redis 键。
+func (l *BaseLogic) cacheLockKey(cacheKey string) string {
+	cacheKey = keys.TrimAppScopedPrefix(keys.TrimTableCachePrefix(cacheKey))
+	return l.AppRedisKey(fmt.Sprintf(keys.CacheRebuildLock, cacheKey))
 }
 
 // tryRebuildCacheWithLock 使用轻量级 Redis 锁保护缓存重建，避免热点 key 并发击穿数据库。
@@ -53,7 +54,7 @@ func (l *BaseLogic) tryRebuildCacheWithLock(cacheKey string, rebuild func() erro
 	if l == nil || l.Redis() == nil || cacheKey == "" {
 		return rebuild()
 	}
-	lockKey := cacheLockKey(cacheKey)
+	lockKey := l.cacheLockKey(cacheKey)
 	locked, err := l.Redis().SetNX(l.Context(), lockKey, "1", cacheRebuildLockTTL).Result()
 	if err != nil {
 		return errors.Tag(err)

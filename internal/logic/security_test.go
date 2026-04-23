@@ -534,7 +534,7 @@ func TestInvalidateAdminRelationCacheDeletesPermissionUUIDs(t *testing.T) {
 	adminID := 7
 
 	stringKeys := []string{
-		fmt.Sprintf(keys.AdminInfo, adminID),
+		base.AppRedisKey(fmt.Sprintf(keys.AdminInfo, adminID)),
 		fmt.Sprintf(keys.AdminProfile, adminID),
 	}
 	setKeys := []string{

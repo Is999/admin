@@ -280,7 +280,7 @@ func (m *SignatureMiddleware) markRequestVerified(r *http.Request, appID string,
 	if m.svc == nil || m.svc.Rds == nil {
 		return errors.New("签名防重放缓存未初始化")
 	}
-	key := fmt.Sprintf(keys.SignatureReplayRequest, appID, traceID)
+	key := keys.AppScopedKey(appID, fmt.Sprintf(keys.SignatureReplayRequest, traceID))
 	ok, err := m.svc.Rds.SetNX(r.Context(), key, "1", 5*time.Minute).Result()
 	if err != nil {
 		return errors.Tag(err)

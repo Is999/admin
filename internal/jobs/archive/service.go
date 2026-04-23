@@ -470,7 +470,7 @@ func (s *Service) runJob(ctx context.Context, run jobRunConfig, workerID string)
 // prepareSegments 根据当前 watermark 与安全归档上界预先切分待归档区间。
 // 这里通过短时分布式锁保证多个 worker 不会重复规划同一批区间。
 func (s *Service) prepareSegments(ctx context.Context, job jobConfig, sourceDB *gorm.DB, controlDB *gorm.DB) error {
-	lockKey := fmt.Sprintf(keys.ArchiveJobPlanLock, job.Name)
+	lockKey := s.appRedisKey(fmt.Sprintf(keys.ArchiveJobPlanLock, job.Name))
 	return redislock.WithLock(ctx, s.redisClient(), lockKey, s.lockTTL(), func(lockCtx context.Context) error {
 		upperBound, ok := s.archiveUpperBound(lockCtx, job, controlDB)
 		if !ok {
@@ -1052,7 +1052,7 @@ func buildStringTimeHistoryMatchQuery(ctx context.Context, db *gorm.DB, job jobC
 
 // advanceWatermark 只按“最长连续完成区间”推进水位线，不允许跳跃推进。
 func (s *Service) advanceWatermark(ctx context.Context, job jobConfig, controlDB *gorm.DB) error {
-	lockKey := fmt.Sprintf(keys.ArchiveJobWatermarkLock, job.Name)
+	lockKey := s.appRedisKey(fmt.Sprintf(keys.ArchiveJobWatermarkLock, job.Name))
 	return redislock.WithLock(ctx, s.redisClient(), lockKey, s.lockTTL(), func(lockCtx context.Context) error {
 		var watermarkTime *time.Time
 		current, err := s.loadWatermark(lockCtx, controlDB, job.Name)
@@ -1135,7 +1135,7 @@ func (s *Service) cleanupHistoryTables(ctx context.Context, job jobConfig, sourc
 	if maxTables <= 0 {
 		return nil
 	}
-	lockKey := fmt.Sprintf(keys.ArchiveJobCleanupLock, job.Name)
+	lockKey := s.appRedisKey(fmt.Sprintf(keys.ArchiveJobCleanupLock, job.Name))
 	return redislock.WithLock(ctx, s.redisClient(), lockKey, s.lockTTL(), func(lockCtx context.Context) error {
 		var items []historyTableItem
 		if err := buildHistoryCleanupItemsQuery(lockCtx, controlDB, job).Scan(&items).Error; err != nil {
@@ -1809,6 +1809,14 @@ func (s *Service) redisClient() redis.UniversalClient {
 		return nil
 	}
 	return s.svcCtx.Rds
+}
+
+// appRedisKey 返回当前 app_id 作用域下的归档 Redis 锁 key。
+func (s *Service) appRedisKey(key string) string {
+	if s == nil || s.svcCtx == nil {
+		return keys.AppScopedKey("", key)
+	}
+	return keys.AppScopedKey(s.svcCtx.CurrentConfig().AppID, key)
 }
 
 // safeDelayMinutes 返回当前归档模块生效的安全延迟分钟数。

@@ -221,7 +221,8 @@ func runUserTagKafkaOutboxRetryScanTask(ctx context.Context, svcCtx *svc.Service
 		return errors.Tag(err)
 	}
 	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
-	err = redislock.WithLock(ctx, svcCtx.Rds, keys.UserTagKafkaOutboxRetryScanLock, userTagKafkaOutboxRetryScanLockTTL, func(lockCtx context.Context) error {
+	lockKey := keys.AppScopedKey(svcCtx.CurrentConfig().AppID, keys.UserTagKafkaOutboxRetryScanLock)
+	err = redislock.WithLock(ctx, svcCtx.Rds, lockKey, userTagKafkaOutboxRetryScanLockTTL, func(lockCtx context.Context) error {
 		_, runErr := repository.NewTagRepository(deps).RetryKafkaOutboxAbnormalRows(lockCtx, opts, pushUserTagOutboxRetryMessages(lockCtx, svcCtx))
 		return errors.Tag(runErr)
 	})
@@ -239,7 +240,8 @@ func runUserTagRuntimeCleanupTask(ctx context.Context, svcCtx *svc.ServiceContex
 		return errors.Errorf("用户标签运行期清理失败：ServiceContext 为空")
 	}
 	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
-	err := redislock.WithLock(ctx, svcCtx.Rds, keys.UserTagRuntimeCleanupLock, userTagRuntimeCleanupLockTTL, func(lockCtx context.Context) error {
+	lockKey := keys.AppScopedKey(svcCtx.CurrentConfig().AppID, keys.UserTagRuntimeCleanupLock)
+	err := redislock.WithLock(ctx, svcCtx.Rds, lockKey, userTagRuntimeCleanupLockTTL, func(lockCtx context.Context) error {
 		return repository.NewTagRepository(deps).CleanupStaleRuntimeTables(lockCtx, time.Now())
 	})
 	return errors.Tag(err)

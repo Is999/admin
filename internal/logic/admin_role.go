@@ -29,7 +29,7 @@ type AdminRoleLogic struct {
 }
 
 const (
-	// rolePermissionWriteLockKey 为角色权限写操作的全局互斥锁，避免多人同时改角色权限导致并发越权。
+	// rolePermissionWriteLockKey 为角色权限写操作互斥锁的业务段，实际 Redis key 会按 app_id 加前缀。
 	rolePermissionWriteLockKey = "admin:role:permission:write:lock"
 	// rolePermissionWriteLockTTL 是角色权限写锁默认持有时长。
 	rolePermissionWriteLockTTL = 20 * time.Second
@@ -490,7 +490,7 @@ func (l *AdminRoleLogic) withRolePermissionWriteLock(operation string, fn func()
 			WithError(wrapLogicError(err, "%s 角色权限分布式锁未初始化", operation))
 	}
 
-	lock := redislock.NewLock(l.Redis(), rolePermissionWriteLockKey)
+	lock := redislock.NewLock(l.Redis(), l.AppRedisKey(rolePermissionWriteLockKey))
 	if err := lock.TryLock(l.Context(), rolePermissionWriteLockTTL); err != nil {
 		return types.NewBizResult(codes.ServiceBusy).
 			SetI18nMessage(i18n.MsgKeyServiceBusy).

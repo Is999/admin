@@ -28,12 +28,12 @@ func NewCacheLogic(ctx context.Context, svcCtx *svc.ServiceContext) *CacheLogic 
 
 // getAdminInfoKey 统一管理员缓存 key 格式，避免业务层散落拼接字符串。
 func (l *CacheLogic) getAdminInfoKey(adminID int) string {
-	return fmt.Sprintf(keys.AdminInfo, adminID)
+	return l.AppRedisKey(fmt.Sprintf(keys.AdminInfo, adminID))
 }
 
 // getAdminLogoutTokenKey 统一管理员登出令牌标记 key，避免中间件和业务层重复拼接。
 func (l *CacheLogic) getAdminLogoutTokenKey(adminID int) string {
-	return fmt.Sprintf(keys.AdminLogoutToken, adminID)
+	return l.AppRedisKey(fmt.Sprintf(keys.AdminLogoutToken, adminID))
 }
 
 // SetAdminInfo 整体写入管理员缓存信息，并设置统一过期时间。
@@ -147,6 +147,7 @@ func (l *CacheLogic) RebuildAdminInfo(adminID int, token string) (*types.AdminIn
 // RebuildAdminInfoByKey 根据管理员缓存键重建登录态缓存；仅当原缓存仍携带 token 时允许重建。
 func (l *CacheLogic) RebuildAdminInfoByKey(key string) error {
 	key = strings.TrimSpace(key)
+	key = keys.TrimAppScopedPrefix(key)
 	adminIDText := strings.TrimPrefix(key, "admin:info:")
 	adminID, err := strconv.Atoi(adminIDText)
 	if err != nil || adminID <= 0 {

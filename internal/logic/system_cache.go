@@ -194,7 +194,7 @@ func (l *SystemCacheLogic) KeyInfo(req *types.CacheKeyReq) *types.BizResult {
 // table-cache 托管项在管理页可兼容输入逻辑 key，但详情读取必须落到带项目命名空间的真实 key。
 func (l *SystemCacheLogic) cacheInfoLookupKey(key string) string {
 	item := l.matchCacheItem(key)
-	if item == nil || !strings.HasPrefix(item.Key, keys.TableCacheDataPrefix) {
+	if !l.cacheItemUsesTableCache(item) {
 		return strings.TrimSpace(key)
 	}
 	return tableCachePhysicalKey(l.BaseLogic, key)
@@ -313,8 +313,13 @@ func (l *SystemCacheLogic) cacheSearchExactKeys(key string) []string {
 	}
 	cacheKeys := []string{key}
 	item := l.matchCacheItem(key)
-	if item != nil && strings.HasPrefix(item.Key, keys.TableCacheDataPrefix) {
+	if l.cacheItemUsesTableCache(item) {
 		physicalKey := tableCachePhysicalKey(l.BaseLogic, key)
+		if physicalKey != "" && physicalKey != key {
+			cacheKeys = append(cacheKeys, physicalKey)
+		}
+	} else if l.cacheItemUsesAppScope(item) {
+		physicalKey := l.AppRedisKey(key)
 		if physicalKey != "" && physicalKey != key {
 			cacheKeys = append(cacheKeys, physicalKey)
 		}
@@ -378,7 +383,7 @@ func (l *SystemCacheLogic) RefreshCacheByKey(key string) error {
 	} else if !errors.Is(err, tablecache.ErrTargetNotFound) {
 		return errors.Wrapf(err, "SystemCacheLogic.RefreshCacheByKey 自动刷新表缓存失败 key=%s", key)
 	}
-	if strings.HasPrefix(key, "admin:info:") {
+	if strings.HasPrefix(keys.TrimAppScopedPrefix(key), "admin:info:") {
 		rebuildErr := NewCacheLogic(l.Context(), l.svc).RebuildAdminInfoByKey(key)
 		if rebuildErr == nil {
 			logCacheInfo(l.Context(), "cache.refresh.success",
@@ -407,17 +412,35 @@ func (l *SystemCacheLogic) cacheItems() []types.CacheItem {
 	items = append(items, tableItems...)
 	items = append(items, types.CacheItem{
 		Index:        "admin_info",
-		Key:          "admin:info:{adminID}",
-		KeyTitle:     "admin:info:{adminID}",
+		Key:          l.AppRedisKey("admin:info:{adminID}"),
+		KeyTitle:     l.AppRedisKey("admin:info:{adminID}"),
 		Type:         "hash",
 		Remark:       "管理员登录态缓存",
 		Category:     "session",
 		IsTemplate:   true,
-		ExampleKey:   "admin:info:1",
+		ExampleKey:   l.AppRedisKey("admin:info:1"),
 		AutoRebuild:  true,
 		RefreshScope: "single",
 	})
 	return items
+}
+
+// cacheItemUsesTableCache 判断缓存项是否由 table-cache 托管，不能依赖 Redis key 前缀判断。
+func (l *SystemCacheLogic) cacheItemUsesTableCache(item *types.CacheItem) bool {
+	if item == nil {
+		return false
+	}
+	for _, target := range tableCacheTargets(l.BaseLogic) {
+		if item.Index == target.Index {
+			return true
+		}
+	}
+	return false
+}
+
+// cacheItemUsesAppScope 判断缓存项是否使用统一 app_id 命名空间。
+func (l *SystemCacheLogic) cacheItemUsesAppScope(item *types.CacheItem) bool {
+	return item != nil && strings.HasPrefix(item.Key, keys.AppScopedDataPrefix)
 }
 
 // isBuiltinCacheKey 判断当前 key 是否属于后台缓存管理内置目标，内置目标 miss 时允许自动回源重建后再查看。
@@ -566,9 +589,10 @@ func (l *SystemCacheLogic) matchCacheItem(key string) *types.CacheItem {
 	}
 	physicalKey := tableCachePhysicalKey(l.BaseLogic, key)
 	logicalKey := tableCacheLogicalKey(l.BaseLogic, key)
+	appLogicalKey := keys.TrimAppScopedPrefix(key)
 	items := l.cacheItems()
 	for i := range items {
-		if items[i].Key == key || items[i].Key == physicalKey || tableCacheLogicalKey(l.BaseLogic, items[i].Key) == logicalKey {
+		if items[i].Key == key || items[i].Key == physicalKey || tableCacheLogicalKey(l.BaseLogic, items[i].Key) == logicalKey || keys.TrimAppScopedPrefix(items[i].Key) == appLogicalKey {
 			return &items[i]
 		}
 	}
@@ -578,8 +602,10 @@ func (l *SystemCacheLogic) matchCacheItem(key string) *types.CacheItem {
 		}
 		prefix := cacheTemplatePrefix(items[i].Key)
 		logicalPrefix := cacheTemplatePrefix(tableCacheLogicalKey(l.BaseLogic, items[i].Key))
+		appLogicalPrefix := cacheTemplatePrefix(keys.TrimAppScopedPrefix(items[i].Key))
 		if (prefix != "" && (strings.HasPrefix(key, prefix) || strings.HasPrefix(physicalKey, prefix))) ||
-			(logicalPrefix != "" && strings.HasPrefix(logicalKey, logicalPrefix)) {
+			(logicalPrefix != "" && strings.HasPrefix(logicalKey, logicalPrefix)) ||
+			(appLogicalPrefix != "" && strings.HasPrefix(appLogicalKey, appLogicalPrefix)) {
 			return &items[i]
 		}
 	}
@@ -639,8 +665,14 @@ func (l *SystemCacheLogic) cacheSearchCandidateMatches(pattern string, candidate
 		return false
 	}
 	patterns := []string{pattern}
-	if target != nil && strings.HasPrefix(target.templateKey, keys.TableCacheDataPrefix) {
+	if target != nil && target.tableCache {
 		physicalPattern := tableCachePhysicalKey(l.BaseLogic, pattern)
+		if physicalPattern != "" {
+			patterns = append(patterns, physicalPattern)
+		}
+	}
+	if target != nil && target.appScoped {
+		physicalPattern := l.AppRedisKey(pattern)
 		if physicalPattern != "" {
 			patterns = append(patterns, physicalPattern)
 		}
@@ -964,7 +996,7 @@ func maskCacheValue(key string, value any) any {
 
 // isAdminInfoCacheKey 判断当前缓存 key 是否为管理员登录态缓存。
 func isAdminInfoCacheKey(key string) bool {
-	return strings.HasPrefix(strings.TrimSpace(key), "admin:info:")
+	return strings.HasPrefix(keys.TrimAppScopedPrefix(key), "admin:info:")
 }
 
 // maskAdminInfoStringMap 对管理员登录态缓存做字段级脱敏。
@@ -1042,7 +1074,7 @@ func maskCacheAnyMap(value map[string]any, maskAll bool) map[string]any {
 
 // isSensitiveCacheKey 判断 Redis Key 是否属于秘钥、登录态或 MFA 票据等敏感缓存。
 func isSensitiveCacheKey(key string) bool {
-	key = keys.TrimTableCachePrefix(strings.TrimSpace(key))
+	key = keys.TrimAppScopedPrefix(keys.TrimTableCachePrefix(strings.TrimSpace(key)))
 	for _, prefix := range sensitiveCacheKeyPrefixes {
 		if strings.HasPrefix(key, prefix) {
 			return true

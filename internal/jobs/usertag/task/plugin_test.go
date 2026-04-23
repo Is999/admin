@@ -23,7 +23,7 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureReleasesFullOwner(t *testing.T
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "215"}, svc.Dependencies{Rds: client})
 	ctx := context.Background()
-	leaseKey := keys.UserTagWorkflowLeaseKeyPrefix + "215"
+	leaseKey := keys.AppScopedKey("215", keys.UserTagWorkflowLeaseKeyPrefix)
 	if err := client.Set(ctx, leaseKey, "wf-full|full", time.Hour).Err(); err != nil {
 		t.Fatalf("seed full lease failed: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureSkipsNonFull(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "215"}, svc.Dependencies{Rds: client})
 	ctx := context.Background()
-	leaseKey := keys.UserTagWorkflowLeaseKeyPrefix + "215"
+	leaseKey := keys.AppScopedKey("215", keys.UserTagWorkflowLeaseKeyPrefix)
 	if err := client.Set(ctx, leaseKey, "wf-full|full", time.Hour).Err(); err != nil {
 		t.Fatalf("seed full lease failed: %v", err)
 	}

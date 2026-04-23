@@ -37,7 +37,10 @@ func TestRetainAssignablePermissionIDs(t *testing.T) {
 func TestWithRolePermissionWriteLockReturnsServiceBusyWhenLocked(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	lock := redislock.NewLock(client, rolePermissionWriteLockKey)
+	logicObj := &AdminRoleLogic{
+		BaseLogic: NewBaseLogicWithContext(context.Background(), &svc.ServiceContext{Rds: client}),
+	}
+	lock := redislock.NewLock(client, logicObj.AppRedisKey(rolePermissionWriteLockKey))
 	if err := lock.TryLock(context.Background(), rolePermissionWriteLockTTL); err != nil {
 		t.Fatalf("TryLock() error = %v", err)
 	}
@@ -47,9 +50,6 @@ func TestWithRolePermissionWriteLockReturnsServiceBusyWhenLocked(t *testing.T) {
 		}
 	}()
 
-	logicObj := &AdminRoleLogic{
-		BaseLogic: NewBaseLogicWithContext(context.Background(), &svc.ServiceContext{Rds: client}),
-	}
 	result := logicObj.withRolePermissionWriteLock("AdminRoleLogic.TestLock", func() *types.BizResult {
 		return types.NewBizResult(codes.Success)
 	})

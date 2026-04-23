@@ -91,7 +91,7 @@ func (l *SecurityLogic) HasPassedLoginMFA(admin *model.Admin) bool {
 	if admin == nil || l.Redis() == nil {
 		return false
 	}
-	flag, err := l.Redis().Get(l.Context(), fmt.Sprintf(keys.LoginCheckMFAFlag, admin.ID)).Int64()
+	flag, err := l.Redis().Get(l.Context(), l.loginMFAFlagKey(admin.ID)).Int64()
 	if err != nil {
 		return false
 	}
@@ -103,7 +103,7 @@ func (l *SecurityLogic) MarkLoginMFACompleted(adminID int) error {
 	if adminID <= 0 || l.Redis() == nil {
 		return nil
 	}
-	return errors.Tag(l.Redis().Set(l.Context(), fmt.Sprintf(keys.LoginCheckMFAFlag, adminID), time.Now().Unix(), loginCheckMFAFlagTTL()).Err())
+	return errors.Tag(l.Redis().Set(l.Context(), l.loginMFAFlagKey(adminID), time.Now().Unix(), loginCheckMFAFlagTTL()).Err())
 }
 
 // loginMFAFlagMatches 判断 Redis 中的登录 MFA 完成标记是否覆盖当前登录会话。
@@ -119,7 +119,7 @@ func (l *SecurityLogic) ClearLoginMFACompleted(adminID int) error {
 	if adminID <= 0 || l.Redis() == nil {
 		return nil
 	}
-	return errors.Tag(l.Redis().Del(l.Context(), fmt.Sprintf(keys.LoginCheckMFAFlag, adminID)).Err())
+	return errors.Tag(l.Redis().Del(l.Context(), l.loginMFAFlagKey(adminID)).Err())
 }
 
 // verifyMFACodeBySecret 按给定 MFA 秘钥校验动态码。
@@ -221,7 +221,7 @@ func (l *SecurityLogic) issueMFATwoStepTicket(adminID int, scenario int, verifyR
 	key := uuid.NewString()
 	value := utils.RandStr(32, utils.RandSource)
 	ttl := l.mfaFrequencyTTL()
-	cacheKey := fmt.Sprintf(keys.AdminMFATwoStepTicket, adminID, key)
+	cacheKey := l.mfaTwoStepTicketKey(adminID, key)
 	cacheValue := encodeMFATwoStepTicketPayload(&mfaTwoStepTicketPayload{
 		Scenario: scenario,
 		Value:    value,
@@ -235,7 +235,7 @@ func (l *SecurityLogic) issueMFATwoStepTicket(adminID int, scenario int, verifyR
 		})
 	}
 	ctx := l.Context()
-	indexKey := fmt.Sprintf(keys.AdminMFATwoStepIndex, adminID)
+	indexKey := l.mfaTwoStepIndexKey(adminID)
 	pipe := l.Redis().Pipeline()
 	// 写入管理员维度索引，后续重置账号时按索引精确删除。
 	pipe.Set(ctx, cacheKey, cacheValue, ttl)
@@ -270,7 +270,7 @@ func (l *SecurityLogic) ClearAdminMFATwoStepTickets(adminID int) error {
 	if adminID <= 0 || l.Redis() == nil {
 		return nil
 	}
-	indexKey := fmt.Sprintf(keys.AdminMFATwoStepIndex, adminID)
+	indexKey := l.mfaTwoStepIndexKey(adminID)
 	members, err := l.Redis().SMembers(l.Context(), indexKey).Result()
 	if err != nil {
 		return errors.Tag(err)
@@ -300,7 +300,7 @@ func (l *SecurityLogic) verifyMFATwoStepTicketPayload(adminID int, scenario int,
 	if key == "" || value == "" {
 		return nil, ErrAdminMFATwoStepExpired
 	}
-	cacheKey := fmt.Sprintf(keys.AdminMFATwoStepTicket, adminID, key)
+	cacheKey := l.mfaTwoStepTicketKey(adminID, key)
 	cacheValue, err := l.Redis().Get(l.Context(), cacheKey).Result()
 	if err != nil {
 		if err == redis.Nil {
@@ -495,6 +495,21 @@ func (l *SecurityLogic) mfaFrequencyTTL() time.Duration {
 	return time.Duration(frequency) * time.Second
 }
 
+// loginMFAFlagKey 返回当前 app_id 作用域下的登录 MFA 完成标记 key。
+func (l *SecurityLogic) loginMFAFlagKey(adminID int) string {
+	return l.AppRedisKey(fmt.Sprintf(keys.LoginCheckMFAFlag, adminID))
+}
+
+// mfaTwoStepTicketKey 返回当前 app_id 作用域下的 MFA 二次票据 key。
+func (l *SecurityLogic) mfaTwoStepTicketKey(adminID int, ticketKey string) string {
+	return l.AppRedisKey(fmt.Sprintf(keys.AdminMFATwoStepTicket, adminID, strings.TrimSpace(ticketKey)))
+}
+
+// mfaTwoStepIndexKey 返回当前 app_id 作用域下的 MFA 二次票据索引 key。
+func (l *SecurityLogic) mfaTwoStepIndexKey(adminID int) string {
+	return l.AppRedisKey(fmt.Sprintf(keys.AdminMFATwoStepIndex, adminID))
+}
+
 // mfaTwoStepIndexTTL 返回 MFA 二次票据索引过期时间，索引稍长于票据本体以覆盖清理时钟抖动。
 func mfaTwoStepIndexTTL(ticketTTL time.Duration) time.Duration {
 	if ticketTTL <= 0 {
@@ -506,7 +521,7 @@ func mfaTwoStepIndexTTL(ticketTTL time.Duration) time.Duration {
 // mfaTwoStepTicketKeyBelongsToAdmin 校验索引成员确实属于当前管理员，避免脏索引误删其它管理员票据。
 func mfaTwoStepTicketKeyBelongsToAdmin(key string, adminID int) bool {
 	prefix := fmt.Sprintf(keys.AdminMFATwoStepTicketPrefix, adminID)
-	return strings.HasPrefix(strings.TrimSpace(key), prefix)
+	return strings.HasPrefix(keys.TrimAppScopedPrefix(key), prefix)
 }
 
 // mfaTwoStepScenarioMatches 判断目标场景是否允许复用当前二次票据。

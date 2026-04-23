@@ -178,7 +178,7 @@ func (l *AdminExportLogic) PrepareDownload(req *types.AdminExportJobReq) (*types
 // triggerWithUniqueLock 在同一导出条件上串行化创建或复用任务，避免重复导出消耗服务器资源。
 func (l *AdminExportLogic) triggerWithUniqueLock(req *types.AdminExportReq, operatorID int, operatorName string) (*types.AdminExportTriggerResp, error) {
 	fingerprint := buildAdminExportRequestFingerprint(req)
-	lockKey := fmt.Sprintf(keys.AdminExportRequestLock, fingerprint)
+	lockKey := l.adminExportRequestLockKey(fingerprint)
 	var triggerResp *types.AdminExportTriggerResp
 	err := redislock.WithLock(l.Context(), l.Redis(), lockKey, adminExportTriggerLockTTL, func(ctx context.Context) error {
 		var innerErr error
@@ -497,7 +497,7 @@ func (l *AdminExportLogic) loadRequestIndex(fingerprint string) (string, error) 
 	if fingerprint == "" {
 		return "", nil
 	}
-	value, err := l.Redis().Get(l.Context(), fmt.Sprintf(keys.AdminExportRequestIndex, fingerprint)).Result()
+	value, err := l.Redis().Get(l.Context(), l.adminExportRequestIndexKey(fingerprint)).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return "", nil
@@ -517,7 +517,7 @@ func (l *AdminExportLogic) saveRequestIndex(fingerprint string, jobID string) er
 	if fingerprint == "" || jobID == "" {
 		return errors.Errorf("导出复用索引参数不能为空")
 	}
-	if err := l.Redis().Set(l.Context(), fmt.Sprintf(keys.AdminExportRequestIndex, fingerprint), jobID, adminExportReuseIndexTTL).Err(); err != nil {
+	if err := l.Redis().Set(l.Context(), l.adminExportRequestIndexKey(fingerprint), jobID, adminExportReuseIndexTTL).Err(); err != nil {
 		return errors.Wrap(err, "保存管理员导出复用索引失败")
 	}
 	return nil
@@ -532,7 +532,7 @@ func (l *AdminExportLogic) clearRequestIndex(fingerprint string) error {
 	if fingerprint == "" {
 		return nil
 	}
-	if err := l.Redis().Del(l.Context(), fmt.Sprintf(keys.AdminExportRequestIndex, fingerprint)).Err(); err != nil {
+	if err := l.Redis().Del(l.Context(), l.adminExportRequestIndexKey(fingerprint)).Err(); err != nil {
 		return errors.Wrap(err, "清理管理员导出复用索引失败")
 	}
 	return nil
@@ -743,7 +743,22 @@ func (l *AdminExportLogic) publicStatus(status *types.AdminExportStatusResp) *ty
 
 // statusStore 返回管理员导出复用的通用任务状态存储。
 func (l *AdminExportLogic) statusStore() *excel.RedisStore {
-	return excel.NewRedisStore(l.Redis(), keys.AdminExportJob, adminExportStatusTTL)
+	return excel.NewRedisStore(l.Redis(), l.adminExportJobKeyPattern(), adminExportStatusTTL)
+}
+
+// adminExportRequestLockKey 返回当前 app_id 作用域下的管理员导出条件互斥锁。
+func (l *AdminExportLogic) adminExportRequestLockKey(fingerprint string) string {
+	return l.AppRedisKey(fmt.Sprintf(keys.AdminExportRequestLock, strings.TrimSpace(fingerprint)))
+}
+
+// adminExportRequestIndexKey 返回当前 app_id 作用域下的管理员导出条件复用索引。
+func (l *AdminExportLogic) adminExportRequestIndexKey(fingerprint string) string {
+	return l.AppRedisKey(fmt.Sprintf(keys.AdminExportRequestIndex, strings.TrimSpace(fingerprint)))
+}
+
+// adminExportJobKeyPattern 返回当前 app_id 作用域下的管理员导出任务状态 key 模板。
+func (l *AdminExportLogic) adminExportJobKeyPattern() string {
+	return l.AppRedisKey(keys.AdminExportJob)
 }
 
 // buildAdminExportHeader 返回管理员导出的标准表头。

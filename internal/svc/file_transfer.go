@@ -38,14 +38,14 @@ func NewFileTransferRuntime() *FileTransferRuntime {
 
 // UploadManager 按配置返回断点续传上传管理器实例。
 // 当上传会话配置未变化时直接复用缓存实例，避免 logic 层重复装配 Redis key 与临时目录。
-func (r *FileTransferRuntime) UploadManager(cfg config.FileStorageConfig, client redis.UniversalClient) (*transfer.LocalUploadManager, error) {
+func (r *FileTransferRuntime) UploadManager(cfg config.FileStorageConfig, appID string, client redis.UniversalClient) (*transfer.LocalUploadManager, error) {
 	if r == nil {
 		return nil, errors.Errorf("文件上传运行时未初始化")
 	}
 	if client == nil {
 		return nil, errors.Errorf("文件上传 Redis 客户端未初始化")
 	}
-	fingerprint := uploadManagerFingerprint(cfg.UploadSession)
+	fingerprint := uploadManagerFingerprint(cfg.UploadSession, appID)
 
 	// 高并发请求下优先走读锁快速路径，配置不变时无额外分配。
 	r.mu.RLock()
@@ -65,10 +65,10 @@ func (r *FileTransferRuntime) UploadManager(cfg config.FileStorageConfig, client
 	manager := transfer.NewLocalUploadManager(
 		client,
 		fileTransferRootDir(cfg.UploadSession),
-		keys.FileTransferUploadSession,
-		keys.FileTransferUploadChunks,
-		keys.FileTransferUploadFingerprint,
-		keys.FileTransferUploadObjectIndex,
+		keys.AppScopedKey(appID, keys.FileTransferUploadSession),
+		keys.AppScopedKey(appID, keys.FileTransferUploadChunks),
+		keys.AppScopedKey(appID, keys.FileTransferUploadFingerprint),
+		keys.AppScopedKey(appID, keys.FileTransferUploadObjectIndex),
 		fileTransferUploadSessionTTL(cfg),
 	)
 	r.uploadManager = manager
@@ -81,7 +81,8 @@ func (s *ServiceContext) FileTransferUploadManager() (*transfer.LocalUploadManag
 	if s == nil {
 		return nil, errors.Errorf("ServiceContext 为空")
 	}
-	return s.fileTransferRuntime().UploadManager(s.CurrentConfig().FileStorage, s.Rds)
+	cfg := s.CurrentConfig()
+	return s.fileTransferRuntime().UploadManager(cfg.FileStorage, cfg.AppID, s.Rds)
 }
 
 // FileTransferUploadSessionTTL 返回当前上传会话保留时间。
@@ -115,13 +116,15 @@ func (s *ServiceContext) fileTransferRuntime() *FileTransferRuntime {
 }
 
 // uploadManagerFingerprint 计算上传会话管理器配置指纹；指纹只用于比较，不输出配置明文。
-func uploadManagerFingerprint(cfg config.FileStorageUploadSessionConfig) string {
+func uploadManagerFingerprint(cfg config.FileStorageUploadSessionConfig, appID string) string {
 	body, err := json.Marshal(struct {
 		RootDir    string `json:"root_dir"`
 		TTLSeconds int    `json:"ttl_seconds"`
+		AppID      string `json:"app_id"`
 	}{
 		RootDir:    fileTransferRootDir(cfg),
 		TTLSeconds: int(fileTransferUploadSessionTTL(config.FileStorageConfig{UploadSession: cfg}) / time.Second),
+		AppID:      keys.NormalizeAppID(appID),
 	})
 	if err != nil {
 		return ""

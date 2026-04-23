@@ -52,7 +52,7 @@ func (l *SysConfigLogic) ExportExcel(req *types.SysConfigExcelExportReq) (string
 	if req == nil {
 		req = &types.SysConfigExcelExportReq{}
 	}
-	lockKey := fmt.Sprintf(keys.SysConfigExcelExportLock, buildSysConfigExcelFingerprint(req))
+	lockKey := l.AppRedisKey(fmt.Sprintf(keys.SysConfigExcelExportLock, buildSysConfigExcelFingerprint(req)))
 	var exportPath string
 	var fileName string
 	err := redislock.WithLock(l.Context(), l.Redis(), lockKey, sysConfigExcelLockTTL, func(ctx context.Context) error {
@@ -93,7 +93,7 @@ func (l *SysConfigLogic) ImportExcel(req *types.SysConfigExcelImportReq) *types.
 			"SysConfigLogic.ImportExcel 解析导入文件失败").ToBizResult()
 	}
 
-	lockKey := fmt.Sprintf(keys.SysConfigExcelImportLock, l.GetCtxAdmin().ID)
+	lockKey := l.AppRedisKey(fmt.Sprintf(keys.SysConfigExcelImportLock, l.GetCtxAdmin().ID))
 	var result *types.SysConfigExcelImportResp
 	changedUUIDs := map[string]struct{}{}
 	err = redislock.WithLock(l.Context(), l.Redis(), lockKey, sysConfigExcelLockTTL, func(ctx context.Context) error {

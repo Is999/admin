@@ -41,7 +41,7 @@ func (l *AdminLogic) BuildLoginCaptcha() *types.BizResult {
 			SetI18nMessage(i18n.MsgKeyInternalError).
 			WithError(errors.Wrap(err, "AdminLogic.BuildLoginCaptcha 生成验证码失败"))
 	}
-	cacheKey := fmt.Sprintf(keys.LoginCaptcha, key)
+	cacheKey := l.AppRedisKey(fmt.Sprintf(keys.LoginCaptcha, key))
 	if err = l.Redis().Set(l.Context(), cacheKey, strings.ToLower(code), loginCaptchaTTLSeconds*time.Second).Err(); err != nil {
 		return types.NewBizResult(codes.ServerError).
 			SetI18nMessage(i18n.MsgKeyInternalErrorFormat).
@@ -68,7 +68,7 @@ func (l *AdminLogic) VerifyLoginCaptcha(key string, captcha string) *types.BizRe
 	if key == "" || captcha == "" {
 		return invalidLoginCaptchaResult(errors.New("登录验证码不能为空"))
 	}
-	cacheKey := fmt.Sprintf(keys.LoginCaptcha, key)
+	cacheKey := l.AppRedisKey(fmt.Sprintf(keys.LoginCaptcha, key))
 	saved, err := l.Redis().GetDel(l.Context(), cacheKey).Result()
 	if err != nil {
 		return invalidLoginCaptchaResult(errors.Wrap(err, "AdminLogic.VerifyLoginCaptcha 读取验证码缓存失败"))

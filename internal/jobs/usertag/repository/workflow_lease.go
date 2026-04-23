@@ -365,25 +365,21 @@ func (r *TagRepository) workflowLeaseClient() (redis.UniversalClient, bool, erro
 }
 
 func (r *TagRepository) workflowLeaseKey() string {
-	appID := "default"
+	appID := keys.NormalizeAppID("")
 	if r != nil && r.deps.Service != nil {
-		if cfgAppID := strings.TrimSpace(r.deps.Service.CurrentConfig().AppID); cfgAppID != "" {
-			appID = cfgAppID
-		}
+		appID = keys.NormalizeAppID(r.deps.Service.CurrentConfig().AppID)
 	}
-	return keys.UserTagWorkflowLeaseKeyPrefix + appID
+	return keys.AppScopedKey(appID, keys.UserTagWorkflowLeaseKeyPrefix)
 }
 
 // workflowSyncDoneKey 返回当前 workflow 的 sync_kafka 分片完成屏障 key。
 // key 中包含 app_id 和 workflow_id，避免多站点共用 Redis 时互相影响。
 func (r *TagRepository) workflowSyncDoneKey(workflowID string) string {
-	appID := "default"
+	appID := keys.NormalizeAppID("")
 	if r != nil && r.deps.Service != nil {
-		if cfgAppID := strings.TrimSpace(r.deps.Service.CurrentConfig().AppID); cfgAppID != "" {
-			appID = cfgAppID
-		}
+		appID = keys.NormalizeAppID(r.deps.Service.CurrentConfig().AppID)
 	}
-	return fmt.Sprintf("%s%s:%s", keys.UserTagWorkflowSyncDoneKeyPrefix, appID, strings.TrimSpace(workflowID))
+	return keys.AppScopedKey(appID, fmt.Sprintf("%s:%s", keys.UserTagWorkflowSyncDoneKeyPrefix, strings.TrimSpace(workflowID)))
 }
 
 func workflowLeaseOwner(opts types.RuntimeOptions) (string, error) {

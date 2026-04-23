@@ -16,6 +16,8 @@ import (
 type templateSearchTarget struct {
 	providerName string                                    // providerName 表示当前模板搜索提供器名称，便于日志定位具体枚举策略。
 	templateKey  string                                    // templateKey 表示当前 provider 负责的模板缓存键定义。
+	tableCache   bool                                      // tableCache 表示候选 key 来自 table-cache 托管目标。
+	appScoped    bool                                      // appScoped 表示候选 key 来自普通 app 作用域缓存。
 	buildKeys    func(*SystemCacheLogic) ([]string, error) // buildKeys 负责枚举当前模板缓存的候选实例 key。
 }
 
@@ -28,20 +30,23 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 		targets = append(targets, templateSearchTarget{
 			providerName: "warmup_template",
 			templateKey:  target.templateKey,
+			tableCache:   true,
 			buildKeys:    target.buildKeys,
 		})
 	}
 	targets = append(targets,
 		templateSearchTarget{
 			providerName: "admin_enabled_ids",
-			templateKey:  "admin:info:{adminID}",
+			templateKey:  l.AppRedisKey("admin:info:{adminID}"),
+			appScoped:    true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildAdminScopedKeys(keys.AdminInfo)
+				return l.buildAppAdminScopedKeys(keys.AdminInfo)
 			},
 		},
 		templateSearchTarget{
 			providerName: "admin_enabled_ids",
 			templateKey:  tableCachePhysicalKey(l.BaseLogic, "admin_role_ids:{adminID}"),
+			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
 				return l.buildTableCacheAdminScopedKeys(keys.AdminRoleIDs)
 			},
@@ -49,6 +54,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 		templateSearchTarget{
 			providerName: "admin_enabled_ids",
 			templateKey:  tableCachePhysicalKey(l.BaseLogic, "admin_permission_ids:{adminID}"),
+			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
 				return l.buildTableCacheAdminScopedKeys(keys.AdminPermissionIDs)
 			},
@@ -56,6 +62,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 		templateSearchTarget{
 			providerName: "admin_enabled_ids",
 			templateKey:  tableCachePhysicalKey(l.BaseLogic, "admin_permission_uuids:{adminID}"),
+			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
 				return l.buildTableCacheAdminScopedKeys(keys.AdminPermissionUUIDs)
 			},
@@ -63,6 +70,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 		templateSearchTarget{
 			providerName: "admin_enabled_ids",
 			templateKey:  tableCachePhysicalKey(l.BaseLogic, "admin_profile:{adminID}"),
+			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
 				return l.buildTableCacheAdminScopedKeys(keys.AdminProfile)
 			},
@@ -70,6 +78,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 		templateSearchTarget{
 			providerName: "admin_enabled_ids",
 			templateKey:  tableCachePhysicalKey(l.BaseLogic, "admin_roles_detail:{adminID}"),
+			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
 				return l.buildTableCacheAdminScopedKeys(keys.AdminRolesDetail)
 			},
@@ -89,12 +98,14 @@ func (l *SystemCacheLogic) matchSearchTemplateTarget(pattern string) *templateSe
 	for i := range targets {
 		prefix := strings.TrimSpace(cacheTemplatePrefix(targets[i].templateKey))
 		logicalPrefix := strings.TrimSpace(cacheTemplatePrefix(tableCacheLogicalKey(l.BaseLogic, targets[i].templateKey)))
-		if prefix == "" && logicalPrefix == "" {
+		appLogicalPrefix := strings.TrimSpace(cacheTemplatePrefix(keys.TrimAppScopedPrefix(targets[i].templateKey)))
+		if prefix == "" && logicalPrefix == "" && appLogicalPrefix == "" {
 			continue
 		}
 		// 管理页展示的是带命名空间的物理 key；这里兼容旧入口传入逻辑 key，避免升级后搜索按钮失效。
 		if (prefix != "" && strings.HasPrefix(pattern, prefix)) ||
-			(logicalPrefix != "" && strings.HasPrefix(pattern, logicalPrefix)) {
+			(logicalPrefix != "" && strings.HasPrefix(pattern, logicalPrefix)) ||
+			(appLogicalPrefix != "" && strings.HasPrefix(pattern, appLogicalPrefix)) {
 			return &targets[i]
 		}
 	}
@@ -135,6 +146,15 @@ func (l *SystemCacheLogic) buildAdminScopedKeys(keyFormat string) ([]string, err
 		keysList = append(keysList, fmt.Sprintf(keyFormat, adminID))
 	}
 	return keysList, nil
+}
+
+// buildAppAdminScopedKeys 基于启用管理员 ID 列表批量拼出 app_id 作用域下的管理员实例 key。
+func (l *SystemCacheLogic) buildAppAdminScopedKeys(keyFormat string) ([]string, error) {
+	keysList, err := l.buildAdminScopedKeys(keyFormat)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return l.AppRedisKeys(keysList...), nil
 }
 
 // buildTableCacheAdminScopedKeys 基于启用管理员 ID 列表批量拼出 table-cache 真实实例 key。

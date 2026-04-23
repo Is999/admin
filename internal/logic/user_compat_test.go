@@ -182,7 +182,7 @@ func TestMarkLoginMFACompletedAfterEnable(t *testing.T) {
 	if err := logicObj.checkAdminMFA(admin); err != nil {
 		t.Fatalf("checkAdminMFA after MarkLoginMFACompleted = %v, want nil", err)
 	}
-	cacheKey := fmt.Sprintf(keys.LoginCheckMFAFlag, admin.ID)
+	cacheKey := logicObj.loginMFAFlagKey(admin.ID)
 	if !server.Exists(cacheKey) {
 		t.Fatalf("login MFA flag key %s not found", cacheKey)
 	}
@@ -202,7 +202,7 @@ func TestSyncLoginMFAAfterPasswordUpdateForForcedReset(t *testing.T) {
 		NeedResetPassword: 1,
 	})
 
-	cacheKey := fmt.Sprintf(keys.LoginCheckMFAFlag, 21)
+	cacheKey := securityLogic.loginMFAFlagKey(21)
 	if !server.Exists(cacheKey) {
 		t.Fatalf("login MFA flag key %s not found after forced reset password update", cacheKey)
 	}
@@ -216,7 +216,7 @@ func TestSyncLoginMFAAfterPasswordUpdateKeepsExistingFlag(t *testing.T) {
 	securityLogic.svc.Rds = client
 	userLogic := &UserCompatLogic{BaseLogic: securityLogic.BaseLogic}
 
-	cacheKey := fmt.Sprintf(keys.LoginCheckMFAFlag, 22)
+	cacheKey := securityLogic.loginMFAFlagKey(22)
 	if err := client.Set(context.Background(), cacheKey, 123456789, time.Minute).Err(); err != nil {
 		t.Fatalf("seed login MFA flag failed: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSyncLoginMFAAfterDisableKeepsCurrentSessionWhenForceEnabled(t *testing.
 		Name: "admin-disable-force",
 	}, 0)
 
-	cacheKey := fmt.Sprintf(keys.LoginCheckMFAFlag, 23)
+	cacheKey := securityLogic.loginMFAFlagKey(23)
 	if !server.Exists(cacheKey) {
 		t.Fatalf("login MFA flag key %s not found after disabling MFA in force mode", cacheKey)
 	}
@@ -293,7 +293,7 @@ func TestSyncLoginMFAAfterDisableKeepsCurrentSessionWhenForceDisabled(t *testing
 	securityLogic.svc.Rds = client
 	userLogic := &UserCompatLogic{BaseLogic: securityLogic.BaseLogic}
 
-	cacheKey := fmt.Sprintf(keys.LoginCheckMFAFlag, 24)
+	cacheKey := securityLogic.loginMFAFlagKey(24)
 	if err := client.Set(context.Background(), cacheKey, 123456789, time.Minute).Err(); err != nil {
 		t.Fatalf("seed login MFA flag failed: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestSyncLoginMFAAfterEnableKeepsCurrentSession(t *testing.T) {
 		Name: "admin-enable",
 	}, 1)
 
-	cacheKey := fmt.Sprintf(keys.LoginCheckMFAFlag, 25)
+	cacheKey := securityLogic.loginMFAFlagKey(25)
 	if !server.Exists(cacheKey) {
 		t.Fatalf("login MFA flag key %s not found after enabling MFA", cacheKey)
 	}

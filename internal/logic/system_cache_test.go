@@ -382,7 +382,7 @@ func TestCacheSearchCandidateMatchesLogicalTableCachePattern(t *testing.T) {
 	if adminTarget == nil {
 		t.Fatal("matchSearchTemplateTarget(admin:info:*) returned nil")
 	}
-	if !logicObj.cacheSearchCandidateMatches("admin:info:*", "admin:info:1", adminTarget) {
+	if !logicObj.cacheSearchCandidateMatches("admin:info:*", logicObj.AppRedisKey("admin:info:1"), adminTarget) {
 		t.Fatal("cacheSearchCandidateMatches(admin info) = false, want true")
 	}
 }
@@ -391,8 +391,12 @@ func TestCacheSearchCandidateMatchesLogicalTableCachePattern(t *testing.T) {
 func TestCacheTemplateDefinitionsUsePhysicalKeys(t *testing.T) {
 	logicObj := &SystemCacheLogic{}
 	prefix := keys.TableCachePrefix("")
+	appPrefix := keys.AppScopedPrefix("")
 	for _, item := range logicObj.cacheItems() {
 		if item.Index == "admin_info" {
+			if !strings.HasPrefix(item.Key, appPrefix) || !strings.HasPrefix(item.KeyTitle, appPrefix) || !strings.HasPrefix(item.ExampleKey, appPrefix) {
+				t.Fatalf("admin info key=%s keyTitle=%s exampleKey=%s should use app prefix %s", item.Key, item.KeyTitle, item.ExampleKey, appPrefix)
+			}
 			continue
 		}
 		if !strings.HasPrefix(item.Key, prefix) || !strings.HasPrefix(item.KeyTitle, prefix) {
@@ -417,7 +421,7 @@ func TestCacheTemplateDefinitionsUsePhysicalKeys(t *testing.T) {
 		}
 	}
 	for _, target := range logicObj.searchTemplateTargets() {
-		if target.templateKey == "admin:info:{adminID}" {
+		if strings.HasPrefix(target.templateKey, appPrefix) {
 			continue
 		}
 		if !strings.HasPrefix(target.templateKey, prefix) {

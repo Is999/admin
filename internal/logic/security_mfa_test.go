@@ -2,12 +2,10 @@ package logic
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	keys "admin_cron/common/rediskeys"
 	"admin_cron/internal/config"
 	"admin_cron/internal/model"
 	"admin_cron/internal/svc"
@@ -259,12 +257,12 @@ func TestClearAdminMFATwoStepTicketsUsesIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueMFATwoStepTicket failed: %v", err)
 	}
-	adminTicketKey := fmt.Sprintf(keys.AdminMFATwoStepTicket, 99, twoStep.Key)
-	otherTicketKey := fmt.Sprintf(keys.AdminMFATwoStepTicket, 100, "keep")
+	adminTicketKey := logicObj.mfaTwoStepTicketKey(99, twoStep.Key)
+	otherTicketKey := logicObj.mfaTwoStepTicketKey(100, "keep")
 	if err := client.Set(context.Background(), otherTicketKey, "demo", time.Minute).Err(); err != nil {
 		t.Fatalf("Set(otherTicketKey) error = %v", err)
 	}
-	if err := client.SAdd(context.Background(), fmt.Sprintf(keys.AdminMFATwoStepIndex, 99), otherTicketKey).Err(); err != nil {
+	if err := client.SAdd(context.Background(), logicObj.mfaTwoStepIndexKey(99), otherTicketKey).Err(); err != nil {
 		t.Fatalf("SAdd(dirty member) error = %v", err)
 	}
 
@@ -274,7 +272,7 @@ func TestClearAdminMFATwoStepTicketsUsesIndex(t *testing.T) {
 	if server.Exists(adminTicketKey) {
 		t.Fatalf("管理员票据 %s 未被清理", adminTicketKey)
 	}
-	if server.Exists(fmt.Sprintf(keys.AdminMFATwoStepIndex, 99)) {
+	if server.Exists(logicObj.mfaTwoStepIndexKey(99)) {
 		t.Fatalf("管理员票据索引未被清理")
 	}
 	if !server.Exists(otherTicketKey) {
@@ -391,7 +389,7 @@ func TestCheckAdminMFAToleratesOneSecondSkew(t *testing.T) {
 		MfaStatus:     1,
 		LastLoginTime: lastLoginTime,
 	}
-	cacheKey := fmt.Sprintf(keys.LoginCheckMFAFlag, admin.ID)
+	cacheKey := logicObj.loginMFAFlagKey(admin.ID)
 	if err := client.Set(context.Background(), cacheKey, lastLoginTime.Unix()-1, time.Minute).Err(); err != nil {
 		t.Fatalf("Set(%s) error = %v", cacheKey, err)
 	}

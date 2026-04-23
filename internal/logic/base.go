@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	keys "admin_cron/common/rediskeys"
 	"admin_cron/helper"
 	"admin_cron/internal/audit"
 	"admin_cron/internal/infra/loggerx"
@@ -70,6 +71,35 @@ func (l *BaseLogic) Redis() redis.UniversalClient {
 		return nil
 	}
 	return l.svc.Rds
+}
+
+// AppID 返回当前 Redis 缓存命名空间使用的 app_id。
+func (l *BaseLogic) AppID() string {
+	if l == nil || l.svc == nil {
+		return keys.NormalizeAppID("")
+	}
+	return keys.NormalizeAppID(l.svc.CurrentConfig().AppID)
+}
+
+// AppRedisKey 给直接 Redis 缓存和锁追加当前 app_id 命名空间。
+func (l *BaseLogic) AppRedisKey(key string) string {
+	if l == nil {
+		return keys.AppScopedKey("", key)
+	}
+	return keys.AppScopedKey(l.AppID(), key)
+}
+
+// AppRedisKeys 批量追加当前 app_id 命名空间并过滤空 key。
+func (l *BaseLogic) AppRedisKeys(cacheKeys ...string) []string {
+	result := make([]string, 0, len(cacheKeys))
+	for _, key := range cacheKeys {
+		key = l.AppRedisKey(key)
+		if key == "" {
+			continue
+		}
+		result = append(result, key)
+	}
+	return helper.UniqueNonEmptyStrings(result)
 }
 
 // Audit 返回统一审计记录器，避免业务层直接拼装 admin_log。

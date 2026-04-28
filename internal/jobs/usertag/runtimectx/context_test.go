@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/types"
 )
 
 // TestRuntimeContextTraceFields 验证日志链路字段格式稳定。

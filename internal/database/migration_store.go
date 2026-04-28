@@ -40,8 +40,15 @@ func (s *GormMigrationStore) AppliedMigrations(ctx context.Context) (map[string]
 	if s == nil || s.db == nil {
 		return nil, errors.Errorf("数据库迁移 GORM 连接为空")
 	}
+	exists, err := s.hasSchemaMigrationsTable(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "检查 schema_migrations 表失败")
+	}
+	if !exists {
+		return map[string]AppliedMigration{}, nil
+	}
 	var rows []AppliedMigration
-	err := s.db.WithContext(ctx).
+	err = s.db.WithContext(ctx).
 		Table("schema_migrations").
 		Select("version, name, asset, checksum").
 		Scan(&rows).Error
@@ -56,6 +63,15 @@ func (s *GormMigrationStore) AppliedMigrations(ctx context.Context) (map[string]
 		applied[row.Version] = row
 	}
 	return applied, nil
+}
+
+// hasSchemaMigrationsTable 检查版本表是否存在，避免缺表时触发查询失败日志。
+func (s *GormMigrationStore) hasSchemaMigrationsTable(ctx context.Context) (bool, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Raw(SchemaMigrationsExistsSQL(), "schema_migrations").Scan(&count).Error; err != nil {
+		return false, errors.Tag(err)
+	}
+	return count > 0, nil
 }
 
 // ExecuteMigration 在事务中执行 SQL 并登记版本。

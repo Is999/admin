@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/jobs/usertag/route"
+	"admin/internal/jobs/usertag/route"
 
 	"github.com/Is999/go-utils/errors"
 )

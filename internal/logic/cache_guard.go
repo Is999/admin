@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	keys "admin_cron/common/rediskeys"
+	keys "admin/common/rediskeys"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -12,6 +12,11 @@ import (
 var (
 	// errCacheEmptyMarker 表示命中了空值缓存占位，用于避免缓存穿透时持续回源数据库。
 	errCacheEmptyMarker = errors.New("cache empty marker")
+)
+
+var (
+	// ErrCacheEmptyMarker 表示命中了空值缓存占位。
+	ErrCacheEmptyMarker = errCacheEmptyMarker
 )
 
 const (
@@ -33,9 +38,19 @@ func jitterTTL(base time.Duration) time.Duration {
 	return base + time.Duration(time.Now().UnixNano()%int64(jitterRange))
 }
 
+// JitterTTL 为基础过期时间添加抖动。
+func JitterTTL(base time.Duration) time.Duration {
+	return jitterTTL(base)
+}
+
 // emptyCacheTTL 返回空值缓存的过期时间，确保不存在的数据也能短时间挡住回源请求。
 func emptyCacheTTL() time.Duration {
 	return jitterTTL(2 * time.Minute)
+}
+
+// EmptyCacheTTL 返回空值缓存的过期时间。
+func EmptyCacheTTL() time.Duration {
+	return emptyCacheTTL()
 }
 
 // cacheIsEmptyMarker 判断当前缓存字段是否为统一空值占位符。
@@ -43,9 +58,14 @@ func cacheIsEmptyMarker(value string) bool {
 	return value == keys.EmptyValueMarker
 }
 
+// CacheIsEmptyMarker 判断当前缓存字段是否为统一空值占位符。
+func CacheIsEmptyMarker(value string) bool {
+	return cacheIsEmptyMarker(value)
+}
+
 // cacheLockKey 返回当前 app_id 作用域下的缓存重建锁 Redis 键。
 func (l *BaseLogic) cacheLockKey(cacheKey string) string {
-	cacheKey = keys.TrimAppScopedPrefix(keys.TrimTableCachePrefix(cacheKey))
+	cacheKey = keys.TrimAppScopedPrefix(keys.TrimTableCachePrefix(l.AppID(), cacheKey))
 	return l.AppRedisKey(fmt.Sprintf(keys.CacheRebuildLock, cacheKey))
 }
 
@@ -55,7 +75,7 @@ func (l *BaseLogic) tryRebuildCacheWithLock(cacheKey string, rebuild func() erro
 		return rebuild()
 	}
 	lockKey := l.cacheLockKey(cacheKey)
-	locked, err := l.Redis().SetNX(l.Context(), lockKey, "1", cacheRebuildLockTTL).Result()
+	locked, err := l.Redis().SetNX(l.Ctx, lockKey, "1", cacheRebuildLockTTL).Result()
 	if err != nil {
 		return errors.Tag(err)
 	}
@@ -63,7 +83,7 @@ func (l *BaseLogic) tryRebuildCacheWithLock(cacheKey string, rebuild func() erro
 		return nil
 	}
 	defer func() {
-		_ = l.Redis().Del(l.Context(), lockKey).Err()
+		_ = l.Redis().Del(l.Ctx, lockKey).Err()
 	}()
 	return rebuild()
 }

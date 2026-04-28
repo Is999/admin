@@ -1,16 +1,16 @@
-APP := admin-cron
+APP := admin
 BIN := bin/$(APP)
 VERSION ?= dev
 PACKAGE := dist/$(APP)-$(VERSION).tar.gz
 LDFLAGS ?= -s -w -X main.buildVersion=$(VERSION)
 DOCKER_COMPOSE ?= docker compose
-INTEGRATION_MYSQL_DSN ?= root:password@tcp(127.0.0.1:3310)/admin_cron?charset=utf8mb4&parseTime=true&loc=Local
+INTEGRATION_MYSQL_DSN ?= root:password@tcp(127.0.0.1:3310)/admin?charset=utf8mb4&parseTime=true&loc=Local
 SECRET_SCAN_PATHS := $(wildcard etc/*.sample.yaml) deploy .gitlab-ci.yml Makefile README.md docs/site docs/prometheus docs/grafana
 PROMTOOL_IMAGE ?= prom/prometheus:v2.55.1
 PROMETHEUS_RULES := $(wildcard docs/prometheus/*.yml)
 PROMETHEUS_RULES_IN_CONTAINER := $(patsubst docs/prometheus/%,/rules/%,$(PROMETHEUS_RULES))
 
-.PHONY: fmt fmt-check test build build-tools package check ci diff-check secret-scan promtool-check govulncheck security-scan integration-env-up integration-env-down integration-test migrate-status migrate-dry-run migrate-up clean
+.PHONY: fmt fmt-check test build build-tools package check ci diff-check secret-scan promtool-check govulncheck security-scan integration-env-up integration-env-down integration-test migrate-status migrate-dry-run migrate-up migrate-bootstrap clean
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -23,7 +23,7 @@ test:
 
 build:
 	mkdir -p bin
-	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) .
+	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/admin
 
 build-tools:
 	mkdir -p bin
@@ -70,6 +70,9 @@ migrate-dry-run:
 
 migrate-up:
 	go run ./cmd/migrate -f $(MIGRATE_CONFIG) -action=up
+
+migrate-bootstrap:
+	go run ./cmd/migrate -f $(MIGRATE_CONFIG) -action=up -allow-bootstrap -allow-destructive
 
 clean:
 	rm -rf bin dist

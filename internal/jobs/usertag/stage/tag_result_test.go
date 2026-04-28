@@ -3,8 +3,8 @@ package stage
 import (
 	"testing"
 
-	"admin_cron/internal/jobs/usertag/runtimectx"
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/runtimectx"
+	"admin/internal/jobs/usertag/types"
 )
 
 // TestBusinessHookStageIsNoop 验证默认业务扩展节点只是占位骨架。

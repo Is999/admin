@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/svc"
+	"admin/internal/config"
+	"admin/internal/infra/loggerx"
+	"admin/internal/svc"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"

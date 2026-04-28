@@ -3,9 +3,9 @@ package repository
 import (
 	"context"
 
-	"admin_cron/internal/jobs/usertag/queryplan"
-	"admin_cron/internal/jobs/usertag/route"
-	"admin_cron/internal/svc"
+	"admin/internal/jobs/usertag/queryplan"
+	"admin/internal/jobs/usertag/route"
+	"admin/internal/svc"
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"

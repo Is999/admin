@@ -6,7 +6,8 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
-	"admin_cron/internal/config"
+	keys "admin/common/rediskeys"
+	"admin/internal/config"
 )
 
 const (
@@ -26,6 +27,9 @@ func validateCoreConfig(c config.Config) error {
 	if len(strings.TrimSpace(c.JwtSecret)) < minAdminJWTSecretLength {
 		return errors.Errorf("jwt_secret 长度不能小于 %d", minAdminJWTSecretLength)
 	}
+	if strings.TrimSpace(c.AppID) == "" {
+		return errors.Errorf("app_id 不能为空")
+	}
 	if len(nonEmptyStrings(c.Redis.Addrs)) == 0 {
 		return errors.Errorf("redis.addrs 不能为空")
 	}
@@ -39,7 +43,8 @@ func validateCoreConfig(c config.Config) error {
 }
 
 // validateAdminCollectorConfig 校验 Collector 载体配置是否自洽。
-func validateAdminCollectorConfig(cfg config.CollectorConfig) error {
+func validateAdminCollectorConfig(c config.Config) error {
+	cfg := c.Collector
 	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
 	switch transport {
 	case "", adminCollectorTransportAuto, adminCollectorTransportKafka, adminCollectorTransportRedis, adminCollectorTransportDB:
@@ -60,6 +65,10 @@ func validateAdminCollectorConfig(cfg config.CollectorConfig) error {
 	}
 	if cfg.Redis.Enabled && strings.TrimSpace(cfg.Redis.Stream) == "" {
 		return errors.Errorf("collector.redis.enabled=true 时必须配置 collector.redis.stream")
+	}
+	if keys.IsForeignAppScopedKey(c.AppID, cfg.Redis.Stream) {
+		ownerAppID, _ := keys.AppScopedAppID(cfg.Redis.Stream)
+		return errors.Errorf("collector.redis.stream 属于其它 app_id[%s]", ownerAppID)
 	}
 
 	switch transport {
@@ -99,9 +108,6 @@ func validateSecurityConfig(c config.Config) error {
 	cfg := c.Security.SecretKey
 	if !securitySecretKeyTouched(cfg) {
 		return nil
-	}
-	if strings.TrimSpace(c.AppID) == "" {
-		return errors.Errorf("配置 security.secret_key 时必须配置 app_id")
 	}
 	if err := validateBinaryStatus("security.secret_key.sign_status", cfg.SignStatus); err != nil {
 		return errors.Tag(err)
@@ -161,9 +167,6 @@ func validateProductionConfig(c config.Config) error {
 	}
 	if isPlaceholderSecret(c.JwtSecret) {
 		return errors.Errorf("生产环境 jwt_secret 不能使用占位值")
-	}
-	if strings.TrimSpace(c.AppID) == "" {
-		return errors.Errorf("生产环境 app_id 不能为空")
 	}
 	if len(strings.TrimSpace(c.AppKey)) < minAdminAppKeyLength {
 		return errors.Errorf("生产环境 app_key 长度不能小于 %d", minAdminAppKeyLength)

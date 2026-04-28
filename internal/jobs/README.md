@@ -5,7 +5,8 @@
 
 当前目录约定：
 
-- `archive`：通用热表归档、归档控制表和归档工作流任务定义。
+- `export`：管理员列表异步导出 handler。
+- `archive`：通用热表归档、归档控制表、管理员日志查询、SQL 模板资产和归档工作流任务定义。
 - `usertag`：用户标签工作流骨架、结果表切换、Kafka outbox 和运行期辅助表治理。
 
-`internal/taskruntime` 只保留插件装配入口，避免定时任务实现继续散落在 `internal` 顶层。
+`internal/task/runtime` 只保留插件运行时和核心插件，业务任务实现放在各自 `internal/jobs/<业务>` 目录。

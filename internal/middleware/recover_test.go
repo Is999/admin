@@ -7,11 +7,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	codes "admin_cron/common/codes"
-	"admin_cron/helper"
-	"admin_cron/internal/config"
-	otelsetup "admin_cron/internal/infra/tracing"
-	"admin_cron/internal/requestctx"
+	codes "admin/common/codes"
+	"admin/helper"
+	"admin/internal/config"
+	otelsetup "admin/internal/infra/tracing"
+	"admin/internal/requestctx"
 )
 
 // TestRecoverMiddlewareReturnsJSON 验证真实全局链路顺序下，panic 会被内层 recover 兜住，并返回统一 JSON 响应与 trace_id。

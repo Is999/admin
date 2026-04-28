@@ -81,7 +81,7 @@ func TestWithLockCancelsContextOnRenewalFailure(t *testing.T) {
 		server.Close()
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errors.Tag(ctx.Err())
 		case <-time.After(2 * time.Second):
 			return errors.New("lock context was not canceled")
 		}

@@ -38,9 +38,7 @@ func (g *GormLogger) Info(ctx context.Context, format string, args ...interface{
 	if g.level < gormlogger.Info {
 		return
 	}
-	WithContextCallerSkip(ctx, 1).Infow("数据库 信息日志",
-		append(FieldsFromContext(ctx), logx.Field("detail", fmt.Sprintf(format, args...)))...,
-	)
+	InfowSkip(ctx, 1, "数据库 信息日志", logx.Field("detail", fmt.Sprintf(format, args...)))
 }
 
 // Warn 输出警告级 SQL 日志。
@@ -48,9 +46,7 @@ func (g *GormLogger) Warn(ctx context.Context, format string, args ...interface{
 	if g.level < gormlogger.Warn {
 		return
 	}
-	WithContextCallerSkip(ctx, 1).Infow("数据库 警告日志",
-		append(FieldsFromContext(ctx), logx.Field("detail", fmt.Sprintf(format, args...)))...,
-	)
+	InfowSkip(ctx, 1, "数据库 警告日志", logx.Field("detail", fmt.Sprintf(format, args...)))
 }
 
 // Error 输出错误级 SQL 日志。
@@ -70,18 +66,18 @@ func (g *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 
 	elapsed := time.Since(begin)
 	sql, rows := fc()
-	fields := append(FieldsFromContext(ctx),
+	fields := []logx.LogField{
 		logx.Field("latency_ms", elapsed.Milliseconds()),
 		logx.Field("rows", rows),
 		logx.Field("sql", sql),
-	)
+	}
 
 	switch {
 	case err != nil && !errors.Is(err, gorm.ErrRecordNotFound):
 		ErrorwSkip(ctx, 1, "数据库 查询失败", err, fields...)
 	case g.slowThreshold > 0 && elapsed > g.slowThreshold:
-		WithContextCallerSkip(ctx, 1).Sloww("数据库 慢查询", fields...)
+		SlowwSkip(ctx, 1, "数据库 慢查询", fields...)
 	case g.level >= gormlogger.Info:
-		WithContextCallerSkip(ctx, 1).Infow("数据库 查询", fields...)
+		InfowSkip(ctx, 1, "数据库 查询", fields...)
 	}
 }

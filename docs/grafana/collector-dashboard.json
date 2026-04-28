@@ -39,7 +39,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (biz_type, result) (rate(admin_cron_collector_processor_events_total[5m]))",
+          "expr": "sum by (biz_type, result) (rate(admin_collector_processor_events_total[5m]))",
           "legendFormat": "{{biz_type}} / {{result}}",
           "range": true,
           "refId": "A"
@@ -81,7 +81,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, biz_type, result) (rate(admin_cron_collector_processor_batch_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, biz_type, result) (rate(admin_collector_processor_batch_duration_seconds_bucket[5m])))",
           "legendFormat": "P95 {{biz_type}} / {{result}}",
           "range": true,
           "refId": "A"
@@ -123,7 +123,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le, biz_type) (rate(admin_cron_collector_processor_batch_size_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le, biz_type) (rate(admin_collector_processor_batch_size_bucket[5m])))",
           "legendFormat": "P50 {{biz_type}}",
           "range": true,
           "refId": "A"
@@ -165,7 +165,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (transport) (rate(admin_cron_collector_outbox_persist_events_total[5m]))",
+          "expr": "sum by (transport) (rate(admin_collector_outbox_persist_events_total[5m]))",
           "legendFormat": "{{transport}}",
           "range": true,
           "refId": "A"

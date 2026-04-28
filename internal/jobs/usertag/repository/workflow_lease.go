@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	keys "admin_cron/common/rediskeys"
-	"admin_cron/internal/jobs/usertag/types"
+	keys "admin/common/rediskeys"
+	"admin/internal/jobs/usertag/types"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"
@@ -71,8 +71,8 @@ func (r *TagRepository) ensureWorkflowLease(ctx context.Context, opts types.Runt
 // ensureExclusiveWorkflowLease 确保 full 工作流独占全局写租约。
 // full 会切换结果表并推进同步基线，必须独占写窗口。
 func (r *TagRepository) ensureExclusiveWorkflowLease(ctx context.Context, opts types.RuntimeOptions) error {
-	client, required, err := r.workflowLeaseClient()
-	if err != nil || !required {
+	client, err := r.workflowLeaseClient()
+	if err != nil {
 		return errors.Tag(err)
 	}
 	owner, err := workflowLeaseOwner(opts)
@@ -86,7 +86,10 @@ func (r *TagRepository) ensureExclusiveWorkflowLease(ctx context.Context, opts t
 		_, _ = r.releaseWorkflowLeaseOwner(ctx, client, owner, opts.WorkflowID)
 		return errors.Errorf("用户标签 full 工作流已进入终态 workflow_id=%s mode=%s", strings.TrimSpace(opts.WorkflowID), strings.TrimSpace(opts.Mode))
 	}
-	key := r.workflowLeaseKey()
+	key, err := r.workflowLeaseKey()
+	if err != nil {
+		return errors.Tag(err)
+	}
 	locked, err := client.SetNX(ctx, key, owner, userTagWorkflowLeaseTTL).Result()
 	if err != nil {
 		return errors.Wrap(err, "获取用户标签工作流互斥租约失败")
@@ -144,11 +147,15 @@ func (r *TagRepository) ensureExclusiveWorkflowLease(ctx context.Context, opts t
 // ensureNoFullWorkflowLease 确认当前没有 full 工作流持有全局租约。
 // 非 full 不持有全局写锁，这里仅把 full 作为互斥边界。
 func (r *TagRepository) ensureNoFullWorkflowLease(ctx context.Context) error {
-	client, required, err := r.workflowLeaseClient()
-	if err != nil || !required {
+	client, err := r.workflowLeaseClient()
+	if err != nil {
 		return errors.Tag(err)
 	}
-	current, err := client.Get(ctx, r.workflowLeaseKey()).Result()
+	key, err := r.workflowLeaseKey()
+	if err != nil {
+		return errors.Tag(err)
+	}
+	current, err := client.Get(ctx, key).Result()
 	if err == redis.Nil {
 		return nil
 	}
@@ -182,8 +189,8 @@ func (r *TagRepository) releaseTerminalNonFullWorkflowLease(ctx context.Context,
 	if !terminal {
 		return false, nil
 	}
-	client, required, err := r.workflowLeaseClient()
-	if err != nil || !required {
+	client, err := r.workflowLeaseClient()
+	if err != nil {
 		return false, errors.Tag(err)
 	}
 	deleted, err := r.releaseWorkflowLeaseOwner(ctx, client, owner, workflowID)
@@ -207,8 +214,8 @@ func (r *TagRepository) releaseTerminalFullWorkflowLease(ctx context.Context, ow
 	if !terminal {
 		return false, nil
 	}
-	client, required, err := r.workflowLeaseClient()
-	if err != nil || !required {
+	client, err := r.workflowLeaseClient()
+	if err != nil {
 		return false, errors.Tag(err)
 	}
 	deleted, err := r.releaseWorkflowLeaseOwner(ctx, client, owner, workflowID)
@@ -236,8 +243,8 @@ func (r *TagRepository) ReleaseWorkflowLease(ctx context.Context, opts types.Run
 	if opts.DryRun || !workflowRequiresExclusiveLease(opts) {
 		return nil
 	}
-	client, required, err := r.workflowLeaseClient()
-	if err != nil || !required {
+	client, err := r.workflowLeaseClient()
+	if err != nil {
 		return errors.Tag(err)
 	}
 	owner, err := workflowLeaseOwner(opts)
@@ -249,7 +256,11 @@ func (r *TagRepository) ReleaseWorkflowLease(ctx context.Context, opts types.Run
 		return errors.Wrap(err, "释放用户标签工作流互斥租约失败")
 	}
 	if !released {
-		current, readErr := client.Get(ctx, r.workflowLeaseKey()).Result()
+		key, keyErr := r.workflowLeaseKey()
+		if keyErr != nil {
+			return errors.Tag(keyErr)
+		}
+		current, readErr := client.Get(ctx, key).Result()
 		if readErr == redis.Nil {
 			return nil
 		}
@@ -264,18 +275,18 @@ func (r *TagRepository) ReleaseWorkflowLease(ctx context.Context, opts types.Run
 // ManualReleaseWorkflowLease 按 workflowID/mode 精确释放用户标签工作流互斥租约。
 // 只删除中心化定义的单个租约 key，且必须先比对完整 owner。
 func (r *TagRepository) ManualReleaseWorkflowLease(ctx context.Context, opts types.RuntimeOptions) (*WorkflowLeaseReleaseResult, error) {
-	client, required, err := r.workflowLeaseClient()
+	client, err := r.workflowLeaseClient()
 	if err != nil {
 		return nil, errors.Tag(err)
-	}
-	if !required {
-		return nil, errors.Errorf("用户标签工作流互斥租约需要 Redis，但 Redis 未初始化")
 	}
 	owner, err := workflowLeaseOwner(opts)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	key := r.workflowLeaseKey()
+	key, err := r.workflowLeaseKey()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
 	result := &WorkflowLeaseReleaseResult{
 		WorkflowID: strings.TrimSpace(opts.WorkflowID),
 		Mode:       strings.TrimSpace(opts.Mode),
@@ -325,11 +336,14 @@ func (r *TagRepository) ReleaseWorkflowLeaseAfterShardDone(ctx context.Context, 
 	if opts.ShardIndex < 0 || opts.ShardIndex >= opts.ShardTotal {
 		return errors.Errorf("用户标签工作流释放租约分片参数异常 shard=%d/%d", opts.ShardIndex, opts.ShardTotal)
 	}
-	client, required, err := r.workflowLeaseClient()
-	if err != nil || !required {
+	client, err := r.workflowLeaseClient()
+	if err != nil {
 		return errors.Tag(err)
 	}
-	key := r.workflowSyncDoneKey(opts.WorkflowID)
+	key, err := r.workflowSyncDoneKey(opts.WorkflowID)
+	if err != nil {
+		return errors.Tag(err)
+	}
 	count, err := userTagWorkflowShardDoneScript.Run(ctx, client, []string{key}, opts.ShardIndex, int64(userTagWorkflowLeaseTTL/time.Second)).Int64()
 	if err != nil {
 		return errors.Wrap(err, "记录用户标签工作流 sync_kafka 分片完成失败")
@@ -343,43 +357,65 @@ func (r *TagRepository) ReleaseWorkflowLeaseAfterShardDone(ctx context.Context, 
 // releaseWorkflowLeaseOwner 按完整 owner 原子释放全局租约，并用单 key 命令清理当前 workflow 的分片屏障。
 // write_lock 用 Lua 比对 owner；sync_done 释放后独立清理。
 func (r *TagRepository) releaseWorkflowLeaseOwner(ctx context.Context, client redis.UniversalClient, owner string, workflowID string) (bool, error) {
-	deleted, err := userTagWorkflowLeaseReleaseScript.Run(ctx, client, []string{r.workflowLeaseKey()}, owner).Int64()
+	key, err := r.workflowLeaseKey()
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	deleted, err := userTagWorkflowLeaseReleaseScript.Run(ctx, client, []string{key}, owner).Int64()
 	if err != nil {
 		return false, errors.Tag(err)
 	}
 	if deleted > 0 && strings.TrimSpace(workflowID) != "" {
+		syncDoneKey, keyErr := r.workflowSyncDoneKey(workflowID)
+		if keyErr != nil {
+			return false, errors.Tag(keyErr)
+		}
 		// sync_done 带 TTL，清理失败不影响租约释放结果。
-		_ = client.Del(ctx, r.workflowSyncDoneKey(workflowID)).Err()
+		_ = client.Del(ctx, syncDoneKey).Err()
 	}
 	return deleted > 0, nil
 }
 
-func (r *TagRepository) workflowLeaseClient() (redis.UniversalClient, bool, error) {
-	if r == nil || r.deps.Redis == nil {
-		if r == nil || r.deps.Service == nil {
-			return nil, false, nil
-		}
-		return nil, true, errors.Errorf("用户标签工作流互斥租约需要 Redis，但 Redis 未初始化")
+// workflowLeaseClient 返回工作流租约使用的 Redis 客户端，缺失依赖时按错误返回。
+func (r *TagRepository) workflowLeaseClient() (redis.UniversalClient, error) {
+	if r == nil {
+		return nil, errors.Errorf("用户标签仓储未初始化，无法获取 Redis 租约客户端")
 	}
-	return r.deps.Redis, true, nil
+	if r.deps.Redis == nil {
+		return nil, errors.Errorf("用户标签工作流互斥租约需要 Redis，但 Redis 未初始化")
+	}
+	return r.deps.Redis, nil
 }
 
-func (r *TagRepository) workflowLeaseKey() string {
-	appID := keys.NormalizeAppID("")
-	if r != nil && r.deps.Service != nil {
-		appID = keys.NormalizeAppID(r.deps.Service.CurrentConfig().AppID)
+// workflowAppID 返回用户标签工作流 Redis key 使用的 app_id。
+func (r *TagRepository) workflowAppID() (string, error) {
+	if r == nil || r.deps.Service == nil {
+		return "", errors.Errorf("用户标签仓储上下文未初始化，无法获取 app_id")
 	}
-	return keys.AppScopedKey(appID, keys.UserTagWorkflowLeaseKeyPrefix)
+	appID := keys.NormalizeAppID(r.deps.Service.CurrentConfig().AppID)
+	if appID == "" {
+		return "", errors.Errorf("用户标签工作流缺少 app_id 配置")
+	}
+	return appID, nil
+}
+
+// workflowLeaseKey 返回当前 app_id 作用域下的用户标签写工作流租约 key。
+func (r *TagRepository) workflowLeaseKey() (string, error) {
+	appID, err := r.workflowAppID()
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	return keys.UserTagWorkflowLeaseRedisKey(appID), nil
 }
 
 // workflowSyncDoneKey 返回当前 workflow 的 sync_kafka 分片完成屏障 key。
 // key 中包含 app_id 和 workflow_id，避免多站点共用 Redis 时互相影响。
-func (r *TagRepository) workflowSyncDoneKey(workflowID string) string {
-	appID := keys.NormalizeAppID("")
-	if r != nil && r.deps.Service != nil {
-		appID = keys.NormalizeAppID(r.deps.Service.CurrentConfig().AppID)
+func (r *TagRepository) workflowSyncDoneKey(workflowID string) (string, error) {
+	appID, err := r.workflowAppID()
+	if err != nil {
+		return "", errors.Tag(err)
 	}
-	return keys.AppScopedKey(appID, fmt.Sprintf("%s:%s", keys.UserTagWorkflowSyncDoneKeyPrefix, strings.TrimSpace(workflowID)))
+	return keys.UserTagWorkflowSyncDoneRedisKey(appID, workflowID), nil
 }
 
 func workflowLeaseOwner(opts types.RuntimeOptions) (string, error) {

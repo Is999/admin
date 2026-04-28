@@ -1,6 +1,10 @@
 package i18n
 
-import "strings"
+import (
+	"strings"
+
+	"golang.org/x/text/language"
+)
 
 const (
 	// LocaleZHCN 表示管理后台默认简体中文语言标签。
@@ -9,26 +13,43 @@ const (
 	LocaleENUS = "en-US"
 )
 
+// supportedLocales 表示后端响应文案当前维护的语种。
+var supportedLocales = []string{LocaleZHCN, LocaleENUS}
+
 // NormalizeLocale 把请求语言标准化为当前系统支持的语言标签。
-func NormalizeLocale(raw string) string {
-	s := strings.TrimSpace(raw)
-	if s == "" {
+func NormalizeLocale(locale string) string {
+	locale = strings.TrimSpace(locale)
+	if locale == "" {
 		return LocaleZHCN
 	}
-
-	parts := strings.Split(s, ",")
-	primary := strings.TrimSpace(parts[0])
-	if i := strings.Index(primary, ";"); i >= 0 {
-		primary = strings.TrimSpace(primary[:i])
+	tags, _, err := language.ParseAcceptLanguage(locale)
+	if err != nil || len(tags) == 0 {
+		tag, parseErr := language.Parse(locale)
+		if parseErr != nil {
+			return LocaleZHCN
+		}
+		tags = []language.Tag{tag}
 	}
-	primary = strings.ToLower(primary)
+	for _, tag := range tags {
+		if locale := supportedLocale(tag); locale != "" {
+			return locale
+		}
+	}
+	return LocaleZHCN
+}
 
-	switch {
-	case strings.HasPrefix(primary, "en"):
+// supportedLocale 将标准语言标签映射到当前后端支持的语言。
+func supportedLocale(tag language.Tag) string {
+	if strings.EqualFold(tag.String(), LocaleENUS) {
 		return LocaleENUS
-	case strings.HasPrefix(primary, "zh"):
+	}
+	base, _ := tag.Base()
+	switch base.String() {
+	case "en":
+		return LocaleENUS
+	case "zh":
 		return LocaleZHCN
 	default:
-		return LocaleZHCN
+		return ""
 	}
 }

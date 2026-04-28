@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"admin_cron/internal/config"
-	otelsetup "admin_cron/internal/infra/tracing"
-	"admin_cron/internal/requestctx"
+	"admin/internal/config"
+	otelsetup "admin/internal/infra/tracing"
+	"admin/internal/requestctx"
 )
 
 // TestTraceMiddlewareGeneratesTraceID 验证请求未携带链路信息时，会自动生成 trace/span 并回写响应头。

@@ -1,7 +1,7 @@
-# admin_cron 配置示例。DNMP 环境参考 config.dnmp.sample.yaml。
+# admin 配置示例。DNMP 环境参考 config.dnmp.sample.yaml。
 
 # 服务名称，用于日志、监控和服务标识。
-Name: admin_cron
+Name: admin
 # HTTP 服务监听地址。
 Host: 0.0.0.0
 # HTTP 服务监听端口。
@@ -39,13 +39,13 @@ security:
     # 密钥版本，对应 X-Key-Version。
     key_version: "v1"
     # AES KEY 文件路径，生产环境不要在 YAML 内联密钥材料。
-    aes_key_ref: "/etc/admin-cron/keys/1/v1/aes_key.txt"
+    aes_key_ref: "/etc/admin/keys/1/v1/aes_key.txt"
     # AES IV 文件绝对路径。
-    aes_iv_ref: "/etc/admin-cron/keys/1/v1/aes_iv.txt"
+    aes_iv_ref: "/etc/admin/keys/1/v1/aes_iv.txt"
     # 客户端 RSA 公钥路径。
-    rsa_public_key_user_ref: "/etc/admin-cron/keys/1/v1/user_public.pem"
+    rsa_public_key_user_ref: "/etc/admin/keys/1/v1/user_public.pem"
     # 服务端 RSA 私钥路径。
-    rsa_private_key_server_ref: "/etc/admin-cron/keys/1/v1/server_private.pem"
+    rsa_private_key_server_ref: "/etc/admin/keys/1/v1/server_private.pem"
 
 # 配置热加载；只刷新运行期配置，不重建基础设施连接。
 hot_reload:
@@ -130,7 +130,7 @@ log:
 # 默认所有业务表使用该连接。
 mysql:
   # 主库 DSN。
-  write_data_source: "user:password@tcp(127.0.0.1:3306)/admin_cron?charset=utf8mb4&parseTime=true&loc=Local"
+  write_data_source: "user:password@tcp(127.0.0.1:3306)/admin?charset=utf8mb4&parseTime=true&loc=Local"
   # 读库 DSN 列表；不需要读写分离时留空。
   read_data_sources: []
   # 最大打开连接数。
@@ -145,7 +145,7 @@ mysql:
 # 命名扩展库示例；默认不配置。
 # site_mysql:
 #   archive:
-#     write_data_source: "user:password@tcp(127.0.0.1:3306)/admin_cron_archive"
+#     write_data_source: "user:password@tcp(127.0.0.1:3306)/admin_archive"
 #     read_data_sources: []
 
 # Redis 配置。
@@ -206,16 +206,16 @@ collector:
     enabled: false
     # broker、批次和写超时默认继承顶层 kafka。
     # Collector 事件主题名。
-    topic: "admin_cron_collector_events"
+    topic: "admin_collector_events"
     # Collector 消费组 ID。
-    group_id: "admin_cron_collector"
+    group_id: "admin_collector"
     # Kafka 读超时时间，单位秒。
     read_timeout: 10
   # Redis Stream 载体配置。
   redis:
     # 是否启用 Redis Stream 载体。
     enabled: false
-    # Redis Stream 名称。
+    # Redis Stream 业务名称，运行时自动转成 app:{app_id}:collector:events。
     stream: "collector:events"
     # Redis Stream 消费组名称。
     group: "collector"
@@ -339,7 +339,7 @@ archive:
 # trace_enabled=true 时上报 OTLP。
 observability:
   # 可观测性服务名。
-  service_name: "admin_cron"
+  service_name: "admin"
   # 环境标识。
   environment: "dev"
   # 是否启用 trace 上报。

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是 Codex 参与 `admin-cron` 开发的短入口。开始修改代码、配置、SQL、脚本或文档前，必须先读：
+本文件是 Codex 参与 `admin` 开发的短入口。开始修改代码、配置、SQL、脚本或文档前，必须先读：
 
 - `docs/site/角色文档/后端开发/AI开发提示词.md`
 

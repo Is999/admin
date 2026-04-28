@@ -11,13 +11,16 @@ import (
 	"sync"
 	"time"
 
-	"admin_cron/common/embedasset"
-	keys "admin_cron/common/rediskeys"
-	"admin_cron/internal/config"
-	"admin_cron/internal/infra/loggerx"
-	redislock "admin_cron/internal/infra/redsync"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskstats"
+	"admin/common/embedasset"
+	keys "admin/common/rediskeys"
+	"admin/internal/config"
+	"admin/internal/infra/loggerx"
+	redislock "admin/internal/infra/redsync"
+	adminlog "admin/internal/jobs/archive/adminlog"
+	"admin/internal/model"
+	"admin/internal/svc"
+	"admin/internal/task/stats"
+	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"
@@ -94,7 +97,7 @@ const (
 )
 
 const (
-	// archiveRunModeAll 表示归档和删除都执行，兼容旧 targets 写法。
+	// archiveRunModeAll 表示归档和删除都执行。
 	archiveRunModeAll = "all"
 	// archiveRunModeArchive 表示本轮只做归档搬迁。
 	archiveRunModeArchive = "archive"
@@ -166,31 +169,31 @@ const (
 // archiveWatermarkSchemaTemplate 保存归档水位控制表 DDL 模板。
 // DDL 只替换受控表名，避免大段原生 SQL 留在 Go 文件中触发 IDE 注入误报。
 //
-//go:embed archive_watermark_schema.sql.tmpl
+//go:embed assets/archive_watermark_schema.sql.tmpl
 var archiveWatermarkSchemaTemplate string
 
 // archiveSegmentSchemaTemplate 保存归档区间 checkpoint 控制表 DDL 模板。
 // 该表负责记录历史表区间、租约和断点游标，模板化后仍由 EnsureSchema 统一执行。
 //
-//go:embed archive_segment_schema.sql.tmpl
+//go:embed assets/archive_segment_schema.sql.tmpl
 var archiveSegmentSchemaTemplate string
 
 // archiveBatchInsertTemplate 保存归档批次复制到历史表的 INSERT IGNORE SELECT 模板。
 // 批次主键集合和时间窗口仍通过 Exec 参数绑定，自定义归档条件只来自已校验配置。
 //
-//go:embed archive_batch_insert.sql.tmpl
+//go:embed assets/archive_batch_insert.sql.tmpl
 var archiveBatchInsertTemplate string
 
 // archiveDropHistoryTableTemplate 保存历史表淘汰使用的动态 DDL 模板。
 // DROP TABLE 只能使用原生 DDL；表名来自历史区间元数据并在渲染前统一反引号保护。
 //
-//go:embed archive_drop_history_table.sql.tmpl
+//go:embed assets/archive_drop_history_table.sql.tmpl
 var archiveDropHistoryTableTemplate string
 
 // archiveCreateHistoryTableTemplate 保存历史表按热表结构自愈创建的动态 DDL 模板。
 // CREATE TABLE LIKE 用于复用线上热表结构和索引，避免手工维护历史表 DDL 漂移。
 //
-//go:embed archive_create_history_table.sql.tmpl
+//go:embed assets/archive_create_history_table.sql.tmpl
 var archiveCreateHistoryTableTemplate string
 
 var (
@@ -205,6 +208,9 @@ type Service struct {
 	svcCtx          *svc.ServiceContext // 服务上下文，提供数据库、Redis 与运行期配置
 	controlDatabase svc.DbName          // 归档控制表归属库名
 }
+
+// AdminLogQueryMeta 是管理员日志查询返回给接口层的元信息。
+type AdminLogQueryMeta = adminlog.Meta
 
 // Option 定义归档服务运行期可插拔配置项。
 type Option func(s *Service)
@@ -296,6 +302,45 @@ func NewService(svcCtx *svc.ServiceContext, opts ...Option) *Service {
 		}
 	}
 	return s
+}
+
+// QueryAdminLogs 查询管理员审计日志。
+func (s *Service) QueryAdminLogs(ctx context.Context, req *types.AdminLogQueryReq) ([]model.AdminLog, int64, AdminLogQueryMeta, error) {
+	if req == nil {
+		return nil, 0, AdminLogQueryMeta{}, errors.Errorf("管理员日志查询参数不能为空")
+	}
+	startTime, endTime, err := req.TimeRange()
+	if err != nil {
+		return nil, 0, AdminLogQueryMeta{}, errors.Tag(err)
+	}
+	job := s.adminLogQueryJob()
+	return adminlog.QueryDirect(ctx, s.adminLogDB(job), req, startTime, endTime, job.QueryWriteDB)
+}
+
+// adminLogQueryJob 返回管理员日志热表查询配置。
+func (s *Service) adminLogQueryJob() jobConfig {
+	if job, ok := s.jobByName(JobNameAdminLog); ok {
+		return job
+	}
+	return jobConfig{
+		Name:      JobNameAdminLog,
+		Database:  svc.DatabaseMain,
+		TableName: model.TableNameAdminLog,
+	}
+}
+
+// adminLogDB 返回管理员日志查询应使用的连接。
+func (s *Service) adminLogDB(job jobConfig) *gorm.DB {
+	if s == nil || s.svcCtx == nil {
+		return nil
+	}
+	if job.QueryWriteDB {
+		return withWriteResolver(s.jobSourceWriteDB(job))
+	}
+	if db := s.svcCtx.ReadDB(job.Database); db != nil {
+		return db
+	}
+	return withWriteResolver(s.jobSourceWriteDB(job))
 }
 
 // archiveTraceName 拼接归档任务处理量明细名称。
@@ -470,7 +515,10 @@ func (s *Service) runJob(ctx context.Context, run jobRunConfig, workerID string)
 // prepareSegments 根据当前 watermark 与安全归档上界预先切分待归档区间。
 // 这里通过短时分布式锁保证多个 worker 不会重复规划同一批区间。
 func (s *Service) prepareSegments(ctx context.Context, job jobConfig, sourceDB *gorm.DB, controlDB *gorm.DB) error {
-	lockKey := s.appRedisKey(fmt.Sprintf(keys.ArchiveJobPlanLock, job.Name))
+	lockKey, err := s.archiveJobPlanKey(job.Name)
+	if err != nil {
+		return errors.Tag(err)
+	}
 	return redislock.WithLock(ctx, s.redisClient(), lockKey, s.lockTTL(), func(lockCtx context.Context) error {
 		upperBound, ok := s.archiveUpperBound(lockCtx, job, controlDB)
 		if !ok {
@@ -488,14 +536,14 @@ func (s *Service) prepareSegments(ctx context.Context, job jobConfig, sourceDB *
 			// 首次运行没有水位线时，需要先定位热表中最早可归档数据。
 			minTime, hasData, innerErr := s.minArchivableTime(lockCtx, job, sourceDB, upperBound)
 			if innerErr != nil {
-				return innerErr
+				return errors.Wrapf(innerErr, "定位归档起始时间失败 job=%s table=%s", job.Name, job.TableName)
 			}
 			if !hasData {
 				return nil
 			}
 			cursor = alignInitialArchiveCursor(minTime, job)
 			if job.StartAt.Valid {
-				// start_at 用于限制首次规划的最早归档边界，避免新接入任务误规划历史规则外的旧区间。
+				// start_at 用于限制首次规划的最早归档边界，避免新接入任务规划规则外区间。
 				startAt := alignInitialArchiveCursor(job.StartAt.Time, job)
 				if cursor.Before(startAt) {
 					cursor = startAt
@@ -1052,7 +1100,10 @@ func buildStringTimeHistoryMatchQuery(ctx context.Context, db *gorm.DB, job jobC
 
 // advanceWatermark 只按“最长连续完成区间”推进水位线，不允许跳跃推进。
 func (s *Service) advanceWatermark(ctx context.Context, job jobConfig, controlDB *gorm.DB) error {
-	lockKey := s.appRedisKey(fmt.Sprintf(keys.ArchiveJobWatermarkLock, job.Name))
+	lockKey, err := s.archiveJobWatermarkKey(job.Name)
+	if err != nil {
+		return errors.Tag(err)
+	}
 	return redislock.WithLock(ctx, s.redisClient(), lockKey, s.lockTTL(), func(lockCtx context.Context) error {
 		var watermarkTime *time.Time
 		current, err := s.loadWatermark(lockCtx, controlDB, job.Name)
@@ -1092,7 +1143,7 @@ func (s *Service) advanceWatermark(ctx context.Context, job jobConfig, controlDB
 					return s.saveWatermarkIfAdvanced(lockCtx, controlDB, job, current, watermarkTime)
 				}
 				if hasCursor && !item.RangeEnd.After(cursor) {
-					// 已经被当前水位线覆盖的历史区间直接跳过，兼容早期重叠区间元数据。
+					// 已经被当前水位线覆盖的重叠区间直接跳过。
 					continue
 				}
 				currentEnd := item.RangeEnd
@@ -1135,7 +1186,10 @@ func (s *Service) cleanupHistoryTables(ctx context.Context, job jobConfig, sourc
 	if maxTables <= 0 {
 		return nil
 	}
-	lockKey := s.appRedisKey(fmt.Sprintf(keys.ArchiveJobCleanupLock, job.Name))
+	lockKey, err := s.archiveJobCleanupKey(job.Name)
+	if err != nil {
+		return errors.Tag(err)
+	}
 	return redislock.WithLock(ctx, s.redisClient(), lockKey, s.lockTTL(), func(lockCtx context.Context) error {
 		var items []historyTableItem
 		if err := buildHistoryCleanupItemsQuery(lockCtx, controlDB, job).Scan(&items).Error; err != nil {
@@ -1811,12 +1865,43 @@ func (s *Service) redisClient() redis.UniversalClient {
 	return s.svcCtx.Rds
 }
 
-// appRedisKey 返回当前 app_id 作用域下的归档 Redis 锁 key。
-func (s *Service) appRedisKey(key string) string {
+// archiveAppID 返回归档服务 Redis key 使用的 app_id。
+func (s *Service) archiveAppID() (string, error) {
 	if s == nil || s.svcCtx == nil {
-		return keys.AppScopedKey("", key)
+		return "", errors.Errorf("归档服务上下文未初始化，无法获取 app_id")
 	}
-	return keys.AppScopedKey(s.svcCtx.CurrentConfig().AppID, key)
+	appID := keys.NormalizeAppID(s.svcCtx.CurrentConfig().AppID)
+	if appID == "" {
+		return "", errors.Errorf("归档服务缺少 app_id 配置")
+	}
+	return appID, nil
+}
+
+// archiveJobPlanKey 返回当前 app_id 作用域下的区间规划锁 key。
+func (s *Service) archiveJobPlanKey(jobName string) (string, error) {
+	appID, err := s.archiveAppID()
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	return keys.ArchiveJobPlanRedisKey(appID, jobName), nil
+}
+
+// archiveJobWatermarkKey 返回当前 app_id 作用域下的水位推进锁 key。
+func (s *Service) archiveJobWatermarkKey(jobName string) (string, error) {
+	appID, err := s.archiveAppID()
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	return keys.ArchiveJobWatermarkRedisKey(appID, jobName), nil
+}
+
+// archiveJobCleanupKey 返回当前 app_id 作用域下的历史表清理锁 key。
+func (s *Service) archiveJobCleanupKey(jobName string) (string, error) {
+	appID, err := s.archiveAppID()
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	return keys.ArchiveJobCleanupRedisKey(appID, jobName), nil
 }
 
 // safeDelayMinutes 返回当前归档模块生效的安全延迟分钟数。
@@ -2184,7 +2269,7 @@ func isArchivedSegmentStatus(status string) bool {
 }
 
 // splitArchiveTarget 解析归档目标及动作后缀。
-// 支持 `job#archive` 和 `job#delete` 分别调度归档、删除；无后缀时兼容为 all。
+// 支持 `job#archive` 和 `job#delete` 分别调度归档、删除；无后缀时按 all 执行。
 func splitArchiveTarget(target string) (string, string) {
 	target = strings.TrimSpace(target)
 	if target == "" {

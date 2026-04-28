@@ -5,18 +5,18 @@ import (
 	"strings"
 	"time"
 
-	keys "admin_cron/common/rediskeys"
-	"admin_cron/internal/config"
-	"admin_cron/internal/infra/kafkax"
-	redislock "admin_cron/internal/infra/redsync"
-	usertagoptions "admin_cron/internal/jobs/usertag/options"
-	"admin_cron/internal/jobs/usertag/repository"
-	"admin_cron/internal/jobs/usertag/route"
-	usertagtypes "admin_cron/internal/jobs/usertag/types"
-	usertagworkflow "admin_cron/internal/jobs/usertag/workflow"
-	"admin_cron/internal/model"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskqueue"
+	keys "admin/common/rediskeys"
+	"admin/internal/config"
+	"admin/internal/infra/kafkax"
+	redislock "admin/internal/infra/redsync"
+	usertagoptions "admin/internal/jobs/usertag/options"
+	"admin/internal/jobs/usertag/repository"
+	"admin/internal/jobs/usertag/route"
+	usertagtypes "admin/internal/jobs/usertag/types"
+	usertagworkflow "admin/internal/jobs/usertag/workflow"
+	"admin/internal/model"
+	"admin/internal/svc"
+	"admin/internal/task/queue"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
@@ -221,7 +221,7 @@ func runUserTagKafkaOutboxRetryScanTask(ctx context.Context, svcCtx *svc.Service
 		return errors.Tag(err)
 	}
 	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
-	lockKey := keys.AppScopedKey(svcCtx.CurrentConfig().AppID, keys.UserTagKafkaOutboxRetryScanLock)
+	lockKey := keys.UserTagKafkaOutboxRetryScanRedisKey(svcCtx.CurrentConfig().AppID)
 	err = redislock.WithLock(ctx, svcCtx.Rds, lockKey, userTagKafkaOutboxRetryScanLockTTL, func(lockCtx context.Context) error {
 		_, runErr := repository.NewTagRepository(deps).RetryKafkaOutboxAbnormalRows(lockCtx, opts, pushUserTagOutboxRetryMessages(lockCtx, svcCtx))
 		return errors.Tag(runErr)
@@ -240,7 +240,7 @@ func runUserTagRuntimeCleanupTask(ctx context.Context, svcCtx *svc.ServiceContex
 		return errors.Errorf("用户标签运行期清理失败：ServiceContext 为空")
 	}
 	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
-	lockKey := keys.AppScopedKey(svcCtx.CurrentConfig().AppID, keys.UserTagRuntimeCleanupLock)
+	lockKey := keys.UserTagRuntimeCleanupRedisKey(svcCtx.CurrentConfig().AppID)
 	err := redislock.WithLock(ctx, svcCtx.Rds, lockKey, userTagRuntimeCleanupLockTTL, func(lockCtx context.Context) error {
 		return repository.NewTagRepository(deps).CleanupStaleRuntimeTables(lockCtx, time.Now())
 	})

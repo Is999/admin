@@ -1,21 +1,18 @@
 package middleware
 
 import (
+	stderrors "errors"
 	"strings"
 	"testing"
 
 	"github.com/Is999/go-utils/errors"
 
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/requestctx"
+	"admin/internal/infra/loggerx"
+	"admin/internal/requestctx"
 )
 
 // TestShouldIgnoreAccessLog 验证访问日志白名单会跳过健康检查等低价值高频路由。
 func TestShouldIgnoreAccessLog(t *testing.T) {
-
-	if !shouldIgnoreAccessLog("/api/health") {
-		t.Fatal("expected /api/health to be ignored by access log")
-	}
 	if !shouldIgnoreAccessLog("/api/live") {
 		t.Fatal("expected /api/live to be ignored by access log")
 	}
@@ -32,7 +29,7 @@ func TestShouldIgnoreAccessLog(t *testing.T) {
 
 // TestBuildAccessErrorChain 验证访问日志会优先输出完整错误链，而不是只保留最外层摘要。
 func TestBuildAccessErrorChain(t *testing.T) {
-	err := errors.Wrap(errors.New("pem decode failed"), "初始化RSA签名私钥失败")
+	err := errors.Wrap(stderrors.New("pem decode failed"), "初始化RSA签名私钥失败")
 	chain := loggerx.ErrorChain(err)
 	if !strings.Contains(chain, "初始化RSA签名私钥失败") {
 		t.Fatalf("error chain should contain outer message, got %q", chain)

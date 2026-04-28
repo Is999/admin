@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/svc"
+	"admin/internal/config"
+	"admin/internal/svc"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"

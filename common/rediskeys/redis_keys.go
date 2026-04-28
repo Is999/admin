@@ -1,10 +1,14 @@
 package keys
 
 const (
-	// AdminInfo 表示管理员信息缓存键模板。
+	// AdminInfo 表示管理员信息缓存业务段模板。
 	// Redis 类型：Hash。
-	// `%d` 位置填充管理员 ID。
+	// `%d` 位置填充管理员 ID，调用侧通过 AppScopedKey 追加 app_id 前缀。
 	AdminInfo = "admin:info:%d"
+
+	// AdminInfoPattern 表示管理员信息缓存业务段展示模板。
+	// Redis 类型：Hash 模板。
+	AdminInfoPattern = "admin:info:{adminID}"
 
 	// RoleStatus 表示角色状态缓存键。
 	// Redis 类型：Hash。
@@ -15,6 +19,14 @@ const (
 	// `%d` 位置填充角色 ID。
 	RolePermission = "role_permission:%d"
 
+	// RolePermissionPattern 表示角色权限缓存键展示模板。
+	// Redis 类型：Set 模板。
+	RolePermissionPattern = "role_permission:{roleID}"
+
+	// RolePermissionWriteLock 表示角色权限写操作互斥锁。
+	// Redis 类型：String（由 redsync 管理）。
+	RolePermissionWriteLock = "admin:role:permission:write:lock"
+
 	// RoleTree 表示角色树缓存键。
 	// Redis 类型：String（JSON 文本）。
 	RoleTree = "role_tree"
@@ -24,25 +36,45 @@ const (
 	// `%d` 位置填充管理员 ID。
 	AdminRoleIDs = "admin_role_ids:%d"
 
+	// AdminRoleIDsPattern 表示管理员启用角色 ID 集合缓存键展示模板。
+	// Redis 类型：Set 模板。
+	AdminRoleIDsPattern = "admin_role_ids:{adminID}"
+
 	// AdminPermissionIDs 表示管理员聚合权限 ID 集合缓存键模板。
 	// Redis 类型：Set。
 	// `%d` 位置填充管理员 ID。
 	AdminPermissionIDs = "admin_permission_ids:%d"
+
+	// AdminPermissionIDsPattern 表示管理员聚合权限 ID 集合缓存键展示模板。
+	// Redis 类型：Set 模板。
+	AdminPermissionIDsPattern = "admin_permission_ids:{adminID}"
 
 	// AdminPermissionUUIDs 表示管理员最终权限码集合缓存键模板。
 	// Redis 类型：Set。
 	// `%d` 位置填充管理员 ID。
 	AdminPermissionUUIDs = "admin_permission_uuids:%d"
 
+	// AdminPermissionUUIDsPattern 表示管理员最终权限码集合缓存键展示模板。
+	// Redis 类型：Set 模板。
+	AdminPermissionUUIDsPattern = "admin_permission_uuids:{adminID}"
+
 	// AdminProfile 表示管理员公开资料缓存键模板。
 	// Redis 类型：String（JSON 文本）。
 	// `%d` 位置填充管理员 ID。
 	AdminProfile = "admin_profile:%d"
 
+	// AdminProfilePattern 表示管理员公开资料缓存键展示模板。
+	// Redis 类型：String 模板。
+	AdminProfilePattern = "admin_profile:{adminID}"
+
 	// AdminRolesDetail 表示管理员角色名称列表缓存键模板。
 	// Redis 类型：String（JSON 文本）。
 	// `%d` 位置填充管理员 ID。
 	AdminRolesDetail = "admin_roles_detail:%d"
+
+	// AdminRolesDetailPattern 表示管理员角色名称列表缓存键展示模板。
+	// Redis 类型：String 模板。
+	AdminRolesDetailPattern = "admin_roles_detail:{adminID}"
 
 	// PermissionModule 表示权限模块缓存键。
 	// Redis 类型：Hash。
@@ -61,6 +93,10 @@ const (
 	// `%s` 位置填充路由别名。
 	RoutePermissionIDs = "route_permission_ids:%s"
 
+	// RoutePermissionIDsPattern 表示路由别名候选权限 ID 集合缓存键展示模板。
+	// Redis 类型：Set 模板。
+	RoutePermissionIDsPattern = "route_permission_ids:{routeAlias}"
+
 	// RoutePermissionAliasIndex 表示已写入路由权限候选缓存的路由别名索引。
 	// Redis 类型：Set。
 	// 成员为 routeAlias，用于权限定义变更时精确删除 `route_permission_ids:{routeAlias}`，避免前缀 SCAN。
@@ -71,59 +107,64 @@ const (
 	// `%s` 位置填充系统配置 uuid。
 	SysConfigUUID = "config_uuid:%s"
 
+	// SysConfigUUIDPattern 表示系统配置缓存键展示模板。
+	// Redis 类型：Hash 模板。
+	SysConfigUUIDPattern = "config_uuid:{uuid}"
+
 	// SecretKeyRoute 表示秘钥版本路由缓存键模板。
 	// Redis 类型：Hash。
 	// `%s` 位置填充 secret_key.uuid。
 	SecretKeyRoute = "secret_key_route:%s"
+
+	// SecretKeyRoutePattern 表示秘钥版本路由缓存键展示模板。
+	// Redis 类型：Hash 模板。
+	SecretKeyRoutePattern = "secret_key_route:{uuid}"
 
 	// SecretKeyAESVersion 表示版本化 AES 秘钥配置缓存键模板。
 	// Redis 类型：Hash。
 	// 第一个 `%s` 位置填充 secret_key.uuid，第二个 `%s` 位置填充 key_version。
 	SecretKeyAESVersion = "secret_key_aes:%s:%s"
 
+	// SecretKeyAESVersionPattern 表示版本化 AES 秘钥配置缓存键展示模板。
+	// Redis 类型：Hash 模板。
+	SecretKeyAESVersionPattern = "secret_key_aes:{uuid}:{keyVersion}"
+
 	// SecretKeyRSAVersion 表示版本化 RSA 秘钥配置缓存键模板。
 	// Redis 类型：Hash。
 	// 第一个 `%s` 位置填充 secret_key.uuid，第二个 `%s` 位置填充 key_version。
 	SecretKeyRSAVersion = "secret_key_rsa:%s:%s"
 
-	// SecretKeyAESVersionPrefix 表示指定 AppID 下 AES 版本缓存 key 前缀。
-	// Redis 类型：Hash 前缀。
-	// `%s` 位置填充 secret_key.uuid，用于按索引成员做精确归属校验。
-	SecretKeyAESVersionPrefix = "secret_key_aes:%s:"
-
-	// SecretKeyRSAVersionPrefix 表示指定 AppID 下 RSA 版本缓存 key 前缀。
-	// Redis 类型：Hash 前缀。
-	// `%s` 位置填充 secret_key.uuid，用于按索引成员做精确归属校验。
-	SecretKeyRSAVersionPrefix = "secret_key_rsa:%s:"
+	// SecretKeyRSAVersionPattern 表示版本化 RSA 秘钥配置缓存键展示模板。
+	// Redis 类型：Hash 模板。
+	SecretKeyRSAVersionPattern = "secret_key_rsa:{uuid}:{keyVersion}"
 
 	// SecretKeyVersionIndex 表示指定 AppID 下版本材料缓存 key 的精确索引。
 	// Redis 类型：Set。
 	// `%s` 位置填充 secret_key.uuid；成员为 `secret_key_aes:{uuid}:{keyVersion}` 与 `secret_key_rsa:{uuid}:{keyVersion}` 真实 key。
 	SecretKeyVersionIndex = "secret_key_version:index:%s"
 
-	// LoginCheckMFAFlag 表示管理员登录 MFA 校验标记缓存键模板。
+	// LoginCheckMFAFlag 表示管理员登录 MFA 校验标记业务段模板。
 	// Redis 类型：String（Unix 时间戳）。
-	// `%d` 位置填充管理员 ID。
+	// `%d` 位置填充管理员 ID，调用侧通过 AppScopedKey 追加 app_id 前缀。
 	LoginCheckMFAFlag = "login_check_mfa_flag:%d"
 
-	// AdminLogoutToken 表示管理员登出令牌标记缓存键模板。
+	// AdminLogoutToken 表示管理员登出令牌标记业务段模板。
 	// Redis 类型：String。
-	// `%d` 位置填充管理员 ID，用于防止登录态缓存 miss 时把已登出的旧 token 回源恢复。
+	// `%d` 位置填充管理员 ID，调用侧通过 AppScopedKey 追加 app_id 前缀。
 	AdminLogoutToken = "admin:logout_token:%d"
 
-	// AdminMFATwoStepTicket 表示管理员二次校验票据缓存键模板。
+	// AdminMFATwoStepTicket 表示管理员二次校验票据业务段模板。
 	// Redis 类型：String。
 	// 第一个 `%d` 位置填充管理员 ID，第二个 `%s` 位置填充票据 key。
 	AdminMFATwoStepTicket = "admin:mfa:two_step:%d:%s"
 
-	// AdminMFATwoStepTicketPrefix 表示管理员二次校验票据缓存 key 前缀。
-	// Redis 类型：String 前缀。
-	// `%d` 位置填充管理员 ID，用于按索引成员做精确归属校验。
-	AdminMFATwoStepTicketPrefix = "admin:mfa:two_step:%d:"
+	// AdminMFATwoStepTicketPattern 表示管理员二次校验票据业务段展示模板。
+	// Redis 类型：String 模板。
+	AdminMFATwoStepTicketPattern = "admin:mfa:two_step:{adminID}:{ticketKey}"
 
-	// AdminMFATwoStepIndex 表示管理员二次校验票据 key 的精确索引。
+	// AdminMFATwoStepIndex 表示管理员二次校验票据索引业务段模板。
 	// Redis 类型：Set。
-	// `%d` 位置填充管理员 ID；成员为 `admin:mfa:two_step:{adminID}:{ticketKey}` 真实 key。
+	// `%d` 位置填充管理员 ID，调用侧通过 AppScopedKey 追加 app_id 前缀。
 	AdminMFATwoStepIndex = "admin:mfa:two_step:index:%d"
 
 	// SysConfigExcelExportLock 表示字典配置导出条件互斥锁 key 模板。
@@ -176,28 +217,10 @@ const (
 	// `%s` 位置填充对象 key 指纹。
 	FileTransferUploadObjectIndex = "file_transfer:upload:object:%s"
 
-	// TaskQueueNamespacePrefix 表示任务队列名称的站点命名空间前缀。
-	// Redis 类型：队列名/分组名前缀。
-	// `%s` 位置填充 app_id，用于共享 task redis 时隔离不同站点。
-	TaskQueueNamespacePrefix = "app:%s:"
-
-	// TaskQueueNamespacedName 表示任务队列或分组的站点命名空间名称模板。
-	// Redis 类型：队列名/分组名。
-	// 第一个 `%s` 位置填充 app_id，第二个 `%s` 位置填充逻辑队列或分组名。
-	TaskQueueNamespacedName = "app:%s:%s"
-
-	// TaskQueueDefaultRedisPrefix 表示未配置 app_id 时的任务系统 Redis key 前缀。
-	// Redis 类型：Key 前缀。
-	TaskQueueDefaultRedisPrefix = "task"
-
-	// TaskQueueAppRedisPrefix 表示配置 app_id 后的任务系统 Redis key 前缀模板。
-	// Redis 类型：Key 前缀。
-	// `%s` 位置填充 app_id。
-	TaskQueueAppRedisPrefix = "task:app:%s"
-
-	// TaskQueueSchedulerLeaderDefault 表示调度器默认 leader 租约 key。
+	// TaskQueueSchedulerLeaderKey 表示调度器默认 leader 租约 key 模板。
 	// Redis 类型：String（由 redsync 管理）。
-	TaskQueueSchedulerLeaderDefault = "task:scheduler:leader"
+	// 实际 Redis key 通过 TaskSchedulerLeaderRedisKey 生成。
+	TaskQueueSchedulerLeaderKey = "task:scheduler:leader"
 
 	// UserTagWorkflowUniqueSegment 表示用户标签工作流默认去重键片段模板。
 	// Redis 类型：作为 task workflow unique key 的业务片段。
@@ -214,39 +237,39 @@ const (
 	// `%s` 位置填充验证码 key。
 	LoginCaptcha = "login:captcha:%s"
 
-	// UserTagWorkflowLeaseKeyPrefix 表示用户标签写工作流全局互斥租约 key 前缀。
+	// UserTagWorkflowLeaseKey 表示用户标签写工作流全局互斥租约 key。
 	// Redis 类型：String。
-	// 实际 Redis key 通过 AppScopedKey 追加 app_id 前缀，值为 `workflowID|mode`，释放时必须按完整 owner 精确比较。
-	UserTagWorkflowLeaseKeyPrefix = "user_tag:workflow:write_lock"
+	// 实际 Redis key 通过 UserTagWorkflowLeaseRedisKey 生成，值为 `workflowID|mode`，释放时必须按完整 owner 精确比较。
+	UserTagWorkflowLeaseKey = "user_tag:workflow:write_lock"
 
-	// UserTagWorkflowSyncDoneKeyPrefix 表示用户标签 sync_kafka 分片完成屏障 key 前缀。
+	// UserTagWorkflowSyncDoneKey 表示用户标签 sync_kafka 分片完成屏障 key 模板。
 	// Redis 类型：Set。
-	// 实际 Redis key 通过 AppScopedKey 追加 app_id 前缀，后缀拼接 workflow_id。
-	UserTagWorkflowSyncDoneKeyPrefix = "user_tag:workflow:sync_done"
+	// `%s` 位置填充 workflow_id，实际 Redis key 通过 UserTagWorkflowSyncDoneRedisKey 生成。
+	UserTagWorkflowSyncDoneKey = "user_tag:workflow:sync_done:%s"
 
 	// UserTagRuntimeCleanupLock 表示用户标签运行期辅助表清理互斥锁。
 	// Redis 类型：String（由 redsync 管理）。
-	// 用途：避免周期调度和人工补跑同时清理 runtime_uid、outbox 等高基数辅助表。
+	// 实际 Redis key 通过 UserTagRuntimeCleanupRedisKey 生成，避免周期调度和人工补跑同时清理。
 	UserTagRuntimeCleanupLock = "user_tag:runtime:cleanup:lock"
 
 	// UserTagKafkaOutboxRetryScanLock 表示用户标签 Kafka outbox 异常扫描互斥锁。
 	// Redis 类型：String（由 redsync 管理）。
-	// 用途：限制异常 outbox 扫描只有一个任务推进，降低 Kafka 故障期对 MySQL 的重复领取压力。
+	// 实际 Redis key 通过 UserTagKafkaOutboxRetryScanRedisKey 生成，限制异常 outbox 单任务推进。
 	UserTagKafkaOutboxRetryScanLock = "user_tag:kafka_outbox:retry_scan:lock"
 
 	// ArchiveJobPlanLock 表示归档任务区间规划互斥锁 key 模板。
 	// Redis 类型：String（由 redsync 管理）。
-	// `%s` 位置填充归档 job 名，避免多个 worker 重复规划同一任务区间。
+	// `%s` 位置填充归档 job 名，实际 Redis key 通过 ArchiveJobPlanRedisKey 生成。
 	ArchiveJobPlanLock = "archive:job:%s:plan"
 
 	// ArchiveJobWatermarkLock 表示归档任务水位推进互斥锁 key 模板。
 	// Redis 类型：String（由 redsync 管理）。
-	// `%s` 位置填充归档 job 名，确保水位只按连续完成区间串行推进。
+	// `%s` 位置填充归档 job 名，实际 Redis key 通过 ArchiveJobWatermarkRedisKey 生成。
 	ArchiveJobWatermarkLock = "archive:job:%s:watermark"
 
 	// ArchiveJobCleanupLock 表示归档历史表清理互斥锁 key 模板。
 	// Redis 类型：String（由 redsync 管理）。
-	// `%s` 位置填充归档 job 名，避免并发删除同一批历史表。
+	// `%s` 位置填充归档 job 名，实际 Redis key 通过 ArchiveJobCleanupRedisKey 生成。
 	ArchiveJobCleanupLock = "archive:job:%s:cleanup"
 
 	// EmptyValueMarker 表示空值缓存占位符。

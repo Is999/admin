@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/internal/config"
-	"admin_cron/pkg/storage"
-	"admin_cron/pkg/transfer"
+	"admin/internal/config"
+	"admin/pkg/storage"
+	"admin/pkg/transfer"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -38,6 +38,7 @@ func (s testServiceVirusScanner) ScanFile(context.Context, string, string) error
 func TestServiceContextObjectStorageCachesByConfig(t *testing.T) {
 	rootDir := t.TempDir()
 	svcCtx := NewServiceContext(config.Config{
+		AppID: "site-a",
 		FileStorage: config.FileStorageConfig{
 			Type: storage.TypeLocal,
 			Local: config.FileStorageLocalConfig{
@@ -160,6 +161,7 @@ func TestServiceContextFileTransferUploadManagerCachesByConfig(t *testing.T) {
 
 	rootDir := t.TempDir()
 	svcCtx := NewServiceContext(config.Config{
+		AppID: "site-a",
 		FileStorage: config.FileStorageConfig{
 			UploadSession: config.FileStorageUploadSessionConfig{
 				RootDir:    rootDir,
@@ -205,6 +207,7 @@ func TestServiceContextFileTransferUploadManagerCachesByConfig(t *testing.T) {
 	}
 
 	svcCtx.UpdateConfig(config.Config{
+		AppID: "site-a",
 		FileStorage: config.FileStorageConfig{
 			UploadSession: config.FileStorageUploadSessionConfig{
 				RootDir:    t.TempDir(),

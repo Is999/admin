@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"admin_cron/helper"
+	"admin/helper"
 
 	"github.com/Is999/go-utils/errors"
 	"gorm.io/gorm"

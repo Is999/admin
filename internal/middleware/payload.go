@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-
-	"github.com/Is999/go-utils/errors"
 	"io"
 	"net/http"
 	"strings"
+
+	"admin/internal/security"
+
+	"github.com/Is999/go-utils/errors"
 )
 
 // readRequestBody 读取请求体并重新写回，避免中间件读取后影响 handler 解析参数。
@@ -16,9 +18,16 @@ func readRequestBody(r *http.Request) ([]byte, error) {
 	if r == nil || r.Body == nil {
 		return nil, nil
 	}
-	body, err := io.ReadAll(r.Body)
+	if r.ContentLength > security.MaxSecurityRequestBodyBytes {
+		return nil, errors.Wrapf(security.ErrSecurityPayloadTooLarge, "安全请求体长度超过上限: %d", security.MaxSecurityRequestBodyBytes)
+	}
+	limited := io.LimitReader(r.Body, security.MaxSecurityRequestBodyBytes+1)
+	body, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, errors.Tag(err)
+	}
+	if len(body) > security.MaxSecurityRequestBodyBytes {
+		return nil, errors.Wrapf(security.ErrSecurityPayloadTooLarge, "安全请求体长度超过上限: %d", security.MaxSecurityRequestBodyBytes)
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	return body, nil

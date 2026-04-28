@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/middleware"
-	"admin_cron/internal/svc"
+	"admin/internal/config"
+	"admin/internal/handler/shared"
+	"admin/internal/middleware"
+	"admin/internal/svc"
 
+	"github.com/Is999/go-utils/errors"
 	"github.com/zeromicro/go-zero/rest"
 )
 
@@ -100,14 +102,14 @@ func readDocsSiteMarkdown(t *testing.T, root string) string {
 	var builder strings.Builder
 	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return errors.Tag(err)
 		}
 		if entry.IsDir() || filepath.Ext(path) != ".md" {
 			return nil
 		}
 		body, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return errors.Tag(err)
 		}
 		builder.Write(body)
 		builder.WriteByte('\n')
@@ -145,7 +147,7 @@ func TestActionLogRegistryAliasesAreContracted(t *testing.T) {
 		}
 		aliases[contract.Alias] = struct{}{}
 	}
-	for name, meta := range actionLogRegistry {
+	for name, meta := range shared.ActionLogRegistry() {
 		if meta.Action == "" {
 			continue
 		}

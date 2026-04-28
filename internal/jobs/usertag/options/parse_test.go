@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/types"
 )
 
 // TestParseOptionsRejectsFilterHash 验证多维筛选 hash 不能作为标签计算来源。

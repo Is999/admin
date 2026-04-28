@@ -152,7 +152,7 @@ type CollectorKafkaConfig struct {
 // CollectorRedisConfig 定义通用收集器的 Redis Stream 载体配置。
 type CollectorRedisConfig struct {
 	Enabled  bool   `json:"enabled,optional"`  // 是否启用 Redis Stream 载体
-	Stream   string `json:"stream,optional"`   // Redis Stream 名称
+	Stream   string `json:"stream,optional"`   // Redis Stream 业务名称，运行时自动追加 app_id 前缀
 	Group    string `json:"group,optional"`    // Redis Stream 消费组
 	Consumer string `json:"consumer,optional"` // Redis Stream 消费者名前缀
 	MaxLen   int64  `json:"max_len,optional"`  // 兼容字段

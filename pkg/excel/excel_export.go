@@ -234,7 +234,7 @@ sendLoop:
 	close(jobs)
 	waitGroup.Wait()
 	if firstErr != nil {
-		return nil, firstErr
+		return nil, errors.Tag(firstErr)
 	}
 	return rows, nil
 }

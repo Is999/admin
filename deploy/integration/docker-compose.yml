@@ -1,11 +1,11 @@
-name: admin-cron-integration
+name: admin-integration
 
 services:
   mysql:
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: admin_cron
+      MYSQL_DATABASE: admin
       TZ: Asia/Shanghai
     command:
       - --character-set-server=utf8mb4

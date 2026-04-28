@@ -1,0 +1,6 @@
+-- 用途：检查当前 MySQL 库中 schema_migrations 是否存在。
+-- 参数：table_name。
+SELECT COUNT(1)
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_name = ?;

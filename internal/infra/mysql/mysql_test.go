@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 )
 
 // TestResolveDataSources 验证对应场景。

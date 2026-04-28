@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/taskqueue"
+	"admin/internal/config"
+	"admin/internal/task/queue"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/zeromicro/go-zero/core/conf"

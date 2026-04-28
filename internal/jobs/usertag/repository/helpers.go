@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"admin_cron/internal/svc"
+	"admin/internal/svc"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"

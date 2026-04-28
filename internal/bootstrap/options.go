@@ -1,12 +1,12 @@
 package bootstrap
 
 import (
-	"admin_cron/internal/handler"
-	"admin_cron/internal/taskruntime"
+	"admin/internal/handler"
+	"admin/internal/task/runtime"
 )
 
 // defaultDisplayName 定义启动日志默认展示名，避免不同入口各自硬编码。
-const defaultDisplayName = "admin-cron"
+const defaultDisplayName = "admin"
 
 // Options 描述应用启动时可注入的扩展项。
 type Options struct {

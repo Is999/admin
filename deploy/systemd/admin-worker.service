@@ -1,0 +1,19 @@
+[Unit]
+Description=admin worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin
+Group=admin
+WorkingDirectory=/opt/admin
+ExecStart=/opt/admin/bin/admin -f /etc/admin/config.yaml -mode 2
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=60s
+LimitNOFILE=65535
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

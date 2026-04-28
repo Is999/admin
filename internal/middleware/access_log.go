@@ -8,8 +8,8 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/requestctx"
+	"admin/internal/infra/loggerx"
+	"admin/internal/requestctx"
 
 	"github.com/zeromicro/go-zero/core/logx"
 	"go.opentelemetry.io/otel/attribute"
@@ -18,7 +18,6 @@ import (
 )
 
 var accessLogIgnorePathSet = map[string]struct{}{
-	"/api/health":                       {}, // 当前健康检查入口由探针高频访问，默认不打印访问日志，避免无效噪音淹没有效业务日志。
 	"/api/live":                         {}, // 当前存活检查入口由探针高频访问，默认不打印访问日志，避免无效噪音淹没有效业务日志。
 	"/api/ready":                        {}, // 当前就绪检查入口由探针高频访问，默认不打印访问日志，异常时由 ready handler 单独打印错误链路。
 	"/api/metrics":                      {}, // 当前指标抓取入口默认跳过访问日志，保留指标能力但不污染业务日志。
@@ -74,9 +73,7 @@ func (m *AccessLogMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 					}
 				}
 				if meta.ErrorCause != nil {
-					fields = append(fields,
-						logx.Field("error_chain", loggerx.ErrorChain(meta.ErrorCause)),
-					)
+					fields = append(fields, loggerx.ErrorFields(meta.ErrorCause)...)
 				}
 				loggerx.Infow(ctx, accessLogMessage(meta, recorder.status, success), fields...)
 			}

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	codes "admin_cron/common/codes"
-	i18n "admin_cron/common/i18n"
+	codes "admin/common/codes"
+	i18n "admin/common/i18n"
 
 	"github.com/Is999/go-utils/errors"
 )

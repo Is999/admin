@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	keys "admin_cron/common/rediskeys"
-	"admin_cron/internal/config"
-	"admin_cron/pkg/transfer"
+	keys "admin/common/rediskeys"
+	"admin/internal/config"
+	"admin/pkg/transfer"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"
@@ -136,7 +136,7 @@ func uploadManagerFingerprint(cfg config.FileStorageUploadSessionConfig, appID s
 func fileTransferRootDir(cfg config.FileStorageUploadSessionConfig) string {
 	rootDir := strings.TrimSpace(cfg.RootDir)
 	if rootDir == "" {
-		rootDir = filepath.Join(os.TempDir(), "admin-cron", "file-transfer")
+		rootDir = filepath.Join(os.TempDir(), "admin", "file-transfer")
 	}
 	if absRootDir, err := filepath.Abs(rootDir); err == nil {
 		rootDir = absRootDir

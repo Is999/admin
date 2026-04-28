@@ -1,8 +1,10 @@
 package i18n
 
-import "testing"
+import (
+	"testing"
 
-import "admin_cron/common/codes"
+	"admin/common/codes"
+)
 
 func TestNormalizeLocale(t *testing.T) {
 	cases := []struct {
@@ -40,6 +42,8 @@ func TestMessageByCode(t *testing.T) {
 
 // TestMessageCatalogParity 校验中英文语言包 key 完整一致，避免新增文案只补一个语种。
 func TestMessageCatalogParity(t *testing.T) {
+	zhCNMessageCatalog := messageCatalog[LocaleZHCN]
+	enUSMessageCatalog := messageCatalog[LocaleENUS]
 	for key := range zhCNMessageCatalog {
 		if enUSMessageCatalog[key] == "" {
 			t.Fatalf("en-US catalog missing key %q", key)

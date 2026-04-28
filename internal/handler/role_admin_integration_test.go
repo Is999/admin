@@ -19,11 +19,12 @@ import (
 	"testing"
 	"time"
 
-	codes "admin_cron/common/codes"
-	"admin_cron/internal/bootstrap"
-	"admin_cron/internal/logic"
-	"admin_cron/internal/security"
-	"admin_cron/internal/svc"
+	codes "admin/common/codes"
+	"admin/internal/bootstrap"
+	secretkeylogic "admin/internal/logic/secretkey"
+	securitylogic "admin/internal/logic/security"
+	"admin/internal/security"
+	"admin/internal/svc"
 )
 
 // roleAdminIntegrationResp 表示接口统一业务响应结构，便于集成测试解码 code/message/data。
@@ -129,12 +130,12 @@ func TestRoleAdminIntegrationFlows(t *testing.T) {
 	superToken := integrationLogin(t, client, baseURL, app.ServiceContext, "super999", testPassword)
 
 	// 先验证登录后初始化和权限码接口可正常返回，确保前端初始化链路可用。
-	afterInfoResp := integrationDo(t, client, http.MethodGet, baseURL+"/api/login/after/info", "auth.login_after_info", superToken, nil)
+	afterInfoResp := integrationDo(t, client, http.MethodGet, baseURL+"/api/auth/profile", "auth.profile", superToken, nil)
 	if afterInfoResp.Code == codes.CheckMFACode || afterInfoResp.Code == codes.CheckMFABind || afterInfoResp.Code == codes.CheckMFAAgain {
 		t.Skipf("当前环境登录态要求 MFA 校验，集成测试无法自动完成 MFA，跳过: %s", afterInfoResp.Message)
 	}
 	if !codes.IsSuccess(afterInfoResp.Code) {
-		t.Fatalf("接口返回失败: method=%s url=%s code=%d message=%s", http.MethodGet, baseURL+"/api/login/after/info", afterInfoResp.Code, afterInfoResp.Message)
+		t.Fatalf("接口返回失败: method=%s url=%s code=%d message=%s", http.MethodGet, baseURL+"/api/auth/profile", afterInfoResp.Code, afterInfoResp.Message)
 	}
 	integrationMustDo(t, client, http.MethodGet, baseURL+"/api/auth/codes", "auth.codes", superToken, nil, nil)
 
@@ -199,7 +200,7 @@ func TestRoleAdminIntegrationFlows(t *testing.T) {
 	}
 
 	// 创建管理员并同时提交父子角色，后端应自动过滤子角色，仅保留父角色绑定。
-	addUserTwoStep := integrationIssueMFATwoStep(t, app.ServiceContext, 1, logic.MFAScenarioAddUser)
+	addUserTwoStep := integrationIssueMFATwoStep(t, app.ServiceContext, 1, securitylogic.MFAScenarioAddUser)
 	integrationMustDo(t, client, http.MethodPost, baseURL+"/api/admins", "admin.add", superToken, map[string]any{
 		"username":     adminUsername,
 		"realName":     "集成测试管理员",
@@ -233,7 +234,7 @@ func TestRoleAdminIntegrationFlows(t *testing.T) {
 
 	// 最后用新管理员重新登录并验证权限码接口能成功返回，确认前后端初始化链路未被破坏。
 	adminToken := integrationLogin(t, client, baseURL, app.ServiceContext, adminUsername, "PassWord3!")
-	integrationMustDo(t, client, http.MethodGet, baseURL+"/api/login/after/info", "auth.login_after_info", adminToken, nil, nil)
+	integrationMustDo(t, client, http.MethodGet, baseURL+"/api/auth/profile", "auth.profile", adminToken, nil, nil)
 	integrationMustDo(t, client, http.MethodGet, baseURL+"/api/auth/codes", "auth.codes", adminToken, nil, nil)
 
 	// 最后再验证禁用角色接口和列表状态回写，避免影响前面的“管理员绑定角色”校验。
@@ -301,7 +302,7 @@ func integrationIssueMFATwoStep(t *testing.T, svcCtx *svc.ServiceContext, adminI
 	if svcCtx == nil {
 		t.Fatalf("签发 MFA 二次票据失败: service context 为空")
 	}
-	twoStep, err := logic.NewSecurityLogic(context.Background(), svcCtx).IssueMFATwoStepTicket(adminID, scenario)
+	twoStep, err := securitylogic.NewSecurityLogic(context.Background(), svcCtx).IssueMFATwoStepTicket(adminID, scenario)
 	if err != nil {
 		t.Fatalf("签发 MFA 二次票据失败: adminID=%d scenario=%d err=%v", adminID, scenario, err)
 	}
@@ -352,7 +353,7 @@ func integrationNormalizeBearerToken(t *testing.T, svcCtx *svc.ServiceContext, t
 	if svcCtx == nil {
 		t.Fatalf("登录 token 需要解密但 ServiceContext 为空")
 	}
-	aesKey, _, err := logic.NewSecretKeyLogic(context.Background(), svcCtx).GetAESKey(integrationAppID, "", "")
+	aesKey, _, err := secretkeylogic.NewSecretKeyLogic(context.Background(), svcCtx).GetAESKey(integrationAppID, "", "")
 	if err != nil || aesKey == nil {
 		t.Fatalf("读取 AES Key 失败: %v", err)
 	}
@@ -400,18 +401,22 @@ func integrationTraceID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
+func integrationTimestamp() string {
+	return fmt.Sprintf("%d", time.Now().Unix())
+}
+
 func integrationSignValue(signText string) string {
 	sum := md5.Sum([]byte(signText))
 	return hex.EncodeToString(sum[:])
 }
 
-func integrationAttachSignature(alias string, payload map[string]any, traceID string) map[string]any {
+func integrationAttachSignature(alias string, payload map[string]any, traceID string, timestamp string) map[string]any {
 	next := make(map[string]any, len(payload)+1)
 	for k, v := range payload {
 		next[k] = v
 	}
 	policy := security.PolicyByRoute(alias)
-	signText := security.BuildSignString(next, policy.RequestSign, traceID, integrationAppID)
+	signText := security.BuildSignString(next, policy.RequestSign, traceID, timestamp, integrationAppID)
 	next["sign"] = integrationSignValue(signText)
 	return next
 }
@@ -453,6 +458,7 @@ func integrationMustDo(t *testing.T, client *http.Client, method string, urlText
 	t.Helper()
 	signEnabled := integrationShouldSign(alias)
 	traceID := ""
+	timestamp := ""
 
 	payloadMap := map[string]any{}
 	if payload != nil {
@@ -487,15 +493,16 @@ func integrationMustDo(t *testing.T, client *http.Client, method string, urlText
 	}
 	if signEnabled {
 		traceID = integrationTraceID()
+		timestamp = integrationTimestamp()
 		// GET/DELETE 走 query 参数承载签名；POST/PUT/PATCH 走 body 承载签名。
 		// 这里必须使用“最终待提交的业务参数”参与签名，避免出现“签名只覆盖空参数”的误判。
 		if queryCarrier {
-			signed := integrationAttachSignature(alias, signParams, traceID)
+			signed := integrationAttachSignature(alias, signParams, traceID, timestamp)
 			for k, v := range signed {
 				queryParams.Set(k, fmt.Sprint(v))
 			}
 		} else {
-			payloadMap = integrationAttachSignature(alias, payloadMap, traceID)
+			payloadMap = integrationAttachSignature(alias, payloadMap, traceID, timestamp)
 		}
 	}
 	parsedURL.RawQuery = queryParams.Encode()
@@ -523,6 +530,7 @@ func integrationMustDo(t *testing.T, client *http.Client, method string, urlText
 	if signEnabled {
 		req.Header.Set("X-App-Id", integrationAppHeader())
 		req.Header.Set("X-Trace-Id", traceID)
+		req.Header.Set("X-Timestamp", timestamp)
 		req.Header.Set("X-Signature", integrationSignatureMD5)
 	}
 	if strings.TrimSpace(token) != "" {
@@ -560,6 +568,7 @@ func integrationDo(t *testing.T, client *http.Client, method string, urlText str
 
 	signEnabled := integrationShouldSign(alias)
 	traceID := ""
+	timestamp := ""
 
 	payloadMap := map[string]any{}
 	if payload != nil {
@@ -594,13 +603,14 @@ func integrationDo(t *testing.T, client *http.Client, method string, urlText str
 	}
 	if signEnabled {
 		traceID = integrationTraceID()
+		timestamp = integrationTimestamp()
 		if queryCarrier {
-			signed := integrationAttachSignature(alias, signParams, traceID)
+			signed := integrationAttachSignature(alias, signParams, traceID, timestamp)
 			for k, v := range signed {
 				queryParams.Set(k, fmt.Sprint(v))
 			}
 		} else {
-			payloadMap = integrationAttachSignature(alias, payloadMap, traceID)
+			payloadMap = integrationAttachSignature(alias, payloadMap, traceID, timestamp)
 		}
 	}
 	parsedURL.RawQuery = queryParams.Encode()
@@ -628,6 +638,7 @@ func integrationDo(t *testing.T, client *http.Client, method string, urlText str
 	if signEnabled {
 		req.Header.Set("X-App-Id", integrationAppHeader())
 		req.Header.Set("X-Trace-Id", traceID)
+		req.Header.Set("X-Timestamp", timestamp)
 		req.Header.Set("X-Signature", integrationSignatureMD5)
 	}
 	if strings.TrimSpace(token) != "" {

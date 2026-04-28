@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -43,7 +43,7 @@ func TestSendTaskFailureBuildsProfessionalText(t *testing.T) {
 	notifier.client = server.Client()
 
 	err = notifier.SendTaskFailure(context.Background(), TaskFailureAlert{
-		ServiceName:  "admin_cron",
+		ServiceName:  "admin",
 		Environment:  "pro",
 		AppID:        "1",
 		TaskID:       "task-1",

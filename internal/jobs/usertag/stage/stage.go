@@ -1,8 +1,8 @@
 package stage
 
 import (
-	"admin_cron/internal/jobs/usertag/queryplan"
-	"admin_cron/internal/jobs/usertag/runtimectx"
+	"admin/internal/jobs/usertag/queryplan"
+	"admin/internal/jobs/usertag/runtimectx"
 )
 
 // Dependency 描述阶段依赖的数据域或前置阶段。

@@ -1,7 +1,7 @@
 package options
 
 import (
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/types"
 
 	"github.com/Is999/go-utils/errors"
 )

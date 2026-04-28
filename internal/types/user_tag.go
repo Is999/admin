@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"admin_cron/internal/jobs/usertag/options"
+	"admin/internal/jobs/usertag/options"
 
 	"github.com/Is999/go-utils/errors"
 )

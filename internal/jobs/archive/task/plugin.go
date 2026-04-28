@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/jobs/archive"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskqueue"
+	"admin/internal/jobs/archive"
+	"admin/internal/svc"
+	"admin/internal/task/queue"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"

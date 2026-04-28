@@ -3,15 +3,15 @@ package workflow
 import (
 	"context"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/jobs/usertag/options"
-	"admin_cron/internal/jobs/usertag/repository"
-	"admin_cron/internal/jobs/usertag/route"
-	"admin_cron/internal/jobs/usertag/runtimectx"
-	"admin_cron/internal/jobs/usertag/stage"
-	"admin_cron/internal/jobs/usertag/types"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskstats"
+	"admin/internal/config"
+	"admin/internal/jobs/usertag/options"
+	"admin/internal/jobs/usertag/repository"
+	"admin/internal/jobs/usertag/route"
+	"admin/internal/jobs/usertag/runtimectx"
+	"admin/internal/jobs/usertag/stage"
+	"admin/internal/jobs/usertag/types"
+	"admin/internal/svc"
+	"admin/internal/task/stats"
 
 	"github.com/Is999/go-utils/errors"
 )

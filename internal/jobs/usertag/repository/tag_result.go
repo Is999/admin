@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/jobs/usertag/types"
-	"admin_cron/internal/model"
+	"admin/internal/jobs/usertag/types"
+	"admin/internal/model"
 
 	"github.com/Is999/go-utils/errors"
 	"gorm.io/gorm"
@@ -324,7 +324,7 @@ func (r *TagRepository) DrainKafkaOutboxShard(ctx context.Context, opts types.Ru
 			UID:        row.UID,
 			TagID:      row.TagType,
 			EventID:    row.WorkflowID,
-			Source:     "admin_cron.user_tag",
+			Source:     "admin.user_tag",
 		})
 	}
 	if push != nil {

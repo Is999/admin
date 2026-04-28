@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"admin_cron/internal/config"
-	"admin_cron/pkg/storage"
+	"admin/internal/config"
+	"admin/pkg/storage"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"

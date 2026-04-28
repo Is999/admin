@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/types"
 )
 
 // TestNewServiceRegistersSkeletonStages 验证骨架工作流只注册通用阶段。

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/jobs/usertag/types"
-	"admin_cron/internal/svc"
+	"admin/internal/infra/loggerx"
+	"admin/internal/jobs/usertag/types"
+	"admin/internal/svc"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/zeromicro/go-zero/core/logx"

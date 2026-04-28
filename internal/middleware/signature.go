@@ -4,19 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Is999/go-utils/errors"
 
-	codes "admin_cron/common/codes"
-	keys "admin_cron/common/rediskeys"
-	"admin_cron/helper"
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/logic"
-	"admin_cron/internal/requestctx"
-	"admin_cron/internal/security"
-	"admin_cron/internal/svc"
+	codes "admin/common/codes"
+	keys "admin/common/rediskeys"
+	"admin/helper"
+	"admin/internal/infra/loggerx"
+	secretkeylogic "admin/internal/logic/secretkey"
+	"admin/internal/requestctx"
+	"admin/internal/security"
+	"admin/internal/svc"
 
 	"github.com/Is999/go-utils"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -26,6 +27,8 @@ import (
 type SignatureMiddleware struct {
 	svc *svc.ServiceContext // 签名中间件依赖的配置、缓存和秘钥读取服务
 }
+
+const signatureReplayTTL = 5 * time.Minute
 
 // NewSignatureMiddleware 创建签名中间件实例。
 func NewSignatureMiddleware(svcCtx *svc.ServiceContext) *SignatureMiddleware {
@@ -52,7 +55,7 @@ func (m *SignatureMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) ht
 			m.fail(w, r, http.StatusOK, codes.ParamError, err)
 			return
 		}
-		routeConfig, err := logic.NewSecretKeyLogic(r.Context(), m.svc).GetRouteConfig(appID)
+		routeConfig, err := secretkeylogic.NewSecretKeyLogic(r.Context(), m.svc).GetRouteConfig(appID)
 		if err != nil {
 			m.fail(w, r, http.StatusOK, codes.InternalError, err)
 			return
@@ -73,8 +76,13 @@ func (m *SignatureMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) ht
 			m.fail(w, r, http.StatusOK, codes.AuthFailed, err)
 			return
 		}
+		timestamp, err := requestTimestamp(r)
+		if err != nil {
+			m.fail(w, r, http.StatusOK, codes.AuthFailed, err)
+			return
+		}
 		if signEnabled && len(policy.RequestSign) > 0 {
-			if err := m.verifyRequest(r, policy, appID, traceID, signatureType); err != nil {
+			if err := m.verifyRequest(r, policy, appID, traceID, timestamp, signatureType); err != nil {
 				m.fail(w, r, http.StatusOK, codes.AuthFailed, err)
 				return
 			}
@@ -88,12 +96,13 @@ func (m *SignatureMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) ht
 			recorder.Header().Del("X-Signature")
 		}
 		if signEnabled && strings.TrimSpace(traceID) != "" {
-			// 响应回签沿用请求头 X-Trace-Id 参与签名，前端验签必须拿到同一值。
+			// 响应回签沿用请求头 X-Trace-Id 与 X-Timestamp，前端验签必须拿到同一组值。
 			recorder.Header().Set(requestctx.HeaderTraceID, strings.TrimSpace(traceID))
+			recorder.Header().Set(requestctx.HeaderTimestamp, timestamp)
 		}
 
 		if signEnabled && len(policy.ResponseSign) > 0 && recorder.status < http.StatusBadRequest && recorder.body.Len() > 0 {
-			resolvedVersion, err := m.signResponse(recorder, policy, appID, traceID, signatureType, r)
+			resolvedVersion, err := m.signResponse(recorder, policy, appID, traceID, timestamp, signatureType, r)
 			if err != nil {
 				m.fail(w, r, http.StatusOK, codes.InternalError, err)
 				return
@@ -113,12 +122,19 @@ func (m *SignatureMiddleware) logRequestHeaders(r *http.Request, appID string, s
 		logx.Field("signature_type", strings.ToUpper(strings.TrimSpace(signatureType))),
 		logx.Field("request_headers", cloneRequestHeaders(r.Header)),
 		logx.Field("trace_id_header", r.Header.Values(requestctx.HeaderTraceID)),
+		logx.Field("timestamp_header", r.Header.Values(requestctx.HeaderTimestamp)),
 	)
 	loggerx.Errorw(r.Context(), "签名 请求头", err, fields...)
 }
 
 // verifyRequest 校验请求参数中的 sign 字段。
-func (m *SignatureMiddleware) verifyRequest(r *http.Request, policy security.RouteSecurityPolicy, appID string, traceID string, signatureType string) error {
+func (m *SignatureMiddleware) verifyRequest(r *http.Request, policy security.RouteSecurityPolicy, appID string, traceID string, timestamp string, signatureType string) error {
+	if hasSignFieldAll(policy.RequestSign) {
+		return errors.New("请求签名不允许使用全量字段")
+	}
+	if err := security.ValidateSecurityFieldCount(policy.RequestSign, "请求签名"); err != nil {
+		return errors.Tag(err)
+	}
 	params, err := requestParams(r)
 	if err != nil {
 		return errors.Tag(err)
@@ -127,7 +143,13 @@ func (m *SignatureMiddleware) verifyRequest(r *http.Request, policy security.Rou
 	if !ok || security.SignValueString(signValue) == "" {
 		return errors.New("缺少签名参数sign")
 	}
-	signStr := security.BuildSignString(params, policy.RequestSign, traceID, appID)
+	if err := security.ValidateSecurityTextValue("请求签名值", "sign", security.SignValueString(signValue), security.MaxSecurityFieldBytes); err != nil {
+		return errors.Tag(err)
+	}
+	if err := validateSignValues(params, policy.RequestSign, "请求签名"); err != nil {
+		return errors.Tag(err)
+	}
+	signStr := security.BuildSignString(params, policy.RequestSign, traceID, timestamp, appID)
 	signer, resolvedVersion, err := m.signer(r, appID, signatureType, true)
 	if err != nil {
 		return errors.Tag(err)
@@ -147,7 +169,13 @@ func (m *SignatureMiddleware) verifyRequest(r *http.Request, policy security.Rou
 }
 
 // signResponse 对标准响应 data 首层字段生成 sign 并写回响应体。
-func (m *SignatureMiddleware) signResponse(recorder *bodyRecorder, policy security.RouteSecurityPolicy, appID string, traceID string, signatureType string, r *http.Request) (string, error) {
+func (m *SignatureMiddleware) signResponse(recorder *bodyRecorder, policy security.RouteSecurityPolicy, appID string, traceID string, timestamp string, signatureType string, r *http.Request) (string, error) {
+	if hasSignFieldAll(policy.ResponseSign) {
+		return "", errors.New("响应签名不允许使用全量字段")
+	}
+	if err := security.ValidateSecurityFieldCount(policy.ResponseSign, "响应签名"); err != nil {
+		return "", errors.Tag(err)
+	}
 	var envelope map[string]any
 	if err := json.Unmarshal(recorder.body.Bytes(), &envelope); err != nil {
 		return "", nil
@@ -160,7 +188,10 @@ func (m *SignatureMiddleware) signResponse(recorder *bodyRecorder, policy securi
 	if !ok || data == nil {
 		return "", nil
 	}
-	signStr := security.BuildSignString(data, policy.ResponseSign, traceID, appID)
+	if err := validateSignValues(data, policy.ResponseSign, "响应签名"); err != nil {
+		return "", errors.Tag(err)
+	}
+	signStr := security.BuildSignString(data, policy.ResponseSign, traceID, timestamp, appID)
 	signer, resolvedVersion, err := m.signer(r, appID, signatureType, false)
 	if err != nil {
 		return "", errors.Tag(err)
@@ -183,7 +214,7 @@ func (m *SignatureMiddleware) signResponse(recorder *bodyRecorder, policy securi
 
 // signer 根据 X-Signature 获取签名或验签实现。
 func (m *SignatureMiddleware) signer(r *http.Request, appID string, signatureType string, isVerify bool) (security.Signer, string, error) {
-	secretKeyLogic := logic.NewSecretKeyLogic(r.Context(), m.svc)
+	secretKeyLogic := secretkeylogic.NewSecretKeyLogic(r.Context(), m.svc)
 	versionHint := requestSecretKeyVersionHint(r)
 	grayKey := requestSecretKeyGrayKey(r)
 	switch signatureType {
@@ -197,9 +228,9 @@ func (m *SignatureMiddleware) signer(r *http.Request, appID string, signatureTyp
 		signer, err := security.NewAESCipher(aesKey.Key, aesKey.IV)
 		return signer, resolvedVersion, errors.Tag(err)
 	case security.SignatureTypeRSA:
-		keyType := logic.RSAServerPrivateKey
+		keyType := secretkeylogic.RSAServerPrivateKey
 		if isVerify {
-			keyType = logic.RSAUserPublicKey
+			keyType = secretkeylogic.RSAUserPublicKey
 		}
 		pemText, resolvedVersion, err := secretKeyLogic.GetRSAKey(appID, versionHint, grayKey, keyType)
 		if err != nil {
@@ -234,6 +265,53 @@ func (m *SignatureMiddleware) requestAppID(r *http.Request) (string, error) {
 		return "", errors.New("请求头X-App-Id格式错误")
 	}
 	return appID, nil
+}
+
+// requestTimestamp 解析 X-Timestamp，并限制请求只在防重放窗口内有效。
+func requestTimestamp(r *http.Request) (string, error) {
+	raw := strings.TrimSpace(r.Header.Get(requestctx.HeaderTimestamp))
+	if raw == "" {
+		return "", errors.New("缺少请求头X-Timestamp")
+	}
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seconds <= 0 {
+		return "", errors.New("请求头X-Timestamp格式错误")
+	}
+	delta := time.Since(time.Unix(seconds, 0))
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta > signatureReplayTTL {
+		return "", errors.New("请求头X-Timestamp已过期")
+	}
+	return strconv.FormatInt(seconds, 10), nil
+}
+
+// hasSignFieldAll 判断签名策略是否要求全量字段签名。
+func hasSignFieldAll(fields []string) bool {
+	for _, field := range fields {
+		if strings.EqualFold(strings.TrimSpace(field), security.SignFieldAll) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateSignValues 校验参与签名的字段值，避免大对象或超长字符串进入签名串。
+func validateSignValues(data map[string]any, fields []string, scope string) error {
+	for _, field := range helper.UniqueNonEmptyStrings(fields) {
+		value, ok := data[field]
+		if !ok || value == nil {
+			continue
+		}
+		if text, ok := value.(string); ok && text == "" {
+			continue
+		}
+		if err := security.ValidateSecurityScalarValue(scope, field, value); err != nil {
+			return errors.Tag(err)
+		}
+	}
+	return nil
 }
 
 // fail 写出签名中间件失败响应，响应文案直接由业务码解析，错误详情只进入日志链路。
@@ -272,7 +350,7 @@ func cloneRequestHeaders(header http.Header) map[string][]string {
 	return result
 }
 
-// markRequestVerified 使用 Redis 记录已验签请求，避免同一个 trace_id 在有效期内重复提交。
+// markRequestVerified 使用 Redis 记录已验签请求，避免同一个 trace_id 在时间窗口内重复提交。
 func (m *SignatureMiddleware) markRequestVerified(r *http.Request, appID string, traceID string) error {
 	if strings.TrimSpace(appID) == "" || strings.TrimSpace(traceID) == "" {
 		return errors.New("签名请求标识不能为空")
@@ -281,7 +359,7 @@ func (m *SignatureMiddleware) markRequestVerified(r *http.Request, appID string,
 		return errors.New("签名防重放缓存未初始化")
 	}
 	key := keys.AppScopedKey(appID, fmt.Sprintf(keys.SignatureReplayRequest, traceID))
-	ok, err := m.svc.Rds.SetNX(r.Context(), key, "1", 5*time.Minute).Result()
+	ok, err := m.svc.Rds.SetNX(r.Context(), key, "1", signatureReplayTTL).Result()
 	if err != nil {
 		return errors.Tag(err)
 	}

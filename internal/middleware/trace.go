@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	i18n "admin_cron/common/i18n"
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/requestctx"
+	i18n "admin/common/i18n"
+	"admin/internal/infra/loggerx"
+	"admin/internal/requestctx"
 
 	"github.com/Is999/go-utils"
 	"go.opentelemetry.io/otel"
@@ -25,11 +25,11 @@ type TraceMiddleware struct {
 // NewTraceMiddleware 创建服务端 span 中间件，统一承接请求入口的 trace 初始化。
 func NewTraceMiddleware() *TraceMiddleware {
 	return &TraceMiddleware{
-		tracer: otel.Tracer("admin_cron/http"),
+		tracer: otel.Tracer("admin/http"),
 	}
 }
 
-// Handle 基于标准 W3C tracecontext 继承链路，并兼容前端 X-Trace-Id。
+// Handle 基于标准 W3C tracecontext 继承链路，并前端 X-Trace-Id。
 func (m *TraceMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, _ := requestctx.New(r.Context())

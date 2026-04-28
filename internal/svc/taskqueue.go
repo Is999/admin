@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"admin_cron/internal/types"
+	"admin/internal/types"
 )
 
 // TaskOption 定义任务投递时的可选配置函数。

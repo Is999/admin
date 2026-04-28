@@ -950,7 +950,7 @@ func (r *CacheRenewReq) Validate() error {
 // CacheWarmupReq 表示模板缓存预热请求。
 // 预热用于“从无到有”批量构建缓存实例，解决模板 key 因 Redis 未命中而无法全量刷新的问题。
 type CacheWarmupReq struct {
-	TemplateKey string `json:"templateKey,optional" form:"templateKey,optional"` // 模板缓存键定义，例如 config_uuid:{uuid}
+	TemplateKey string `json:"templateKey,optional" form:"templateKey,optional"` // 模板缓存键定义
 	Limit       int    `json:"limit,optional" form:"limit,optional"`             // 限制本次最多预热多少个实例，避免一次性回源过大
 }
 

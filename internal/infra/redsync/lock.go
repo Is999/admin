@@ -129,7 +129,8 @@ func isLockTakenError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "lock already taken")
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "lock already taken")
 }
 
 // startRenewal 周期性续期当前锁；一旦续期失败，会通知锁丢失并停止续期。
@@ -302,7 +303,7 @@ func WithLock(ctx context.Context, redisClient redis.UniversalClient, key string
 	if fn == nil {
 		unlockErr := lock.Unlock()
 		<-watcherDone
-		return unlockErr
+		return errors.Tag(unlockErr)
 	}
 
 	// fn 接收 runCtx；如果续期失败，runCtx 会被取消，业务逻辑可以据此尽快退出。

@@ -3,9 +3,9 @@ package task
 import (
 	"encoding/json"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/jobs/usertag/options"
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/config"
+	"admin/internal/jobs/usertag/options"
+	"admin/internal/jobs/usertag/types"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"

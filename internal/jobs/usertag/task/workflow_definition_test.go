@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/internal/jobs/usertag/options"
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/options"
+	"admin/internal/jobs/usertag/types"
 )
 
 // TestWorkflowDefinitionsFinalizeDisablesRetryOverride 验证 full 切表节点禁止被全局重试覆盖。

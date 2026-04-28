@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/svc"
+	"admin/internal/config"
+	"admin/internal/svc"
 )
 
 func TestCacheLockKeyUsesAppNamespace(t *testing.T) {
@@ -19,7 +19,7 @@ func TestCacheLockKeyUsesAppNamespace(t *testing.T) {
 
 func TestCacheLockKeyTrimsTableCacheNamespace(t *testing.T) {
 	base := NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
-	got := base.cacheLockKey("app:site-a:role_tree")
+	got := base.cacheLockKey("app:site-a:table:role_tree")
 	want := "app:site-a:cache:rebuild:lock:role_tree"
 	if got != want {
 		t.Fatalf("cacheLockKey(table-cache) = %q, want %q", got, want)

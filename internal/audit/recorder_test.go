@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/internal/model"
-	"admin_cron/internal/requestctx"
+	"admin/internal/model"
+	"admin/internal/requestctx"
 )
 
 // TestSerializeMasksSensitiveFields 验证审计序列化时会自动脱敏密码、token、MFA 秘钥等敏感字段。

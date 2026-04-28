@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	keys "admin_cron/common/rediskeys"
-	"admin_cron/helper"
-	"admin_cron/internal/audit"
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/model"
-	"admin_cron/internal/requestctx"
-	"admin_cron/internal/svc"
+	keys "admin/common/rediskeys"
+	"admin/helper"
+	"admin/internal/audit"
+	"admin/internal/infra/loggerx"
+	"admin/internal/model"
+	"admin/internal/requestctx"
+	"admin/internal/svc"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"
@@ -28,11 +28,11 @@ const (
 // BaseLogic 是所有业务 logic 的公共基座，统一封装请求上下文、日志、DB、Redis 与审计能力。
 type BaseLogic struct {
 	logx.Logger                     // 已绑定当前请求上下文的日志记录器
-	ctx         context.Context     // 当前 logic 处理链路使用的上下文
-	svc         *svc.ServiceContext // 绑定当前上下文后的服务依赖集合
+	Ctx         context.Context     // 当前 logic 处理链路使用的上下文
+	Svc         *svc.ServiceContext // 绑定当前上下文后的服务依赖集合
 }
 
-// NewBaseLogic 兼容现有以 http.Request 创建 logic 的调用方式。
+// NewBaseLogic 用于 HTTP 请求入口创建 logic。
 func NewBaseLogic(r *http.Request, svcCtx *svc.ServiceContext) *BaseLogic {
 	ctx := context.Background()
 	if r != nil {
@@ -55,36 +55,31 @@ func NewBaseLogicWithContext(ctx context.Context, svcCtx *svc.ServiceContext) *B
 
 	return &BaseLogic{
 		Logger: logx.WithContext(ctx),
-		ctx:    ctx,
-		svc:    scopedSvc,
+		Ctx:    ctx,
+		Svc:    scopedSvc,
 	}
 }
 
-// Context 返回当前 logic 绑定的请求上下文。
-func (l *BaseLogic) Context() context.Context {
-	return l.ctx
-}
-
-// Redis 返回共享 Redis 客户端（兼容单机/集群），具体命令执行时仍应显式传入 l.ctx。
+// Redis 返回共享 Redis 客户端（支持单机/集群），具体命令执行时仍应显式传入 l.Ctx。
 func (l *BaseLogic) Redis() redis.UniversalClient {
-	if l.svc == nil {
+	if l.Svc == nil {
 		return nil
 	}
-	return l.svc.Rds
+	return l.Svc.Rds
 }
 
 // AppID 返回当前 Redis 缓存命名空间使用的 app_id。
 func (l *BaseLogic) AppID() string {
-	if l == nil || l.svc == nil {
-		return keys.NormalizeAppID("")
+	if l == nil || l.Svc == nil {
+		return ""
 	}
-	return keys.NormalizeAppID(l.svc.CurrentConfig().AppID)
+	return keys.NormalizeAppID(l.Svc.CurrentConfig().AppID)
 }
 
 // AppRedisKey 给直接 Redis 缓存和锁追加当前 app_id 命名空间。
 func (l *BaseLogic) AppRedisKey(key string) string {
 	if l == nil {
-		return keys.AppScopedKey("", key)
+		return ""
 	}
 	return keys.AppScopedKey(l.AppID(), key)
 }
@@ -104,15 +99,15 @@ func (l *BaseLogic) AppRedisKeys(cacheKeys ...string) []string {
 
 // Audit 返回统一审计记录器，避免业务层直接拼装 admin_log。
 func (l *BaseLogic) Audit() *audit.Recorder {
-	if l.svc == nil {
+	if l.Svc == nil {
 		return nil
 	}
-	return l.svc.Audit
+	return l.Svc.Audit
 }
 
 // Meta 返回当前请求链路元数据，供少量需要直接读取 trace/user/result 的逻辑复用。
 func (l *BaseLogic) Meta() *requestctx.Meta {
-	return requestctx.FromContext(l.ctx)
+	return requestctx.FromContext(l.Ctx)
 }
 
 // ClientIP 返回当前请求的客户端 IP（优先取 request meta）。
@@ -133,7 +128,7 @@ func (l *BaseLogic) AccessToken() string {
 
 // GetCtxAdmin 返回当前请求上下文中的管理员信息；未登录场景下返回空对象而不是 nil。
 func (l *BaseLogic) GetCtxAdmin() *helper.CtxAdmin {
-	admin := helper.GetCtxAdmin(l.ctx)
+	admin := helper.GetCtxAdmin(l.Ctx)
 	if admin == nil {
 		return &helper.CtxAdmin{}
 	}
@@ -144,7 +139,7 @@ func (l *BaseLogic) GetCtxAdmin() *helper.CtxAdmin {
 func (l *BaseLogic) AddAdminLog(action model.AdminLogAction, route, method, describe string, data any) {
 	ctxAdmin := l.GetCtxAdmin()
 	if ctxAdmin.ID == 0 {
-		loggerx.Infow(l.Context(), "管理员审计跳过",
+		loggerx.Infow(l.Ctx, "管理员审计跳过",
 			logx.Field("skip_reason", "缺少管理员上下文"),
 			logx.Field("action", action),
 			logx.Field("route", route),
@@ -153,7 +148,7 @@ func (l *BaseLogic) AddAdminLog(action model.AdminLogAction, route, method, desc
 		return
 	}
 	if l.Audit() == nil {
-		loggerx.Infow(l.Context(), "管理员审计跳过",
+		loggerx.Infow(l.Ctx, "管理员审计跳过",
 			logx.Field("skip_reason", "审计记录器未就绪"),
 			logx.Field("action", action),
 			logx.Field("route", route),
@@ -164,13 +159,13 @@ func (l *BaseLogic) AddAdminLog(action model.AdminLogAction, route, method, desc
 
 	// 审计日志在 handler 响应写出后立即落库，早于 access log middleware 的 defer 收口。
 	// 因此这里先按请求开始时间刷新一次当前耗时，避免 admin_log.latency_ms 一直使用默认 0。
-	requestctx.RefreshLatency(l.Context())
+	requestctx.RefreshLatency(l.Ctx)
 
 	// 审计日志需要继承当前请求的 trace / user / route 等上下文值，但不应继续受原请求 deadline 影响。
 	// 否则主业务接近超时时，日志写库会被同一个 context 一起取消，导致“业务成功但审计缺失”。
 	auditCtx := context.Background()
-	if l.ctx != nil {
-		auditCtx = context.WithoutCancel(l.ctx)
+	if l.Ctx != nil {
+		auditCtx = context.WithoutCancel(l.Ctx)
 	}
 	auditCtx, cancel := context.WithTimeout(auditCtx, adminLogWriteTimeout)
 	defer cancel()
@@ -195,9 +190,10 @@ func (l *BaseLogic) AddAdminLog(action model.AdminLogAction, route, method, desc
 	}
 }
 
-// RdsGetJsonObj 从 Redis 读取 JSON 字符串并反序列化到目标对象。
+// RdsGetJsonObj 从当前 app_id 命名空间读取 JSON 字符串并反序列化到目标对象。
 func (l *BaseLogic) RdsGetJsonObj(key string, dest any) error {
-	val, err := l.svc.Rds.Get(l.ctx, key).Result()
+	key = l.AppRedisKey(key)
+	val, err := l.Svc.Rds.Get(l.Ctx, key).Result()
 	if err != nil {
 		return errors.Tag(err)
 	}
@@ -219,6 +215,11 @@ func wrapLogicError(err error, format string, args ...any) error {
 	return errors.Wrap(err, format)
 }
 
+// WrapLogicError 给拆分后的领域包复用统一错误上下文包装。
+func WrapLogicError(err error, format string, args ...any) error {
+	return wrapLogicError(err, format, args...)
+}
+
 // logWrappedError 用于无法继续向上返回的兜底场景，统一补充上下文后按一条错误链打印。
 func logWrappedError(logger interface{ Errorf(string, ...any) }, err error, format string, args ...any) {
 	if logger == nil || err == nil {
@@ -227,26 +228,32 @@ func logWrappedError(logger interface{ Errorf(string, ...any) }, err error, form
 	logger.Errorf("%s", loggerx.ErrorChain(wrapLogicError(err, format, args...)))
 }
 
-// RdsSetJSONValue 将值序列化为 JSON 后写入 Redis，并设置过期时间。
+// LogWrappedError 给拆分后的领域包复用兜底错误日志格式。
+func LogWrappedError(logger interface{ Errorf(string, ...any) }, err error, format string, args ...any) {
+	logWrappedError(logger, err, format, args...)
+}
+
+// RdsSetJSONValue 将值序列化为 JSON 后写入当前 app_id 命名空间，并设置过期时间。
 func (l *BaseLogic) RdsSetJSONValue(key string, value any, expireSec int) error {
+	key = l.AppRedisKey(key)
 	data, err := json.Marshal(value)
 	if err != nil {
 		return errors.Tag(err)
 	}
-	return errors.Tag(l.svc.Rds.Set(l.ctx, key, data, time.Duration(expireSec)*time.Second).Err())
+	return errors.Tag(l.Svc.Rds.Set(l.Ctx, key, data, time.Duration(expireSec)*time.Second).Err())
 }
 
-// RdsDelKeys 批量删除 Redis 键。
+// RdsDelKeys 批量删除当前 app_id 命名空间下的 Redis 键。
 func (l *BaseLogic) RdsDelKeys(keys ...string) error {
 	if len(keys) == 0 {
 		return nil
 	}
 	for _, key := range keys {
-		key = strings.TrimSpace(key)
+		key = l.AppRedisKey(key)
 		if key == "" {
 			continue
 		}
-		if err := l.svc.Rds.Del(l.ctx, key).Err(); err != nil {
+		if err := l.Svc.Rds.Del(l.Ctx, key).Err(); err != nil {
 			return errors.Tag(err)
 		}
 	}
@@ -255,10 +262,11 @@ func (l *BaseLogic) RdsDelKeys(keys ...string) error {
 
 // RdsReloadKey 先删除指定 Redis 键，再执行回调重建缓存内容。
 func (l *BaseLogic) RdsReloadKey(key string, fn func() error) error {
+	key = l.AppRedisKey(key)
 	if key == "" {
 		return nil
 	}
-	err := l.svc.Rds.Del(l.ctx, key).Err()
+	err := l.Svc.Rds.Del(l.Ctx, key).Err()
 	if err != nil {
 		return errors.Tag(err)
 	}
@@ -266,12 +274,12 @@ func (l *BaseLogic) RdsReloadKey(key string, fn func() error) error {
 }
 
 // ReloadCacheAsync 把缓存重建请求投递到统一任务队列。
-// 旧版直接起 goroutine 的方式虽然简单，但不具备重试、崩溃恢复和聚合能力；现在统一收口到任务系统。
+// 早期直接起 goroutine 的方式虽然简单，但不具备重试、崩溃恢复和聚合能力；现在统一收口到任务系统。
 func (l *BaseLogic) ReloadCacheAsync(operation, key string) {
-	if l == nil || l.svc == nil || l.svc.Task == nil || key == "" {
+	if l == nil || l.Svc == nil || l.Svc.Task == nil || key == "" {
 		return
 	}
-	if err := l.svc.Task.EnqueueCacheRefresh(l.ctx, operation, []string{key}); err != nil {
+	if err := l.Svc.Task.EnqueueCacheRefresh(l.Ctx, operation, []string{key}); err != nil {
 		if operation == "" {
 			operation = "BaseLogic.ReloadCacheAsync"
 		}

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/aws/aws-sdk-go-v2/aws"

@@ -8,6 +8,7 @@ import (
 
 const (
 	HeaderTraceID     = "X-Trace-Id"  // HeaderTraceID 是前后端约定的请求追踪头，参与签名与防重放。
+	HeaderTimestamp   = "X-Timestamp" // HeaderTimestamp 是秒级请求时间戳，参与签名并校验时间窗口。
 	HeaderSpanID      = "X-Span-Id"   // HeaderSpanID 是服务端当前处理片段标识，便于一次请求内定位服务节点。
 	HeaderTraceParent = "traceparent" // HeaderTraceParent 是 W3C Trace Context 标准头，用于跨服务链路继承。
 )

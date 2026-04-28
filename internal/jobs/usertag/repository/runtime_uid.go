@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"admin_cron/internal/model"
-	"admin_cron/internal/svc"
+	"admin/internal/model"
+	"admin/internal/svc"
 
 	"github.com/Is999/go-utils/errors"
 	"gorm.io/gorm/clause"

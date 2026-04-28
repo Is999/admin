@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Is999/go-utils/errors"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -212,7 +213,7 @@ func TestStreamExportShardedRejectsPendingChunkOverflow(t *testing.T) {
 			if shard.ID == 1 {
 				select {
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return nil, errors.Tag(ctx.Err())
 				case <-time.After(200 * time.Millisecond):
 					return &CursorPage[shardedExportRow, int]{
 						Total:   1,

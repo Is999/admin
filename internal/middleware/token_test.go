@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/logic"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/types"
+	"admin/internal/config"
+	cachelogic "admin/internal/logic/cache"
+	"admin/internal/svc"
+	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/alicebob/miniredis/v2"
@@ -27,9 +27,8 @@ func TestVerifyAdminTokenRequiresCachedSession(t *testing.T) {
 
 	secret := "test-secret"
 	token := testAdminToken(t, secret, 1, "admin", time.Now().Add(time.Hour))
-	svcCtx := &svc.ServiceContext{Rds: client}
-	svcCtx.UpdateConfig(config.Config{JwtSecret: secret})
-	if err := logic.NewCacheLogic(ctx, svcCtx).SetAdminInfo(1, &types.AdminInfo{
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a", JwtSecret: secret}, svc.Dependencies{Rds: client})
+	if err := cachelogic.NewCacheLogic(ctx, svcCtx).SetAdminInfo(1, &types.AdminInfo{
 		ID:       1,
 		UserName: "admin",
 		Token:    token,

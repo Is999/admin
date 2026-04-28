@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/segmentio/kafka-go"

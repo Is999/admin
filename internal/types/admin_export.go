@@ -3,7 +3,7 @@
 package types
 
 import (
-	"admin_cron/pkg/excel"
+	"admin/pkg/excel"
 	"strings"
 
 	"github.com/Is999/go-utils/errors"

@@ -1,7 +1,7 @@
 package model
 
 import (
-	"admin_cron/internal/types"
+	"admin/internal/types"
 	"strings"
 	"time"
 

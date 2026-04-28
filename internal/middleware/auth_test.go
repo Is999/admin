@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"admin_cron/internal/requestctx"
+	"admin/internal/requestctx"
 )
 
 // TestPublicHandleSetsRouteAliasBeforeDownstream 验证公开路由在进入下游处理前已经写入统一 route alias。

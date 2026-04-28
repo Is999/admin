@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"admin_cron/helper"
-	"admin_cron/internal/model"
-	"admin_cron/internal/requestctx"
+	"admin/helper"
+	"admin/internal/model"
+	"admin/internal/requestctx"
 
 	"gorm.io/gorm"
 	"gorm.io/plugin/dbresolver"

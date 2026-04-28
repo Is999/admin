@@ -7,10 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/model"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/types"
+	"admin/internal/config"
+	"admin/internal/model"
+	"admin/internal/svc"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -496,7 +495,7 @@ func TestRangePredicateArgsUnixMilliseconds(t *testing.T) {
 	}
 }
 
-// TestNormalizeTimeColumnType 验证时间列类型未配置时默认 time，旧枚举和非法类型会被拒绝。
+// TestNormalizeTimeColumnType 验证时间列类型未配置时默认 time，非当前枚举会被拒绝。
 func TestNormalizeTimeColumnType(t *testing.T) {
 	if got := normalizeTimeColumnType(""); got != TimeColumnTypeTime {
 		t.Fatalf("normalizeTimeColumnType(empty) = %s, want %s", got, TimeColumnTypeTime)
@@ -1326,7 +1325,7 @@ func TestResolveTargetsDeduplicatesAndIgnoresUnknown(t *testing.T) {
 		t.Fatalf("期望返回稳定排序后的已启用目标，实际为 %#v", runs)
 	}
 	if runs[0].Mode != archiveRunModeAll || runs[1].Mode != archiveRunModeAll {
-		t.Fatalf("期望无后缀 target 兼容执行 all，实际为 %#v", runs)
+		t.Fatalf("期望无后缀 target 按 all 执行，实际为 %#v", runs)
 	}
 }
 
@@ -1395,46 +1394,5 @@ func TestAdminLogQueryJobUsesConfiguredJob(t *testing.T) {
 	}
 	if job.TableName != model.TableNameAdminLog {
 		t.Fatalf("adminLogQueryJob().TableName = %s, want %s", job.TableName, model.TableNameAdminLog)
-	}
-}
-
-// TestBuildAdminLogSubQueryUsesTemplate 验证管理员日志历史子查询由模板生成，并保持参数绑定顺序稳定。
-func TestBuildAdminLogSubQueryUsesTemplate(t *testing.T) {
-	uid := 1001
-	startTime := time.Date(2026, time.May, 1, 0, 0, 0, 0, time.Local)
-	endTime := time.Date(2026, time.May, 2, 0, 0, 0, 0, time.Local)
-	lowerBound := time.Date(2026, time.May, 1, 12, 0, 0, 0, time.Local)
-	upperBound := time.Date(2026, time.May, 1, 13, 0, 0, 0, time.Local)
-	sqlText, args := buildAdminLogSubQuery("admin_log_archive_202605", &types.AdminLogQueryReq{
-		TraceID: "trace-001",
-		UserID:  &uid,
-		Action:  "查询管理员操作日志",
-	}, &startTime, &endTime, &lowerBound, &upperBound)
-
-	for _, want := range []string{
-		"SELECT id, user_id, user_name",
-		"FROM `admin_log_archive_202605`",
-		"trace_id = ?",
-		"user_id = ?",
-		"action = ?",
-		"created_at >= ?",
-		"created_at <= ?",
-		"created_at < ?",
-	} {
-		if !strings.Contains(sqlText, want) {
-			t.Fatalf("期望 SQL 包含 %q，实际为 %s", want, sqlText)
-		}
-	}
-	if strings.Contains(sqlText, "user_name = ?") {
-		t.Fatalf("未传用户名时不应生成 user_name 条件，实际为 %s", sqlText)
-	}
-	if len(args) != 7 {
-		t.Fatalf("参数数量 = %d, want 7, args=%v", len(args), args)
-	}
-	if args[0] != "trace-001" || args[1] != uid || args[2] != "查询管理员操作日志" {
-		t.Fatalf("业务筛选参数顺序不正确: %v", args[:3])
-	}
-	if args[3] != startTime || args[4] != endTime || args[5] != lowerBound || args[6] != upperBound {
-		t.Fatalf("时间边界参数顺序不正确: %v", args[3:])
 	}
 }

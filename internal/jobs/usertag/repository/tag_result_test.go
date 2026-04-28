@@ -3,8 +3,8 @@ package repository
 import (
 	"testing"
 
-	"admin_cron/internal/jobs/usertag/route"
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/route"
+	"admin/internal/jobs/usertag/types"
 )
 
 // TestWorkflowShardUIDsFiltersCurrentShard 验证骨架仓储仍按工作流分片过滤 UID。

@@ -3,8 +3,8 @@ package bootstrap
 import (
 	"testing"
 
-	"admin_cron/internal/handler"
-	"admin_cron/internal/taskruntime"
+	"admin/internal/handler"
+	"admin/internal/task/runtime"
 )
 
 // TestResolveOptionsDefaults 确保未传启动选项时仍使用默认展示名。
@@ -29,14 +29,14 @@ func TestResolveOptionsMergesPlugins(t *testing.T) {
 	routeModule := handler.NewRouteModuleFunc("route-a", nil)
 
 	opts := resolveOptions([]Option{
-		WithDisplayName("admin-cron-enterprise"),
+		WithDisplayName("admin-enterprise"),
 		WithTaskPlugins(pluginA, pluginB),
 		WithComponents(component),
 		WithRouteModules(routeModule),
 		WithDefaultComponents(false),
 	})
 
-	if opts.DisplayName != "admin-cron-enterprise" {
+	if opts.DisplayName != "admin-enterprise" {
 		t.Fatalf("unexpected display name: %s", opts.DisplayName)
 	}
 	if len(opts.TaskPlugins) != 2 {

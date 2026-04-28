@@ -9,6 +9,11 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	// AdminSuperRoleID 表示超级管理员角色 ID。
+	AdminSuperRoleID = 1
+)
+
 // formatDateTime 把数据库时间统一转换成前端使用的日期时间字符串。
 func formatDateTime(t time.Time) string {
 	if t.IsZero() {
@@ -90,4 +95,47 @@ func intPtrDefault(value *int, defaultValue int) int {
 		return defaultValue
 	}
 	return *value
+}
+
+// FormatDateTime 把数据库时间统一转换成前端使用的日期时间字符串。
+func FormatDateTime(t time.Time) string {
+	return formatDateTime(t)
+}
+
+// BuildTreePids 根据父级 ID 和父级族谱生成当前节点族谱。
+func BuildTreePids(parentID int, parentPids string) string {
+	return buildTreePids(parentID, parentPids)
+}
+
+// ApplyGenealogyScopeFilter 使用 MySQL `FIND_IN_SET` 过滤指定祖先节点下的全部子孙节点。
+func ApplyGenealogyScopeFilter(db *gorm.DB, genealogyField string, id int) *gorm.DB {
+	return applyGenealogyScopeFilter(db, genealogyField, id)
+}
+
+// ContainsTreeID 判断逗号分隔族谱中是否包含指定 ID。
+func ContainsTreeID(pids string, id int) bool {
+	return containsTreeID(pids, id)
+}
+
+// NormalizedOrderField 把前端常见小驼峰排序字段映射成数据库字段。
+func NormalizedOrderField(orderBy string, fallback string) string {
+	return normalizedOrderField(orderBy, fallback)
+}
+
+// NormalizedOrderDirection 归一化排序方向，非法值统一回落到降序。
+func NormalizedOrderDirection(order string) string {
+	return normalizedOrderDirection(order)
+}
+
+// IntPtrDefault 返回指针整数值；指针为空时使用默认值。
+func IntPtrDefault(value *int, defaultValue int) int {
+	return intPtrDefault(value, defaultValue)
+}
+
+// FreshTxStatement 基于当前事务创建干净语句上下文。
+func FreshTxStatement(tx *gorm.DB) *gorm.DB {
+	if tx == nil {
+		return nil
+	}
+	return tx.Session(&gorm.Session{NewDB: true})
 }

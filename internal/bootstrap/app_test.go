@@ -10,9 +10,9 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskqueue"
+	"admin/internal/config"
+	"admin/internal/svc"
+	"admin/internal/task/queue"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -57,6 +57,7 @@ func TestAppUpdateConfigPropagatesTaskManagerSnapshot(t *testing.T) {
 
 	manager := taskqueue.New(config.TaskQueueConfig{
 		Enabled:      true,
+		AppID:        "old-app",
 		DefaultQueue: "old-queue",
 	}, client)
 	if manager == nil {
@@ -91,6 +92,29 @@ func TestAppUpdateConfigPropagatesTaskManagerSnapshot(t *testing.T) {
 	}
 	if got := manager.CurrentConfig().AppID; got != "site-1" {
 		t.Fatalf("期望任务系统继承顶层 app_id，实际为 %q", got)
+	}
+}
+
+// TestCollectorConfigWithAppIDScopesRedisStream 确保 Collector Redis Stream 按 app_id 隔离。
+func TestCollectorConfigWithAppIDScopesRedisStream(t *testing.T) {
+	cfg := collectorConfigWithAppID(config.Config{
+		AppID: "site-1",
+		Collector: config.CollectorConfig{
+			Redis: config.CollectorRedisConfig{Stream: "collector:events"},
+		},
+	})
+	if got := cfg.Redis.Stream; got != "app:site-1:collector:events" {
+		t.Fatalf("期望 Collector Redis Stream 按 app_id 加前缀，实际为 %q", got)
+	}
+
+	cfg = collectorConfigWithAppID(config.Config{
+		AppID: "site-2",
+		Collector: config.CollectorConfig{
+			Redis: config.CollectorRedisConfig{Stream: "app:site-1:collector:events"},
+		},
+	})
+	if got := cfg.Redis.Stream; got != "app:site-1:collector:events" {
+		t.Fatalf("期望已带其它 app 前缀的 Collector Redis Stream 保持原样，实际为 %q", got)
 	}
 }
 

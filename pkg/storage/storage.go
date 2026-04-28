@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"admin_cron/helper"
-	"admin_cron/internal/config"
+	"admin/helper"
+	"admin/internal/config"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -478,6 +478,7 @@ func (r *contextReader) Read(p []byte) (int, error) {
 	}
 	if err != nil {
 		if stdErrors.Is(err, io.EOF) {
+			// io.Reader 必须原样返回 io.EOF，避免 io.Copy 把正常结束识别成失败。
 			return n, err
 		}
 		return n, errors.Tag(err)

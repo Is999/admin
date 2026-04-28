@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"admin_cron/internal/jobs/usertag/options"
-	"admin_cron/internal/jobs/usertag/types"
-	"admin_cron/internal/taskqueue"
+	"admin/internal/jobs/usertag/options"
+	"admin/internal/jobs/usertag/types"
+	"admin/internal/task/queue"
 )
 
 const (

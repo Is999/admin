@@ -172,7 +172,7 @@ func (r *Registry) Stop(ctx context.Context) error {
 			}
 		})
 	}
-	return errors.Tag(firstErr)
+	return firstErr
 }
 
 // Collect 收集一条业务数据。

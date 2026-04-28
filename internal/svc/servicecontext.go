@@ -5,10 +5,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"admin_cron/internal/audit"
-	"admin_cron/internal/collector"
-	"admin_cron/internal/config"
-	"admin_cron/internal/infra/kafkax"
+	"admin/internal/audit"
+	"admin/internal/config"
+	"admin/internal/infra/collectorx"
+	"admin/internal/infra/kafkax"
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -43,7 +43,7 @@ type ServiceContext struct {
 	Audit        *audit.Recorder       // 审计日志记录器
 	Task         TaskQueue             // 任务系统接口（支持调度、DAG、队列管理）
 	ConfigReload ConfigReloadExecutor  // 配置热加载执行器，供管理接口手动触发重载
-	Collector    *collector.Manager    // 通用收集器（Kafka/Redis/DB outbox 回退与重试）
+	Collector    *collectorx.Manager   // 通用收集器（Kafka/Redis/DB outbox 回退与重试）
 }
 
 // ConfigReloadExecutor 约束配置重载执行能力，避免 logic 层直接依赖 bootstrap 实现。

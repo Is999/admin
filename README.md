@@ -1,6 +1,6 @@
-# admin-cron
+# admin
 
-`admin-cron` 是后台管理服务端工程，采用模块化单体结构组织 API、后台任务和运行时组件。项目基于 go-zero 风格分层，结合 GORM、Redis、Asynq 等基础设施封装统一的服务上下文、任务运行时、配置加载和观测链路。
+`admin` 是后台管理服务端工程，采用模块化单体结构组织 API、后台任务和运行时组件。项目基于 go-zero 风格分层，结合 GORM、Redis、Asynq 等基础设施封装统一的服务上下文、任务运行时、配置加载和观测链路。
 
 本文只说明工程框架、启动方式、部署入口和开发边界；接口细节以 `docs` 目录下的专题文档为准。
 
@@ -47,14 +47,14 @@ go mod download
 ### 3. 启动服务
 
 ```bash
-go run . -f ./etc/config.yaml -mode 7
+go run ./cmd/admin -f ./etc/config.yaml -mode 7
 ```
 
 ### 4. 验证工程
 
 ```bash
 go test ./...
-go build -o bin/admin-cron .
+go build -o bin/admin ./cmd/admin
 ```
 
 仓库提供统一检查入口：
@@ -69,27 +69,30 @@ make ci
 make migrate-status MIGRATE_CONFIG=./etc/config.yaml
 make migrate-dry-run MIGRATE_CONFIG=./etc/config.yaml
 make migrate-up MIGRATE_CONFIG=./etc/config.yaml
+make migrate-bootstrap MIGRATE_CONFIG=./etc/config.yaml
 ```
+
+`migrate-bootstrap` 只用于空库初始化，会显式允许历史基线 SQL；已有生产库不要执行该入口。
 
 ## 部署入口
 
 生产推荐拆成控制面和执行面：
 
 ```bash
-./bin/admin-cron -f ./etc/config.yaml -mode 5  # API + Scheduler
-./bin/admin-cron -f ./etc/config.yaml -mode 2  # Worker
+./bin/admin -f ./etc/config.yaml -mode 5  # API + Scheduler
+./bin/admin -f ./etc/config.yaml -mode 2  # Worker
 ```
 
 完整流程见 [部署发布指南](docs/site/角色文档/运维/部署发布指南.md)。
 
-发布模板位于 `deploy/`，包括 Dockerfile、systemd 单元和集成依赖 Compose；Prometheus 告警规则位于 `docs/prometheus/admin-cron-alerts.yml`。
+发布模板位于 `deploy/`，包括 Dockerfile、systemd 单元和集成依赖 Compose；Prometheus 告警规则位于 `docs/prometheus/admin-alerts.yml`。
 
 > **首次上线重点**：如果后台无法登录，先确认数据库里已有超级管理员账号，再通过内网接口 `POST /internal/auth/init-admin-bootstrap` 重置该账号为首次登录状态。该接口只允许内网访问，不创建新账号，不提升角色。详细步骤见 [内网初始化管理员接口](docs/site/接口文档/后台系统/内网初始化管理员接口.md)。
 
 ## 目录结构
 
 ```text
-admin-cron
+admin
 ├── common                    # 跨包公共能力：状态码、常量、i18n、Redis Key、嵌入资产
 ├── docs                      # 架构、开发规范、接口文档、运维手册
 │   └── site
@@ -153,8 +156,8 @@ admin-cron
 ```bash
 go test ./...
 go test ./internal/...
-go run . -f ./etc/config.yaml -mode 7
-go build -o bin/admin-cron .
+go run ./cmd/admin -f ./etc/config.yaml -mode 7
+go build -o bin/admin ./cmd/admin
 ```
 
 ## 文档索引

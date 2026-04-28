@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"admin_cron/common/embedasset"
+	"admin/common/embedasset"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -21,25 +21,25 @@ var sqlTemplatePlaceholderRegexp = regexp.MustCompile(`\{\{\s*([A-Za-z0-9_]+)\s*
 // tagResultCopySystemTagsTemplate 保存 full 临时表复制系统标签的 MySQL INSERT SELECT 模板。
 // 模板只替换已转义表名，标签来源和类型仍通过 GORM Exec 参数绑定。
 //
-//go:embed tag_result_copy_system_tags.sql.tmpl
+//go:embed assets/tag_result_copy_system_tags.sql.tmpl
 var tagResultCopySystemTagsTemplate string
 
 // userTagTruncateTableTemplate 保存用户标签结果/快照表清理 DDL 模板。
 // 表名来自固定分片命名并统一反引号保护，避免在业务方法中拼接 TRUNCATE SQL。
 //
-//go:embed user_tag_truncate_table.sql.tmpl
+//go:embed assets/user_tag_truncate_table.sql.tmpl
 var userTagTruncateTableTemplate string
 
 // userTagCreateLikeTableTemplate 保存用户标签分片表按线上表结构自愈创建的 DDL 模板。
 // CREATE TABLE LIKE 用于 full 临时结果表补齐，避免 tmp 表结构与线上结果表漂移。
 //
-//go:embed user_tag_create_like_table.sql.tmpl
+//go:embed assets/user_tag_create_like_table.sql.tmpl
 var userTagCreateLikeTableTemplate string
 
 // userTagRenameTableTemplate 保存用户标签 full 结果分片原子切表 DDL 模板。
 // RENAME 列表由固定分片表名渲染而来，调用方负责先 quoteIdent，避免动态 DDL 散落在业务方法中。
 //
-//go:embed user_tag_rename_table.sql.tmpl
+//go:embed assets/user_tag_rename_table.sql.tmpl
 var userTagRenameTableTemplate string
 
 // renderSQLTemplate 渲染本包受控 SQL 模板，并裁剪模板文件末尾换行。

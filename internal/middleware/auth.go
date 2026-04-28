@@ -5,13 +5,14 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
-	codes "admin_cron/common/codes"
-	i18n "admin_cron/common/i18n"
-	"admin_cron/helper"
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/logic"
-	"admin_cron/internal/requestctx"
-	"admin_cron/internal/svc"
+	codes "admin/common/codes"
+	i18n "admin/common/i18n"
+	"admin/helper"
+	"admin/internal/infra/loggerx"
+	cachelogic "admin/internal/logic/cache"
+	securitylogic "admin/internal/logic/security"
+	"admin/internal/requestctx"
+	"admin/internal/svc"
 
 	"github.com/Is999/go-utils"
 )
@@ -105,37 +106,37 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 		}
 
 		ip := utils.ClientIP(r)
-		if err = logic.NewSecurityLogic(ctx, m.svc).CheckAdminAccess(identity.UserID, string(alias), ip, identity.LoginIP); err != nil {
+		if err = securitylogic.NewSecurityLogic(ctx, m.svc).CheckAdminAccess(identity.UserID, string(alias), ip, identity.LoginIP); err != nil {
 			switch {
-			case errors.Is(err, logic.ErrAdminPermissionDenied):
+			case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
 				failForbidden(i18n.MsgKeyForbidden)
-			case errors.Is(err, logic.ErrAdminDisabled):
+			case errors.Is(err, securitylogic.ErrAdminDisabled):
 				failUnauthorized(i18n.MsgKeyUserDisabled)
-			case errors.Is(err, logic.ErrAdminIPChanged):
+			case errors.Is(err, securitylogic.ErrAdminIPChanged):
 				helper.NewJsonResp(ctx, w).
 					SetHttpStatus(http.StatusUnauthorized).
 					SetCode(codes.Unauthorized).
 					SetError(err).
 					Fail(i18n.MsgKeyAdminLoginIPChanged)
-			case errors.Is(err, logic.ErrAdminIPNotAllowed):
+			case errors.Is(err, securitylogic.ErrAdminIPNotAllowed):
 				helper.NewJsonResp(ctx, w).
 					SetHttpStatus(http.StatusUnauthorized).
 					SetCode(codes.Unauthorized).
 					SetError(err).
 					Fail(i18n.MsgKeyAdminIPNotAllowed)
-			case errors.Is(err, logic.ErrAdminPasswordResetRequired):
+			case errors.Is(err, securitylogic.ErrAdminPasswordResetRequired):
 				helper.NewJsonResp(ctx, w).
 					SetHttpStatus(http.StatusOK).
 					SetCode(codes.CheckPasswordReset).
 					SetError(err).
 					Fail(i18n.MsgKeyCheckPasswordReset)
-			case errors.Is(err, logic.ErrAdminMFABindRequired):
+			case errors.Is(err, securitylogic.ErrAdminMFABindRequired):
 				helper.NewJsonResp(ctx, w).
 					SetHttpStatus(http.StatusOK).
 					SetCode(codes.CheckMFABind).
 					SetError(err).
 					Fail(i18n.MsgKeyCheckMFABind)
-			case errors.Is(err, logic.ErrAdminMFARequired):
+			case errors.Is(err, securitylogic.ErrAdminMFARequired):
 				helper.NewJsonResp(ctx, w).
 					SetHttpStatus(http.StatusOK).
 					SetCode(codes.CheckMFACode).
@@ -153,7 +154,7 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 		ctx = loggerx.BindContext(ctx)
 
 		// 活跃会话滑动续期，减少管理员持续操作期间的 Redis 回源抖动。
-		_ = logic.NewCacheLogic(ctx, m.svc).TouchAdminInfo(identity.UserID)
+		_ = cachelogic.NewCacheLogic(ctx, m.svc).TouchAdminInfo(identity.UserID)
 
 		next(w, r.WithContext(ctx))
 	}

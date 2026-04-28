@@ -4,11 +4,11 @@ import (
 	"context"
 	"strings"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskqueue"
-	"admin_cron/internal/taskruntime"
+	"admin/internal/config"
+	"admin/internal/infra/loggerx"
+	"admin/internal/svc"
+	"admin/internal/task/queue"
+	"admin/internal/task/runtime"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"

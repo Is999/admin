@@ -1,0 +1,19 @@
+[Unit]
+Description=admin control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin
+Group=admin
+WorkingDirectory=/opt/admin
+ExecStart=/opt/admin/bin/admin -f /etc/admin/config.yaml -mode 5
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+LimitNOFILE=65535
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 
 	"github.com/Is999/go-utils/errors"
 )

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"

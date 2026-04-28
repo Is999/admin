@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/internal/jobs/usertag/route"
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/route"
+	"admin/internal/jobs/usertag/types"
 )
 
 // TestPlanRejectsUnsafeFullScan 验证查询计划默认拒绝没有 UID 和时间窗口的全表扫描。

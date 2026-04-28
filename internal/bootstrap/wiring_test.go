@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 )
 
 // TestLoadConfigLoadsSample 确保默认装配入口能够正确读取项目样例配置。
@@ -457,6 +457,7 @@ name: test
 host: 127.0.0.1
 port: 8888
 Mode: dev
+app_id: "1"
 jwt_secret: test-secret-0123456789abcdef
 mysql:
   write_data_source: "root:pass@tcp(127.0.0.1:3306)/admin"

@@ -9,9 +9,9 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
-	codes "admin_cron/common/codes"
-	i18n "admin_cron/common/i18n"
-	"admin_cron/internal/requestctx"
+	codes "admin/common/codes"
+	i18n "admin/common/i18n"
+	"admin/internal/requestctx"
 )
 
 // TestBizResultResolveMessage 验证对应场景。

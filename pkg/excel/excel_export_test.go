@@ -2,13 +2,14 @@ package excel
 
 import (
 	"context"
-	"errors"
+	stdErrors "errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/Is999/go-utils/errors"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -33,18 +34,18 @@ func TestBuildRowsConcurrentlyKeepsOrder(t *testing.T) {
 // TestBuildRowsConcurrentlyReturnsOnBuilderErrorWithoutDeadlock 验证行构造失败后不会卡死。
 func TestBuildRowsConcurrentlyReturnsOnBuilderErrorWithoutDeadlock(t *testing.T) {
 	items := make([]int, 1000)
-	buildErr := errors.New("build row failed")
+	buildErr := stdErrors.New("build row failed")
 	done := make(chan error, 1)
 	go func() {
 		_, err := BuildRowsConcurrentlyWithOpt(items, func(item int) ([]any, error) {
-			return nil, buildErr
+			return nil, errors.Tag(buildErr)
 		}, WithConcurrentRowsWorkersRange(1, 1))
 		done <- err
 	}()
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, buildErr) {
+		if !stdErrors.Is(err, buildErr) {
 			t.Fatalf("BuildRowsConcurrentlyWithOpt error = %v, want %v", err, buildErr)
 		}
 	case <-time.After(time.Second):

@@ -1,10 +1,10 @@
 package stage
 
 import (
-	"admin_cron/internal/jobs/usertag/queryplan"
-	"admin_cron/internal/jobs/usertag/repository"
-	"admin_cron/internal/jobs/usertag/runtimectx"
-	"admin_cron/internal/jobs/usertag/types"
+	"admin/internal/jobs/usertag/queryplan"
+	"admin/internal/jobs/usertag/repository"
+	"admin/internal/jobs/usertag/runtimectx"
+	"admin/internal/jobs/usertag/types"
 )
 
 // PrepareStage 负责清理当前工作流运行期状态，并在 full 模式清空预建临时表。

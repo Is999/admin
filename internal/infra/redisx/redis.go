@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/infra/loggerx"
+	"admin/internal/config"
+	"admin/internal/infra/loggerx"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"
@@ -49,7 +49,7 @@ func New(ctx context.Context, cfg config.RedisConfig, obs config.ObservabilityCo
 			DB:              cfg.DB,
 			PoolSize:        poolSize,
 			MinIdleConns:    poolSize / 5, // 保持一定的最小空闲连接，避免突发流量时建连耗时
-			DisableIdentity: true,         // 禁用发送 CLIENT SETINFO，避免旧版或代理 Redis 报错
+			DisableIdentity: true,         // 禁用 CLIENT SETINFO，避免代理 Redis 拒绝该命令
 			Protocol:        2,
 			MaintNotificationsConfig: &maintnotifications.Config{
 				Mode: maintnotifications.ModeDisabled,
@@ -63,7 +63,7 @@ func New(ctx context.Context, cfg config.RedisConfig, obs config.ObservabilityCo
 			Password:        cfg.Password,
 			PoolSize:        poolSize,
 			MinIdleConns:    poolSize / 5, // 保持一定的最小空闲连接，避免突发流量时建连耗时
-			DisableIdentity: true,         // 禁用发送 CLIENT SETINFO，避免旧版或代理 Redis 报错
+			DisableIdentity: true,         // 禁用 CLIENT SETINFO，避免代理 Redis 拒绝该命令
 			Protocol:        2,
 			MaintNotificationsConfig: &maintnotifications.Config{
 				Mode: maintnotifications.ModeDisabled,
@@ -181,7 +181,7 @@ func resolveAddrMap(raw map[string]string) map[string]string {
 }
 
 // isClusterMode 根据显式 type 配置判断是否走 Redis Cluster。
-// 兼容旧配置：未配置 type 时，仍按地址数量判断。
+// 未配置 type 时按地址数量推断，减少部署配置缺项导致的启动失败。
 func isClusterMode(cfg config.RedisConfig, addrs []string) bool {
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
 	case "cluster":
@@ -363,7 +363,8 @@ func isRedisScriptCacheMiss(err error, cmd redis.Cmder) bool {
 	if errors.Is(err, redis.ErrNoScript) || redis.HasErrorPrefix(err, redisNoScriptPrefix) {
 		return true
 	}
-	return strings.HasPrefix(err.Error(), redisNoScriptPrefix)
+	message := err.Error()
+	return strings.HasPrefix(message, redisNoScriptPrefix)
 }
 
 // pipelineNames 提取 pipeline 内所有命令名称，方便日志快速定位命令组成。

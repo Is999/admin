@@ -16,6 +16,14 @@ func TestIsPrivateClientIP(t *testing.T) {
 		{name: "public", ip: "8.8.8.8", want: false},
 		{name: "public-with-port", ip: "8.8.8.8:443", want: false},
 		{name: "private-with-port", ip: "10.0.0.2:8080", want: true},
+		{name: "ipv4-link-local", ip: "169.254.1.1", want: false},
+		{name: "ipv6-loopback", ip: "::1", want: true},
+		{name: "ipv6-private", ip: "fd00::1", want: true},
+		{name: "ipv6-private-with-port", ip: "[fd00::1]:8080", want: true},
+		{name: "ipv6-link-local", ip: "fe80::1", want: false},
+		{name: "ipv6-public", ip: "2001:4860:4860::8888", want: false},
+		{name: "empty", ip: "", want: false},
+		{name: "invalid", ip: "not-an-ip", want: false},
 	}
 	for _, tc := range cases {
 		if got := isPrivateClientIP(tc.ip); got != tc.want {

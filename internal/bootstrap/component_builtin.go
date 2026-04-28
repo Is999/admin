@@ -5,15 +5,16 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/collector"
-	"admin_cron/internal/config"
-	"admin_cron/internal/handler"
-	"admin_cron/internal/infra/larkx"
-	"admin_cron/internal/infra/redisx"
-	"admin_cron/internal/requestctx"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskqueue"
-	"admin_cron/internal/taskruntime"
+	keys "admin/common/rediskeys"
+	"admin/internal/config"
+	"admin/internal/handler"
+	"admin/internal/infra/collectorx"
+	"admin/internal/infra/larkx"
+	"admin/internal/infra/redisx"
+	"admin/internal/requestctx"
+	"admin/internal/svc"
+	"admin/internal/task/queue"
+	"admin/internal/task/runtime"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
@@ -27,8 +28,8 @@ func newCollectorComponent() Component {
 		if state == nil || state.ServiceContext == nil {
 			return errors.Errorf("通用收集器组件缺少服务上下文")
 		}
-		// collector 使用主库写连接处理 DB outbox。
-		manager, err := collector.New(state.Config.Collector, state.ServiceContext.WriteDB(svc.DatabaseMain), state.ServiceContext.Rds)
+		// collector 使用主库写连接处理 DB outbox，Redis Stream 在装配期统一追加 app_id 前缀。
+		manager, err := collectorx.New(collectorConfigWithAppID(state.Config), state.ServiceContext.WriteDB(svc.DatabaseMain), state.ServiceContext.Rds)
 		if err != nil {
 			return errors.Tag(err)
 		}
@@ -46,6 +47,13 @@ func newCollectorComponent() Component {
 		}
 		return nil
 	})
+}
+
+// collectorConfigWithAppID 把顶层 app_id 注入 Collector Redis Stream，避免多站点共用 Redis 时串流。
+func collectorConfigWithAppID(c config.Config) config.CollectorConfig {
+	cfg := c.Collector
+	cfg.Redis.Stream = keys.AppScopedKey(c.AppID, cfg.Redis.Stream)
+	return cfg
 }
 
 // newTaskRuntimeComponent 创建任务队列与任务运行时启动组件。
@@ -139,7 +147,10 @@ func registerTaskFailureLarkAlert(cfg config.Config, manager *taskqueue.Manager)
 		return nil
 	}
 	return manager.RegisterFinalFailureHook(func(ctx context.Context, task *asynq.Task, meta taskqueue.WorkflowTaskMeta, runErr error) error {
-		return notifier.SendTaskFailure(taskFailureAlertSendContext(ctx), buildTaskFailureAlert(cfg, ctx, task, meta, runErr))
+		if err := notifier.SendTaskFailure(taskFailureAlertSendContext(ctx), buildTaskFailureAlert(cfg, ctx, task, meta, runErr)); err != nil {
+			return errors.Wrap(err, "发送任务失败 Lark 告警失败")
+		}
+		return nil
 	})
 }
 

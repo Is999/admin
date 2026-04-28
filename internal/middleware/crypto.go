@@ -5,17 +5,17 @@ import (
 	"net/http"
 	"strings"
 
-	codes "admin_cron/common/codes"
-	"admin_cron/helper"
-	"admin_cron/internal/logic"
-	"admin_cron/internal/requestctx"
-	"admin_cron/internal/security"
-	"admin_cron/internal/svc"
+	codes "admin/common/codes"
+	"admin/helper"
+	secretkeylogic "admin/internal/logic/secretkey"
+	"admin/internal/requestctx"
+	"admin/internal/security"
+	"admin/internal/svc"
 	"github.com/Is999/go-utils/errors"
 )
 
 const (
-	// cipherWholeBody 表示 X-Cipher=cipher 时对整个请求或响应内容加解密。
+	// cipherWholeBody 表示已废弃的整包加密标记，仅用于拒绝非法输入。
 	cipherWholeBody = security.CipherWholeBody
 	// cipherJSONPrefix 表示字段值加解密前需要做 JSON 编解码。
 	cipherJSONPrefix = security.CipherJSONPrefix
@@ -35,12 +35,12 @@ func NewCryptoMiddleware(svcCtx *svc.ServiceContext) *CryptoMiddleware {
 	return &CryptoMiddleware{svc: svcCtx}
 }
 
-// Handle 根据 X-Cipher/X-Crypto 请求头执行加解密，未携带 X-Cipher 时完全兼容普通请求。
+// Handle 根据 X-Cipher/X-Crypto 请求头执行字段级加解密；未携带 X-Cipher 时按普通 JSON 请求处理。
 func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// policy 表示当前路由别名命中的请求/响应加密策略。
 		policy := security.PolicyByRoute(requestRouteAlias(r))
-		// requestCipher 表示本次请求实际声明的解密字段或整包配置。
+		// requestCipher 表示本次请求实际声明的字段级解密配置。
 		requestCipher := strings.TrimSpace(r.Header.Get("X-Cipher"))
 		// cryptoType 表示当前请求声明的加密算法，默认回落为 AES。
 		cryptoType := strings.ToUpper(strings.TrimSpace(r.Header.Get("X-Crypto")))
@@ -51,6 +51,7 @@ func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		// appID 表示当前请求绑定的秘钥应用标识，请求解密和响应加密都会复用它。
 		appID := ""
 		cryptoEnabled := true
+		var requestCipherParams []string
 		var err error
 		if requestCipher != "" || len(policy.ResponseCipher) > 0 {
 			appID, err = m.requestAppID(r)
@@ -58,7 +59,7 @@ func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 				m.fail(w, r, codes.ParamError, err)
 				return
 			}
-			routeConfig, err := logic.NewSecretKeyLogic(r.Context(), m.svc).GetRouteConfig(appID)
+			routeConfig, err := secretkeylogic.NewSecretKeyLogic(r.Context(), m.svc).GetRouteConfig(appID)
 			if err != nil {
 				m.fail(w, r, codes.InternalError, err)
 				return
@@ -80,13 +81,18 @@ func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 			r.Header.Del("X-Crypto")
 		}
 		if requestCipher != "" {
+			requestCipherParams, err = decodeAndValidateCipherParams(requestCipher, policy.RequestCipher, "请求")
+			if err != nil {
+				m.fail(w, r, codes.AuthFailed, err)
+				return
+			}
 			cryptor, resolvedVersion, err := m.cryptor(r, appID, cryptoType, false)
 			if err != nil {
 				m.fail(w, r, codes.InternalError, err)
 				return
 			}
 			recordResolvedSecretKeyVersion(r, resolvedVersion)
-			if err := m.decryptRequest(r, requestCipher, cryptor); err != nil {
+			if err := m.decryptRequest(r, requestCipherParams, cryptor); err != nil {
 				m.fail(w, r, codes.AuthFailed, err)
 				return
 			}
@@ -96,7 +102,7 @@ func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		recorder := newBodyRecorder()
 		next(recorder, r)
 
-		// responseCipher 表示当前响应需要按哪些字段或整包方式执行加密。
+		// responseCipher 表示当前响应需要按哪些字段执行加密。
 		responseCipher := strings.TrimSpace(recorder.Header().Get("X-Cipher"))
 		if cryptoEnabled && responseCipher == "" && len(policy.ResponseCipher) > 0 && recorder.status < http.StatusBadRequest {
 			responseCipher = security.EncodeCipherParams(policy.ResponseCipher)
@@ -128,7 +134,12 @@ func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 			if resolvedVersion != "" {
 				recorder.Header().Set(secretKeyVersionHeader, resolvedVersion)
 			}
-			if err := m.encryptResponse(recorder, responseCipher, cryptor); err != nil {
+			responseCipherParams, err := decodeAndValidateCipherParams(responseCipher, policy.ResponseCipher, "响应")
+			if err != nil {
+				m.fail(w, r, codes.InternalError, err)
+				return
+			}
+			if err := m.encryptResponse(recorder, responseCipherParams, cryptor); err != nil {
 				m.fail(w, r, codes.InternalError, err)
 				return
 			}
@@ -148,38 +159,10 @@ func requestRouteAlias(r *http.Request) string {
 	return ""
 }
 
-// decryptRequest 解密请求体或请求体首层字段。
-func (m *CryptoMiddleware) decryptRequest(r *http.Request, cipherHeader string, cryptor security.Cryptor) error {
-	if strings.EqualFold(cipherHeader, cipherWholeBody) {
-		params, err := requestParams(r)
-		if err != nil {
-			return errors.Tag(err)
-		}
-		cipherText := security.SignValueString(params["ciphertext"])
-		if cipherText == "" {
-			body, err := readRequestBody(r)
-			if err != nil {
-				return errors.Tag(err)
-			}
-			cipherText = strings.TrimSpace(string(body))
-		}
-		if cipherText == "" {
-			return nil
-		}
-		plain, err := cryptor.Decrypt(cipherText)
-		if err != nil {
-			return errors.Wrap(err, "请求解密失败")
-		}
-		var bodyMap map[string]any
-		if err := json.Unmarshal([]byte(plain), &bodyMap); err != nil {
-			return errors.Wrap(err, "解密后的请求体不是JSON对象")
-		}
-		return replaceJSONBody(r, bodyMap)
-	}
-
-	cipherParams, err := decodeCipherParams(cipherHeader)
-	if err != nil {
-		return errors.Tag(err)
+// decryptRequest 解密请求体首层字段。
+func (m *CryptoMiddleware) decryptRequest(r *http.Request, cipherParams []string, cryptor security.Cryptor) error {
+	if hasCipherWholeBody(cipherParams) {
+		return errors.New("请求解密不允许整包加密")
 	}
 	bodyMap, err := requestJSONMap(r)
 	if err != nil {
@@ -191,14 +174,20 @@ func (m *CryptoMiddleware) decryptRequest(r *http.Request, cipherHeader string, 
 		// field 表示当前要解密的请求首层字段名。
 		field := strings.TrimPrefix(param, cipherJSONPrefix)
 		value, ok := bodyMap[field]
-		if !ok || security.SignValueString(value) == "" {
+		if !ok || isEmptySecurityFieldValue(value) {
 			continue
+		}
+		if err := security.ValidateSecurityScalarValue("请求加密密文", field, value); err != nil {
+			return errors.Tag(err)
 		}
 		plain, err := cryptor.Decrypt(security.SignValueString(value))
 		if err != nil {
 			return errors.Wrapf(err, "请求字段[%s]解密失败", field)
 		}
 		if isJSON {
+			if err := security.ValidateSecurityTextValue("请求加密明文", field, plain, security.MaxSecurityJSONFieldBytes); err != nil {
+				return errors.Tag(err)
+			}
 			var jsonValue any
 			if plain != "" {
 				if err := json.Unmarshal([]byte(plain), &jsonValue); err != nil {
@@ -207,28 +196,19 @@ func (m *CryptoMiddleware) decryptRequest(r *http.Request, cipherHeader string, 
 			}
 			bodyMap[field] = jsonValue
 		} else {
+			if err := security.ValidateSecurityTextValue("请求加密明文", field, plain, security.MaxSecurityFieldBytes); err != nil {
+				return errors.Tag(err)
+			}
 			bodyMap[field] = plain
 		}
 	}
 	return replaceJSONBody(r, bodyMap)
 }
 
-// encryptResponse 加密响应体或响应 data 下的字段；字段路径支持 `user.buildMFAURL` 这类点路径。
-func (m *CryptoMiddleware) encryptResponse(recorder *bodyRecorder, cipherHeader string, cryptor security.Cryptor) error {
-	if strings.EqualFold(cipherHeader, cipherWholeBody) {
-		encrypted, err := cryptor.Encrypt(recorder.body.String())
-		if err != nil {
-			return errors.Wrap(err, "响应整体加密失败")
-		}
-		recorder.body.Reset()
-		_, _ = recorder.body.WriteString(encrypted)
-		recorder.Header().Del("Content-Length")
-		return nil
-	}
-
-	cipherParams, err := decodeCipherParams(cipherHeader)
-	if err != nil {
-		return errors.Tag(err)
+// encryptResponse 加密响应 data 下的字段；字段路径支持 `user.buildMFAURL` 这类点路径。
+func (m *CryptoMiddleware) encryptResponse(recorder *bodyRecorder, cipherParams []string, cryptor security.Cryptor) error {
+	if hasCipherWholeBody(cipherParams) {
+		return errors.New("响应加密不允许整包加密")
 	}
 	var envelope map[string]any
 	if err := json.Unmarshal(recorder.body.Bytes(), &envelope); err != nil {
@@ -244,16 +224,20 @@ func (m *CryptoMiddleware) encryptResponse(recorder *bodyRecorder, cipherHeader 
 		// fieldPath 表示当前响应 data 下需要加密的点路径字段。
 		fieldPath := strings.TrimPrefix(param, cipherJSONPrefix)
 		value, ok := nestedCipherValue(data, fieldPath)
-		if !ok || security.SignValueString(value) == "" {
+		if !ok || isEmptySecurityFieldValue(value) {
 			continue
 		}
-		plain := security.SignValueString(value)
+		plain := ""
 		if isJSON {
-			body, err := json.Marshal(value)
+			body, err := security.ValidateSecurityJSONValue("响应加密明文", fieldPath, value)
 			if err != nil {
 				return errors.Wrapf(err, "响应字段[%s] JSON编码失败", fieldPath)
 			}
 			plain = string(body)
+		} else if err := security.ValidateSecurityScalarValue("响应加密明文", fieldPath, value); err != nil {
+			return errors.Tag(err)
+		} else {
+			plain = security.SignValueString(value)
 		}
 		encrypted, err := cryptor.Encrypt(plain)
 		if err != nil {
@@ -272,6 +256,64 @@ func (m *CryptoMiddleware) encryptResponse(recorder *bodyRecorder, cipherHeader 
 	_, _ = recorder.body.Write(body)
 	recorder.Header().Del("Content-Length")
 	return nil
+}
+
+// decodeAndValidateCipherParams 解码加密字段并校验是否在路由策略白名单内。
+func decodeAndValidateCipherParams(raw string, allowed []string, scope string) ([]string, error) {
+	if strings.EqualFold(strings.TrimSpace(raw), cipherWholeBody) {
+		return nil, errors.Errorf("%s加密不允许整包加密", scope)
+	}
+	if err := security.ValidateSecurityTextValue(scope+"加密头", "X-Cipher", raw, security.MaxSecurityJSONFieldBytes); err != nil {
+		return nil, errors.Tag(err)
+	}
+	params, err := decodeCipherParams(raw)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	params = helper.UniqueNonEmptyStrings(params)
+	if len(params) == 0 {
+		return nil, errors.Errorf("%s加密字段不能为空", scope)
+	}
+	if err := security.ValidateSecurityFieldCount(params, scope+"加密"); err != nil {
+		return nil, errors.Tag(err)
+	}
+	if hasCipherWholeBody(params) {
+		return nil, errors.Errorf("%s加密不允许整包加密", scope)
+	}
+	allowed = helper.UniqueNonEmptyStrings(allowed)
+	if len(allowed) == 0 {
+		return nil, errors.Errorf("%s加密字段未在路由策略中声明", scope)
+	}
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, field := range allowed {
+		allowedSet[field] = struct{}{}
+	}
+	for _, field := range params {
+		if _, ok := allowedSet[field]; !ok {
+			return nil, errors.Errorf("%s加密字段不允许: %s", scope, field)
+		}
+	}
+	return params, nil
+}
+
+// hasCipherWholeBody 判断字段列表是否包含已废弃的整包加密标记。
+func hasCipherWholeBody(fields []string) bool {
+	for _, field := range fields {
+		if strings.EqualFold(strings.TrimSpace(field), cipherWholeBody) {
+			return true
+		}
+	}
+	return false
+}
+
+func isEmptySecurityFieldValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	if text, ok := value.(string); ok {
+		return text == ""
+	}
+	return false
 }
 
 // nestedCipherValue 按点路径读取 map 中的嵌套字段值。
@@ -341,7 +383,7 @@ func splitCipherFieldPath(fieldPath string) []string {
 
 // cryptor 根据 X-Crypto 获取加密或解密实现。
 func (m *CryptoMiddleware) cryptor(r *http.Request, appID string, cryptoType string, isEncrypt bool) (security.Cryptor, string, error) {
-	secretKeyLogic := logic.NewSecretKeyLogic(r.Context(), m.svc)
+	secretKeyLogic := secretkeylogic.NewSecretKeyLogic(r.Context(), m.svc)
 	versionHint := requestSecretKeyVersionHint(r)
 	grayKey := requestSecretKeyGrayKey(r)
 	switch cryptoType {
@@ -353,9 +395,9 @@ func (m *CryptoMiddleware) cryptor(r *http.Request, appID string, cryptoType str
 		cryptor, err := security.NewAESCipher(aesKey.Key, aesKey.IV)
 		return cryptor, resolvedVersion, errors.Tag(err)
 	case security.CryptoTypeRSA:
-		keyType := logic.RSAServerPrivateKey
+		keyType := secretkeylogic.RSAServerPrivateKey
 		if isEncrypt {
-			keyType = logic.RSAUserPublicKey
+			keyType = secretkeylogic.RSAUserPublicKey
 		}
 		pemText, resolvedVersion, err := secretKeyLogic.GetRSAKey(appID, versionHint, grayKey, keyType)
 		if err != nil {

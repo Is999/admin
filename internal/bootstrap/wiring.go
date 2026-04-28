@@ -5,7 +5,7 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 
 	"github.com/zeromicro/go-zero/core/conf"
 )
@@ -35,7 +35,7 @@ func validateBootstrapConfig(c config.Config) error {
 	if err := validateTaskRedisConfig(c.Task.Redis); err != nil {
 		return errors.Wrap(err, "校验任务系统 Redis 配置失败")
 	}
-	if err := validateAdminCollectorConfig(c.Collector); err != nil {
+	if err := validateAdminCollectorConfig(c); err != nil {
 		return errors.Tag(err)
 	}
 	if err := validateAlertConfig(c.Alert); err != nil {

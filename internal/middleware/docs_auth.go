@@ -5,13 +5,13 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
-	codes "admin_cron/common/codes"
-	i18n "admin_cron/common/i18n"
-	"admin_cron/helper"
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/logic"
-	"admin_cron/internal/requestctx"
-	"admin_cron/internal/svc"
+	codes "admin/common/codes"
+	i18n "admin/common/i18n"
+	"admin/helper"
+	"admin/internal/infra/loggerx"
+	securitylogic "admin/internal/logic/security"
+	"admin/internal/requestctx"
+	"admin/internal/svc"
 
 	"github.com/Is999/go-utils"
 	"github.com/zeromicro/go-zero/rest"
@@ -53,31 +53,31 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 			}
 
 			ip := utils.ClientIP(r)
-			if err = logic.NewSecurityLogic(ctx, svcCtx).CheckAdminAccess(identity.UserID, "docs.index", ip, identity.LoginIP); err != nil {
+			if err = securitylogic.NewSecurityLogic(ctx, svcCtx).CheckAdminAccess(identity.UserID, "docs.index", ip, identity.LoginIP); err != nil {
 				switch {
-				case errors.Is(err, logic.ErrAdminPermissionDenied):
+				case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
 					helper.NewJsonResp(ctx, w).
 						SetHttpStatus(http.StatusForbidden).
 						SetCode(codes.Forbidden).
 						Fail(i18n.MsgKeyForbidden)
-				case errors.Is(err, logic.ErrAdminDisabled):
+				case errors.Is(err, securitylogic.ErrAdminDisabled):
 					helper.NewJsonResp(ctx, w).
 						SetHttpStatus(http.StatusUnauthorized).
 						SetCode(codes.Unauthorized).
 						Fail(i18n.MsgKeyUserDisabled)
-				case errors.Is(err, logic.ErrAdminIPChanged):
+				case errors.Is(err, securitylogic.ErrAdminIPChanged):
 					helper.NewJsonResp(ctx, w).
 						SetHttpStatus(http.StatusUnauthorized).
 						SetCode(codes.Unauthorized).
 						SetError(err).
 						Fail(i18n.MsgKeyAdminLoginIPChanged)
-				case errors.Is(err, logic.ErrAdminIPNotAllowed):
+				case errors.Is(err, securitylogic.ErrAdminIPNotAllowed):
 					helper.NewJsonResp(ctx, w).
 						SetHttpStatus(http.StatusUnauthorized).
 						SetCode(codes.Unauthorized).
 						SetError(err).
 						Fail(i18n.MsgKeyAdminIPNotAllowed)
-				case errors.Is(err, logic.ErrAdminMFARequired):
+				case errors.Is(err, securitylogic.ErrAdminMFARequired):
 					helper.NewJsonResp(ctx, w).
 						SetHttpStatus(http.StatusOK).
 						SetCode(codes.CheckMFACode).

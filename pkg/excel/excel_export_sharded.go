@@ -587,9 +587,9 @@ func queryShardWithRetry[T any, C any, S any](ctx context.Context, shard S, curs
 		}
 	}
 	if lastErr == nil {
-		lastErr = errors.Errorf("导出查询失败")
+		return nil, errors.Errorf("导出查询失败")
 	}
-	return nil, lastErr
+	return nil, errors.Tag(lastErr)
 }
 
 // streamExportRetryDelay 按指数退避计算下一次重试等待时间。

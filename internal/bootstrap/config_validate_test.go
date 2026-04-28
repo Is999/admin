@@ -3,7 +3,7 @@ package bootstrap
 import (
 	"testing"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 )
 
 // TestValidateBootstrapConfigRejectsWeakJWTSecret 确保明显弱 JWT 密钥不能通过启动校验。
@@ -24,12 +24,31 @@ func TestValidateBootstrapConfigRejectsMissingRedis(t *testing.T) {
 	}
 }
 
+// TestValidateBootstrapConfigRejectsMissingAppID 确保 app_id 缺失时不会落到共享 Redis 默认命名空间。
+func TestValidateBootstrapConfigRejectsMissingAppID(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.AppID = ""
+	if err := validateBootstrapConfig(cfg); err == nil {
+		t.Fatal("期望 app_id 缺失返回错误，实际为 nil")
+	}
+}
+
 // TestValidateBootstrapConfigRejectsInvalidCollectorTransport 确保 Collector 载体只能使用受支持枚举。
 func TestValidateBootstrapConfigRejectsInvalidCollectorTransport(t *testing.T) {
 	cfg := validAdminBootstrapConfig()
 	cfg.Collector.Transport = "amqp"
 	if err := validateBootstrapConfig(cfg); err == nil {
 		t.Fatal("期望非法 collector.transport 返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsForeignCollectorStream 确保 Collector 不会误用其它站点 Redis Stream。
+func TestValidateBootstrapConfigRejectsForeignCollectorStream(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.AppID = "site-2"
+	cfg.Collector.Redis.Stream = "app:site-1:collector:events"
+	if err := validateBootstrapConfig(cfg); err == nil {
+		t.Fatal("期望其它 app_id 的 collector.redis.stream 返回错误，实际为 nil")
 	}
 }
 
@@ -131,6 +150,7 @@ func TestValidateBootstrapConfigAcceptsProductionSafeConfig(t *testing.T) {
 
 func validAdminBootstrapConfig() config.Config {
 	return config.Config{
+		AppID:     "1",
 		JwtSecret: "test-jwt-secret-0123456789abcdef",
 		Redis: config.RedisConfig{
 			Type:     "single",

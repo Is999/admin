@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/taskqueue"
-	"admin_cron/internal/types"
+	"admin/internal/config"
+	"admin/internal/task/queue"
+	"admin/internal/types"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/hibiken/asynq"
@@ -51,6 +51,7 @@ func TestTaskFailureLarkAlertSendsOnArchivedTask(t *testing.T) {
 
 	manager := taskqueue.New(config.TaskQueueConfig{
 		Enabled:          true,
+		AppID:            "site-1",
 		DefaultQueue:     taskqueue.QueueDefault,
 		Concurrency:      1,
 		TaskCheckSeconds: 1,
@@ -70,7 +71,7 @@ func TestTaskFailureLarkAlertSendsOnArchivedTask(t *testing.T) {
 	if err := registerTaskFailureLarkAlert(config.Config{
 		AppID: "site-1",
 		Observability: config.ObservabilityConfig{
-			ServiceName: "admin_cron",
+			ServiceName: "admin",
 			Environment: "test",
 		},
 		Alert: config.AlertConfig{Lark: config.LarkAlertConfig{

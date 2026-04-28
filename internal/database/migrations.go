@@ -8,13 +8,15 @@ import (
 	"sort"
 	"strings"
 
-	"admin_cron/common/embedasset"
+	"admin/common/embedasset"
 
 	"github.com/Is999/go-utils/errors"
 )
 
-//go:embed *.sql *.sql.tmpl
+//go:embed assets/*.sql assets/*.sql.tmpl
 var migrationAssets embed.FS
+
+const migrationAssetDir = "assets"
 
 // Migration 描述一个数据库迁移资产。
 type Migration struct {
@@ -37,8 +39,8 @@ type migrationSpec struct {
 }
 
 var defaultMigrationSpecs = []migrationSpec{
-	{version: "202606050001", name: "bootstrap_admin", asset: "admin.sql", bootstrapOnly: true, destructive: true},
-	{version: "202606050002", name: "bootstrap_admin_cron", asset: "admin_cron.sql", bootstrapOnly: true, destructive: true},
+	{version: "202606050001", name: "bootstrap_admin_table", asset: "admin.sql", bootstrapOnly: true, destructive: true},
+	{version: "202606050002", name: "bootstrap_ops", asset: "bootstrap.sql", bootstrapOnly: true, destructive: true},
 	{version: "202606050003", name: "bootstrap_admin_log", asset: "admin_log.sql", bootstrapOnly: true, destructive: true},
 	{version: "202606050004", name: "bootstrap_admin_message", asset: "admin_message.sql", bootstrapOnly: true, destructive: true},
 	{version: "202606050005", name: "bootstrap_admin_message_receiver", asset: "admin_message_receiver.sql", bootstrapOnly: true, destructive: true},
@@ -57,7 +59,16 @@ var defaultMigrationSpecs = []migrationSpec{
 
 // SchemaMigrationsSQL 返回剥离文件头说明后的迁移版本表 DDL。
 func SchemaMigrationsSQL() string {
-	data, err := migrationAssets.ReadFile("schema_migrations.sql.tmpl")
+	data, err := migrationAssets.ReadFile(migrationAssetPath("schema_migrations.sql.tmpl"))
+	if err != nil {
+		return ""
+	}
+	return embedasset.StripLeadingLineComments(string(data), "--")
+}
+
+// SchemaMigrationsExistsSQL 返回版本表存在性检查 SQL。
+func SchemaMigrationsExistsSQL() string {
+	data, err := migrationAssets.ReadFile(migrationAssetPath("schema_migrations_exists.sql.tmpl"))
 	if err != nil {
 		return ""
 	}
@@ -100,11 +111,14 @@ func ValidateDefaultMigrations() error {
 	return validateMigrationList(DefaultMigrations())
 }
 
-// MigrationAssetNames 返回仓库内 database 目录的一层 SQL 资产名。
+// MigrationAssetNames 返回仓库内 database/assets 目录的一层 SQL 资产名。
 func MigrationAssetNames() ([]string, error) {
-	matches, err := fs.Glob(migrationAssets, "*.sql")
+	matches, err := fs.Glob(migrationAssets, migrationAssetPath("*.sql"))
 	if err != nil {
 		return nil, errors.Tag(err)
+	}
+	for index, item := range matches {
+		matches[index] = strings.TrimPrefix(item, migrationAssetDir+"/")
 	}
 	sort.Strings(matches)
 	return matches, nil
@@ -112,11 +126,19 @@ func MigrationAssetNames() ([]string, error) {
 
 // readMigrationSQL 读取指定迁移 SQL 资产。
 func readMigrationSQL(asset string) string {
-	data, err := migrationAssets.ReadFile(asset)
+	data, err := migrationAssets.ReadFile(migrationAssetPath(asset))
 	if err != nil {
 		return ""
 	}
 	return stripMigrationSQLHeader(string(data))
+}
+
+// migrationAssetPath 返回 go:embed 文件系统内的资产路径，迁移记录仍保留短文件名。
+func migrationAssetPath(asset string) string {
+	if strings.HasPrefix(asset, migrationAssetDir+"/") {
+		return asset
+	}
+	return migrationAssetDir + "/" + asset
 }
 
 // sha256Hex 返回文本 SHA256 十六进制摘要。

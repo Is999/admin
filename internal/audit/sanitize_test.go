@@ -79,10 +79,10 @@ func TestSerialize(t *testing.T) {
 		{
 			name: "AES和RSA引用字段脱敏",
 			input: map[string]string{
-				"aesKeyRef":              "/etc/admin-cron/keys/app/aes_key",
-				"aes_iv_ref":             "/etc/admin-cron/keys/app/aes_iv",
-				"rsaPrivateKeyServerRef": "/etc/admin-cron/keys/app/server_private.pem",
-				"rsaPublicKeyServerRef":  "/etc/admin-cron/keys/app/server_public.pem",
+				"aesKeyRef":              "/etc/admin/keys/app/aes_key",
+				"aes_iv_ref":             "/etc/admin/keys/app/aes_iv",
+				"rsaPrivateKeyServerRef": "/etc/admin/keys/app/server_private.pem",
+				"rsaPublicKeyServerRef":  "/etc/admin/keys/app/server_public.pem",
 			},
 			maxBytes: 1000,
 			contains: []string{
@@ -92,8 +92,8 @@ func TestSerialize(t *testing.T) {
 				`"rsaPublicKeyServerRef":"***"`,
 			},
 			excludes: []string{
-				"/etc/admin-cron/keys/app/aes_key",
-				"/etc/admin-cron/keys/app/aes_iv",
+				"/etc/admin/keys/app/aes_key",
+				"/etc/admin/keys/app/aes_iv",
 				"server_private.pem",
 				"server_public.pem",
 			},
@@ -147,14 +147,14 @@ func TestSerialize(t *testing.T) {
 
 // TestSanitizeText 验证历史文本日志回显时也会执行脱敏。
 func TestSanitizeText(t *testing.T) {
-	input := `{"aesKeyRef":"/etc/admin-cron/keys/app/aes_key","rsaPrivateKeyServerRef":"/etc/admin-cron/keys/app/server_private.pem","remark":"ok"}`
+	input := `{"aesKeyRef":"/etc/admin/keys/app/aes_key","rsaPrivateKeyServerRef":"/etc/admin/keys/app/server_private.pem","remark":"ok"}`
 	got := SanitizeText(input, 4096)
 	for _, item := range []string{`"aesKeyRef":"***"`, `"rsaPrivateKeyServerRef":"***"`, `"remark":"ok"`} {
 		if !strings.Contains(got, item) {
 			t.Fatalf("SanitizeText() = %s, want contain %s", got, item)
 		}
 	}
-	for _, item := range []string{"/etc/admin-cron/keys/app/aes_key", "server_private.pem"} {
+	for _, item := range []string{"/etc/admin/keys/app/aes_key", "server_private.pem"} {
 		if strings.Contains(got, item) {
 			t.Fatalf("SanitizeText() = %s, want exclude %s", got, item)
 		}
@@ -162,7 +162,7 @@ func TestSanitizeText(t *testing.T) {
 }
 
 // BenchmarkSerialize_JSON_vs_New 性能对比测试
-// go test -benchmem -run=^$ -bench ^BenchmarkSerialize$ admin_cron/internal/audit
+// go test -benchmem -run=^$ -bench ^BenchmarkSerialize$ admin/internal/audit
 // BenchmarkSerialize 基准测试对应场景。
 func BenchmarkSerialize(b *testing.B) {
 	data := map[string]any{

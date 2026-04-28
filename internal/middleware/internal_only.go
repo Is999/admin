@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"strings"
 
-	codes "admin_cron/common/codes"
-	i18n "admin_cron/common/i18n"
-	"admin_cron/helper"
-	"admin_cron/internal/requestctx"
+	codes "admin/common/codes"
+	i18n "admin/common/i18n"
+	"admin/helper"
+	"admin/internal/requestctx"
 
 	"github.com/Is999/go-utils"
 )
@@ -41,6 +41,7 @@ func (m *InternalOnlyMiddleware) Handle(next http.HandlerFunc, alias RouteAlias)
 	}
 }
 
+// isPrivateClientIP 判断客户端地址是否属于可信内网或本机回环地址。
 func isPrivateClientIP(clientIP string) bool {
 	host := strings.TrimSpace(clientIP)
 	if host == "" {
@@ -57,18 +58,10 @@ func isPrivateClientIP(clientIP string) bool {
 	return false
 }
 
+// isPrivateIP 只放行回环地址和私有地址；链路本地地址不属于业务内网白名单。
 func isPrivateIP(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
-	if ip.IsLoopback() || ip.IsPrivate() {
-		return true
-	}
-	if ipv4 := ip.To4(); ipv4 != nil {
-		// 兼容链路本地与运营网络偶发探测请求。
-		return ipv4[0] == 169 && ipv4[1] == 254
-	}
-	// fc00::/7 为 IPv6 内网地址，fe80::/10 为链路本地地址。
-	return len(ip) == net.IPv6len &&
-		((ip[0]&0xfe) == 0xfc || (ip[0] == 0xfe && (ip[1]&0xc0) == 0x80))
+	return ip.IsLoopback() || ip.IsPrivate()
 }

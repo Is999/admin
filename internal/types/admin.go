@@ -82,7 +82,7 @@ type AdminInfo struct {
 	Description       string `json:"description"`       // 备注说明
 	LastLoginTime     string `json:"lastLoginTime"`     // 最近登录时间
 	LastLoginIP       string `json:"lastLoginIP"`       // 最近登录 IP
-	LastLoginIpaddr   string `json:"LastLoginIpaddr"`   // 最近登录 IP 归属地；沿用旧 JSON 字段名以兼容前端
+	LastLoginIpaddr   string `json:"LastLoginIpaddr"`   // 最近登录 IP 归属地；沿用旧 JSON 字段名以前端
 	Token             string `json:"token"`             // 当前登录态 JWT 令牌
 }
 

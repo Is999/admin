@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -22,7 +22,7 @@ type LocalStorage struct {
 func NewLocalStorage(cfg config.FileStorageConfig) *LocalStorage {
 	rootDir := strings.TrimSpace(cfg.Local.RootDir)
 	if rootDir == "" {
-		rootDir = filepath.Join(os.TempDir(), "admin-cron", "storage")
+		rootDir = filepath.Join(os.TempDir(), "admin", "storage")
 	}
 	if absRootDir, err := filepath.Abs(rootDir); err == nil {
 		rootDir = absRootDir

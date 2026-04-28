@@ -3,8 +3,11 @@ package bootstrap
 import (
 	"sort"
 
-	"admin_cron/internal/handler"
-	"admin_cron/internal/taskruntime"
+	"admin/internal/handler"
+	archivetask "admin/internal/jobs/archive/task"
+	exportjob "admin/internal/jobs/export"
+	usertagtask "admin/internal/jobs/usertag/task"
+	"admin/internal/task/runtime"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"
@@ -142,29 +145,29 @@ func DefaultRegistrationManifest() []RegistrationManifestItem {
 		{
 			Kind:        registrationKindTaskPlugin,
 			Name:        "core",
-			File:        "internal/taskruntime/core_plugin.go",
+			File:        "internal/task/runtime/core_plugin.go",
 			Method:      "taskruntime.NewCorePlugin",
 			Description: "注册任务核心 handler、聚合器和缓存刷新工作流",
 		},
 		{
 			Kind:        registrationKindTaskPlugin,
 			Name:        "archive",
-			File:        "internal/jobs/archive/task/plugin.go + internal/taskruntime/archive_plugin.go",
-			Method:      "taskruntime.NewArchivePlugin / archivetask.Setup",
+			File:        "internal/jobs/archive/task/plugin.go",
+			Method:      "taskruntime.NewPluginFunc / archivetask.Setup",
 			Description: "注册通用归档任务 handler 和工作流",
 		},
 		{
 			Kind:        registrationKindTaskPlugin,
 			Name:        "admin_export",
-			File:        "internal/taskruntime/admin_export_plugin.go",
-			Method:      "taskruntime.NewAdminExportPlugin",
+			File:        "internal/jobs/export/plugin.go",
+			Method:      "taskruntime.NewPluginFunc / exportjob.Setup",
 			Description: "注册管理员列表异步导出 handler",
 		},
 		{
 			Kind:        registrationKindTaskPlugin,
 			Name:        "user_tag",
-			File:        "internal/jobs/usertag/task/plugin.go + internal/taskruntime/user_tag_plugin.go",
-			Method:      "taskruntime.NewUserTagPlugin / usertagtask.Setup",
+			File:        "internal/jobs/usertag/task/plugin.go",
+			Method:      "taskruntime.NewPluginFunc / usertagtask.Setup",
 			Description: "注册用户标签任务 handler、周期维护任务和工作流",
 		},
 		{
@@ -191,8 +194,8 @@ func DefaultRegistrationManifest() []RegistrationManifestItem {
 		{
 			Kind:        registrationKindRuntimeRegistry,
 			Name:        "collector_processor",
-			File:        "internal/collector/types.go + internal/collector/manager.go",
-			Method:      "collector.Manager.RegisterProcessor / RegisterProcessorFunc",
+			File:        "internal/infra/collectorx/types.go + internal/infra/collectorx/manager.go",
+			Method:      "collectorx.Manager.RegisterProcessor / RegisterProcessorFunc",
 			Description: "按 bizType 注册批量消费 Processor",
 		},
 	}
@@ -282,10 +285,16 @@ func resolveRouteModules(options Options) []handler.RouteModule {
 // defaultTaskPlugins 返回项目内置任务运行时插件集合。
 func defaultTaskPlugins() []taskruntime.Plugin {
 	return []taskruntime.Plugin{
-		taskruntime.NewCorePlugin(),        // 核心插件
-		taskruntime.NewArchivePlugin(),     // 通用归档插件
-		taskruntime.NewAdminExportPlugin(), // 管理员导出插件
-		taskruntime.NewUserTagPlugin(),     // 用户标签插件
+		taskruntime.NewCorePlugin(), // 核心插件
+		taskruntime.NewPluginFunc(archivetask.PluginName, func(runtime *taskruntime.Runtime) error {
+			return archivetask.Setup(runtime)
+		}), // 通用归档插件
+		taskruntime.NewPluginFunc(exportjob.PluginName, func(runtime *taskruntime.Runtime) error {
+			return exportjob.Setup(runtime)
+		}), // 管理员导出插件
+		taskruntime.NewPluginFunc(usertagtask.PluginName, func(runtime *taskruntime.Runtime) error {
+			return usertagtask.Setup(runtime)
+		}), // 用户标签插件
 	}
 }
 

@@ -1,6 +1,6 @@
 package options
 
-import "admin_cron/internal/config"
+import "admin/internal/config"
 
 const (
 	// defaultShardTotal 是用户标签默认分片数，和 uid%10 分表口径保持一致。

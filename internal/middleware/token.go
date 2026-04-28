@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/logic"
-	"admin_cron/internal/svc"
+	"admin/internal/config"
+	cachelogic "admin/internal/logic/cache"
+	"admin/internal/svc"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/golang-jwt/jwt/v4"
@@ -18,7 +18,7 @@ import (
 
 const (
 	// DocsSessionCookieName 是文档站专用会话 cookie 名称，只用于浏览器访问 /api/docs。
-	DocsSessionCookieName = "admin_cron_docs_token"
+	DocsSessionCookieName = "admin_docs_token"
 	// DocsSessionCookiePath 限制文档会话 cookie 只随文档站请求发送。
 	DocsSessionCookiePath = "/api/docs"
 )
@@ -54,7 +54,7 @@ func bearerToken(header string) (string, error) {
 	return token, nil
 }
 
-// docsRequestToken 从文档请求中读取 token，优先使用请求头，兼容浏览器 iframe 的 HttpOnly cookie。
+// docsRequestToken 从文档请求中读取 token，优先使用请求头，支持浏览器 iframe 的 HttpOnly cookie。
 func docsRequestToken(r *http.Request) (string, error) {
 	if r == nil {
 		return "", errMissingBearerToken
@@ -110,7 +110,7 @@ func verifyAdminToken(ctx context.Context, svcCtx *svc.ServiceContext, tokenStri
 	if int64(exp) < time.Now().Unix() {
 		// token 过期时尽力清理 Redis 登录态；如果 Redis 依赖未注入，则只返回过期错误，避免中间件 panic。
 		if svcCtx.Rds != nil {
-			_ = logic.NewCacheLogic(ctx, svcCtx).DeleteAdminInfo(uid)
+			_ = cachelogic.NewCacheLogic(ctx, svcCtx).DeleteAdminInfo(uid)
 		}
 		return nil, errTokenExpired
 	}
@@ -133,7 +133,7 @@ func verifyAdminToken(ctx context.Context, svcCtx *svc.ServiceContext, tokenStri
 	}
 
 	// Redis 中保存的是当前管理员最新有效 token，这里完成单点登录和登出失效校验。
-	cacheLogic := logic.NewCacheLogic(ctx, svcCtx)
+	cacheLogic := cachelogic.NewCacheLogic(ctx, svcCtx)
 	logoutToken, err := cacheLogic.IsAdminLogoutToken(uid, tokenString)
 	if err != nil {
 		return nil, errInvalidToken

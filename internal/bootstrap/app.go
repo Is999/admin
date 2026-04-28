@@ -11,16 +11,16 @@ import (
 	"syscall"
 	"time"
 
-	"admin_cron/internal/audit"
-	"admin_cron/internal/config"
-	"admin_cron/internal/infra/kafkax"
-	"admin_cron/internal/infra/loggerx"
-	mysqlx "admin_cron/internal/infra/mysql"
-	"admin_cron/internal/infra/redisx"
-	"admin_cron/internal/infra/tracing"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskqueue"
-	"admin_cron/internal/taskruntime"
+	"admin/internal/audit"
+	"admin/internal/config"
+	"admin/internal/infra/kafkax"
+	"admin/internal/infra/loggerx"
+	mysqlx "admin/internal/infra/mysql"
+	"admin/internal/infra/redisx"
+	"admin/internal/infra/tracing"
+	"admin/internal/svc"
+	"admin/internal/task/queue"
+	"admin/internal/task/runtime"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"
@@ -329,7 +329,7 @@ func (a *App) ReloadConfig(ctx context.Context, source string) error {
 	if configFile == "" {
 		err := errors.Errorf("未绑定配置文件路径")
 		a.markHotReloadFailure("手动触发配置重载失败", err, "", normalizeHotReloadSource(source), "not_bound", "")
-		return errors.Tag(err)
+		return err
 	}
 	_, err := a.reloadConfigFile(ctx, normalizeHotReloadSource(source), configFile)
 	return errors.Tag(err)

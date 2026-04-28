@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"admin_cron/helper"
+	"admin/helper"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"
@@ -17,7 +17,7 @@ import (
 const (
 	// SignFieldAll 表示签名时对当前请求或响应中的所有首层字段参与排序签名。
 	SignFieldAll = "*"
-	// CipherWholeBody 表示整包请求体或整包响应体执行加解密。
+	// CipherWholeBody 表示已废弃的整包加密标记，仅用于识别并拒绝非法输入。
 	CipherWholeBody = "cipher"
 	// CipherJSONPrefix 表示字段值在加解密前需要按 JSON 编解码。
 	CipherJSONPrefix = "json:"
@@ -29,38 +29,54 @@ type SignRule struct {
 	Response []string // Response 表示响应回签字段列表
 }
 
-// RouteSecurityPolicy 定义单个路由的请求验签、响应回签与响应加密策略。
-// 请求加密字段不再由后端静态配置，统一由前端通过 X-Cipher 动态声明。
+// RouteSecurityPolicy 定义单个路由的请求验签、请求解密、响应回签与响应加密策略。
 type RouteSecurityPolicy struct {
-	RequestSign    []string // RequestSign 表示请求验签字段；为空时默认走全字段验签
-	ResponseSign   []string // ResponseSign 表示响应回签字段；为空表示该路由不做响应回签
-	ResponseCipher []string // ResponseCipher 表示响应需要加密的字段；cipher 代表整包加密
+	RequestSign    []string // RequestSign 表示请求验签关键字段；禁止默认使用 *
+	RequestCipher  []string // RequestCipher 表示请求允许解密的字段；禁止使用 cipher 整包加密
+	ResponseSign   []string // ResponseSign 表示响应回签关键字段；禁止默认使用 *
+	ResponseCipher []string // ResponseCipher 表示响应需要加密的字段路径
 }
 
 // sensitiveIdentityFields 收口登录/身份校验链路的敏感请求字段。
-// 这组字段统一用于账号登录、兼容登录预校验等身份入口，避免每条路由重复维护相同签名参数。
+// 这组字段统一用于账号登录、登录预校验等身份入口，避免每条路由重复维护相同签名参数。
 var sensitiveIdentityFields = []string{"username", "password", "secureCode", "key", "captcha"}
 
 // sensitiveProfileFields 收口管理员资料变更链路的敏感请求字段。
 // 这组字段覆盖账号资料、密码、MFA 秘钥和二次确认票据，供管理员新增与编辑共用。
 var sensitiveProfileFields = []string{"username", "realName", "email", "phone", "password", "mfaSecureKey", "twoStepKey", "twoStepValue"}
 
+// sensitiveProfileCipherFields 收口管理员资料变更链路的请求解密字段。
+var sensitiveProfileCipherFields = []string{"password", "mfaSecureKey", "twoStepKey", "twoStepValue"}
+
 // sensitiveSecretKeyFields 收口秘钥管理写操作的敏感请求字段。
 // 这组字段包含主配置开关、版本选路、AES/RSA 文件引用和二次确认票据，供新增和编辑秘钥接口共用。
 var sensitiveSecretKeyFields = []string{"uuid", "title", "keyVersion", "aesKeyRef", "aesIvRef", "rsaPublicKeyUserRef", "rsaPublicKeyServerRef", "rsaPrivateKeyServerRef", "status", "signStatus", "cryptoStatus", "versionStatus", "stableVersion", "grayVersion", "grayPercent", "remark", "twoStepKey", "twoStepValue"}
 
+// sensitiveSecretKeyCipherFields 收口秘钥管理写操作的请求解密字段。
+var sensitiveSecretKeyCipherFields = []string{"aesKeyRef", "aesIvRef", "rsaPublicKeyUserRef", "rsaPublicKeyServerRef", "rsaPrivateKeyServerRef", "twoStepKey", "twoStepValue"}
+
 // sensitiveSecretKeyResponseFields 收口秘钥详情返回时需要加密的敏感响应字段。
 // 秘钥详情读取场景只加密文件引用字段，避免把完整绝对路径直接暴露在前端网络面板中。
-var sensitiveSecretKeyResponseFields = []string{"aesKeyRef", "aesIvRef", "rsaPublicKeyUserRef", "rsaPublicKeyServerRef", "rsaPrivateKeyServerRef"}
+var sensitiveSecretKeyResponseFields = []string{"aesKeyRef", "aesIvRef", "rsaPublicKeyUserRef", "rsaPublicKeyServerRef", "rsaPrivateKeyServerRef", CipherJSONPrefix + "versionList"}
 
-// RouteSecurityPolicies 定义后台接口的推荐安全策略：
-// 1. 默认所有接口请求都验签；
-// 2. 请求加密字段由前端通过 X-Cipher 动态声明；
-// 3. token、秘钥详情等敏感响应字段按路由配置做响应加密和回签。
+// securityDebugSignResponseFields 收口安全调试台签名/验签响应中需要回签的轻量字段。
+var securityDebugSignResponseFields = []string{"appId", "requestId", "traceId", "timestamp", "signatureType", "payloadText", "signText", "sign"}
+
+// securityDebugVerifyResponseFields 收口安全调试台验签响应中需要回签的轻量字段。
+var securityDebugVerifyResponseFields = []string{"appId", "requestId", "traceId", "timestamp", "signatureType", "payloadText", "signText", "sign", "verified"}
+
+// securityDebugCipherResponseFields 收口安全调试台加解密响应中需要回签的轻量字段。
+var securityDebugCipherResponseFields = []string{"appId", "cryptoType", "cipherHeader", "payloadText", "resultPayloadText"}
+
+// secretKeyCheckResponseFields 收口秘钥预检和自检响应中需要回签的轻量字段。
+var secretKeyCheckResponseFields = []string{"uuid", "title", "keyVersion", "mode", "status", "allPassed", "canSave", "canEnable", "runtimeChecked", "cacheRefreshed", "checkedAt", "durationMs"}
+
+// RouteSecurityPolicies 定义后台接口的显式安全策略。
 var RouteSecurityPolicies = map[string]RouteSecurityPolicy{
 	// auth.login 表示新版登录接口：响应对 token、手机号与 MFA 绑定地址做字段级加密。
 	"auth.login": {
 		RequestSign:    sensitiveIdentityFields,
+		RequestCipher:  []string{"password", "secureCode"},
 		ResponseSign:   []string{"token"},
 		ResponseCipher: []string{"token", "user.phone", "user.buildMFAURL"},
 	},
@@ -69,36 +85,41 @@ var RouteSecurityPolicies = map[string]RouteSecurityPolicy{
 		ResponseSign:   []string{"token", "isRefresh"},
 		ResponseCipher: []string{"token"},
 	},
-	// auth.login_after_info 表示登录后初始化接口：token 走响应字段级加密。
-	"auth.login_after_info": {
+	// auth.profile 表示登录后初始化接口：token 走响应字段级加密。
+	"auth.profile": {
 		ResponseSign:   []string{"token"},
 		ResponseCipher: []string{"token"},
 	},
-	// user.build_secret_verify_account 表示兼容登录预校验接口：保护 token、手机号和二维码。
-	"user.build_secret_verify_account": {
+	// auth.verify_account 表示登录预校验接口：保护 token、手机号和二维码。
+	"auth.verify_account": {
 		RequestSign:    sensitiveIdentityFields,
+		RequestCipher:  []string{"password", "secureCode"},
 		ResponseSign:   []string{"token"},
 		ResponseCipher: []string{"token", "user.phone", "user.buildMFAURL"},
 	},
-	// user.mine 表示个人中心资料接口：手机号与 MFA 绑定地址属于敏感响应字段，需要字段级加密保护。
-	"user.mine": {
+	// profile.mine 表示个人中心资料接口：手机号与 MFA 绑定地址属于敏感响应字段，需要字段级加密保护。
+	"profile.mine": {
 		ResponseCipher: []string{"phone", "buildMFAURL"},
 	},
-	// user.check_secure 表示通用安全码校验接口：仅校验安全码字段签名。
-	"user.check_secure": {
-		RequestSign: []string{"secure"},
+	// profile.check_secure 表示通用安全码校验接口：仅校验安全码字段签名。
+	"profile.check_secure": {
+		RequestSign:   []string{"secure"},
+		RequestCipher: []string{"secure"},
 	},
-	// user.check_mfa_secure 表示 MFA 动态码校验接口：校验动态码、场景和值班绑定秘钥。
-	"user.check_mfa_secure": {
-		RequestSign: []string{"secure", "scenarios", "mfaSecureKey"},
+	// profile.check_mfa 表示 MFA 动态码校验接口：校验动态码、场景和值班绑定秘钥。
+	"profile.check_mfa": {
+		RequestSign:   []string{"secure", "scenarios", "mfaSecureKey"},
+		RequestCipher: []string{"secure", "mfaSecureKey"},
 	},
 	// admin.add 表示新增管理员接口：资料与初始安全字段统一参与签名。
 	"admin.add": {
-		RequestSign: sensitiveProfileFields,
+		RequestSign:   sensitiveProfileFields,
+		RequestCipher: sensitiveProfileCipherFields,
 	},
 	// admin.update 表示编辑管理员接口：资料与安全字段统一参与签名。
 	"admin.update": {
-		RequestSign: sensitiveProfileFields,
+		RequestSign:   sensitiveProfileFields,
+		RequestCipher: sensitiveProfileCipherFields,
 	},
 	// admin.delete 表示删除管理员接口：仅校验二次确认票据，避免敏感删除请求绕过统一签名保护。
 	"admin.delete": {
@@ -108,44 +129,46 @@ var RouteSecurityPolicies = map[string]RouteSecurityPolicy{
 	"admin.status.update": {
 		RequestSign: []string{"status", "twoStepKey", "twoStepValue"},
 	},
-	// user.admin_mfa_status 表示后台修改管理员 MFA 状态接口：只校验状态切换与二次确认票据。
-	"user.admin_mfa_status": {
+	// admin.mfa_status.update 表示后台修改管理员 MFA 状态接口：只校验状态切换与二次确认票据。
+	"admin.mfa_status.update": {
 		RequestSign: []string{"mfaStatus", "twoStepKey", "twoStepValue"},
 	},
 	// admin.password.reset 表示管理员重置密码接口：密码相关字段必须参与签名。
 	"admin.password.reset": {
-		RequestSign: []string{"password", "twoStepKey", "twoStepValue"},
+		RequestSign:   []string{"password", "twoStepKey", "twoStepValue"},
+		RequestCipher: []string{"password", "twoStepKey", "twoStepValue"},
 	},
 	// admin.reset.initial_state 表示管理员重置初始状态接口：密码类字段与二次确认票据统一保护。
 	"admin.reset.initial_state": {
-		RequestSign: []string{"password", "twoStepKey", "twoStepValue"},
+		RequestSign:   []string{"password", "twoStepKey", "twoStepValue"},
+		RequestCipher: []string{"password", "twoStepKey", "twoStepValue"},
 	},
 	// admin.role.update 表示覆盖保存管理员角色接口：角色集合与二次确认票据统一参与签名。
 	"admin.role.update": {
 		RequestSign: []string{"roleIDs", "twoStepKey", "twoStepValue"},
 	},
-	// admin.role.add 表示追加管理员角色接口：角色集合与二次确认票据统一参与签名。
-	"admin.role.add": {
-		RequestSign: []string{"roleIDs", "twoStepKey", "twoStepValue"},
+	// profile.update_password 表示个人中心改密接口：旧密码、新密码与确认密码必须参与签名。
+	"profile.update_password": {
+		RequestSign:   []string{"passwordOld", "passwordNew", "confirmPassword", "twoStepKey", "twoStepValue"},
+		RequestCipher: []string{"passwordOld", "passwordNew", "confirmPassword", "twoStepKey", "twoStepValue"},
 	},
-	// user.update_password 表示个人中心改密接口：旧密码、新密码与确认密码必须参与签名。
-	"user.update_password": {
-		RequestSign: []string{"passwordOld", "passwordNew", "confirmPassword", "twoStepKey", "twoStepValue"},
+	// profile.update_mine 表示个人中心资料更新接口：个人资料与二次确认票据统一参与签名。
+	"profile.update_mine": {
+		RequestSign:   []string{"realName", "email", "phone", "avatar", "description", "twoStepKey", "twoStepValue"},
+		RequestCipher: []string{"email", "phone", "twoStepKey", "twoStepValue"},
 	},
-	// user.update_mine 表示个人中心资料更新接口：个人资料与二次确认票据统一参与签名。
-	"user.update_mine": {
-		RequestSign: []string{"realName", "email", "phone", "avatar", "description", "twoStepKey", "twoStepValue"},
+	// profile.update_mfa_status 表示个人中心启停 MFA 接口：状态、秘钥与二次确认票据统一参与签名。
+	"profile.update_mfa_status": {
+		RequestSign:   []string{"mfaStatus", "mfaSecureKey", "twoStepKey", "twoStepValue"},
+		RequestCipher: []string{"mfaSecureKey", "twoStepKey", "twoStepValue"},
 	},
-	// user.update_mfa_status 表示个人中心启停 MFA 接口：状态、秘钥与二次确认票据统一参与签名。
-	"user.update_mfa_status": {
-		RequestSign: []string{"mfaStatus", "mfaSecureKey", "twoStepKey", "twoStepValue"},
+	// profile.update_mfa_secret 表示刷新个人 MFA 秘钥接口：只保护新秘钥和二次确认票据。
+	"profile.update_mfa_secret": {
+		RequestSign:   []string{"mfaSecureKey", "twoStepKey", "twoStepValue"},
+		RequestCipher: []string{"mfaSecureKey", "twoStepKey", "twoStepValue"},
 	},
-	// user.update_mfa_secret 表示刷新个人 MFA 秘钥接口：只保护新秘钥和二次确认票据。
-	"user.update_mfa_secret": {
-		RequestSign: []string{"mfaSecureKey", "twoStepKey", "twoStepValue"},
-	},
-	// user.update_avatar 表示个人头像更新接口：仅校验头像字段签名。
-	"user.update_avatar": {
+	// profile.update_avatar 表示个人头像更新接口：仅校验头像字段签名。
+	"profile.update_avatar": {
 		RequestSign: []string{"avatar"},
 	},
 	// secretKey.get 表示秘钥详情接口：仅对返回的真实秘钥材料字段做响应加密。
@@ -154,31 +177,37 @@ var RouteSecurityPolicies = map[string]RouteSecurityPolicy{
 	},
 	// security.debug.sign 表示安全调试台签名接口：调试结果整体按字段回签并保护输出文本。
 	"security.debug.sign": {
+		RequestCipher:  []string{"payloadText"},
 		ResponseCipher: []string{"payloadText", "signText", "sign"},
-		ResponseSign:   []string{SignFieldAll},
+		ResponseSign:   securityDebugSignResponseFields,
 	},
 	// security.debug.verify 表示安全调试台验签接口：调试结果整体按字段回签并保护输出文本。
 	"security.debug.verify": {
+		RequestCipher:  []string{"payloadText", "sign"},
 		ResponseCipher: []string{"payloadText", "signText", "sign"},
-		ResponseSign:   []string{SignFieldAll},
+		ResponseSign:   securityDebugVerifyResponseFields,
 	},
-	// security.debug.encrypt 表示安全调试台加密接口：保护原文、密文与结果文本，避免调试台泄漏敏感内容。
+	// security.debug.encrypt 表示安全调试台加密接口：保护输入和输出 JSON 文本，避免调试台泄漏敏感内容。
 	"security.debug.encrypt": {
-		ResponseCipher: []string{"payloadText", "resultPayloadText", "ciphertext", "plaintext"},
-		ResponseSign:   []string{SignFieldAll},
+		RequestCipher:  []string{"payloadText"},
+		ResponseCipher: []string{"payloadText", "resultPayloadText"},
+		ResponseSign:   securityDebugCipherResponseFields,
 	},
-	// security.debug.decrypt 表示安全调试台解密接口：保护原文、密文与结果文本，避免调试台泄漏敏感内容。
+	// security.debug.decrypt 表示安全调试台解密接口：保护输入和输出 JSON 文本，避免调试台泄漏敏感内容。
 	"security.debug.decrypt": {
-		ResponseCipher: []string{"payloadText", "resultPayloadText", "ciphertext", "plaintext"},
-		ResponseSign:   []string{SignFieldAll},
+		RequestCipher:  []string{"payloadText"},
+		ResponseCipher: []string{"payloadText", "resultPayloadText"},
+		ResponseSign:   securityDebugCipherResponseFields,
 	},
 	// secretKey.add 表示新增秘钥接口：秘钥材料写入前统一参与签名。
 	"secretKey.add": {
-		RequestSign: sensitiveSecretKeyFields,
+		RequestSign:   sensitiveSecretKeyFields,
+		RequestCipher: sensitiveSecretKeyCipherFields,
 	},
 	// secretKey.edit 表示编辑秘钥接口：秘钥材料变更统一参与签名。
 	"secretKey.edit": {
-		RequestSign: sensitiveSecretKeyFields,
+		RequestSign:   sensitiveSecretKeyFields,
+		RequestCipher: sensitiveSecretKeyCipherFields,
 	},
 	// secretKey.editStatus 表示启停秘钥接口：只校验状态与二次确认票据。
 	"secretKey.editStatus": {
@@ -190,13 +219,14 @@ var RouteSecurityPolicies = map[string]RouteSecurityPolicy{
 	},
 	// secretKey.validate 表示秘钥路径预检接口：返回结构化校验结果并对明细结果回签。
 	"secretKey.validate": {
-		RequestSign:  sensitiveSecretKeyFields,
-		ResponseSign: []string{SignFieldAll},
+		RequestSign:   sensitiveSecretKeyFields,
+		RequestCipher: sensitiveSecretKeyCipherFields,
+		ResponseSign:  secretKeyCheckResponseFields,
 	},
 	// secretKey.self_check 表示秘钥运行态自检接口：校验版本和二次确认票据。
 	"secretKey.self_check": {
 		RequestSign:  []string{"keyVersion", "twoStepKey", "twoStepValue"},
-		ResponseSign: []string{SignFieldAll},
+		ResponseSign: secretKeyCheckResponseFields,
 	},
 	// user_tag.workflow_lease.release 表示释放工作流互斥锁接口：保护参数和二次确认票据。
 	"user_tag.workflow_lease.release": {
@@ -205,7 +235,6 @@ var RouteSecurityPolicies = map[string]RouteSecurityPolicy{
 }
 
 // PolicyByRoute 根据路由别名读取统一安全策略。
-// 未显式配置的接口默认启用“请求全字段验签”，满足“每个接口都需要验签”的推荐要求。
 func PolicyByRoute(route string) RouteSecurityPolicy {
 	route = strings.TrimSpace(route)
 	if route == "" || strings.EqualFold(route, "ignore") {
@@ -214,14 +243,12 @@ func PolicyByRoute(route string) RouteSecurityPolicy {
 	if policy, ok := RouteSecurityPolicies[route]; ok {
 		return policy
 	}
-	return RouteSecurityPolicy{
-		RequestSign: []string{SignFieldAll},
-	}
+	return RouteSecurityPolicy{}
 }
 
-// BuildSignString 生成待签名字符串，保持 laravel-admin getSignStr 的字段排序与 key 拼接规则。
-// traceID 统一对应请求头 X-Trace-Id，作为签名盐值和防重放标识参与计算。
-func BuildSignString(data map[string]any, signParams []string, traceID, appID string) string {
+// BuildSignString 生成待签名字符串，按字段排序后拼接时间绑定的请求盐值。
+// traceID 对应 X-Trace-Id，timestamp 对应 X-Timestamp，二者共同参与签名和防重放。
+func BuildSignString(data map[string]any, signParams []string, traceID, timestamp, appID string) string {
 	params := resolveSignParams(data, signParams)
 	sort.Strings(params)
 
@@ -237,18 +264,20 @@ func BuildSignString(data map[string]any, signParams []string, traceID, appID st
 		builder.WriteString("&")
 	}
 	builder.WriteString("key=")
-	builder.WriteString(utils.Md5(appID + "-" + traceID))
+	builder.WriteString(utils.Md5(appID + "-" + traceID + "-" + timestamp))
 	return builder.String()
 }
 
-// EncodeCipherParams 把字段级加密配置编码成请求头值，整包加密直接返回 cipher。
+// EncodeCipherParams 把字段级加密配置编码成请求头值；整包加密标记不再生成请求头。
 func EncodeCipherParams(params []string) string {
 	params = helper.UniqueNonEmptyStrings(params)
 	if len(params) == 0 {
 		return ""
 	}
-	if len(params) == 1 && strings.EqualFold(params[0], CipherWholeBody) {
-		return CipherWholeBody
+	for _, param := range params {
+		if strings.EqualFold(param, CipherWholeBody) {
+			return ""
+		}
 	}
 	body, err := json.Marshal(params)
 	if err != nil {

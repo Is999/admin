@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	codes "admin_cron/common/codes"
-	i18n "admin_cron/common/i18n"
-	"admin_cron/helper"
-	"admin_cron/internal/infra/loggerx"
-	"admin_cron/internal/requestctx"
+	codes "admin/common/codes"
+	i18n "admin/common/i18n"
+	"admin/helper"
+	"admin/internal/infra/loggerx"
+	"admin/internal/requestctx"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/zeromicro/go-zero/core/logx"

@@ -1,12 +1,25 @@
 package handler
 
 import (
-	"net/http"
 	"strings"
 
-	"admin_cron/docs"
-	"admin_cron/internal/middleware"
-	"admin_cron/internal/svc"
+	adminhandler "admin/internal/handler/admin"
+	authhandler "admin/internal/handler/auth"
+	cachehandler "admin/internal/handler/cachemanage"
+	collectorhandler "admin/internal/handler/collector"
+	confighandler "admin/internal/handler/config"
+	docshandler "admin/internal/handler/docs"
+	healthhandler "admin/internal/handler/health"
+	messagehandler "admin/internal/handler/message"
+	profilehandler "admin/internal/handler/profile"
+	rbachandler "admin/internal/handler/rbac"
+	secretkeyhandler "admin/internal/handler/secretkey"
+	securitydebughandler "admin/internal/handler/securitydebug"
+	taskhandler "admin/internal/handler/task"
+	transferhandler "admin/internal/handler/transfer"
+	usertaghandler "admin/internal/handler/usertag"
+	"admin/internal/middleware"
+	"admin/internal/svc"
 
 	"github.com/zeromicro/go-zero/rest"
 )
@@ -63,12 +76,19 @@ func ComposeRouteModules(groups ...[]RouteModule) []RouteModule {
 }
 
 // BuiltinRouteModules 返回当前进程默认启用的路由模块集合。
-// 该方法仅保留给旧测试和兼容入口复用；启动默认清单以 bootstrap.defaultRouteModules 为唯一来源。
+// 该方法供测试和显式装配入口复用；启动默认清单以 bootstrap.defaultRouteModules 为唯一来源。
 func BuiltinRouteModules() []RouteModule {
 	return []RouteModule{
 		NewHealthRouteModule(),          // 基础健康检查
 		NewAuthRouteModule(),            // 认证模块（登录、登出、刷新 token、登录态初始化）
-		NewAdminRouteModule(),           // 管理员模块（管理员管理与管理员操作日志）
+		NewAdminRouteModule(),           // 管理员管理模块
+		NewProfileRouteModule(),         // 个人中心和账号安全模块
+		NewRBACRouteModule(),            // 角色权限模块
+		NewConfigRouteModule(),          // 系统配置模块
+		NewCacheRouteModule(),           // 缓存管理模块
+		NewAdminLogRouteModule(),        // 管理员审计日志模块
+		NewSecretKeyRouteModule(),       // 秘钥管理模块
+		NewSecurityDebugRouteModule(),   // 安全调试模块
 		NewMessageRouteModule(),         // 消息中心模块（站内信/通知）
 		NewTransferRouteModule(),        // 导入导出通用文件传输模块（断点续传上传等）
 		NewTaskRouteModule(),            // 任务系统模块（手动触发工作流、队列控制、状态查询）
@@ -83,82 +103,131 @@ func BuiltinRouteModules() []RouteModule {
 // NewHealthRouteModule 创建健康检查路由模块。
 func NewHealthRouteModule() RouteModule {
 	return NewRouteModuleFunc("health", func(scope *RouteScope) {
-		registerHealthRoutes(scope.Server, scope.ServiceContext)
+		healthhandler.RegisterRoutes(scope.Server, scope.ServiceContext)
 	})
 }
 
 // NewAuthRouteModule 创建后台认证路由模块。
 func NewAuthRouteModule() RouteModule {
 	return NewRouteModuleFunc("auth", func(scope *RouteScope) {
-		registerAuthRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+		authhandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
 	})
 }
 
 // NewAdminRouteModule 创建管理员管理路由模块。
 func NewAdminRouteModule() RouteModule {
 	return NewRouteModuleFunc("admin", func(scope *RouteScope) {
-		registerAdminRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+		adminhandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+	})
+}
+
+// NewProfileRouteModule 创建个人中心和账号安全路由模块。
+func NewProfileRouteModule() RouteModule {
+	return NewRouteModuleFunc("profile", func(scope *RouteScope) {
+		profilehandler.RegisterManageRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+	})
+}
+
+// NewRBACRouteModule 创建角色权限路由模块。
+func NewRBACRouteModule() RouteModule {
+	return NewRouteModuleFunc("rbac", func(scope *RouteScope) {
+		rbachandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+	})
+}
+
+// NewConfigRouteModule 创建系统配置路由模块。
+func NewConfigRouteModule() RouteModule {
+	return NewRouteModuleFunc("config", func(scope *RouteScope) {
+		confighandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+	})
+}
+
+// NewCacheRouteModule 创建缓存管理路由模块。
+func NewCacheRouteModule() RouteModule {
+	return NewRouteModuleFunc("cache", func(scope *RouteScope) {
+		cachehandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+	})
+}
+
+// NewAdminLogRouteModule 创建管理员审计日志路由模块。
+func NewAdminLogRouteModule() RouteModule {
+	return NewRouteModuleFunc("admin_log", func(scope *RouteScope) {
+		adminhandler.RegisterLogRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+	})
+}
+
+// NewSecretKeyRouteModule 创建秘钥管理路由模块。
+func NewSecretKeyRouteModule() RouteModule {
+	return NewRouteModuleFunc("secret_key", func(scope *RouteScope) {
+		secretkeyhandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+	})
+}
+
+// NewSecurityDebugRouteModule 创建安全调试路由模块。
+func NewSecurityDebugRouteModule() RouteModule {
+	return NewRouteModuleFunc("security_debug", func(scope *RouteScope) {
+		securitydebughandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
 	})
 }
 
 // NewMessageRouteModule 创建消息中心路由模块。
 func NewMessageRouteModule() RouteModule {
 	return NewRouteModuleFunc("message", func(scope *RouteScope) {
-		registerMessageRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+		messagehandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
 	})
 }
 
 // NewTransferRouteModule 创建文件传输路由模块。
 func NewTransferRouteModule() RouteModule {
 	return NewRouteModuleFunc("transfer", func(scope *RouteScope) {
-		registerTransferRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+		transferhandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
 	})
 }
 
 // NewTaskRouteModule 创建任务系统路由模块。
 func NewTaskRouteModule() RouteModule {
 	return NewRouteModuleFunc("task", func(scope *RouteScope) {
-		registerTaskRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+		taskhandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
 	})
 }
 
 // NewCollectorRouteModule 创建通用收集器管理路由模块。
 func NewCollectorRouteModule() RouteModule {
 	return NewRouteModuleFunc("collector", func(scope *RouteScope) {
-		registerCollectorRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+		collectorhandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
 	})
 }
 
 // NewUserTagRouteModule 创建用户标签业务路由模块。
 func NewUserTagRouteModule() RouteModule {
 	return NewRouteModuleFunc("user_tag", func(scope *RouteScope) {
-		registerUserTagRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+		usertaghandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
 	})
 }
 
 // NewInternalUserTagRouteModule 创建内网用户标签路由模块。
 func NewInternalUserTagRouteModule() RouteModule {
 	return NewRouteModuleFunc("internal_user_tag", func(scope *RouteScope) {
-		registerInternalUserTagRoutes(scope.Server, scope.ServiceContext, scope.InternalMiddleware)
+		usertaghandler.RegisterInternalRoutes(scope.Server, scope.ServiceContext, scope.InternalMiddleware)
 	})
 }
 
 // NewInternalAuthRouteModule 创建内网认证自举路由模块。
 func NewInternalAuthRouteModule() RouteModule {
 	return NewRouteModuleFunc("internal_auth", func(scope *RouteScope) {
-		registerInternalAuthRoutes(scope.Server, scope.ServiceContext, scope.InternalMiddleware)
+		authhandler.RegisterInternalRoutes(scope.Server, scope.ServiceContext, scope.InternalMiddleware)
 	})
 }
 
 // NewDocsRouteModule 创建 API 文档路由模块。
 func NewDocsRouteModule() RouteModule {
 	return NewRouteModuleFunc("docs", func(scope *RouteScope) {
-		registerDocsRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
+		docshandler.RegisterRoutes(scope.Server, scope.ServiceContext, scope.AuthMiddleware)
 	})
 }
 
 // RegisterHandlers 统一注册全局中间件和各领域路由模块。
-// 该方法保留兼容行为：自动追加内置路由；新启动链应使用 bootstrap 统一清单调用 RegisterHandlersWithModules。
+// 自动组合内置路由和额外模块；启动链使用 bootstrap 统一清单调用 RegisterHandlersWithModules。
 // 中间件顺序固定为 outer recover -> trace -> access log -> inner recover：
 // 1. outer recover 兜底保护入口中间件自身异常；
 // 2. trace 创建上下文和 span；
@@ -203,42 +272,5 @@ func registerRouteModules(scope *RouteScope, modules ...RouteModule) {
 
 // RegisterDocsHandler 注册 API 文档服务，文档路由单独走文档鉴权中间件。
 func RegisterDocsHandler(server *rest.Server, serverCtx *svc.ServiceContext) {
-	registerDocsRoutes(server, serverCtx, middleware.NewAuthMiddleware(serverCtx))
-}
-
-// registerDocsRoutes 注册 API 文档路由，供内置路由模块和兼容入口复用。
-func registerDocsRoutes(server *rest.Server, serverCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware) {
-	server.AddRoute(rest.Route{
-		Method:  http.MethodPost,
-		Path:    "/api/docs/session",
-		Handler: authMw.Handle(DocsSessionHandler(), DocsSession.Alias),
-	})
-	// 文档路由单独挂载 JWT 鉴权，避免与主业务路由的鉴权链互相耦合。
-	server.AddRoutes(
-		rest.WithMiddleware(
-			middleware.DocsJwtMiddleware(serverCtx),
-			[]rest.Route{
-				{
-					Method:  http.MethodGet,
-					Path:    "/api/docs", // 文档首页
-					Handler: docs.Handler(),
-				},
-				{
-					Method:  http.MethodGet,
-					Path:    "/api/docs/:path", // 文档静态资源
-					Handler: docs.Handler(),
-				},
-				{
-					Method:  http.MethodGet,
-					Path:    "/api/docs/:path/:sub", // 二级文档资源
-					Handler: docs.Handler(),
-				},
-				{
-					Method:  http.MethodGet,
-					Path:    "/api/docs/:path/:sub/:file", // 三级文档资源
-					Handler: docs.Handler(),
-				},
-			}...,
-		),
-	)
+	docshandler.RegisterRoutes(server, serverCtx, middleware.NewAuthMiddleware(serverCtx))
 }

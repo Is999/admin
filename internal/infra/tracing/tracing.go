@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 
 	"github.com/Is999/go-utils/errors"
 	"go.opentelemetry.io/otel"
@@ -23,7 +23,7 @@ import (
 func Setup(ctx context.Context, cfg config.ObservabilityConfig) (func(context.Context) error, error) {
 	serviceName := cfg.ServiceName
 	if serviceName == "" {
-		serviceName = "admin_cron"
+		serviceName = "admin"
 	}
 
 	environment := cfg.Environment

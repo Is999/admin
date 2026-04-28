@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/config"
-	"admin_cron/internal/infra/loggerx"
+	"admin/internal/config"
+	"admin/internal/infra/loggerx"
 
 	"github.com/Is999/go-utils/errors"
 	drivermysql "github.com/go-sql-driver/mysql"

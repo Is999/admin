@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	keys "admin_cron/common/rediskeys"
-	"admin_cron/internal/config"
-	"admin_cron/internal/jobs/usertag/types"
-	"admin_cron/internal/svc"
-	"admin_cron/internal/taskqueue"
+	keys "admin/common/rediskeys"
+	"admin/internal/config"
+	"admin/internal/jobs/usertag/types"
+	"admin/internal/svc"
+	"admin/internal/task/queue"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/hibiken/asynq"
@@ -23,7 +23,7 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureReleasesFullOwner(t *testing.T
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "215"}, svc.Dependencies{Rds: client})
 	ctx := context.Background()
-	leaseKey := keys.AppScopedKey("215", keys.UserTagWorkflowLeaseKeyPrefix)
+	leaseKey := keys.UserTagWorkflowLeaseRedisKey("215")
 	if err := client.Set(ctx, leaseKey, "wf-full|full", time.Hour).Err(); err != nil {
 		t.Fatalf("seed full lease failed: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureSkipsNonFull(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "215"}, svc.Dependencies{Rds: client})
 	ctx := context.Background()
-	leaseKey := keys.AppScopedKey("215", keys.UserTagWorkflowLeaseKeyPrefix)
+	leaseKey := keys.UserTagWorkflowLeaseRedisKey("215")
 	if err := client.Set(ctx, leaseKey, "wf-full|full", time.Hour).Err(); err != nil {
 		t.Fatalf("seed full lease failed: %v", err)
 	}

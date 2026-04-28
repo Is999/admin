@@ -85,8 +85,8 @@ func TestBuildSignString(t *testing.T) {
 		"b": "2",
 		"a": "1",
 		"c": "",
-	}, []string{"b", "c", "a"}, "req", "app")
-	want := "a=1&b=2&key=068250e02e610c9a60a1b9aa5a2ed370"
+	}, []string{"b", "c", "a"}, "req", "1700000000", "app")
+	want := "a=1&b=2&key=27a7b5b98263d73425f421dbfd16de41"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
@@ -103,7 +103,7 @@ func TestBuildSignStringStableObjectOrder(t *testing.T) {
 				"a": 1,
 			},
 		},
-	}, []string{"payload"}, "req", "app")
+	}, []string{"payload"}, "req", "1700000000", "app")
 	right := BuildSignString(map[string]any{
 		"payload": map[string]any{
 			"a": "first",
@@ -113,7 +113,7 @@ func TestBuildSignStringStableObjectOrder(t *testing.T) {
 			},
 			"z": "last",
 		},
-	}, []string{"payload"}, "req", "app")
+	}, []string{"payload"}, "req", "1700000000", "app")
 	if left != right {
 		t.Fatalf("expected stable sign text, left=%q right=%q", left, right)
 	}

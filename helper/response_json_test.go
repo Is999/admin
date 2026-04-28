@@ -3,13 +3,14 @@ package helper
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/Is999/go-utils/errors"
 
-	i18n "admin_cron/common/i18n"
-	"admin_cron/internal/requestctx"
+	i18n "admin/common/i18n"
+	"admin/internal/requestctx"
 )
 
 // TestJsonRespFailSeparatesUserMessageAndInternalError 验证失败响应会隔离前端文案与内部错误链。
@@ -19,7 +20,7 @@ func TestJsonRespFailSeparatesUserMessageAndInternalError(t *testing.T) {
 	requestctx.SetTrace(ctx, "0123456789abcdef0123456789abcdef", "0123456789abcdef")
 
 	recorder := httptest.NewRecorder()
-	internalErr := errors.Wrap(errors.New("boom"), "TaskLogic.ListQueues 查询任务队列失败")
+	internalErr := errors.Wrap(stderrors.New("boom"), "TaskLogic.ListQueues 查询任务队列失败")
 	NewJsonResp(ctx, recorder).
 		SetCode(1005).
 		SetError(internalErr).

@@ -1,10 +1,13 @@
 package loggerx
 
 import (
-	"admin_cron/internal/config"
-	"admin_cron/internal/requestctx"
+	"admin/internal/config"
+	"admin/internal/requestctx"
 	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -16,8 +19,12 @@ import (
 )
 
 const (
-	// loggerxCallerSkip 表示从 loggerx 统一封装函数跳到真实业务调用点需要额外跳过的栈层数。
-	loggerxCallerSkip = 1
+	// loggerxCallerSkip 表示从 loggerx 内部写入函数跳到真实业务调用点需要额外跳过的栈层数。
+	loggerxCallerSkip = 2
+	// loggerxRuntimeCallerSkip 表示 runtime.Caller 从内部写入函数跳到业务调用点的默认栈层数。
+	loggerxRuntimeCallerSkip = 3
+	// goUtilsCallerSkip 表示 go-utils 日志适配器自身增加的一层封装。
+	goUtilsCallerSkip = 1
 
 	// fieldTraceID 表示请求级 Trace ID，来源于请求头或请求上下文生成结果，用于串联 API、任务和下游日志。
 	fieldTraceID = "trace_id"
@@ -47,6 +54,14 @@ const (
 	fieldError = "error"
 	// fieldErrorChain 表示完整错误链路，来源于 errors.Wrapf/errors.Tag 结果，用于保留中间层上下文。
 	fieldErrorChain = "error_chain"
+	// fieldErrorTrace 表示便于人读的错误追踪文本，来源于 errors.TraceString。
+	fieldErrorTrace = "error_trace"
+	// fieldErrorCaller 表示错误链中最早的业务栈帧，用于定位 error 产生位置。
+	fieldErrorCaller = "error_caller"
+	// fieldCaller 表示本条日志的业务定位点；错误日志优先使用 error_caller，普通日志使用调用点。
+	fieldCaller = "caller"
+	// fieldLogCaller 表示统一日志封装实际打印位置，避免覆盖 caller 的业务定位语义。
+	fieldLogCaller = "log_caller"
 	// fieldErrorMsg 表示对外错误消息，来源于请求元数据，用于和接口响应中的 message 对齐。
 	fieldErrorMsg = "error_message"
 	// fieldTaskID 表示任务实例 ID，来源于任务队列上下文，用于串联单个后台任务的生命周期日志。
@@ -84,6 +99,9 @@ const (
 
 // Setup 初始化 go-zero 日志，并在文件输出模式下额外镜像到 stdout 方便容器采集。
 func Setup(c config.Config) {
+	if shouldMoveBuiltinCaller(c.Log.FieldKeys.CallerKey) {
+		c.Log.FieldKeys.CallerKey = fieldLogCaller
+	}
 	logx.MustSetup(c.Log)
 	if strings.EqualFold(c.Log.Mode, "file") {
 		logx.AddWriter(logx.NewWriter(os.Stdout))
@@ -111,22 +129,22 @@ func newGoUtilsLogger(fields []any) *goUtilsLogger {
 
 // Debug 输出调试日志。
 func (l *goUtilsLogger) Debug(msg string, args ...any) {
-	WithCallerSkip(3).Debugw(msg, l.logFields(args...)...)
+	DebugwSkip(nil, goUtilsCallerSkip, msg, l.logFields(args...)...)
 }
 
 // Info 输出信息日志。
 func (l *goUtilsLogger) Info(msg string, args ...any) {
-	WithCallerSkip(3).Infow(msg, l.logFields(args...)...)
+	InfowSkip(nil, goUtilsCallerSkip, msg, l.logFields(args...)...)
 }
 
 // Warn 输出警告日志。
 func (l *goUtilsLogger) Warn(msg string, args ...any) {
-	WithCallerSkip(3).Sloww(msg, l.logFields(args...)...)
+	SlowwSkip(nil, goUtilsCallerSkip, msg, l.logFields(args...)...)
 }
 
 // Error 输出错误日志。
 func (l *goUtilsLogger) Error(msg string, args ...any) {
-	WithCallerSkip(3).Errorw(msg, l.logFields(args...)...)
+	ErrorTextwSkip(nil, goUtilsCallerSkip, msg, msg, l.logFields(args...)...)
 }
 
 // With 创建携带固定字段的新日志对象。
@@ -372,7 +390,31 @@ func ErrorChain(err error) string {
 	if traceJSON != "" {
 		return traceJSON
 	}
-	return strings.TrimSpace(err.Error())
+	summary := strings.TrimSpace(err.Error())
+	return summary
+}
+
+// ErrorTrace 把错误链渲染为便于人眼检索的单行文本。
+func ErrorTrace(err error) string {
+	if err == nil {
+		return ""
+	}
+	trace := strings.TrimSpace(errors.TraceString(err))
+	if trace != "" {
+		return trace
+	}
+	return ErrorChain(err)
+}
+
+// ErrorCaller 返回错误链中最早的业务栈帧。
+func ErrorCaller(err error) string {
+	if err == nil {
+		return ""
+	}
+	if caller := firstTraceCallerFromJSON(ErrorChain(err)); caller != "" {
+		return caller
+	}
+	return firstTraceCallerFromText(ErrorTrace(err))
 }
 
 // ErrorFields 返回统一错误日志字段，确保所有错误日志同时输出错误信息和错误追踪链路。
@@ -380,10 +422,19 @@ func ErrorFields(err error) []logx.LogField {
 	if err == nil {
 		return nil
 	}
-	return []logx.LogField{
-		logx.Field(fieldError, strings.TrimSpace(err.Error())),
-		logx.Field(fieldErrorChain, ErrorChain(err)),
+	summary := strings.TrimSpace(err.Error())
+	chain := ErrorChain(err)
+	fields := []logx.LogField{
+		logx.Field(fieldError, summary),
+		logx.Field(fieldErrorChain, chain),
 	}
+	if trace := ErrorTrace(err); trace != "" && trace != summary {
+		fields = append(fields, logx.Field(fieldErrorTrace, trace))
+	}
+	if caller := ErrorCaller(err); caller != "" {
+		fields = append(fields, logx.Field(fieldErrorCaller, caller))
+	}
+	return fields
 }
 
 // ErrorTextFields 返回纯文本错误对应的统一日志字段，适用于尚未封装成 error 对象的失败原因。
@@ -400,69 +451,84 @@ func ErrorTextFields(message string) []logx.LogField {
 
 // Errorw 统一输出带错误链路的错误日志，并自动绑定上下文中的 trace/task/workflow 字段。
 func Errorw(ctx context.Context, msg string, err error, fields ...logx.LogField) {
+	errorw(ctx, 0, msg, err, fields...)
+}
+
+// errorw 写入错误日志，并按调用方传入的额外 skip 修正 caller。
+func errorw(ctx context.Context, skip int, msg string, err error, fields ...logx.LogField) {
 	fields = appendLogFields(fields, ErrorFields(err)...)
-	if ctx == nil {
-		WithCallerSkip(loggerxCallerSkip).Errorw(msg, fields...)
-		return
-	}
-	WithContextCallerSkip(BindContext(ctx), loggerxCallerSkip).Errorw(msg, fields...)
+	fields = appendErrorCallerFields(fields, err, callerLocation(runtimeCallerSkip(skip)))
+	loggerFor(ctx, logxCallerSkip(skip)).Errorw(msg, fields...)
 }
 
 // ErrorTextw 统一输出只有错误文本的错误日志，并自动补齐 error 与 error_chain 字段。
 func ErrorTextw(ctx context.Context, msg string, errorText string, fields ...logx.LogField) {
+	errorTextw(ctx, 0, msg, errorText, fields...)
+}
+
+// errorTextw 写入文本错误日志，适用于尚未构造成 error 的失败原因。
+func errorTextw(ctx context.Context, skip int, msg string, errorText string, fields ...logx.LogField) {
 	fields = appendLogFields(fields, ErrorTextFields(errorText)...)
-	if ctx == nil {
-		WithCallerSkip(loggerxCallerSkip).Errorw(msg, fields...)
-		return
-	}
-	WithContextCallerSkip(BindContext(ctx), loggerxCallerSkip).Errorw(msg, fields...)
+	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
+	loggerFor(ctx, logxCallerSkip(skip)).Errorw(msg, fields...)
 }
 
 // ErrorwSkip 统一输出带 caller skip 的错误日志，适用于 GORM、适配器等封装层。
 func ErrorwSkip(ctx context.Context, skip int, msg string, err error, fields ...logx.LogField) {
-	fields = appendLogFields(fields, ErrorFields(err)...)
-	if ctx == nil {
-		WithCallerSkip(normalizeCallerSkip(skip)).Errorw(msg, fields...)
-		return
-	}
-	WithContextCallerSkip(BindContext(ctx), normalizeCallerSkip(skip)).Errorw(msg, fields...)
+	errorw(ctx, skip, msg, err, fields...)
 }
 
 // ErrorTextwSkip 统一输出带 caller skip 的文本错误日志，适用于尚未构造成 error 对象的场景。
 func ErrorTextwSkip(ctx context.Context, skip int, msg string, errorText string, fields ...logx.LogField) {
-	fields = appendLogFields(fields, ErrorTextFields(errorText)...)
-	if ctx == nil {
-		WithCallerSkip(normalizeCallerSkip(skip)).Errorw(msg, fields...)
-		return
-	}
-	WithContextCallerSkip(BindContext(ctx), normalizeCallerSkip(skip)).Errorw(msg, fields...)
+	errorTextw(ctx, skip, msg, errorText, fields...)
 }
 
 // Infow 统一输出信息日志，并自动绑定上下文中的 trace/task/workflow 字段。
 func Infow(ctx context.Context, msg string, fields ...logx.LogField) {
-	if ctx == nil {
-		WithCallerSkip(loggerxCallerSkip).Infow(msg, fields...)
-		return
-	}
-	WithContextCallerSkip(BindContext(ctx), loggerxCallerSkip).Infow(msg, fields...)
+	infow(ctx, 0, msg, fields...)
+}
+
+// InfowSkip 输出带 caller skip 的信息日志，适用于第三方适配器等额外封装层。
+func InfowSkip(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
+	infow(ctx, skip, msg, fields...)
+}
+
+// infow 写入信息日志，并统一补充业务 caller 字段。
+func infow(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
+	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
+	loggerFor(ctx, logxCallerSkip(skip)).Infow(msg, fields...)
 }
 
 // Debugw 统一输出调试日志，并自动绑定上下文中的 trace/task/workflow 字段。
 func Debugw(ctx context.Context, msg string, fields ...logx.LogField) {
-	if ctx == nil {
-		WithCallerSkip(loggerxCallerSkip).Debugw(msg, fields...)
-		return
-	}
-	WithContextCallerSkip(BindContext(ctx), loggerxCallerSkip).Debugw(msg, fields...)
+	debugw(ctx, 0, msg, fields...)
+}
+
+// DebugwSkip 输出带 caller skip 的调试日志，适用于第三方适配器等额外封装层。
+func DebugwSkip(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
+	debugw(ctx, skip, msg, fields...)
+}
+
+// debugw 写入调试日志，并统一补充业务 caller 字段。
+func debugw(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
+	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
+	loggerFor(ctx, logxCallerSkip(skip)).Debugw(msg, fields...)
 }
 
 // Sloww 统一输出慢操作日志，并自动绑定上下文中的 trace/task/workflow 字段。
 func Sloww(ctx context.Context, msg string, fields ...logx.LogField) {
-	if ctx == nil {
-		WithCallerSkip(loggerxCallerSkip).Sloww(msg, fields...)
-		return
-	}
-	WithContextCallerSkip(BindContext(ctx), loggerxCallerSkip).Sloww(msg, fields...)
+	sloww(ctx, 0, msg, fields...)
+}
+
+// SlowwSkip 输出带 caller skip 的慢操作日志，适用于第三方适配器等额外封装层。
+func SlowwSkip(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
+	sloww(ctx, skip, msg, fields...)
+}
+
+// sloww 写入慢操作日志，并统一补充业务 caller 字段。
+func sloww(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
+	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
+	loggerFor(ctx, logxCallerSkip(skip)).Sloww(msg, fields...)
 }
 
 // appendLogFields 统一复制并追加日志字段，避免调用方直接复用底层切片导致字段串写。
@@ -473,12 +539,170 @@ func appendLogFields(base []logx.LogField, extra ...logx.LogField) []logx.LogFie
 	return merged
 }
 
-// normalizeCallerSkip 归一化调用方传入的额外 skip，并补上 loggerx 自身封装层。
-func normalizeCallerSkip(skip int) int {
+// runtimeCallerSkip 返回 runtime.Caller 使用的最终 skip。
+func runtimeCallerSkip(skip int) int {
+	return loggerxRuntimeCallerSkip + positiveSkip(skip)
+}
+
+// logxCallerSkip 返回 go-zero logx 使用的最终 skip。
+func logxCallerSkip(skip int) int {
+	return normalizeCallerSkip(skip)
+}
+
+// appendErrorCallerFields 优先使用 error 产生位置作为业务 caller。
+func appendErrorCallerFields(fields []logx.LogField, err error, logCaller string) []logx.LogField {
+	sourceCaller := ErrorCaller(err)
+	if sourceCaller == "" {
+		sourceCaller = logCaller
+	}
+	fields = appendCallerField(fields, sourceCaller)
+	if logCaller != "" && logCaller != sourceCaller {
+		fields = appendLogFields(fields, logx.Field(fieldLogCaller, logCaller))
+	}
+	return fields
+}
+
+// appendCallerField 追加统一 caller 字段，空值不输出。
+func appendCallerField(fields []logx.LogField, caller string) []logx.LogField {
+	caller = strings.TrimSpace(caller)
+	if caller == "" {
+		return fields
+	}
+	return appendLogFields(fields, logx.Field(fieldCaller, caller))
+}
+
+// errorTraceNode 表示 go-utils errors.TraceJSON 中的错误链节点。
+type errorTraceNode struct {
+	Trace []string          `json:"trace"` // Trace 保存当前错误节点的栈帧文本。
+	Err   json.RawMessage   `json:"err"`   // Err 保存单个下级错误节点。
+	Errs  []json.RawMessage `json:"errs"`  // Errs 保存多个下级错误节点。
+}
+
+// firstTraceCallerFromJSON 从错误链 JSON 中提取最早的业务栈帧。
+func firstTraceCallerFromJSON(traceJSON string) string {
+	traceJSON = strings.TrimSpace(traceJSON)
+	if traceJSON == "" || traceJSON == "null" {
+		return ""
+	}
+	var node errorTraceNode
+	if err := json.Unmarshal([]byte(traceJSON), &node); err != nil {
+		return ""
+	}
+	return firstTraceCallerFromNode(node)
+}
+
+// firstTraceCallerFromNode 按当前节点、单错误、多错误顺序查找业务栈帧。
+func firstTraceCallerFromNode(node errorTraceNode) string {
+	for _, frame := range node.Trace {
+		if caller := traceFrameLocation(frame); caller != "" {
+			return caller
+		}
+	}
+	if caller := firstTraceCallerFromRaw(node.Err); caller != "" {
+		return caller
+	}
+	for _, raw := range node.Errs {
+		if caller := firstTraceCallerFromRaw(raw); caller != "" {
+			return caller
+		}
+	}
+	return ""
+}
+
+// firstTraceCallerFromRaw 解析原始错误节点并提取业务栈帧。
+func firstTraceCallerFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var node errorTraceNode
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return ""
+	}
+	return firstTraceCallerFromNode(node)
+}
+
+// firstTraceCallerFromText 从文本错误链中提取业务栈帧。
+func firstTraceCallerFromText(traceText string) string {
+	traceText = strings.TrimSpace(traceText)
+	if traceText == "" {
+		return ""
+	}
+	return traceFrameLocation(traceText)
+}
+
+// traceFrameLocation 从单个栈帧文本中截取短文件名和行号。
+func traceFrameLocation(frame string) string {
+	frame = strings.TrimSpace(frame)
+	if frame == "" {
+		return ""
+	}
+	if start := strings.LastIndex(frame, " ("); start >= 0 && strings.HasSuffix(frame, ")") {
+		frame = strings.TrimSuffix(frame[start+2:], ")")
+	}
+	idx := strings.LastIndex(frame, ".go:")
+	if idx < 0 {
+		return ""
+	}
+	end := idx + len(".go:")
+	for end < len(frame) && frame[end] >= '0' && frame[end] <= '9' {
+		end++
+	}
+	start := strings.LastIndexAny(frame[:idx], " \t(")
+	if start >= 0 {
+		return frame[start+1 : end]
+	}
+	return frame[:end]
+}
+
+// callerLocation 返回 runtime.Caller 对应的短文件名和行号。
+func callerLocation(skip int) string {
 	if skip < 0 {
 		skip = 0
 	}
-	return loggerxCallerSkip + skip
+	_, file, line, ok := runtime.Caller(skip)
+	if !ok {
+		return ""
+	}
+	return shortCaller(file, line)
+}
+
+// shortCaller 保留最后两段路径，避免日志 caller 过长。
+func shortCaller(file string, line int) string {
+	file = filepath.ToSlash(file)
+	idx := strings.LastIndexByte(file, '/')
+	if idx >= 0 {
+		if prev := strings.LastIndexByte(file[:idx], '/'); prev >= 0 {
+			file = file[prev+1:]
+		}
+	}
+	return file + ":" + strconv.Itoa(line)
+}
+
+// shouldMoveBuiltinCaller 判断是否需要把 go-zero 内置 caller 改名为 log_caller。
+func shouldMoveBuiltinCaller(callerKey string) bool {
+	callerKey = strings.TrimSpace(callerKey)
+	return callerKey == "" || callerKey == fieldCaller
+}
+
+// positiveSkip 把负数 skip 归零，避免调用点向错误方向偏移。
+func positiveSkip(skip int) int {
+	if skip < 0 {
+		return 0
+	}
+	return skip
+}
+
+// normalizeCallerSkip 归一化调用方传入的额外 skip，并补上 loggerx 自身封装层。
+func normalizeCallerSkip(skip int) int {
+	return loggerxCallerSkip + positiveSkip(skip)
+}
+
+// loggerFor 返回带上下文字段和 caller skip 的 logx logger。
+func loggerFor(ctx context.Context, skip int) logx.Logger {
+	if ctx == nil {
+		return LoggerWithCallerSkip(skip)
+	}
+	return contextLoggerWithCallerSkip(BindContext(ctx), skip)
 }
 
 // BindContext 将当前请求字段绑定进 logx context，后续 logx.WithContext(ctx) 会自动带上这些字段。
@@ -490,14 +714,12 @@ func BindContext(ctx context.Context) context.Context {
 	return logx.ContextWithFields(ctx, fields...)
 }
 
-// WithCallerSkip 返回带 caller skip 的 logger，用于日志适配层把 caller 还原到真实触发位置。
-// skip 表示在当前封装链路上需要额外跳过的层数；不传上下文时仅修正 caller，不附带请求字段。
-func WithCallerSkip(skip int) logx.Logger {
-	return logx.WithCallerSkip(skip)
+// LoggerWithCallerSkip 返回带 caller skip 的底层 logger，供第三方 logger 适配器使用。
+func LoggerWithCallerSkip(skip int) logx.Logger {
+	return logx.WithCallerSkip(positiveSkip(skip))
 }
 
-// WithContextCallerSkip 返回同时带上下文和 caller skip 的 logger。
-// 适用于 GORM、Asynq 等二次封装场景，避免 caller 固定落在适配层文件。
-func WithContextCallerSkip(ctx context.Context, skip int) logx.Logger {
-	return logx.WithContext(ctx).WithCallerSkip(skip)
+// contextLoggerWithCallerSkip 返回同时绑定上下文和 caller skip 的底层 logger。
+func contextLoggerWithCallerSkip(ctx context.Context, skip int) logx.Logger {
+	return logx.WithContext(ctx).WithCallerSkip(positiveSkip(skip))
 }

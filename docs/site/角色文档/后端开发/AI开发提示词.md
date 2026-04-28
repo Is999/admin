@@ -5,7 +5,7 @@
 <button type="button" class="ai-prompt-copy-button" data-default-label="复制 AI 提示词">复制 AI 提示词</button>
 
 ```text
-你现在参与 admin-cron / admin-cron-vue 项目的生产级开发与重构。请严格按以下规范执行，不能只给方案，除非我明确要求先不改代码。
+你现在参与 admin / gozero-admin-vue 项目的生产级开发与重构。请严格按以下规范执行，不能只给方案，除非我明确要求先不改代码。
 
 一、工作方式
 1. 修改前必须先阅读现有目录结构、代码风格、命名习惯和调用链。
@@ -19,13 +19,14 @@
 二、代码规则
 1. 命名短而准确，贴合业务语境；禁止随意命名、过度缩写、超长描述名和含糊的 `DefaultValue`。
 2. 错误必须使用 `github.com/Is999/go-utils/errors` 包装。
-3. 业务中间层只返回错误，不打印 error 级日志；顶层 handler、worker、scheduler 或不可返回错误的兜底协程统一打印 error，同一错误链路只允许最外层打印一次。
-4. 错误上下文和任务日志必须带可追踪字段，例如 `workflow_id`、`mode`、`node`、`shard`、`uid`、`task_id`。
-5. 常量按领域前缀集中定义，表达稳定业务含义或枚举语义；禁止魔法字符串。
-6. 结构体使用名词或领域对象命名；请求以 `Req` 结尾，响应以 `Resp` 结尾，列表项以 `Item` 结尾。
-7. 接口按能力命名，优先使用 `Reader`、`Writer`、`Repository`、`Provider` 等自然后缀；只有一个实现且无替换点时不要强行抽接口。
-8. Redis Key 必须集中定义，禁止在业务代码临时拼接高基数通配 Key。
-9. 目录布局必须符合当前项目分层，保持 `handler` / `logic` / `model` / `svc` / `types` 等边界清晰。
+3. 同一个函数里，同一个 `error` 值只包装一次；跨函数边界可以继续包装，因为那是新的调用语义和上下文，避免裸错误漏出去。
+4. 业务中间层只返回错误，不打印 error 级日志；顶层 handler、worker、scheduler 或不可返回错误的兜底协程统一打印 error，同一错误链路只允许最外层打印一次。
+5. 错误上下文和任务日志必须带可追踪字段，例如 `workflow_id`、`mode`、`node`、`shard`、`uid`、`task_id`。
+6. 常量按领域前缀集中定义，表达稳定业务含义或枚举语义；禁止魔法字符串。
+7. 结构体使用名词或领域对象命名；请求以 `Req` 结尾，响应以 `Resp` 结尾，列表项以 `Item` 结尾。
+8. 接口按能力命名，优先使用 `Reader`、`Writer`、`Repository`、`Provider` 等自然后缀；只有一个实现且无替换点时不要强行抽接口。
+9. Redis Key 必须集中定义，禁止在业务代码临时拼接高基数通配 Key。
+10. 目录布局必须符合当前项目分层，保持 `handler` / `logic` / `model` / `svc` / `types` 等边界清晰。
 
 三、中文注释
 1. 新增或重构的变量、常量、方法、结构体、字段、map 字段、路由、GORM Model、接口和关键逻辑必须补中文注释。
@@ -41,9 +42,10 @@
 
 五、错误处理
 1. 错误必须使用 github.com/Is999/go-utils/errors 包装。
-2. 业务中间层只返回错误，不打印 error 级日志。
-3. 顶层 handler、worker、scheduler 或不可返回错误的兜底协程统一打印 error 级日志，同一错误链路只允许最外层打印一次。
-4. 错误上下文必须带 workflow_id、mode、node、shard、uid、task_id 等可追踪字段。
+2. 同一个函数里，同一个 error 值只包装一次；跨函数边界可以继续包装，因为那是新的调用语义和上下文，避免裸错误漏出去。
+3. 业务中间层只返回错误，不打印 error 级日志。
+4. 顶层 handler、worker、scheduler 或不可返回错误的兜底协程统一打印 error 级日志，同一错误链路只允许最外层打印一次。
+5. 错误上下文必须带 workflow_id、mode、node、shard、uid、task_id 等可追踪字段。
 
 六、日志规范
 1. 日志统一使用项目现有 loggerx/logx 风格。
@@ -67,7 +69,7 @@
 6. 新增大数据查询必须补索引依据、保护阈值、关键日志/指标和最小测试；无法验证执行计划时，要说明风险和上线观察方式。
 
 九、接口与前端
-1. admin-cron-vue 延续 vbenjs/vue-vben-admin 推荐布局和现有项目风格。
+1. gozero-admin-vue 延续 vbenjs/vue-vben-admin 推荐布局和现有项目风格。
 2. 前端文案必须支持中文和英文国际化，不能硬编码业务文案。
 3. 敏感操作必须接入 MFA、签名、加密、秘钥版本等既有安全机制。
 4. 新增业务码必须补中文和英文文案；新增接口必须补接口文档。

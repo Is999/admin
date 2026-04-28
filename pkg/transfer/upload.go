@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"admin_cron/helper"
-	redislock "admin_cron/internal/infra/redsync"
-	"admin_cron/pkg/storage"
+	"admin/helper"
+	redislock "admin/internal/infra/redsync"
+	"admin/pkg/storage"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"

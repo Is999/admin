@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"admin_cron/internal/config"
+	"admin/internal/config"
 )
 
 // TestSetupWithHTTPOTLP 验证对应场景。

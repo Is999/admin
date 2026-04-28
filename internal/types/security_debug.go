@@ -3,7 +3,7 @@ package types
 import (
 	"strings"
 
-	"admin_cron/internal/security"
+	"admin/internal/security"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -12,7 +12,7 @@ import (
 type SecurityDebugSignReq struct {
 	AppID         string   `json:"appId"`                  // AppID 对应 secret_key.uuid
 	RequestID     string   `json:"requestId,optional"`     // 请求唯一标识，为空时后端自动生成
-	TraceID       string   `json:"traceId,optional"`       // 兼容前端真实链路的 X-Trace-Id 字段，未传 requestId 时参与签名
+	Timestamp     string   `json:"timestamp,optional"`     // 秒级请求时间戳，为空时后端自动生成
 	SignatureType string   `json:"signatureType,optional"` // 签名方式：M/A/R
 	SignFields    []string `json:"signFields,optional"`    // 参与签名字段，空时默认全字段
 	PayloadText   string   `json:"payloadText"`            // 待签名 JSON 对象文本
@@ -22,12 +22,7 @@ type SecurityDebugSignReq struct {
 func (r *SecurityDebugSignReq) Validate() error {
 	r.AppID = strings.TrimSpace(r.AppID)
 	r.RequestID = strings.TrimSpace(r.RequestID)
-	r.TraceID = strings.TrimSpace(r.TraceID)
-	if r.RequestID == "" {
-		// 安全调试台真实使用 X-Trace-Id 排查请求签名，这里把 traceId 作为 requestId 的兼容别名。
-		r.RequestID = r.TraceID
-	}
-	r.TraceID = r.RequestID
+	r.Timestamp = strings.TrimSpace(r.Timestamp)
 	r.SignatureType = strings.ToUpper(strings.TrimSpace(r.SignatureType))
 	r.PayloadText = strings.TrimSpace(r.PayloadText)
 	if r.AppID == "" {
@@ -77,9 +72,8 @@ func (r *SecurityDebugVerifyReq) Validate() error {
 type SecurityDebugCipherReq struct {
 	AppID        string   `json:"appId"`                 // AppID 对应 secret_key.uuid
 	CryptoType   string   `json:"cryptoType,optional"`   // 加密方式：A/R
-	CipherFields []string `json:"cipherFields,optional"` // 需要加密或解密的字段；传 ["cipher"] 表示整包
-	PayloadText  string   `json:"payloadText,optional"`  // 字段模式下的 JSON 对象文本，或整包模式下的明文
-	Ciphertext   string   `json:"ciphertext,optional"`   // 整包模式下的密文
+	CipherFields []string `json:"cipherFields,optional"` // 需要加密或解密的字段路径
+	PayloadText  string   `json:"payloadText,optional"`  // JSON 对象文本
 }
 
 // ValidateEncrypt 校验加密调试请求。
@@ -87,14 +81,13 @@ func (r *SecurityDebugCipherReq) ValidateEncrypt() error {
 	r.AppID = strings.TrimSpace(r.AppID)
 	r.CryptoType = strings.ToUpper(strings.TrimSpace(r.CryptoType))
 	r.PayloadText = strings.TrimSpace(r.PayloadText)
-	r.Ciphertext = strings.TrimSpace(r.Ciphertext)
 	if r.AppID == "" {
 		return errors.Errorf("AppID不能为空")
 	}
 	if r.PayloadText == "" {
 		return errors.Errorf("待加密内容不能为空")
 	}
-	return nil
+	return r.validateCipherFields()
 }
 
 // ValidateDecrypt 校验解密调试请求。
@@ -102,20 +95,13 @@ func (r *SecurityDebugCipherReq) ValidateDecrypt() error {
 	r.AppID = strings.TrimSpace(r.AppID)
 	r.CryptoType = strings.ToUpper(strings.TrimSpace(r.CryptoType))
 	r.PayloadText = strings.TrimSpace(r.PayloadText)
-	r.Ciphertext = strings.TrimSpace(r.Ciphertext)
 	if r.AppID == "" {
 		return errors.Errorf("AppID不能为空")
-	}
-	if r.IsWholeBodyCipher() {
-		if r.Ciphertext == "" {
-			return errors.Errorf("密文不能为空")
-		}
-		return nil
 	}
 	if r.PayloadText == "" {
 		return errors.Errorf("待解密内容不能为空")
 	}
-	return nil
+	return r.validateCipherFields()
 }
 
 // NormalizedCryptoType 返回归一化后的加密方式。
@@ -128,16 +114,21 @@ func (r *SecurityDebugCipherReq) NormalizedCryptoType() string {
 
 // NormalizedCipherFields 返回归一化后的字段加密配置。
 func (r *SecurityDebugCipherReq) NormalizedCipherFields() []string {
-	if len(r.CipherFields) == 0 {
-		return []string{security.CipherWholeBody}
-	}
 	return r.CipherFields
 }
 
-// IsWholeBodyCipher 判断当前是否为整包加解密模式。
-func (r *SecurityDebugCipherReq) IsWholeBodyCipher() bool {
+// validateCipherFields 校验安全调试台只能使用字段级加解密。
+func (r *SecurityDebugCipherReq) validateCipherFields() error {
 	fields := r.NormalizedCipherFields()
-	return len(fields) == 1 && strings.EqualFold(strings.TrimSpace(fields[0]), security.CipherWholeBody)
+	if len(fields) == 0 {
+		return errors.Errorf("加密字段不能为空")
+	}
+	for _, field := range fields {
+		if strings.EqualFold(strings.TrimSpace(field), security.CipherWholeBody) {
+			return errors.Errorf("不允许整包加密")
+		}
+	}
+	return nil
 }
 
 // SecurityDebugSignResp 表示签名调试结果。
@@ -145,6 +136,7 @@ type SecurityDebugSignResp struct {
 	AppID         string         `json:"appId"`         // 实际参与签名的 AppID
 	RequestID     string         `json:"requestId"`     // 实际参与签名的请求标识
 	TraceID       string         `json:"traceId"`       // 与 requestId 等值，便于前端按 X-Trace-Id 直接回填
+	Timestamp     string         `json:"timestamp"`     // 实际参与签名的秒级请求时间戳
 	SignatureType string         `json:"signatureType"` // 实际使用的签名方式
 	SignFields    []string       `json:"signFields"`    // 实际参与签名的字段列表
 	Payload       map[string]any `json:"payload"`       // 归一化后的待签名对象
@@ -165,11 +157,8 @@ type SecurityDebugCipherResp struct {
 	CryptoType        string         `json:"cryptoType"`                  // 实际使用的加密方式
 	CipherFields      []string       `json:"cipherFields"`                // 实际使用的字段配置
 	CipherHeader      string         `json:"cipherHeader"`                // 可直接用于 X-Cipher 的头值
-	WholeBody         bool           `json:"wholeBody"`                   // 是否整包模式
-	Payload           map[string]any `json:"payload,omitempty"`           // 输入对象，仅字段模式返回
+	Payload           map[string]any `json:"payload,omitempty"`           // 输入对象
 	PayloadText       string         `json:"payloadText"`                 // 输入文本
-	ResultPayload     map[string]any `json:"resultPayload,omitempty"`     // 输出对象，仅字段模式返回
+	ResultPayload     map[string]any `json:"resultPayload,omitempty"`     // 输出对象
 	ResultPayloadText string         `json:"resultPayloadText,omitempty"` // 输出对象 JSON 文本
-	Ciphertext        string         `json:"ciphertext,omitempty"`        // 输出或输入的密文
-	Plaintext         string         `json:"plaintext,omitempty"`         // 解密后的明文
 }

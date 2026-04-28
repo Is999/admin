@@ -1,6 +1,6 @@
 package i18n
 
-import "admin_cron/common/codes"
+import "admin/common/codes"
 
 // codeToMessageKey 维护业务响应码到多语言 key 的映射。
 var codeToMessageKey = map[int]string{

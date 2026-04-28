@@ -1,0 +1,49 @@
+/*
+ Navicat Premium Dump SQL
+
+ Source Server         : D-M
+ Source Server Type    : MySQL
+ Source Server Version : 80034 (8.0.34)
+ Source Host           : 127.0.0.1:3307
+ Source Schema         : admin
+
+ Target Server Type    : MySQL
+ Target Server Version : 80034 (8.0.34)
+ File Encoding         : 65001
+
+ Date: 06/05/2026 16:04:44
+*/
+
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- ----------------------------
+-- Table structure for archive_segment
+-- ----------------------------
+DROP TABLE IF EXISTS `archive_segment`;
+CREATE TABLE `archive_segment` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `job_name` varchar(128) NOT NULL COMMENT '归档任务名',
+  `table_name` varchar(128) NOT NULL COMMENT '热表名',
+  `history_table_name` varchar(128) NOT NULL COMMENT '历史表名',
+  `range_start` datetime(6) NOT NULL COMMENT '区间起点含边界',
+  `range_end` datetime(6) NOT NULL COMMENT '区间终点排他边界',
+  `status` varchar(16) NOT NULL COMMENT '区间状态，done表示已归档，deleted表示热表已删',
+  `worker_id` varchar(128) NOT NULL DEFAULT '' COMMENT '当前持有worker',
+  `lease_expires_at` datetime(6) DEFAULT NULL COMMENT '租约过期时间',
+  `last_archived_id` bigint NOT NULL DEFAULT '0' COMMENT '最近归档主键游标',
+  `last_archived_time` datetime(6) DEFAULT NULL COMMENT '最近归档时间游标',
+  `rows_archived` bigint NOT NULL DEFAULT '0' COMMENT '累计归档行数',
+  `attempt_count` int unsigned NOT NULL DEFAULT '0' COMMENT '领取次数',
+  `error_message` varchar(500) NOT NULL DEFAULT '' COMMENT '失败摘要',
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+  `updated_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+  `completed_at` datetime(6) DEFAULT NULL COMMENT '完成时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_job_range` (`job_name`,`range_start`,`range_end`),
+  KEY `idx_job_status_lease` (`job_name`,`status`,`lease_expires_at`),
+  KEY `idx_job_range` (`job_name`,`range_start`,`range_end`),
+  KEY `idx_history_table` (`history_table_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='归档区间与checkpoint控制表';
+
+SET FOREIGN_KEY_CHECKS = 1;

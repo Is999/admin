@@ -1,8 +1,8 @@
 # AI开发规范
 
-本文档用于约束 AI 参与 `admin-cron` 开发、重构、补测试和补文档时的输出标准。目标是让 AI 生成代码与人工代码保持同一风格、质量门槛和可维护性。
+本文档用于约束 AI 参与 `admin` 开发、重构、补测试和补文档时的输出标准。目标是让 AI 生成代码与人工代码保持同一风格、质量门槛和可维护性。
 
-> **重要提醒**：每次让 AI 修改 `admin-cron` 或 `admin-cron-vue` 前，必须先让 AI 阅读本文档。
+> **重要提醒**：每次让 AI 修改 `admin` 或 `gozero-admin-vue` 前，必须先让 AI 阅读本文档。
 
 ## 1. 总原则
 
@@ -72,6 +72,7 @@
 ## 5. 错误处理规范
 
 - 底层错误必须使用 `github.com/Is999/go-utils/errors` 的 `errors.Tag`、`errors.Wrap` 或 `errors.Wrapf` 包装。
+- 同一个函数里，同一个 `error` 值只包装一次；跨函数边界可以继续包装，因为那是新的调用语义和上下文，避免裸错误漏出去。
 - 业务中间层只返回错误，不打印 `error` 级日志；禁止在 logic、repository、service、model、helper 等内层随意调用 `loggerx.Errorw`、`loggerx.ErrorTextw` 或 `logx.Error*`。
 - 顶层 handler、worker、scheduler 或不可返回错误的兜底协程统一打印 `error` 级日志；同一错误链路只能在最外层打印一次。
 - 底层需要补排障信息时只能通过 `errors.Wrapf` 写入上下文字段，不能用多处 `error` 日志替代错误链。

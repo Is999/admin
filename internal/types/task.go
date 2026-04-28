@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"admin_cron/internal/taskstats"
+	"admin/internal/task/stats"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -145,7 +145,7 @@ func (r *ListTaskItemsReq) Validate() error {
 		return errors.Errorf("taskName 不能超过 128 个字符")
 	}
 	if err := validateTaskListTimeRange(r.StartTime, r.EndTime); err != nil {
-		return err
+		return errors.Tag(err)
 	}
 	if r.Page <= 0 {
 		r.Page = 1
@@ -189,7 +189,7 @@ func (r *ListTaskItemsOverviewReq) Validate() error {
 		return errors.Errorf("taskName 不能超过 128 个字符")
 	}
 	if err := validateTaskListTimeRange(r.StartTime, r.EndTime); err != nil {
-		return err
+		return errors.Tag(err)
 	}
 	if r.Page <= 0 {
 		r.Page = 1

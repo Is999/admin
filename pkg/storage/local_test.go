@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"admin_cron/helper"
-	"admin_cron/internal/config"
+	"admin/helper"
+	"admin/internal/config"
 )
 
 type testVirusScanner struct {

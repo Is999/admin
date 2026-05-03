@@ -180,14 +180,14 @@ type CollectorConfig struct {
 
 // UserTagConfig 定义用户标签重构任务的运行参数。
 type UserTagConfig struct {
-	Enabled              bool `json:"enabled,optional"`                // 是否启用用户标签工作流插件
-	MarketingSyncEnabled bool `json:"marketing_sync_enabled,optional"` // 是否启用用户标签事件同步
-	DefaultShardTotal    int  `json:"default_shard_total,optional"`    // 默认分片数，通常与 uid%10 分表保持一致
-	DefaultBatchSize     int  `json:"default_batch_size,optional"`     // 默认游标扫描批次大小
-	DefaultWorkerCount   int  `json:"default_worker_count,optional"`   // 节点内部 worker 默认值
-	ProfileShardTotal    int  `json:"profile_shard_total,optional"`    // 运行期 UID 分片数，默认 10
-	DiffBatchSize        int  `json:"diff_batch_size,optional"`        // 标签差异同步批次大小
-	KafkaBatchSize       int  `json:"kafka_batch_size,optional"`       // Kafka 标签变更推送批次大小
+	Enabled            bool `json:"enabled,optional"`              // 是否启用用户标签工作流插件
+	EventHookEnabled   bool `json:"event_hook_enabled,optional"`   // 是否启用标签得失事件 hook 派发
+	DefaultShardTotal  int  `json:"default_shard_total,optional"`  // 默认分片数，通常与 uid%10 分表保持一致
+	DefaultBatchSize   int  `json:"default_batch_size,optional"`   // 默认游标扫描批次大小
+	DefaultWorkerCount int  `json:"default_worker_count,optional"` // 节点内部 worker 默认值
+	RuntimeShardTotal  int  `json:"runtime_shard_total,optional"`  // 运行期 UID 索引分片数，默认 10
+	DiffBatchSize      int  `json:"diff_batch_size,optional"`      // 标签差异解析批次大小
+	EventBatchSize     int  `json:"event_batch_size,optional"`     // 事件 outbox 派发批次大小
 }
 
 // TaskQueueSchedulerConfig 定义周期任务调度器的 leader 选举与同步参数。

@@ -16,7 +16,7 @@ import (
 // 它集中保存链路字段和外部依赖，避免日志字段在各层重复拼装。
 type Context struct {
 	Context    context.Context      // Go 标准上下文，用于取消、超时和日志链路
-	Service    *svc.ServiceContext  // 全局依赖上下文，包含 MySQL、Redis、Kafka
+	Service    *svc.ServiceContext  // 全局依赖上下文，包含 MySQL、Redis 等基础设施
 	Options    types.RuntimeOptions // 当前工作流解析后的运行参数
 	Node       string               // 当前节点名称
 	Shard      int                  // 当前分片下标

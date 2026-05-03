@@ -12,7 +12,7 @@ import (
 )
 
 // AddRuntimeUIDs 写入本次工作流需要继续计算的 UID 集合。
-func (d RuntimeDeps) AddRuntimeUIDs(ctx context.Context, workflowID, source string, uids []int64) error {
+func (d RuntimeDeps) AddRuntimeUIDs(ctx context.Context, workflowID, scope string, uids []int64) error {
 	if workflowID == "" || len(uids) == 0 {
 		return nil
 	}
@@ -35,7 +35,7 @@ func (d RuntimeDeps) AddRuntimeUIDs(ctx context.Context, workflowID, source stri
 			WorkflowID: workflowID,
 			UID:        uid,
 			ShardNo:    int8(d.ShardPlan.UIDShard(uid, d.ShardPlan.RuntimeShardTotal)),
-			Source:     source,
+			Scope:      scope,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		})
@@ -43,14 +43,17 @@ func (d RuntimeDeps) AddRuntimeUIDs(ctx context.Context, workflowID, source stri
 	if len(rows) == 0 {
 		return nil
 	}
-	return db.WithContext(ctx).Table(model.TableNameUserTagRuntimeUID).
+	if err := db.WithContext(ctx).Table(model.TableNameUserTagRuntimeUID).
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "workflow_id"}, {Name: "uid"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"shard_no",
-				"source",
+				"scope",
 				"updated_at",
 			}),
 		}).
-		CreateInBatches(rows, 1000).Error
+		CreateInBatches(rows, 1000).Error; err != nil {
+		return errors.Tag(err)
+	}
+	return nil
 }

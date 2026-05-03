@@ -14,21 +14,27 @@ const (
 const (
 	// NodePrepare 表示工作流准备节点。
 	NodePrepare = "prepare"
-	// NodeBusinessHook 表示扩展占位节点。
-	NodeBusinessHook = "business_hook"
+	// NodeCollectScope 表示通用候选范围收集节点。
+	NodeCollectScope = "collect_scope"
+	// NodeEvaluateTags 表示通用标签规则评估节点。
+	NodeEvaluateTags = "evaluate_tags"
+	// NodeResolveChanges 表示标签得失差异解析节点。
+	NodeResolveChanges = "resolve_changes"
+	// NodePersistResults 表示最终标签结果与事件 outbox 写入节点。
+	NodePersistResults = "persist_results"
 	// NodeFinalize 表示最终结果提交节点。
 	NodeFinalize = "finalize"
-	// NodeSyncKafka 表示 full 同步快照重建节点，名称保留兼容历史工作流。
-	NodeSyncKafka = "sync_kafka"
+	// NodeDispatchHooks 表示标签得失事件 hook 派发节点。
+	NodeDispatchHooks = "dispatch_hooks"
 	// NodeRuntimeCleanup 表示用户标签运行期辅助表清理节点。
 	NodeRuntimeCleanup = "runtime_cleanup"
-	// NodeKafkaOutboxRetryScan 表示用户标签 Kafka outbox 异常扫描重推节点。
-	NodeKafkaOutboxRetryScan = "kafka_outbox_retry_scan"
+	// NodeEventOutboxRetryScan 表示用户标签事件 outbox 异常扫描重派节点。
+	NodeEventOutboxRetryScan = "event_outbox_retry_scan"
 )
 
 const (
-	// TaskTypeUserTagKafkaOutboxRetry 表示用户标签 outbox 独立重试任务。
-	TaskTypeUserTagKafkaOutboxRetry = "user_tag:kafka_outbox_retry"
+	// TaskTypeUserTagEventOutboxRetry 表示用户标签事件 outbox 独立重试任务。
+	TaskTypeUserTagEventOutboxRetry = "user_tag:event_outbox_retry"
 	// TaskTypeUserTagRuntimeCleanup 表示用户标签运行期辅助表独立清理任务。
 	TaskTypeUserTagRuntimeCleanup = "user_tag:runtime_cleanup"
 )
@@ -40,6 +46,13 @@ const (
 	SourceClickHouse = "clickhouse"
 	// SourceRedis 表示 Redis 数据源。
 	SourceRedis = "redis"
-	// SourceKafkaOutbox 表示 Kafka 分片 outbox 数据源。
-	SourceKafkaOutbox = "kafka_outbox"
+	// SourceEventOutbox 表示用户标签事件 outbox 数据源。
+	SourceEventOutbox = "event_outbox"
+)
+
+const (
+	// ChangeActionGain 表示用户获得标签。
+	ChangeActionGain = "gain"
+	// ChangeActionLost 表示用户失去标签。
+	ChangeActionLost = "lost"
 )

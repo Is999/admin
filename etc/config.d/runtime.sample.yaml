@@ -42,18 +42,20 @@ workflows:
   user_tag:
     # 是否启用用户标签能力。
     enabled: false
-    # 是否启用用户标签事件同步；当前骨架默认不生成具体事件。
-    marketing_sync_enabled: false
+    # 是否启用标签得失事件 hook 派发；未注册 hook 时保持关闭。
+    event_hook_enabled: false
     # 默认标签分片总数。
     default_shard_total: 10
     # 默认单批处理数量。
     default_batch_size: 2000
-    # 运行期 UID 分片数；当前骨架不再初始化 profile 表。
-    profile_shard_total: 10
-    # 标签差异比对批次大小。
+    # 节点内部 worker 默认值。
+    default_worker_count: 4
+    # 运行期 UID 索引分片数。
+    runtime_shard_total: 10
+    # 标签差异解析批次大小。
     diff_batch_size: 10000
-    # Kafka 标签变更推送批次大小。
-    kafka_batch_size: 500
+    # 事件 outbox 派发批次大小。
+    event_batch_size: 500
 
 # 周期任务列表；name 和 unique_key 必须唯一。
 task_periodic:
@@ -121,14 +123,14 @@ task_periodic:
     # 唯一键保留时间，单位秒。
     unique_ttl_seconds: 7200
 
-  # 用户标签 Kafka outbox 异常重推。
-  - name: "user-tag-kafka-outbox-retry-scan"
+  # 用户标签事件 outbox 异常重派。
+  - name: "user-tag-event-outbox-retry-scan"
     # 是否启用该任务。
     enabled: false
-    # 每 10 分钟扫描一次异常 outbox。
+    # 每 10 分钟扫描一次异常事件。
     cron: "*/10 * * * *"
     # 触发的工作流名称。
-    workflow: "user_tag.kafka_outbox.retry_scan"
+    workflow: "user_tag.event_outbox.retry_scan"
     # 投递队列名。
     queue: "maintenance"
     # 扫描任务重试次数。
@@ -136,6 +138,6 @@ task_periodic:
     # 单次任务超时时间，单位秒。
     timeout_seconds: 540
     # 周期任务唯一键，避免同一调度窗口重复投递。
-    unique_key: "periodic:user_tag.kafka_outbox.retry_scan"
+    unique_key: "periodic:user_tag.event_outbox.retry_scan"
     # 唯一键保留时间，单位秒。
     unique_ttl_seconds: 540

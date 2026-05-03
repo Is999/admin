@@ -14,18 +14,23 @@ import (
 )
 
 const (
-	userTagRuntimeUIDRetention       = 7 * 24 * time.Hour     // runtime_uid 只保留近期 workflow 运行期集合
-	userTagKafkaOutboxDoneRetention  = 7 * 24 * time.Hour     // 已成功推送 outbox 保留时间
-	userTagKafkaOutboxDeadRetention  = 30 * 24 * time.Hour    // 死信 outbox 保留时间
-	userTagKafkaOutboxStaleRetention = 7 * 24 * time.Hour     // 长期未被 drain 的非终态 outbox 超时后转死信
-	userTagRuntimeResetBatchSize     = 1000                   // 当前 workflow 清理单批行数
-	userTagRuntimeResetBatchDelay    = 20 * time.Millisecond  // 当前 workflow 清理批次间隔
-	userTagRuntimeCleanupBatchSize   = 500                    // 历史运行期表清理单批行数
-	userTagRuntimeCleanupBatchDelay  = 100 * time.Millisecond // 历史运行期表清理批次间隔
-	userTagRuntimeCleanupTimeBudget  = 55 * time.Minute       // 单次独立清理任务总时间预算
+	userTagRuntimeUIDRetention        = 7 * 24 * time.Hour     // runtime_uid 只保留近期 workflow 候选集合
+	userTagRuntimeCheckpointRetention = 7 * 24 * time.Hour     // checkpoint 只保留近期 workflow 节点进度
+	userTagEventOutboxDoneRetention   = 7 * 24 * time.Hour     // 已成功派发事件保留时间
+	userTagEventOutboxDeadRetention   = 30 * 24 * time.Hour    // 死信事件保留时间
+	userTagEventOutboxStaleRetention  = 7 * 24 * time.Hour     // 长期未派发事件超时后回收
+	userTagEventOutboxMaxAttempt      = 6                      // 单条事件最大派发尝试次数
+	userTagRuntimeResetBatchSize      = 1000                   // 当前 workflow 清理单批行数
+	userTagRuntimeResetBatchDelay     = 20 * time.Millisecond  // 当前 workflow 清理批次间隔
+	userTagRuntimeCleanupBatchSize    = 500                    // 历史运行期表清理单批行数
+	userTagRuntimeCleanupBatchDelay   = 100 * time.Millisecond // 历史运行期表清理批次间隔
+	userTagRuntimeCleanupTimeBudget   = 55 * time.Minute       // 单次独立清理任务总时间预算
 )
 
-// TagRepository 提供用户标签工作流骨架所需的结果表、运行期表和同步表访问能力。
+// EventDispatcher 表示标签得失事件派发函数。
+type EventDispatcher func(context.Context, []types.TagChange) error
+
+// TagRepository 提供用户标签工作流骨架所需的结果表、运行期表和事件 outbox 访问能力。
 type TagRepository struct {
 	deps RuntimeDeps // 运行依赖
 }
@@ -37,7 +42,7 @@ func NewTagRepository(deps RuntimeDeps) *TagRepository {
 
 // PrepareResultTables 清空 full 模式临时标签结果表。
 func (r *TagRepository) PrepareResultTables(ctx context.Context, opts types.RuntimeOptions) error {
-	if opts.DryRun || opts.Mode != types.ModeFull {
+	if opts.DryRun || opts.SyncSnapshotOnly || opts.Mode != types.ModeFull {
 		return nil
 	}
 	logDB, err := r.logDB()
@@ -59,7 +64,7 @@ func (r *TagRepository) PrepareResultTables(ctx context.Context, opts types.Runt
 
 // FinalizeResultTables 在 full 所有节点成功后交换 tmp 和线上结果表。
 func (r *TagRepository) FinalizeResultTables(ctx context.Context, opts types.RuntimeOptions) error {
-	if opts.DryRun || opts.Mode != types.ModeFull {
+	if opts.DryRun || opts.SyncSnapshotOnly || opts.Mode != types.ModeFull {
 		return nil
 	}
 	logDB, err := r.logDB()
@@ -82,7 +87,38 @@ func (r *TagRepository) FinalizeResultTables(ctx context.Context, opts types.Run
 	return nil
 }
 
-// ResetRuntimeState 清理当前工作流的运行期 UID 和 Kafka outbox。
+// RebuildReadSnapshotShard 重建当前执行分片负责的只读标签快照。
+func (r *TagRepository) RebuildReadSnapshotShard(ctx context.Context, opts types.RuntimeOptions) (int, error) {
+	if opts.DryRun || opts.Mode != types.ModeFull {
+		return 0, nil
+	}
+	logDB, err := r.logDB()
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	total := 0
+	for _, shard := range r.deps.ShardPlan.TagShardsForWorkflow(opts.ShardIndex, opts.ShardTotal) {
+		sourceTable := model.UserTagShardTableName(shard)
+		targetTable := model.UserTagSyncShardTableName(shard)
+		if err := logDB.WithContext(ctx).Exec(userTagCreateLikeTableSQL(targetTable, sourceTable)).Error; err != nil {
+			return total, errors.Wrapf(err, "创建用户标签只读快照表失败 table=%s", targetTable)
+		}
+		if err := logDB.WithContext(ctx).Exec(userTagTruncateTableSQL(targetTable)).Error; err != nil {
+			return total, errors.Wrapf(err, "清空用户标签只读快照表失败 table=%s", targetTable)
+		}
+		result := logDB.WithContext(ctx).Exec(
+			"INSERT INTO " + quoteIdent(targetTable) + " (uid, tag_type, tag_source, tag_data, tag_category, created_at, updated_at) " +
+				"SELECT uid, tag_type, tag_source, tag_data, tag_category, created_at, updated_at FROM " + quoteIdent(sourceTable),
+		)
+		if result.Error != nil {
+			return total, errors.Wrapf(result.Error, "重建用户标签只读快照失败 table=%s", targetTable)
+		}
+		total += int(result.RowsAffected)
+	}
+	return total, nil
+}
+
+// ResetRuntimeState 清理当前工作流的运行期 UID、checkpoint 和事件 outbox。
 func (r *TagRepository) ResetRuntimeState(ctx context.Context, workflowID string) error {
 	workflowID = strings.TrimSpace(workflowID)
 	if workflowID == "" {
@@ -95,12 +131,16 @@ func (r *TagRepository) ResetRuntimeState(ctx context.Context, workflowID string
 	if err := r.resetRuntimeUIDRowsByWorkflow(ctx, logDB, workflowID); err != nil {
 		return errors.Tag(err)
 	}
-	if err := r.resetKafkaOutboxRowsByWorkflow(ctx, logDB, workflowID); err != nil {
+	if err := r.resetRuntimeCheckpointRowsByWorkflow(ctx, logDB, workflowID); err != nil {
+		return errors.Tag(err)
+	}
+	if err := r.resetEventOutboxRowsByWorkflow(ctx, logDB, workflowID); err != nil {
 		return errors.Tag(err)
 	}
 	return nil
 }
 
+// resetRuntimeUIDRowsByWorkflow 小批清理当前 workflow 的运行期 UID。
 func (r *TagRepository) resetRuntimeUIDRowsByWorkflow(ctx context.Context, logDB *gorm.DB, workflowID string) error {
 	for {
 		uids := make([]int64, 0, userTagRuntimeResetBatchSize)
@@ -129,10 +169,44 @@ func (r *TagRepository) resetRuntimeUIDRowsByWorkflow(ctx context.Context, logDB
 	}
 }
 
-func (r *TagRepository) resetKafkaOutboxRowsByWorkflow(ctx context.Context, logDB *gorm.DB, workflowID string) error {
+// resetRuntimeCheckpointRowsByWorkflow 小批清理当前 workflow 的节点进度。
+func (r *TagRepository) resetRuntimeCheckpointRowsByWorkflow(ctx context.Context, logDB *gorm.DB, workflowID string) error {
+	for {
+		rows := make([]model.UserTagRuntimeCheckpoint, 0, userTagRuntimeResetBatchSize)
+		if err := logDB.WithContext(ctx).Model(&model.UserTagRuntimeCheckpoint{}).
+			Select("node", "shard_no").
+			Where("workflow_id = ?", workflowID).
+			Order("node ASC, shard_no ASC").
+			Limit(userTagRuntimeResetBatchSize).
+			Find(&rows).Error; err != nil {
+			return errors.Tag(err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		tuples := make([][]any, 0, len(rows))
+		for _, row := range rows {
+			tuples = append(tuples, []any{workflowID, row.Node, row.ShardNo})
+		}
+		if err := logDB.WithContext(ctx).
+			Where("(workflow_id, node, shard_no) IN ?", tuples).
+			Delete(&model.UserTagRuntimeCheckpoint{}).Error; err != nil {
+			return errors.Tag(err)
+		}
+		if len(rows) < userTagRuntimeResetBatchSize {
+			return nil
+		}
+		if err := waitUserTagRuntimeBatch(ctx, userTagRuntimeResetBatchDelay); err != nil {
+			return errors.Tag(err)
+		}
+	}
+}
+
+// resetEventOutboxRowsByWorkflow 小批清理当前 workflow 的事件 outbox。
+func (r *TagRepository) resetEventOutboxRowsByWorkflow(ctx context.Context, logDB *gorm.DB, workflowID string) error {
 	for {
 		ids := make([]int64, 0, userTagRuntimeResetBatchSize)
-		if err := logDB.WithContext(ctx).Model(&model.UserTagKafkaOutbox{}).
+		if err := logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
 			Select("id").
 			Where("workflow_id = ?", workflowID).
 			Order("id ASC").
@@ -143,7 +217,7 @@ func (r *TagRepository) resetKafkaOutboxRowsByWorkflow(ctx context.Context, logD
 		if len(ids) == 0 {
 			return nil
 		}
-		if err := logDB.WithContext(ctx).Where("id IN ?", ids).Delete(&model.UserTagKafkaOutbox{}).Error; err != nil {
+		if err := logDB.WithContext(ctx).Where("id IN ?", ids).Delete(&model.UserTagEventOutbox{}).Error; err != nil {
 			return errors.Tag(err)
 		}
 		if len(ids) < userTagRuntimeResetBatchSize {
@@ -166,15 +240,23 @@ func (r *TagRepository) CleanupStaleRuntimeTables(ctx context.Context, now time.
 	if err := r.cleanupRuntimeUIDRows(cleanupCtx, logDB, now.Add(-userTagRuntimeUIDRetention)); err != nil {
 		return errors.Wrapf(err, "清理 runtime_uid 失败")
 	}
-	if err := r.cleanupKafkaOutboxRows(cleanupCtx, logDB, []model.UserTagKafkaOutboxState{model.UserTagKafkaOutboxStateDone}, now.Add(-userTagKafkaOutboxDoneRetention)); err != nil {
-		return errors.Wrapf(err, "清理 done outbox 失败")
+	if err := r.cleanupRuntimeCheckpointRows(cleanupCtx, logDB, now.Add(-userTagRuntimeCheckpointRetention)); err != nil {
+		return errors.Wrapf(err, "清理 runtime_checkpoint 失败")
 	}
-	if err := r.cleanupKafkaOutboxRows(cleanupCtx, logDB, []model.UserTagKafkaOutboxState{model.UserTagKafkaOutboxStateDead}, now.Add(-userTagKafkaOutboxDeadRetention)); err != nil {
-		return errors.Wrapf(err, "清理 dead outbox 失败")
+	if err := r.cleanupEventOutboxRows(cleanupCtx, logDB, []model.UserTagEventOutboxState{model.UserTagEventOutboxStateDone}, now.Add(-userTagEventOutboxDoneRetention)); err != nil {
+		return errors.Wrapf(err, "清理 done event_outbox 失败")
 	}
-	return r.cleanupKafkaOutboxRows(cleanupCtx, logDB, []model.UserTagKafkaOutboxState{model.UserTagKafkaOutboxStatePending, model.UserTagKafkaOutboxStateRetry, model.UserTagKafkaOutboxStateRunning}, now.Add(-userTagKafkaOutboxStaleRetention))
+	if err := r.cleanupEventOutboxRows(cleanupCtx, logDB, []model.UserTagEventOutboxState{model.UserTagEventOutboxStateDead}, now.Add(-userTagEventOutboxDeadRetention)); err != nil {
+		return errors.Wrapf(err, "清理 dead event_outbox 失败")
+	}
+	return r.cleanupEventOutboxRows(cleanupCtx, logDB, []model.UserTagEventOutboxState{
+		model.UserTagEventOutboxStatePending,
+		model.UserTagEventOutboxStateRetry,
+		model.UserTagEventOutboxStateRunning,
+	}, now.Add(-userTagEventOutboxStaleRetention))
 }
 
+// cleanupRuntimeUIDRows 按创建时间回收历史运行期 UID。
 func (r *TagRepository) cleanupRuntimeUIDRows(ctx context.Context, logDB *gorm.DB, cutoff time.Time) error {
 	for {
 		rows := make([]model.UserTagRuntimeUID, 0, userTagRuntimeCleanupBatchSize)
@@ -204,10 +286,41 @@ func (r *TagRepository) cleanupRuntimeUIDRows(ctx context.Context, logDB *gorm.D
 	}
 }
 
-func (r *TagRepository) cleanupKafkaOutboxRows(ctx context.Context, logDB *gorm.DB, states []model.UserTagKafkaOutboxState, cutoff time.Time) error {
+// cleanupRuntimeCheckpointRows 按更新时间回收历史节点进度。
+func (r *TagRepository) cleanupRuntimeCheckpointRows(ctx context.Context, logDB *gorm.DB, cutoff time.Time) error {
+	for {
+		rows := make([]model.UserTagRuntimeCheckpoint, 0, userTagRuntimeCleanupBatchSize)
+		if err := logDB.WithContext(ctx).Model(&model.UserTagRuntimeCheckpoint{}).
+			Where("updated_at < ?", cutoff).
+			Order("updated_at ASC, workflow_id ASC").
+			Limit(userTagRuntimeCleanupBatchSize).
+			Find(&rows).Error; err != nil {
+			return errors.Tag(err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		tuples := make([][]any, 0, len(rows))
+		for _, row := range rows {
+			tuples = append(tuples, []any{row.WorkflowID, row.Node, row.ShardNo})
+		}
+		if err := logDB.WithContext(ctx).Where("(workflow_id, node, shard_no) IN ?", tuples).Delete(&model.UserTagRuntimeCheckpoint{}).Error; err != nil {
+			return errors.Tag(err)
+		}
+		if len(rows) < userTagRuntimeCleanupBatchSize {
+			return nil
+		}
+		if err := waitUserTagRuntimeBatch(ctx, userTagRuntimeCleanupBatchDelay); err != nil {
+			return errors.Tag(err)
+		}
+	}
+}
+
+// cleanupEventOutboxRows 按状态和更新时间回收历史事件 outbox。
+func (r *TagRepository) cleanupEventOutboxRows(ctx context.Context, logDB *gorm.DB, states []model.UserTagEventOutboxState, cutoff time.Time) error {
 	for {
 		ids := make([]int64, 0, userTagRuntimeCleanupBatchSize)
-		if err := logDB.WithContext(ctx).Model(&model.UserTagKafkaOutbox{}).
+		if err := logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
 			Select("id").
 			Where("state IN ? AND updated_at < ?", states, cutoff).
 			Order("updated_at ASC, id ASC").
@@ -218,7 +331,7 @@ func (r *TagRepository) cleanupKafkaOutboxRows(ctx context.Context, logDB *gorm.
 		if len(ids) == 0 {
 			return nil
 		}
-		if err := logDB.WithContext(ctx).Where("id IN ?", ids).Delete(&model.UserTagKafkaOutbox{}).Error; err != nil {
+		if err := logDB.WithContext(ctx).Where("id IN ?", ids).Delete(&model.UserTagEventOutbox{}).Error; err != nil {
 			return errors.Tag(err)
 		}
 		if len(ids) < userTagRuntimeCleanupBatchSize {
@@ -254,6 +367,7 @@ func (r *TagRepository) WalkRuntimeUIDBatches(ctx context.Context, opts types.Ru
 	}
 }
 
+// runtimeUIDBatch 读取当前 workflow 分片内的一批候选 UID。
 func (r *TagRepository) runtimeUIDBatch(ctx context.Context, opts types.RuntimeOptions, lastUID int64) ([]int64, error) {
 	logDB, err := r.logDB()
 	if err != nil {
@@ -264,10 +378,7 @@ func (r *TagRepository) runtimeUIDBatch(ctx context.Context, opts types.RuntimeO
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	batchSize := opts.BatchSize
-	if batchSize <= 0 {
-		batchSize = userTagRuntimeCleanupBatchSize
-	}
+	batchSize := positiveBatchSize(opts.BatchSize)
 	uids := make([]int64, 0, batchSize)
 	query := logDB.WithContext(ctx).Table(model.TableNameUserTagRuntimeUID).
 		Select("uid").
@@ -281,25 +392,74 @@ func (r *TagRepository) runtimeUIDBatch(ctx context.Context, opts types.RuntimeO
 	return uids, nil
 }
 
-// BuildKafkaOutboxForUIDs 是用户标签变更 outbox 的预留构造入口。
-func (r *TagRepository) BuildKafkaOutboxForUIDs(ctx context.Context, opts types.RuntimeOptions, uids []int64) (int, error) {
+// BuildChangeEventsForUIDs 是标签得失事件 outbox 的预留构造入口。
+func (r *TagRepository) BuildChangeEventsForUIDs(ctx context.Context, opts types.RuntimeOptions, uids []int64) (int, error) {
 	return 0, nil
 }
 
-// RetryKafkaOutboxAbnormalRows 周期扫描并重推异常 Kafka outbox。
-func (r *TagRepository) RetryKafkaOutboxAbnormalRows(ctx context.Context, opts types.RuntimeOptions, push func([]model.UserTagMessage) error) (int, error) {
-	return r.DrainKafkaOutboxShard(ctx, opts, push)
+// RetryEventOutboxAbnormalRows 周期扫描并重派异常事件 outbox。
+func (r *TagRepository) RetryEventOutboxAbnormalRows(ctx context.Context, opts types.RuntimeOptions, dispatch EventDispatcher) (int, error) {
+	return r.DrainEventOutboxShard(ctx, opts, dispatch)
 }
 
-// DrainKafkaOutboxShard 推送当前工作流 outbox，并在推送成功后标记完成。
-func (r *TagRepository) DrainKafkaOutboxShard(ctx context.Context, opts types.RuntimeOptions, push func([]model.UserTagMessage) error) (int, error) {
+// DrainEventOutboxShard 派发当前条件命中的事件 outbox，并在成功后标记完成。
+func (r *TagRepository) DrainEventOutboxShard(ctx context.Context, opts types.RuntimeOptions, dispatch EventDispatcher) (int, error) {
+	if opts.DryRun || opts.SyncSnapshotOnly {
+		return 0, nil
+	}
 	logDB, err := r.logDB()
 	if err != nil {
 		return 0, errors.Tag(err)
 	}
-	rows := make([]model.UserTagKafkaOutbox, 0, opts.BatchSize)
-	query := logDB.WithContext(ctx).Model(&model.UserTagKafkaOutbox{}).
-		Where("state IN ?", []model.UserTagKafkaOutboxState{model.UserTagKafkaOutboxStatePending, model.UserTagKafkaOutboxStateRetry}).
+	rows, err := r.claimEventOutboxRows(ctx, logDB, opts)
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	if dispatch == nil {
+		dispatchErr := errors.Errorf("用户标签事件 outbox 派发函数未注册 workflow_id=%s", strings.TrimSpace(opts.WorkflowID))
+		if markErr := r.markEventOutboxFailed(ctx, logDB, rows, dispatchErr); markErr != nil {
+			return 0, errors.Wrapf(markErr, "标记用户标签事件 outbox 重试失败 original=%s", dispatchErr.Error())
+		}
+		return 0, errors.Tag(dispatchErr)
+	}
+	events := make([]types.TagChange, 0, len(rows))
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+		events = append(events, eventOutboxRowToChange(row))
+	}
+	if err := dispatch(ctx, events); err != nil {
+		if markErr := r.markEventOutboxFailed(ctx, logDB, rows, err); markErr != nil {
+			return 0, errors.Wrapf(markErr, "标记用户标签事件 outbox 重试失败 original=%s", err.Error())
+		}
+		return 0, errors.Tag(err)
+	}
+	now := time.Now()
+	if err := logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
+		Where("id IN ?", ids).
+		Updates(map[string]any{
+			"state":         model.UserTagEventOutboxStateDone,
+			"dispatched_at": &now,
+			"next_retry_at": nil,
+			"locked_by":     "",
+			"last_error":    "",
+			"updated_at":    now,
+		}).Error; err != nil {
+		return 0, errors.Tag(err)
+	}
+	return len(rows), nil
+}
+
+// claimEventOutboxRows 领取一批当前可派发的事件 outbox。
+func (r *TagRepository) claimEventOutboxRows(ctx context.Context, logDB *gorm.DB, opts types.RuntimeOptions) ([]model.UserTagEventOutbox, error) {
+	now := time.Now()
+	rows := make([]model.UserTagEventOutbox, 0, positiveBatchSize(opts.BatchSize))
+	query := logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
+		Where("state IN ?", []model.UserTagEventOutboxState{model.UserTagEventOutboxStatePending, model.UserTagEventOutboxStateRetry}).
+		Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now).
 		Order("id ASC").
 		Limit(positiveBatchSize(opts.BatchSize))
 	if strings.TrimSpace(opts.WorkflowID) != "" {
@@ -309,85 +469,85 @@ func (r *TagRepository) DrainKafkaOutboxShard(ctx context.Context, opts types.Ru
 		shard := r.deps.ShardPlan.NormalizeShard(opts.ShardIndex, opts.ShardTotal)
 		query = query.Where("shard_no = ?", shard.Index)
 	}
+	if len(opts.UIDs) > 0 {
+		query = query.Where("uid IN ?", opts.UIDs)
+	}
 	if err := query.Find(&rows).Error; err != nil {
-		return 0, errors.Tag(err)
+		return nil, errors.Tag(err)
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return nil, nil
 	}
-	messages := make([]model.UserTagMessage, 0, len(rows))
 	ids := make([]int64, 0, len(rows))
 	for _, row := range rows {
 		ids = append(ids, row.ID)
-		messages = append(messages, model.UserTagMessage{
-			ActionType: row.ActionType,
-			UID:        row.UID,
-			TagID:      row.TagType,
-			EventID:    row.WorkflowID,
-			Source:     "admin.user_tag",
+	}
+	result := logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
+		Where("id IN ? AND state IN ?", ids, []model.UserTagEventOutboxState{model.UserTagEventOutboxStatePending, model.UserTagEventOutboxStateRetry}).
+		Updates(map[string]any{
+			"state":      model.UserTagEventOutboxStateRunning,
+			"attempt":    gorm.Expr("attempt + 1"),
+			"locked_at":  &now,
+			"locked_by":  eventOutboxLocker(opts),
+			"updated_at": now,
 		})
+	if result.Error != nil {
+		return nil, errors.Tag(result.Error)
 	}
-	if push != nil {
-		if err := push(messages); err != nil {
-			_ = logDB.WithContext(ctx).Model(&model.UserTagKafkaOutbox{}).
-				Where("id IN ?", ids).
-				Updates(map[string]any{"state": model.UserTagKafkaOutboxStateRetry, "attempt": gorm.Expr("attempt + 1"), "last_error": truncateString(err.Error(), 1000), "updated_at": time.Now()}).Error
-			return 0, errors.Tag(err)
-		}
+	if result.RowsAffected == 0 {
+		return nil, nil
 	}
+	return rows, nil
+}
+
+// markEventOutboxFailed 标记事件派发失败并设置下一次重试时间。
+func (r *TagRepository) markEventOutboxFailed(ctx context.Context, logDB *gorm.DB, rows []model.UserTagEventOutbox, runErr error) error {
 	now := time.Now()
-	if err := logDB.WithContext(ctx).Model(&model.UserTagKafkaOutbox{}).
-		Where("id IN ?", ids).
-		Updates(map[string]any{"state": model.UserTagKafkaOutboxStateDone, "sent_at": &now, "updated_at": now}).Error; err != nil {
-		return 0, errors.Tag(err)
+	for _, row := range rows {
+		attempt := row.Attempt + 1
+		state := model.UserTagEventOutboxStateRetry
+		var nextRetryAt *time.Time
+		if attempt >= userTagEventOutboxMaxAttempt {
+			state = model.UserTagEventOutboxStateDead
+		} else {
+			next := now.Add(time.Duration(attempt) * time.Minute)
+			nextRetryAt = &next
+		}
+		if err := logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
+			Where("id = ?", row.ID).
+			Updates(map[string]any{
+				"state":         state,
+				"attempt":       attempt,
+				"next_retry_at": nextRetryAt,
+				"locked_by":     "",
+				"last_error":    truncateString(runErr.Error(), 1000),
+				"updated_at":    now,
+			}).Error; err != nil {
+			return errors.Tag(err)
+		}
 	}
-	return len(rows), nil
+	return nil
 }
 
-// DiscardKafkaOutboxShard 清理当前 workflow 分片内已生成但不需要推送的 outbox。
-func (r *TagRepository) DiscardKafkaOutboxShard(ctx context.Context, opts types.RuntimeOptions) (int64, error) {
-	if strings.TrimSpace(opts.WorkflowID) == "" {
-		return 0, nil
+// eventOutboxRowToChange 把 outbox 行转换为 hook 入参。
+func eventOutboxRowToChange(row model.UserTagEventOutbox) types.TagChange {
+	return types.TagChange{
+		EventID:    row.EventID,
+		WorkflowID: row.WorkflowID,
+		UID:        row.UID,
+		TagType:    row.TagType,
+		Action:     row.Action,
+		Payload:    row.Payload,
 	}
-	logDB, err := r.logDB()
-	if err != nil {
-		return 0, errors.Tag(err)
-	}
-	query := logDB.WithContext(ctx).Where("workflow_id = ?", opts.WorkflowID)
-	if opts.ShardTotal > 0 {
-		shard := r.deps.ShardPlan.NormalizeShard(opts.ShardIndex, opts.ShardTotal)
-		query = query.Where("shard_no = ?", shard.Index)
-	}
-	result := query.Delete(&model.UserTagKafkaOutbox{})
-	return result.RowsAffected, errors.Tag(result.Error)
 }
 
-// RebuildSyncSnapshotShard 重建当前执行分片负责的同步快照。
-func (r *TagRepository) RebuildSyncSnapshotShard(ctx context.Context, opts types.RuntimeOptions) (int, error) {
-	logDB, err := r.logDB()
-	if err != nil {
-		return 0, errors.Tag(err)
+// eventOutboxLocker 返回当前 outbox 领取者标识。
+func eventOutboxLocker(opts types.RuntimeOptions) string {
+	workflowID := strings.TrimSpace(opts.WorkflowID)
+	if workflowID == "" {
+		return "event_outbox_retry_scan"
 	}
-	total := 0
-	for _, shard := range r.deps.ShardPlan.TagShardsForWorkflow(opts.ShardIndex, opts.ShardTotal) {
-		sourceTable := model.UserTagShardTableName(shard)
-		targetTable := model.UserTagSyncShardTableName(shard)
-		if err := logDB.WithContext(ctx).Exec(userTagCreateLikeTableSQL(targetTable, sourceTable)).Error; err != nil {
-			return total, errors.Wrapf(err, "创建用户标签同步快照表失败 table=%s", targetTable)
-		}
-		if err := logDB.WithContext(ctx).Exec(userTagTruncateTableSQL(targetTable)).Error; err != nil {
-			return total, errors.Wrapf(err, "清空用户标签同步快照表失败 table=%s", targetTable)
-		}
-		result := logDB.WithContext(ctx).Exec(
-			"INSERT INTO " + quoteIdent(targetTable) + " (uid, tag_type, tag_source, tag_data, tag_category, created_at, updated_at) " +
-				"SELECT uid, tag_type, tag_source, tag_data, tag_category, created_at, updated_at FROM " + quoteIdent(sourceTable),
-		)
-		if result.Error != nil {
-			return total, errors.Wrapf(result.Error, "重建用户标签同步快照失败 table=%s", targetTable)
-		}
-		total += int(result.RowsAffected)
-	}
-	return total, nil
+	return workflowID
 }
 
 // WorkflowShardUIDs 返回当前 workflow 分片负责的 UID 集合。
@@ -395,6 +555,7 @@ func (r *TagRepository) WorkflowShardUIDs(opts types.RuntimeOptions, uids []int6
 	return filterUIDsByShard(uniqueInt64s(uids), opts.ShardIndex, opts.ShardTotal)
 }
 
+// logDB 返回用户标签写库连接。
 func (r *TagRepository) logDB() (*gorm.DB, error) {
 	if r == nil || r.deps.DBs.MainDB == nil {
 		return nil, errors.Errorf("主库连接为空")
@@ -402,6 +563,7 @@ func (r *TagRepository) logDB() (*gorm.DB, error) {
 	return r.deps.DBs.MainDB, nil
 }
 
+// waitUserTagRuntimeBatch 在批量清理之间等待，避免长时间压住数据库。
 func waitUserTagRuntimeBatch(ctx context.Context, delay time.Duration) error {
 	if delay <= 0 {
 		return nil
@@ -416,6 +578,7 @@ func waitUserTagRuntimeBatch(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+// positiveBatchSize 返回安全批次大小。
 func positiveBatchSize(value int) int {
 	if value > 0 {
 		return value
@@ -423,6 +586,7 @@ func positiveBatchSize(value int) int {
 	return userTagRuntimeCleanupBatchSize
 }
 
+// truncateString 截断超长错误摘要。
 func truncateString(value string, limit int) string {
 	if limit <= 0 || len(value) <= limit {
 		return value
@@ -432,6 +596,7 @@ func truncateString(value string, limit int) string {
 
 var simpleIdentPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// quoteIdent 返回安全 MySQL 标识符。
 func quoteIdent(name string) string {
 	name = strings.TrimSpace(name)
 	if !simpleIdentPattern.MatchString(name) {

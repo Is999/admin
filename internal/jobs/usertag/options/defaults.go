@@ -11,31 +11,31 @@ const (
 	defaultWorkerCount = 4
 	// defaultDiffBatchSize 是默认标签差异处理批次大小。
 	defaultDiffBatchSize = 10000
-	// defaultKafkaBatchSize 是默认 Kafka outbox 推送批次大小。
-	defaultKafkaBatchSize = 500
+	// defaultEventBatchSize 是默认事件 outbox 派发批次大小。
+	defaultEventBatchSize = 500
 )
 
 // Defaults 定义 usertag 运行默认值。
 type Defaults struct {
-	ShardTotal           int  // 工作流默认分片数
-	RuntimeShardTotal    int  // 运行期 UID 索引分片数
-	BatchSize            int  // 游标扫描批次大小
-	WorkerCount          int  // 节点内部 worker 数
-	DiffBatchSize        int  // 标签差异处理批次大小
-	KafkaBatchSize       int  // Kafka outbox 推送批次大小
-	MarketingSyncEnabled bool // 是否启用用户标签事件同步
+	ShardTotal        int  // 工作流默认分片数
+	RuntimeShardTotal int  // 运行期 UID 索引分片数
+	BatchSize         int  // 游标扫描批次大小
+	WorkerCount       int  // 节点内部 worker 数
+	DiffBatchSize     int  // 标签差异处理批次大小
+	EventBatchSize    int  // 事件 outbox 派发批次大小
+	EventHookEnabled  bool // 是否启用用户标签事件 hook
 }
 
 // NewDefaults 根据全局用户标签配置构造 默认值。
 func NewDefaults(cfg config.UserTagConfig) Defaults {
 	return Defaults{
-		ShardTotal:           boundedPositiveOr(cfg.DefaultShardTotal, defaultShardTotal, MaxShardTotal),
-		RuntimeShardTotal:    boundedPositiveOr(cfg.ProfileShardTotal, defaultShardTotal, MaxShardTotal),
-		BatchSize:            boundedPositiveOr(cfg.DefaultBatchSize, defaultBatchSize, MaxBatchSize),
-		WorkerCount:          boundedPositiveOr(cfg.DefaultWorkerCount, defaultWorkerCount, MaxWorkerCount),
-		DiffBatchSize:        boundedPositiveOr(cfg.DiffBatchSize, defaultDiffBatchSize, MaxBatchSize),
-		KafkaBatchSize:       boundedPositiveOr(cfg.KafkaBatchSize, defaultKafkaBatchSize, MaxBatchSize),
-		MarketingSyncEnabled: cfg.MarketingSyncEnabled,
+		ShardTotal:        boundedPositiveOr(cfg.DefaultShardTotal, defaultShardTotal, MaxShardTotal),
+		RuntimeShardTotal: boundedPositiveOr(cfg.RuntimeShardTotal, defaultShardTotal, MaxShardTotal),
+		BatchSize:         boundedPositiveOr(cfg.DefaultBatchSize, defaultBatchSize, MaxBatchSize),
+		WorkerCount:       boundedPositiveOr(cfg.DefaultWorkerCount, defaultWorkerCount, MaxWorkerCount),
+		DiffBatchSize:     boundedPositiveOr(cfg.DiffBatchSize, defaultDiffBatchSize, MaxBatchSize),
+		EventBatchSize:    boundedPositiveOr(cfg.EventBatchSize, defaultEventBatchSize, MaxBatchSize),
+		EventHookEnabled:  cfg.EventHookEnabled,
 	}
 }
 

@@ -324,9 +324,9 @@ func (r *TagRepository) ManualReleaseWorkflowLease(ctx context.Context, opts typ
 	return result, nil
 }
 
-// ReleaseWorkflowLeaseAfterShardDone 记录 sync_kafka 分片完成，并在所有分片完成后释放全局写租约。
-// sync_kafka 必须等待全部分片完成后才能释放租约。
-func (r *TagRepository) ReleaseWorkflowLeaseAfterShardDone(ctx context.Context, opts types.RuntimeOptions) error {
+// ReleaseWorkflowLeaseAfterFinalShardDone 记录最终分片完成，并在所有分片完成后释放全局写租约。
+// full 必须等待 dispatch_hooks 全部分片完成后才能释放租约。
+func (r *TagRepository) ReleaseWorkflowLeaseAfterFinalShardDone(ctx context.Context, opts types.RuntimeOptions) error {
 	if opts.DryRun || !workflowRequiresExclusiveLease(opts) {
 		return nil
 	}
@@ -340,13 +340,13 @@ func (r *TagRepository) ReleaseWorkflowLeaseAfterShardDone(ctx context.Context, 
 	if err != nil {
 		return errors.Tag(err)
 	}
-	key, err := r.workflowSyncDoneKey(opts.WorkflowID)
+	key, err := r.workflowFinalDoneKey(opts.WorkflowID)
 	if err != nil {
 		return errors.Tag(err)
 	}
 	count, err := userTagWorkflowShardDoneScript.Run(ctx, client, []string{key}, opts.ShardIndex, int64(userTagWorkflowLeaseTTL/time.Second)).Int64()
 	if err != nil {
-		return errors.Wrap(err, "记录用户标签工作流 sync_kafka 分片完成失败")
+		return errors.Wrap(err, "记录用户标签工作流最终分片完成失败")
 	}
 	if count < int64(opts.ShardTotal) {
 		return nil
@@ -355,7 +355,7 @@ func (r *TagRepository) ReleaseWorkflowLeaseAfterShardDone(ctx context.Context, 
 }
 
 // releaseWorkflowLeaseOwner 按完整 owner 原子释放全局租约，并用单 key 命令清理当前 workflow 的分片屏障。
-// write_lock 用 Lua 比对 owner；sync_done 释放后独立清理。
+// write_lock 用 Lua 比对 owner；final_done 释放后独立清理。
 func (r *TagRepository) releaseWorkflowLeaseOwner(ctx context.Context, client redis.UniversalClient, owner string, workflowID string) (bool, error) {
 	key, err := r.workflowLeaseKey()
 	if err != nil {
@@ -366,12 +366,12 @@ func (r *TagRepository) releaseWorkflowLeaseOwner(ctx context.Context, client re
 		return false, errors.Tag(err)
 	}
 	if deleted > 0 && strings.TrimSpace(workflowID) != "" {
-		syncDoneKey, keyErr := r.workflowSyncDoneKey(workflowID)
+		finalDoneKey, keyErr := r.workflowFinalDoneKey(workflowID)
 		if keyErr != nil {
 			return false, errors.Tag(keyErr)
 		}
-		// sync_done 带 TTL，清理失败不影响租约释放结果。
-		_ = client.Del(ctx, syncDoneKey).Err()
+		// final_done 带 TTL，清理失败不影响租约释放结果。
+		_ = client.Del(ctx, finalDoneKey).Err()
 	}
 	return deleted > 0, nil
 }
@@ -408,14 +408,14 @@ func (r *TagRepository) workflowLeaseKey() (string, error) {
 	return keys.UserTagWorkflowLeaseRedisKey(appID), nil
 }
 
-// workflowSyncDoneKey 返回当前 workflow 的 sync_kafka 分片完成屏障 key。
+// workflowFinalDoneKey 返回当前 workflow 的最终分片完成屏障 key。
 // key 中包含 app_id 和 workflow_id，避免多站点共用 Redis 时互相影响。
-func (r *TagRepository) workflowSyncDoneKey(workflowID string) (string, error) {
+func (r *TagRepository) workflowFinalDoneKey(workflowID string) (string, error) {
 	appID, err := r.workflowAppID()
 	if err != nil {
 		return "", errors.Tag(err)
 	}
-	return keys.UserTagWorkflowSyncDoneRedisKey(appID, workflowID), nil
+	return keys.UserTagWorkflowFinalDoneRedisKey(appID, workflowID), nil
 }
 
 func workflowLeaseOwner(opts types.RuntimeOptions) (string, error) {
@@ -427,7 +427,7 @@ func workflowLeaseOwner(opts types.RuntimeOptions) (string, error) {
 }
 
 // workflowRequiresExclusiveLease 判断当前模式是否需要持有全局写租约。
-// 只有 full 会切表并批量推进同步快照；非 full 保持可并发补算，避免手动任务失败后阻塞所有用户标签入口。
+// 只有 full 会切表并刷新只读快照；非 full 保持可并发补算，避免手动任务失败后阻塞所有用户标签入口。
 func workflowRequiresExclusiveLease(opts types.RuntimeOptions) bool {
 	return strings.TrimSpace(opts.Mode) == types.ModeFull
 }

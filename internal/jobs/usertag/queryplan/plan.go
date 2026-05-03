@@ -41,7 +41,7 @@ type Aggregate struct {
 // Plan 描述一次可执行的数据源查询计划。
 type Plan struct {
 	Name               string      // 查询计划名称
-	Source             string      // 数据源类型：mysql/clickhouse/redis/kafka_outbox
+	Source             string      // 数据源类型：mysql/clickhouse/redis/event_outbox
 	Table              string      // 查询表名或逻辑源名
 	Fields             []string    // 需要读取的字段清单，禁止使用 *
 	Aggregates         []Aggregate // 聚合目标清单

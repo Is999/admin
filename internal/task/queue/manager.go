@@ -1189,8 +1189,8 @@ func workflowUsageHint(name string) string {
 		return "用于按标签类型全量重算，建议在 targets 中携带 tagType 或执行标识。"
 	case "user_tag.runtime.cleanup":
 		return "用于机会型清理用户标签运行期辅助表，通常由周期任务触发，不需要填写 targets。"
-	case "user_tag.kafka_outbox.retry_scan":
-		return "用于周期扫描并重推用户标签 outbox 异常数据，通常由周期任务触发，不需要填写 targets。"
+	case "user_tag.event_outbox.retry_scan":
+		return "用于周期扫描并重派用户标签事件 outbox 异常数据，通常由周期任务触发，不需要填写 targets。"
 	default:
 		return "触发前请确认执行目标和默认队列是否符合当前环境。"
 	}
@@ -1209,7 +1209,7 @@ func workflowTargetsExample(name string) string {
 		return "tagType:2, tagType:3"
 	case "user_tag.runtime.cleanup":
 		return ""
-	case "user_tag.kafka_outbox.retry_scan":
+	case "user_tag.event_outbox.retry_scan":
 		return ""
 	default:
 		return ""

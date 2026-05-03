@@ -31,7 +31,7 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureReleasesFullOwner(t *testing.T
 	if err != nil {
 		t.Fatalf("marshal payload failed: %v", err)
 	}
-	task := asynq.NewTask(TaskTypeUserTagBusinessHook, payload)
+	task := asynq.NewTask(TaskTypeUserTagEvaluateTags, payload)
 
 	if err = releaseUserTagWorkflowLeaseOnFinalFailure(ctx, svcCtx, task, taskqueue.WorkflowTaskMeta{WorkflowName: WorkflowNameUserTagFull}); err != nil {
 		t.Fatalf("release full lease on final failure failed: %v", err)
@@ -59,7 +59,7 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureSkipsNonFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal payload failed: %v", err)
 	}
-	task := asynq.NewTask(TaskTypeUserTagBusinessHook, payload)
+	task := asynq.NewTask(TaskTypeUserTagCollectScope, payload)
 
 	if err = releaseUserTagWorkflowLeaseOnFinalFailure(ctx, svcCtx, task, taskqueue.WorkflowTaskMeta{WorkflowName: WorkflowNameUserTagDelta}); err != nil {
 		t.Fatalf("non-full final failure cleanup should be no-op: %v", err)
@@ -70,5 +70,28 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureSkipsNonFull(t *testing.T) {
 	}
 	if current != "wf-full|full" {
 		t.Fatalf("delta cleanup should keep full lease, got=%s", current)
+	}
+}
+
+// TestUserTagStageHandlerSpecsCoverMainSkeletonNodes 验证插件注册清单覆盖主 DAG 骨架节点。
+func TestUserTagStageHandlerSpecsCoverMainSkeletonNodes(t *testing.T) {
+	specs := userTagStageHandlerSpecs()
+	got := make(map[string]string, len(specs))
+	for _, spec := range specs {
+		got[spec.Node] = spec.TaskType
+	}
+	want := map[string]string{
+		types.NodePrepare:        TaskTypeUserTagPrepare,
+		types.NodeCollectScope:   TaskTypeUserTagCollectScope,
+		types.NodeEvaluateTags:   TaskTypeUserTagEvaluateTags,
+		types.NodeResolveChanges: TaskTypeUserTagResolveChanges,
+		types.NodePersistResults: TaskTypeUserTagPersistResults,
+		types.NodeFinalize:       TaskTypeUserTagFinalize,
+		types.NodeDispatchHooks:  TaskTypeUserTagDispatchHooks,
+	}
+	for node, taskType := range want {
+		if got[node] != taskType {
+			t.Fatalf("node=%s taskType=%s want=%s specs=%+v", node, got[node], taskType, specs)
+		}
 	}
 }

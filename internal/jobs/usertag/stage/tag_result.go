@@ -1,6 +1,7 @@
 package stage
 
 import (
+	"admin/internal/jobs/usertag/hook"
 	"admin/internal/jobs/usertag/queryplan"
 	"admin/internal/jobs/usertag/repository"
 	"admin/internal/jobs/usertag/runtimectx"
@@ -37,29 +38,6 @@ func (s *PrepareStage) Run(ctx *runtimectx.Context, plans map[string]any) (Resul
 	return Result{}, nil
 }
 
-// BusinessHookStage 是业务扩展占位阶段。
-type BusinessHookStage struct {
-	Base
-}
-
-// NewBusinessHookStage 创建业务扩展占位阶段。
-func NewBusinessHookStage() *BusinessHookStage {
-	return &BusinessHookStage{Base: Base{StageName: types.NodeBusinessHook}}
-}
-
-// Plans 返回业务扩展占位阶段查询计划。
-func (s *BusinessHookStage) Plans(ctx *runtimectx.Context) ([]queryplan.Plan, error) {
-	return nil, nil
-}
-
-// Run 执行业务扩展占位阶段。
-func (s *BusinessHookStage) Run(ctx *runtimectx.Context, plans map[string]any) (Result, error) {
-	if ctx.Options.DryRun {
-		return Result{Skipped: true}, nil
-	}
-	return Result{Skipped: true}, nil
-}
-
 // FinalizeStage 负责 full 模式最终切表。
 type FinalizeStage struct {
 	Base
@@ -81,37 +59,37 @@ func (s *FinalizeStage) Run(ctx *runtimectx.Context, plans map[string]any) (Resu
 	if err := s.repo.FinalizeResultTables(ctx.Context, ctx.Options); err != nil {
 		return Result{}, ctx.Wrap(err, "切换最终标签表失败")
 	}
-	return Result{}, nil
+	count, err := s.repo.RebuildReadSnapshotShard(ctx.Context, ctx.Options)
+	if err != nil {
+		return Result{}, ctx.Wrap(err, "重建只读标签快照失败")
+	}
+	return Result{Updated: int64(count)}, nil
 }
 
-// SyncKafkaStage 负责 full finalize 后重建同步快照。
-type SyncKafkaStage struct {
+// DispatchHooksStage 负责派发标签得到和失去事件 hook。
+type DispatchHooksStage struct {
 	Base
 	repo *repository.TagRepository // 标签结果仓储
 }
 
-// NewSyncKafkaStage 创建同步阶段。
-func NewSyncKafkaStage(repo *repository.TagRepository) *SyncKafkaStage {
-	return &SyncKafkaStage{Base: Base{StageName: types.NodeSyncKafka}, repo: repo}
+// NewDispatchHooksStage 创建事件 hook 派发阶段。
+func NewDispatchHooksStage(repo *repository.TagRepository) *DispatchHooksStage {
+	return &DispatchHooksStage{Base: Base{StageName: types.NodeDispatchHooks}, repo: repo}
 }
 
-// Plans 返回同步阶段查询计划。
-func (s *SyncKafkaStage) Plans(ctx *runtimectx.Context) ([]queryplan.Plan, error) {
+// Plans 返回事件 hook 派发阶段查询计划。
+func (s *DispatchHooksStage) Plans(ctx *runtimectx.Context) ([]queryplan.Plan, error) {
 	return nil, nil
 }
 
-// Run 执行 full 同步快照重建。
-func (s *SyncKafkaStage) Run(ctx *runtimectx.Context, plans map[string]any) (Result, error) {
-	if ctx.Options.Mode != types.ModeFull {
+// Run 执行当前分片事件 hook 派发。
+func (s *DispatchHooksStage) Run(ctx *runtimectx.Context, plans map[string]any) (Result, error) {
+	if !ctx.Options.EventHookEnabled {
 		return Result{Skipped: true}, nil
 	}
-	count, err := s.repo.RebuildSyncSnapshotShard(ctx.Context, ctx.Options)
+	count, err := s.repo.DrainEventOutboxShard(ctx.Context, ctx.Options, hook.DefaultRegistry().Dispatch)
 	if err != nil {
-		return Result{}, ctx.Wrap(err, "重建同步快照失败")
+		return Result{}, ctx.Wrap(err, "派发标签事件 hook 失败")
 	}
-	discarded, err := s.repo.DiscardKafkaOutboxShard(ctx.Context, ctx.Options)
-	if err != nil {
-		return Result{}, ctx.Wrap(err, "清理全量 Kafka outbox 失败")
-	}
-	return Result{Updated: int64(count) + discarded}, nil
+	return Result{Updated: int64(count), Skipped: count == 0}, nil
 }

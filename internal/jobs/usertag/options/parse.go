@@ -18,17 +18,17 @@ func ParseOptions(payload types.WorkflowPayload, defaults Defaults) (types.Runti
 		return types.RuntimeOptions{}, errors.Tag(err)
 	}
 	opts := types.RuntimeOptions{
-		WorkflowID:           strings.TrimSpace(payload.WorkflowID),
-		Mode:                 mode,
-		TagTypes:             normalizeInts(payload.TagTypes),
-		UIDs:                 normalizeInt64s(payload.UIDs),
-		ShardIndex:           payload.ShardIndex,
-		ShardTotal:           positiveOr(payload.ShardTotal, defaults.ShardTotal),
-		BatchSize:            positiveOr(payload.BatchSize, defaults.BatchSize),
-		WorkerCount:          positiveOr(payload.WorkerCount, defaults.WorkerCount),
-		DryRun:               payload.DryRun,
-		SyncSnapshotOnly:     payload.SyncSnapshotOnly,
-		MarketingSyncEnabled: defaults.MarketingSyncEnabled,
+		WorkflowID:       strings.TrimSpace(payload.WorkflowID),
+		Mode:             mode,
+		TagTypes:         normalizeInts(payload.TagTypes),
+		UIDs:             normalizeInt64s(payload.UIDs),
+		ShardIndex:       payload.ShardIndex,
+		ShardTotal:       positiveOr(payload.ShardTotal, defaults.ShardTotal),
+		BatchSize:        positiveOr(payload.BatchSize, defaults.BatchSize),
+		WorkerCount:      positiveOr(payload.WorkerCount, defaults.WorkerCount),
+		DryRun:           payload.DryRun,
+		SyncSnapshotOnly: payload.SyncSnapshotOnly,
+		EventHookEnabled: defaults.EventHookEnabled,
 	}
 	for _, target := range payload.Targets {
 		key, val, ok := strings.Cut(strings.TrimSpace(target), "=")
@@ -89,6 +89,12 @@ func ParseOptions(payload types.WorkflowPayload, defaults Defaults) (types.Runti
 	}
 	if opts.Mode == types.ModeRecalculate && len(opts.TagTypes) == 0 {
 		return opts, errors.Errorf("recalculate 模式必须提供 tag_types")
+	}
+	if opts.SyncSnapshotOnly && opts.Mode != types.ModeFull {
+		return opts, errors.Errorf("sync_snapshot_only 仅支持 full 模式")
+	}
+	if opts.SyncSnapshotOnly && opts.DryRun {
+		return opts, errors.Errorf("sync_snapshot_only 与 dry_run 不能同时启用")
 	}
 	if err := ValidateRuntimeOptions(opts); err != nil {
 		return opts, errors.Tag(err)

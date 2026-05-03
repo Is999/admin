@@ -242,20 +242,20 @@ const (
 	// 实际 Redis key 通过 UserTagWorkflowLeaseRedisKey 生成，值为 `workflowID|mode`，释放时必须按完整 owner 精确比较。
 	UserTagWorkflowLeaseKey = "user_tag:workflow:write_lock"
 
-	// UserTagWorkflowSyncDoneKey 表示用户标签 sync_kafka 分片完成屏障 key 模板。
+	// UserTagWorkflowFinalDoneKey 表示用户标签最终分片完成屏障 key 模板。
 	// Redis 类型：Set。
-	// `%s` 位置填充 workflow_id，实际 Redis key 通过 UserTagWorkflowSyncDoneRedisKey 生成。
-	UserTagWorkflowSyncDoneKey = "user_tag:workflow:sync_done:%s"
+	// `%s` 位置填充 workflow_id，实际 Redis key 通过 UserTagWorkflowFinalDoneRedisKey 生成。
+	UserTagWorkflowFinalDoneKey = "user_tag:workflow:final_done:%s"
 
 	// UserTagRuntimeCleanupLock 表示用户标签运行期辅助表清理互斥锁。
 	// Redis 类型：String（由 redsync 管理）。
 	// 实际 Redis key 通过 UserTagRuntimeCleanupRedisKey 生成，避免周期调度和人工补跑同时清理。
 	UserTagRuntimeCleanupLock = "user_tag:runtime:cleanup:lock"
 
-	// UserTagKafkaOutboxRetryScanLock 表示用户标签 Kafka outbox 异常扫描互斥锁。
+	// UserTagEventOutboxRetryScanLock 表示用户标签事件 outbox 异常扫描互斥锁。
 	// Redis 类型：String（由 redsync 管理）。
-	// 实际 Redis key 通过 UserTagKafkaOutboxRetryScanRedisKey 生成，限制异常 outbox 单任务推进。
-	UserTagKafkaOutboxRetryScanLock = "user_tag:kafka_outbox:retry_scan:lock"
+	// 实际 Redis key 通过 UserTagEventOutboxRetryScanRedisKey 生成，限制异常 outbox 单任务推进。
+	UserTagEventOutboxRetryScanLock = "user_tag:event_outbox:retry_scan:lock"
 
 	// ArchiveJobPlanLock 表示归档任务区间规划互斥锁 key 模板。
 	// Redis 类型：String（由 redsync 管理）。

@@ -314,8 +314,8 @@ func TestNewPeriodicWorkflowPlugin(t *testing.T) {
 	}
 }
 
-// TestUserTagPluginRegistersKafkaOutboxRetryScanWorkflow 验证用户标签插件会注册周期 outbox 重推工作流。
-func TestUserTagPluginRegistersKafkaOutboxRetryScanWorkflow(t *testing.T) {
+// TestUserTagPluginRegistersMaintenanceWorkflows 验证用户标签插件会注册独立维护工作流。
+func TestUserTagPluginRegistersMaintenanceWorkflows(t *testing.T) {
 	svcCtx := svc.NewServiceContext(config.Config{
 		Workflows: config.WorkflowsConfig{
 			UserTag: config.UserTagConfig{Enabled: true},
@@ -330,12 +330,20 @@ func TestUserTagPluginRegistersKafkaOutboxRetryScanWorkflow(t *testing.T) {
 		t.Fatalf("注册用户标签插件失败: %v", err)
 	}
 	registered := manager.ListRegisteredWorkflows()
+	want := map[string]bool{
+		usertagtask.WorkflowNameUserTagEventOutboxRetryScan: false,
+		usertagtask.WorkflowNameUserTagRuntimeCleanup:       false,
+	}
 	for _, item := range registered {
-		if item.Name == usertagtask.WorkflowNameUserTagKafkaOutboxRetryScan {
-			return
+		if _, ok := want[item.Name]; ok {
+			want[item.Name] = true
 		}
 	}
-	t.Fatalf("未注册 Kafka outbox 重推工作流 %s，当前清单=%+v", usertagtask.WorkflowNameUserTagKafkaOutboxRetryScan, registered)
+	for workflowName, ok := range want {
+		if !ok {
+			t.Fatalf("未注册用户标签维护工作流 %s，当前清单=%+v", workflowName, registered)
+		}
+	}
 }
 
 func newTestManager() *taskqueue.Manager {

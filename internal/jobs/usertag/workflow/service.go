@@ -26,7 +26,7 @@ const (
 )
 
 // Service 是 usertag 工作流编排服务。
-// 当前只保留通用骨架节点，业务方可按需替换或补充业务阶段。
+// 当前只注册可调度、可观测的骨架阶段，不内置具体标签业务逻辑。
 type Service struct {
 	ctx      context.Context        // 当前请求上下文
 	svcCtx   *svc.ServiceContext    // 全局依赖上下文
@@ -38,7 +38,7 @@ type Service struct {
 
 // NewService 创建 usertag 工作流服务。
 // 初始化时会从配置解析默认运行参数，构建统一分片计划和仓储运行依赖，
-// 并注册 prepare、business_hook、finalize、sync_kafka 等骨架阶段。
+// 并注册 prepare、collect、evaluate、resolve、persist、finalize、dispatch 等固定骨架阶段。
 func NewService(ctx context.Context, svcCtx *svc.ServiceContext) *Service {
 	// 允许调用方省略 ctx，任务入口未透传时使用后台上下文兜底。
 	if ctx == nil {
@@ -64,19 +64,25 @@ func NewService(ctx context.Context, svcCtx *svc.ServiceContext) *Service {
 		stages:   make(map[string]stage.Stage),
 	}
 
-	// TagRepository 承担工作流状态、结果表、Kafka outbox 等共享能力，多个阶段复用同一个实例。
+	// TagRepository 承担工作流状态、结果表、事件 outbox 等共享能力，多个阶段复用同一个实例。
 	tagRepo := repository.NewTagRepository(service.repos)
 	service.tagRepo = tagRepo
 
 	// 固定骨架阶段在构造时集中注册，后续 RunStage 只按 payload.Node 查表执行。
 	// prepare：准备本轮工作流运行环境，清理运行期状态，并在 full 模式处理临时结果表。
 	_ = service.RegisterStage(stage.NewPrepareStage(tagRepo))
-	// business_hook：业务扩展占位阶段，业务项目可替换或追加具体清洗、计算阶段。
-	_ = service.RegisterStage(stage.NewBusinessHookStage())
-	// finalize：完成 full 模式结果表原子切换和必要状态收尾。
+	// collect_scope：保留通用候选范围收集入口，当前不读取具体业务来源。
+	_ = service.RegisterStage(stage.NewCollectScopeStage())
+	// evaluate_tags：保留通用标签规则评估入口，当前不内置具体规则。
+	_ = service.RegisterStage(stage.NewEvaluateTagsStage())
+	// resolve_changes：保留标签得失差异解析入口，当前不内置具体业务计算。
+	_ = service.RegisterStage(stage.NewResolveChangesStage())
+	// persist_results：保留标签结果和事件 outbox 写入入口。
+	_ = service.RegisterStage(stage.NewPersistResultsStage())
+	// finalize：完成 full 模式结果表原子切换和只读快照刷新。
 	_ = service.RegisterStage(stage.NewFinalizeStage(tagRepo))
-	// sync_kafka：重建 full 同步快照，节点名保留兼容历史 DAG。
-	_ = service.RegisterStage(stage.NewSyncKafkaStage(tagRepo))
+	// dispatch_hooks：派发标签得到和失去事件 hook。
+	_ = service.RegisterStage(stage.NewDispatchHooksStage(tagRepo))
 	return service
 }
 
@@ -135,7 +141,7 @@ func (s *Service) RunStage(payload types.WorkflowPayload) (stage.Result, error) 
 		runtimeCtx.Errorf("阶段失败 err=%v", err)
 		return result, errors.Tag(err)
 	}
-	if runtimeCtx.Node == types.NodeSyncKafka {
+	if runtimeCtx.Node == types.NodeDispatchHooks {
 		if err := s.releaseWorkflowLease(runtimeCtx); err != nil {
 			recordStageTrace(runtimeCtx, result)
 			return result, runtimeCtx.Wrap(err, "释放工作流互斥租约失败")
@@ -175,15 +181,15 @@ func (s *Service) ensureWorkflowLease(ctx *runtimectx.Context) error {
 	return s.tagRepo.RenewWorkflowLease(ctx.Context, ctx.Options)
 }
 
-// releaseWorkflowLease 在工作流完成同步阶段后释放 full 模式租约。
+// releaseWorkflowLease 在工作流完成最终事件阶段后释放 full 模式租约。
 // 非 full 模式不持有全局租约，直接跳过释放流程。
 func (s *Service) releaseWorkflowLease(ctx *runtimectx.Context) error {
 	if s == nil || s.tagRepo == nil || ctx == nil {
 		return nil
 	}
 	if ctx.Options.Mode != types.ModeFull {
-		// 非 full 工作流不持有全局租约，sync_kafka 跳过后也不需要参与 full 的分片释放屏障。
+		// 非 full 工作流不持有全局租约，最终事件阶段也不需要参与 full 的分片释放屏障。
 		return nil
 	}
-	return s.tagRepo.ReleaseWorkflowLeaseAfterShardDone(ctx.Context, ctx.Options)
+	return s.tagRepo.ReleaseWorkflowLeaseAfterFinalShardDone(ctx.Context, ctx.Options)
 }

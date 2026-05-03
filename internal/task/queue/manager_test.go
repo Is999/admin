@@ -179,7 +179,7 @@ func TestEnrichTaskContextSetsModeField(t *testing.T) {
 	payload := mustJSONBytes(map[string]any{
 		"workflowId":   "wf-mode-1",
 		"workflowName": "user_tag_delta",
-		"workflowNode": "business_hook",
+		"workflowNode": "collect_scope",
 		"mode":         "delta",
 		"shardIndex":   2,
 		"shardTotal":   8,
@@ -194,7 +194,7 @@ func TestEnrichTaskContextSetsModeField(t *testing.T) {
 	if meta.Mode != "delta" {
 		t.Fatalf("期望 mode=delta，实际为 %q", meta.Mode)
 	}
-	if meta.WorkflowNode != "business_hook" || meta.ShardIndex != 2 || meta.ShardTotal != 8 {
+	if meta.WorkflowNode != "collect_scope" || meta.ShardIndex != 2 || meta.ShardTotal != 8 {
 		t.Fatalf("工作流链路字段不符合预期: %+v", meta)
 	}
 }

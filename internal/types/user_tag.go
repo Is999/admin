@@ -21,7 +21,7 @@ type TriggerUserTagWorkflowReq struct {
 	BatchSize        int     `json:"batchSize,optional"`        // 游标批次大小
 	WorkerCount      int     `json:"workerCount,optional"`      // 节点内部 worker 数
 	DryRun           bool    `json:"dryRun,optional"`           // 只计算不落库
-	SyncSnapshotOnly bool    `json:"syncSnapshotOnly,optional"` // 只初始化同步快照，不推 Kafka 事件
+	SyncSnapshotOnly bool    `json:"syncSnapshotOnly,optional"` // 只刷新只读快照，不派发事件 hook
 	UniqueKey        string  `json:"uniqueKey,optional"`        // 去重键
 	UniqueTTLSeconds *int    `json:"uniqueTTLSeconds,optional"` // 去重 TTL 秒
 	Retry            *int    `json:"retry,optional"`            // 覆盖默认重试次数
@@ -32,7 +32,7 @@ type TriggerUserTagWorkflowReq struct {
 type ReleaseUserTagWorkflowLeaseReq struct {
 	WorkflowID   string `json:"workflowId"`            // 待释放租约所属工作流实例 ID，必须与 Redis owner 完整匹配
 	Mode         string `json:"mode,optional"`         // 工作流运行模式；留空默认 full，释放时参与 owner 精确匹配
-	Reason       string `json:"reason"`                // 人工释放原因，用于审计日志确认已排除运行中切表或 Kafka 同步风险
+	Reason       string `json:"reason"`                // 人工释放原因，用于审计日志确认已排除运行中切表或事件派发风险
 	TwoStepKey   string `json:"twoStepKey,optional"`   // MFA 二次校验票据 key，系统强制 MFA 时必填
 	TwoStepValue string `json:"twoStepValue,optional"` // MFA 二次校验票据 value，系统强制 MFA 时必填
 }

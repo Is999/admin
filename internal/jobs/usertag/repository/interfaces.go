@@ -45,8 +45,8 @@ type QueryExecutor interface {
 	Execute(ctx context.Context, plan queryplan.Plan, dest any) error
 }
 
-// OutboxRepository 定义 Kafka 分片 outbox 的最小访问接口。
+// OutboxRepository 定义标签得失事件 outbox 的最小访问接口。
 type OutboxRepository interface {
 	Append(ctx context.Context, workflowID string, shard int, rows any) error            // 追加最终标签差异事件
-	Drain(ctx context.Context, workflowID string, shard int, batchSize int) (int, error) // 推送并标记 outbox 事件
+	Drain(ctx context.Context, workflowID string, shard int, batchSize int) (int, error) // 派发并标记 outbox 事件
 }

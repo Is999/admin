@@ -9,9 +9,9 @@ import (
 
 // TestRuntimeContextTraceFields 验证日志链路字段格式稳定。
 func TestRuntimeContextTraceFields(t *testing.T) {
-	ctx := New(nil, nil, types.RuntimeOptions{WorkflowID: "wf1", Mode: types.ModeDelta, ShardIndex: 2, ShardTotal: 10}, types.NodeBusinessHook).WithBatch(7)
+	ctx := New(nil, nil, types.RuntimeOptions{WorkflowID: "wf1", Mode: types.ModeDelta, ShardIndex: 2, ShardTotal: 10}, types.NodeCollectScope).WithBatch(7)
 	text := ctx.TraceFields()
-	for _, want := range []string{"workflow_id=wf1", "mode=delta", "node=business_hook", "shard=2/10", "batch=7"} {
+	for _, want := range []string{"workflow_id=wf1", "mode=delta", "node=collect_scope", "shard=2/10", "batch=7"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("trace fields missing %s: %s", want, text)
 		}

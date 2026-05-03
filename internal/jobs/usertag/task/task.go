@@ -22,21 +22,27 @@ const (
 	WorkflowNameUserTagRecalculate = "user_tag.tag.recalculate"
 	// WorkflowNameUserTagRuntimeCleanup 表示用户标签运行期辅助表清理工作流。
 	WorkflowNameUserTagRuntimeCleanup = "user_tag.runtime.cleanup"
-	// WorkflowNameUserTagKafkaOutboxRetryScan 表示用户标签 Kafka outbox 异常扫描重推工作流。
-	WorkflowNameUserTagKafkaOutboxRetryScan = "user_tag.kafka_outbox.retry_scan"
+	// WorkflowNameUserTagEventOutboxRetryScan 表示用户标签事件 outbox 异常扫描重派工作流。
+	WorkflowNameUserTagEventOutboxRetryScan = "user_tag.event_outbox.retry_scan"
 )
 
 const (
 	// TaskTypeUserTagPrepare 准备用户标签运行环境。
 	TaskTypeUserTagPrepare = "user_tag:prepare"
-	// TaskTypeUserTagBusinessHook 预留扩展入口，默认不做具体处理。
-	TaskTypeUserTagBusinessHook = "user_tag:business_hook"
+	// TaskTypeUserTagCollectScope 收集本次工作流候选范围。
+	TaskTypeUserTagCollectScope = "user_tag:collect_scope"
+	// TaskTypeUserTagEvaluateTags 执行通用标签规则评估。
+	TaskTypeUserTagEvaluateTags = "user_tag:evaluate_tags"
+	// TaskTypeUserTagResolveChanges 解析标签得到和失去差异。
+	TaskTypeUserTagResolveChanges = "user_tag:resolve_changes"
+	// TaskTypeUserTagPersistResults 写入标签结果和事件 outbox。
+	TaskTypeUserTagPersistResults = "user_tag:persist_results"
 	// TaskTypeUserTagFinalize 原子切换全量重建结果表。
 	TaskTypeUserTagFinalize = "user_tag:finalize"
-	// TaskTypeUserTagSyncKafka 重建 full 同步快照或兼容历史 Kafka 同步节点。
-	TaskTypeUserTagSyncKafka = "user_tag:sync_kafka"
-	// TaskTypeUserTagKafkaOutboxRetry 独立重试用户标签 outbox，不参与用户标签计算工作流成败。
-	TaskTypeUserTagKafkaOutboxRetry = types.TaskTypeUserTagKafkaOutboxRetry
+	// TaskTypeUserTagDispatchHooks 派发标签得失事件 hook。
+	TaskTypeUserTagDispatchHooks = "user_tag:dispatch_hooks"
+	// TaskTypeUserTagEventOutboxRetry 独立重试用户标签事件 outbox，不参与用户标签计算工作流成败。
+	TaskTypeUserTagEventOutboxRetry = types.TaskTypeUserTagEventOutboxRetry
 	// TaskTypeUserTagRuntimeCleanup 独立清理用户标签运行期辅助表，不参与用户标签计算工作流成败。
 	TaskTypeUserTagRuntimeCleanup = types.TaskTypeUserTagRuntimeCleanup
 )

@@ -20,6 +20,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// Collector 默认运行参数限制单轮处理规模、租约和慢批次日志阈值。
 const (
 	defaultDBRunnerBatchSize       = 500
 	defaultDBRunnerIntervalSeconds = 1

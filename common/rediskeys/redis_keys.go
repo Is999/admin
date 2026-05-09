@@ -3,7 +3,7 @@ package keys
 const (
 	// AdminInfo 表示管理员信息缓存业务段模板。
 	// Redis 类型：Hash。
-	// `%d` 位置填充管理员 ID，调用侧通过 AppScopedKey 追加 app_id 前缀。
+	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
 	AdminInfo = "admin:info:%d"
 
 	// AdminInfoPattern 表示管理员信息缓存业务段展示模板。
@@ -145,12 +145,12 @@ const (
 
 	// LoginCheckMFAFlag 表示管理员登录 MFA 校验标记业务段模板。
 	// Redis 类型：String（Unix 时间戳）。
-	// `%d` 位置填充管理员 ID，调用侧通过 AppScopedKey 追加 app_id 前缀。
+	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
 	LoginCheckMFAFlag = "login_check_mfa_flag:%d"
 
 	// AdminLogoutToken 表示管理员登出令牌标记业务段模板。
 	// Redis 类型：String。
-	// `%d` 位置填充管理员 ID，调用侧通过 AppScopedKey 追加 app_id 前缀。
+	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
 	AdminLogoutToken = "admin:logout_token:%d"
 
 	// AdminMFATwoStepTicket 表示管理员二次校验票据业务段模板。
@@ -164,7 +164,7 @@ const (
 
 	// AdminMFATwoStepIndex 表示管理员二次校验票据索引业务段模板。
 	// Redis 类型：Set。
-	// `%d` 位置填充管理员 ID，调用侧通过 AppScopedKey 追加 app_id 前缀。
+	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
 	AdminMFATwoStepIndex = "admin:mfa:two_step:index:%d"
 
 	// SysConfigExcelExportLock 表示字典配置导出条件互斥锁 key 模板。
@@ -179,7 +179,7 @@ const (
 
 	// CacheRebuildLock 表示缓存回源重建互斥锁 key 模板。
 	// Redis 类型：String（由 redsync 管理）。
-	// `%s` 位置填充真实缓存 key 的业务段，实际 Redis key 通过 AppScopedKey 追加 app_id 前缀。
+	// `%s` 位置填充真实缓存 key 的业务段，实际 Redis key 通过 WithPrefix 追加 app_id 前缀。
 	CacheRebuildLock = "cache:rebuild:lock:%s"
 
 	// AdminExportJob 表示管理员列表导出任务状态缓存键模板。
@@ -229,7 +229,7 @@ const (
 
 	// SignatureReplayRequest 表示请求签名防重放缓存键模板。
 	// Redis 类型：String。
-	// `%s` 位置填充 RequestID，实际 Redis key 通过 AppScopedKey 追加 app_id 前缀。
+	// `%s` 位置填充 RequestID，实际 Redis key 通过 WithPrefix 追加 app_id 前缀。
 	SignatureReplayRequest = "signature:request:%s"
 
 	// LoginCaptcha 表示登录图形验证码缓存键模板。

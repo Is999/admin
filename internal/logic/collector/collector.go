@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// Collector 概览默认参数限制后台聚合批次、缓存时间和展示数量。
 const (
 	defaultCollectorOverviewKafkaBatchSize    = 500
 	defaultCollectorOverviewRedisCount        = 500

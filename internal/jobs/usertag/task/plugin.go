@@ -223,7 +223,7 @@ func runUserTagEventOutboxRetryScanTask(ctx context.Context, svcCtx *svc.Service
 		return nil
 	}
 	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
-	lockKey := keys.UserTagEventOutboxRetryScanRedisKey(svcCtx.CurrentConfig().AppID)
+	lockKey := keys.UserTagEventOutboxRetryScanRedisKey()
 	err = redislock.WithLock(ctx, svcCtx.Rds, lockKey, userTagEventOutboxRetryScanLockTTL, func(lockCtx context.Context) error {
 		_, runErr := repository.NewTagRepository(deps).RetryEventOutboxAbnormalRows(lockCtx, opts, hook.DefaultRegistry().Dispatch)
 		return errors.Tag(runErr)
@@ -242,7 +242,7 @@ func runUserTagRuntimeCleanupTask(ctx context.Context, svcCtx *svc.ServiceContex
 		return errors.Errorf("用户标签运行期清理失败：ServiceContext 为空")
 	}
 	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
-	lockKey := keys.UserTagRuntimeCleanupRedisKey(svcCtx.CurrentConfig().AppID)
+	lockKey := keys.UserTagRuntimeCleanupRedisKey()
 	err := redislock.WithLock(ctx, svcCtx.Rds, lockKey, userTagRuntimeCleanupLockTTL, func(lockCtx context.Context) error {
 		return repository.NewTagRepository(deps).CleanupStaleRuntimeTables(lockCtx, time.Now())
 	})
@@ -280,7 +280,7 @@ func userTagEventOutboxRetryScanOptions(defaults Defaults) (usertagtypes.Runtime
 	opts := usertagtypes.RuntimeOptions{
 		Mode:             usertagtypes.ModeDelta,
 		ShardIndex:       0,
-		ShardTotal:       positiveOr(defaults.ShardTotal, 1),
+		ShardTotal:       1,
 		BatchSize:        positiveOr(defaults.EventBatchSize, defaults.BatchSize),
 		WorkerCount:      positiveOr(defaults.WorkerCount, 1),
 		EventHookEnabled: defaults.EventHookEnabled,

@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// Collector 指标变量集中定义 outbox 落地、Processor 批量处理和结果统计。
 var (
 	collectorMetricsOnce        sync.Once
 	collectorMetricBizTypeGuard = struct {

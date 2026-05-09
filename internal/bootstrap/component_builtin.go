@@ -52,7 +52,7 @@ func newCollectorComponent() Component {
 // collectorConfigWithAppID 把顶层 app_id 注入 Collector Redis Stream，避免多站点共用 Redis 时串流。
 func collectorConfigWithAppID(c config.Config) config.CollectorConfig {
 	cfg := c.Collector
-	cfg.Redis.Stream = keys.AppScopedKey(c.AppID, cfg.Redis.Stream)
+	cfg.Redis.Stream = keys.WithPrefix(cfg.Redis.Stream)
 	return cfg
 }
 

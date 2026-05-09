@@ -11,6 +11,7 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 	userTagEventOutboxDoneRetention   = 7 * 24 * time.Hour     // 已成功派发事件保留时间
 	userTagEventOutboxDeadRetention   = 30 * 24 * time.Hour    // 死信事件保留时间
 	userTagEventOutboxStaleRetention  = 7 * 24 * time.Hour     // 长期未派发事件超时后回收
+	userTagEventOutboxRunningTimeout  = 15 * time.Minute       // running 事件超过该时间视为 worker 异常退出
 	userTagEventOutboxMaxAttempt      = 6                      // 单条事件最大派发尝试次数
 	userTagRuntimeResetBatchSize      = 1000                   // 当前 workflow 清理单批行数
 	userTagRuntimeResetBatchDelay     = 20 * time.Millisecond  // 当前 workflow 清理批次间隔
@@ -392,13 +394,18 @@ func (r *TagRepository) runtimeUIDBatch(ctx context.Context, opts types.RuntimeO
 	return uids, nil
 }
 
-// BuildChangeEventsForUIDs 是标签得失事件 outbox 的预留构造入口。
-func (r *TagRepository) BuildChangeEventsForUIDs(ctx context.Context, opts types.RuntimeOptions, uids []int64) (int, error) {
-	return 0, nil
-}
-
 // RetryEventOutboxAbnormalRows 周期扫描并重派异常事件 outbox。
 func (r *TagRepository) RetryEventOutboxAbnormalRows(ctx context.Context, opts types.RuntimeOptions, dispatch EventDispatcher) (int, error) {
+	if opts.DryRun || opts.SyncSnapshotOnly {
+		return 0, nil
+	}
+	logDB, err := r.logDB()
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	if err := r.recoverRunningEventOutboxRows(ctx, logDB, opts, time.Now().Add(-userTagEventOutboxRunningTimeout)); err != nil {
+		return 0, errors.Tag(err)
+	}
 	return r.DrainEventOutboxShard(ctx, opts, dispatch)
 }
 
@@ -457,47 +464,103 @@ func (r *TagRepository) DrainEventOutboxShard(ctx context.Context, opts types.Ru
 func (r *TagRepository) claimEventOutboxRows(ctx context.Context, logDB *gorm.DB, opts types.RuntimeOptions) ([]model.UserTagEventOutbox, error) {
 	now := time.Now()
 	rows := make([]model.UserTagEventOutbox, 0, positiveBatchSize(opts.BatchSize))
+	err := logDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.Model(&model.UserTagEventOutbox{}).
+			Where("state IN ?", []model.UserTagEventOutboxState{model.UserTagEventOutboxStatePending, model.UserTagEventOutboxStateRetry}).
+			Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now).
+			Order("id ASC").
+			Limit(positiveBatchSize(opts.BatchSize)).
+			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		var err error
+		query, err = r.applyEventOutboxScope(query, opts)
+		if err != nil {
+			return errors.Tag(err)
+		}
+		if err = query.Find(&rows).Error; err != nil {
+			return errors.Tag(err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		ids := make([]int64, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+		}
+		result := tx.Model(&model.UserTagEventOutbox{}).
+			Where("id IN ?", ids).
+			Updates(map[string]any{
+				"state":      model.UserTagEventOutboxStateRunning,
+				"attempt":    gorm.Expr("attempt + 1"),
+				"locked_at":  &now,
+				"locked_by":  eventOutboxLocker(opts),
+				"updated_at": now,
+			})
+		if result.Error != nil {
+			return errors.Tag(result.Error)
+		}
+		if result.RowsAffected != int64(len(rows)) {
+			return errors.Errorf("用户标签事件 outbox 领取数量不一致 expect=%d actual=%d", len(rows), result.RowsAffected)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return rows, nil
+}
+
+// recoverRunningEventOutboxRows 回收超时 running 事件，避免 worker 异常退出后永久卡住。
+func (r *TagRepository) recoverRunningEventOutboxRows(ctx context.Context, logDB *gorm.DB, opts types.RuntimeOptions, cutoff time.Time) error {
+	ids := make([]int64, 0, positiveBatchSize(opts.BatchSize))
 	query := logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
-		Where("state IN ?", []model.UserTagEventOutboxState{model.UserTagEventOutboxStatePending, model.UserTagEventOutboxStateRetry}).
-		Where("(next_retry_at IS NULL OR next_retry_at <= ?)", now).
+		Select("id").
+		Where("state = ?", model.UserTagEventOutboxStateRunning).
+		Where("(locked_at IS NULL OR locked_at < ?)", cutoff).
 		Order("id ASC").
 		Limit(positiveBatchSize(opts.BatchSize))
+	var err error
+	query, err = r.applyEventOutboxScope(query, opts)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if err = query.Find(&ids).Error; err != nil {
+		return errors.Tag(err)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	now := time.Now()
+	if err = logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
+		Where("id IN ? AND state = ?", ids, model.UserTagEventOutboxStateRunning).
+		Updates(map[string]any{
+			"state":         model.UserTagEventOutboxStateRetry,
+			"next_retry_at": nil,
+			"locked_by":     "",
+			"last_error":    "running 事件租约超时，已回收等待重派",
+			"updated_at":    now,
+		}).Error; err != nil {
+		return errors.Tag(err)
+	}
+	return nil
+}
+
+// applyEventOutboxScope 为事件 outbox 查询追加 workflow、分片和 UID 边界。
+func (r *TagRepository) applyEventOutboxScope(query *gorm.DB, opts types.RuntimeOptions) (*gorm.DB, error) {
 	if strings.TrimSpace(opts.WorkflowID) != "" {
 		query = query.Where("workflow_id = ?", opts.WorkflowID)
 	}
-	if opts.ShardTotal > 0 {
+	if opts.ShardTotal > 1 {
 		shard := r.deps.ShardPlan.NormalizeShard(opts.ShardIndex, opts.ShardTotal)
-		query = query.Where("shard_no = ?", shard.Index)
+		condition, err := r.deps.ShardPlan.IndexedUIDCondition("uid", "shard_no", shard)
+		if err != nil {
+			return nil, errors.Tag(err)
+		}
+		query = query.Where(condition.Expr, condition.Args...)
 	}
 	if len(opts.UIDs) > 0 {
 		query = query.Where("uid IN ?", opts.UIDs)
 	}
-	if err := query.Find(&rows).Error; err != nil {
-		return nil, errors.Tag(err)
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	ids := make([]int64, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.ID)
-	}
-	result := logDB.WithContext(ctx).Model(&model.UserTagEventOutbox{}).
-		Where("id IN ? AND state IN ?", ids, []model.UserTagEventOutboxState{model.UserTagEventOutboxStatePending, model.UserTagEventOutboxStateRetry}).
-		Updates(map[string]any{
-			"state":      model.UserTagEventOutboxStateRunning,
-			"attempt":    gorm.Expr("attempt + 1"),
-			"locked_at":  &now,
-			"locked_by":  eventOutboxLocker(opts),
-			"updated_at": now,
-		})
-	if result.Error != nil {
-		return nil, errors.Tag(result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return nil, nil
-	}
-	return rows, nil
+	return query, nil
 }
 
 // markEventOutboxFailed 标记事件派发失败并设置下一次重试时间。
@@ -537,6 +600,7 @@ func eventOutboxRowToChange(row model.UserTagEventOutbox) types.TagChange {
 		UID:        row.UID,
 		TagType:    row.TagType,
 		Action:     row.Action,
+		Source:     int(row.TagSource),
 		Payload:    row.Payload,
 	}
 }

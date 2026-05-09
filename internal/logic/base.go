@@ -8,6 +8,7 @@ import (
 	"time"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/helper"
 	"admin/internal/audit"
 	"admin/internal/infra/loggerx"
@@ -73,7 +74,7 @@ func (l *BaseLogic) AppID() string {
 	if l == nil || l.Svc == nil {
 		return ""
 	}
-	return keys.NormalizeAppID(l.Svc.CurrentConfig().AppID)
+	return strings.TrimSpace(l.Svc.CurrentConfig().AppID)
 }
 
 // AppRedisKey 给直接 Redis 缓存和锁追加当前 app_id 命名空间。
@@ -81,7 +82,11 @@ func (l *BaseLogic) AppRedisKey(key string) string {
 	if l == nil {
 		return ""
 	}
-	return keys.AppScopedKey(l.AppID(), key)
+	appID := l.AppID()
+	if appID == "" || appID != runtimecfg.AppID() {
+		return ""
+	}
+	return keys.WithPrefix(key)
 }
 
 // AppRedisKeys 批量追加当前 app_id 命名空间并过滤空 key。
@@ -192,7 +197,13 @@ func (l *BaseLogic) AddAdminLog(action model.AdminLogAction, route, method, desc
 
 // RdsGetJsonObj 从当前 app_id 命名空间读取 JSON 字符串并反序列化到目标对象。
 func (l *BaseLogic) RdsGetJsonObj(key string, dest any) error {
+	if l == nil || l.Svc == nil || l.Svc.Rds == nil {
+		return errors.New("Redis 未初始化")
+	}
 	key = l.AppRedisKey(key)
+	if key == "" {
+		return errors.New("Redis key 为空")
+	}
 	val, err := l.Svc.Rds.Get(l.Ctx, key).Result()
 	if err != nil {
 		return errors.Tag(err)
@@ -235,7 +246,13 @@ func LogWrappedError(logger interface{ Errorf(string, ...any) }, err error, form
 
 // RdsSetJSONValue 将值序列化为 JSON 后写入当前 app_id 命名空间，并设置过期时间。
 func (l *BaseLogic) RdsSetJSONValue(key string, value any, expireSec int) error {
+	if l == nil || l.Svc == nil || l.Svc.Rds == nil {
+		return errors.New("Redis 未初始化")
+	}
 	key = l.AppRedisKey(key)
+	if key == "" {
+		return errors.New("Redis key 为空")
+	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		return errors.Tag(err)
@@ -248,14 +265,22 @@ func (l *BaseLogic) RdsDelKeys(keys ...string) error {
 	if len(keys) == 0 {
 		return nil
 	}
+	if l == nil || l.Svc == nil || l.Svc.Rds == nil {
+		return errors.New("Redis 未初始化")
+	}
+	deleted := false
 	for _, key := range keys {
 		key = l.AppRedisKey(key)
 		if key == "" {
 			continue
 		}
+		deleted = true
 		if err := l.Svc.Rds.Del(l.Ctx, key).Err(); err != nil {
 			return errors.Tag(err)
 		}
+	}
+	if !deleted {
+		return errors.New("Redis key 为空")
 	}
 	return nil
 }

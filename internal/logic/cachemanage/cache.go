@@ -136,7 +136,7 @@ func equalsAny(keyword string, values ...string) bool {
 
 // matchTemplatePrefix 判断关键字是否命中模板 key 的完整前缀或业务段前缀。
 func matchTemplatePrefix(template string, keyword string) bool {
-	for _, candidate := range []string{template, keys.TrimAppScopedPrefix(template)} {
+	for _, candidate := range []string{template, keys.TrimPrefix(template)} {
 		prefix := strings.TrimSpace(cachelogic.CacheTemplatePrefix(candidate))
 		if prefix != "" && strings.HasPrefix(prefix, keyword) {
 			return true
@@ -219,19 +219,21 @@ func (l *SystemCacheLogic) cacheInfoLookupKey(key string) string {
 // ensureCurrentAppCacheKey 禁止缓存管理操作访问其它 app_id 的完整 Redis key。
 func (l *SystemCacheLogic) ensureCurrentAppCacheKey(key string) error {
 	key = strings.TrimSpace(key)
-	if !keys.IsForeignAppScopedKey(l.AppID(), key) {
+	appID := strings.TrimSpace(l.AppID())
+	ownerAppID, ok := keys.Owner(key)
+	if !ok || (appID != "" && ownerAppID == appID) {
 		return nil
 	}
-	ownerAppID, _ := keys.AppScopedAppID(key)
 	return errors.Errorf("缓存key属于其它app_id[%s]，当前app_id[%s]禁止访问", ownerAppID, l.AppID())
 }
 
 // currentAppLogicalKey 只对当前 app_id 或裸业务 key 返回逻辑 key，避免其它站点 key 参与模板匹配。
 func (l *SystemCacheLogic) currentAppLogicalKey(key string) string {
-	if keys.IsForeignAppScopedKey(l.AppID(), key) {
+	appID := strings.TrimSpace(l.AppID())
+	if ownerAppID, ok := keys.Owner(key); ok && (appID == "" || ownerAppID != appID) {
 		return ""
 	}
-	return keys.TrimAppScopedPrefix(strings.TrimSpace(key))
+	return keys.TrimPrefix(strings.TrimSpace(key))
 }
 
 // SearchKey 搜索 Redis Key，仅允许精确 key 或已登记模板 key，避免生产大 Key 空间下使用 SCAN。
@@ -463,13 +465,13 @@ func (l *SystemCacheLogic) cacheItems() []types.CacheItem {
 	items = append(items, tableItems...)
 	items = append(items, types.CacheItem{
 		Index:        "admin_info",
-		Key:          keys.AdminInfoPatternRedisKey(l.AppID()),
-		KeyTitle:     keys.AdminInfoPatternRedisKey(l.AppID()),
+		Key:          keys.AdminInfoPatternRedisKey(),
+		KeyTitle:     keys.AdminInfoPatternRedisKey(),
 		Type:         "hash",
 		Remark:       "管理员登录态缓存",
 		Category:     "session",
 		IsTemplate:   true,
-		ExampleKey:   keys.AdminInfoRedisKey(l.AppID(), 1),
+		ExampleKey:   keys.AdminInfoRedisKey(1),
 		AutoRebuild:  true,
 		RefreshScope: "single",
 	})
@@ -491,7 +493,7 @@ func (l *SystemCacheLogic) cacheItemUsesTableCache(item *types.CacheItem) bool {
 
 // cacheItemUsesAppScope 判断缓存项是否使用统一 app_id 命名空间。
 func (l *SystemCacheLogic) cacheItemUsesAppScope(item *types.CacheItem) bool {
-	return item != nil && strings.HasPrefix(item.Key, keys.AppScopedDataPrefix)
+	return item != nil && strings.HasPrefix(item.Key, keys.ScopeRoot)
 }
 
 // isBuiltinCacheKey 判断当前 key 是否属于后台缓存管理内置目标，内置目标 miss 时允许自动回源重建后再查看。
@@ -646,7 +648,7 @@ func (l *SystemCacheLogic) matchCacheItem(key string) *types.CacheItem {
 		if items[i].Key == key ||
 			items[i].Key == physicalKey ||
 			cachelogic.TableCacheLogicalKey(l.BaseLogic, items[i].Key) == logicalKey ||
-			(appLogicalKey != "" && keys.TrimAppScopedPrefix(items[i].Key) == appLogicalKey) {
+			(appLogicalKey != "" && keys.TrimPrefix(items[i].Key) == appLogicalKey) {
 			return &items[i]
 		}
 	}
@@ -656,7 +658,7 @@ func (l *SystemCacheLogic) matchCacheItem(key string) *types.CacheItem {
 		}
 		prefix := cachelogic.CacheTemplatePrefix(items[i].Key)
 		logicalPrefix := cachelogic.CacheTemplatePrefix(cachelogic.TableCacheLogicalKey(l.BaseLogic, items[i].Key))
-		appLogicalPrefix := cachelogic.CacheTemplatePrefix(keys.TrimAppScopedPrefix(items[i].Key))
+		appLogicalPrefix := cachelogic.CacheTemplatePrefix(keys.TrimPrefix(items[i].Key))
 		if (prefix != "" && (strings.HasPrefix(key, prefix) || strings.HasPrefix(physicalKey, prefix))) ||
 			(logicalPrefix != "" && strings.HasPrefix(logicalKey, logicalPrefix)) ||
 			(appLogicalKey != "" && appLogicalPrefix != "" && strings.HasPrefix(appLogicalKey, appLogicalPrefix)) {
@@ -725,7 +727,7 @@ func (l *SystemCacheLogic) cacheSearchCandidateMatches(pattern string, candidate
 			patterns = append(patterns, physicalPattern)
 		}
 	}
-	if target != nil && target.appScoped {
+	if target != nil && target.appPrefix {
 		physicalPattern := l.AppRedisKey(pattern)
 		if physicalPattern != "" {
 			patterns = append(patterns, physicalPattern)
@@ -1128,9 +1130,9 @@ func maskCacheAnyMap(value map[string]any, maskAll bool) map[string]any {
 
 // isSensitiveCacheKey 判断 Redis Key 是否属于秘钥、登录态或 MFA 票据等敏感缓存。
 func isSensitiveCacheKey(key string) bool {
-	key = keys.TrimAppScopedPrefix(strings.TrimSpace(key))
+	key = keys.TrimPrefix(strings.TrimSpace(key))
 	for _, pattern := range sensitiveCacheKeyPatterns {
-		prefix := keys.KeyTemplatePrefix(keys.TrimAppScopedPrefix(pattern))
+		prefix := keys.KeyTemplatePrefix(keys.TrimPrefix(pattern))
 		if strings.HasPrefix(key, prefix) {
 			return true
 		}

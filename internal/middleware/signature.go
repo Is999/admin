@@ -12,6 +12,7 @@ import (
 
 	codes "admin/common/codes"
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/helper"
 	"admin/internal/infra/loggerx"
 	secretkeylogic "admin/internal/logic/secretkey"
@@ -352,13 +353,22 @@ func cloneRequestHeaders(header http.Header) map[string][]string {
 
 // markRequestVerified 使用 Redis 记录已验签请求，避免同一个 trace_id 在时间窗口内重复提交。
 func (m *SignatureMiddleware) markRequestVerified(r *http.Request, appID string, traceID string) error {
-	if strings.TrimSpace(appID) == "" || strings.TrimSpace(traceID) == "" {
+	appID = strings.TrimSpace(appID)
+	traceID = strings.TrimSpace(traceID)
+	if appID == "" || traceID == "" {
 		return errors.New("签名请求标识不能为空")
 	}
 	if m.svc == nil || m.svc.Rds == nil {
 		return errors.New("签名防重放缓存未初始化")
 	}
-	key := keys.AppScopedKey(appID, fmt.Sprintf(keys.SignatureReplayRequest, traceID))
+	runtimeAppID := runtimecfg.AppID()
+	if runtimeAppID == "" || appID != runtimeAppID || strings.TrimSpace(m.svc.CurrentConfig().AppID) != runtimeAppID {
+		return errors.New("签名 app_id 与运行配置不一致")
+	}
+	key := keys.WithPrefix(fmt.Sprintf(keys.SignatureReplayRequest, traceID))
+	if key == "" {
+		return errors.New("签名防重放缓存 key 为空")
+	}
 	ok, err := m.svc.Rds.SetNX(r.Context(), key, "1", signatureReplayTTL).Result()
 	if err != nil {
 		return errors.Tag(err)

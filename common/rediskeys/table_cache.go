@@ -4,32 +4,32 @@ import "strings"
 
 const tableCacheSegment = "table"
 
-// TableCachePrefix 根据站点 AppID 生成 table-cache 真实 Redis Key 前缀。
-// 最终 key 形如 `app:{appID}:table:{key}`，业务 key 本身不带 table 前缀。
-func TableCachePrefix(appID string) string {
-	return AppScopedKey(appID, tableCacheLogicalPrefix())
+// TableCachePrefix 返回当前应用 table-cache 真实 Redis Key 前缀。
+// 最终 key 形如 `app:{app_id}:table:{key}`，业务 key 本身不带 table 前缀。
+func TableCachePrefix() string {
+	return WithPrefix(tableCacheLogicalPrefix())
 }
 
-// IsTableCacheKey 判断 key 是否属于指定 app_id 的 table-cache 真实 Redis key。
-func IsTableCacheKey(appID string, key string) bool {
+// IsTableCacheKey 判断 key 是否属于当前应用的 table-cache 真实 Redis key。
+func IsTableCacheKey(key string) bool {
 	key = strings.TrimSpace(key)
-	appID = NormalizeAppID(appID)
-	if appID == "" || !strings.HasPrefix(key, AppScopedPrefix(appID)) {
+	prefix := Prefix()
+	if prefix == "" || !strings.HasPrefix(key, prefix) {
 		return false
 	}
-	logicalKey := TrimAppScopedPrefix(key)
+	logicalKey := TrimPrefix(key)
 	logicalPrefix := tableCacheLogicalPrefix()
 	return strings.HasPrefix(logicalKey, logicalPrefix) && len(logicalKey) > len(logicalPrefix)
 }
 
-// TrimTableCachePrefix 去掉指定 AppID 的 table-cache 项目前缀，返回业务逻辑 key。
-// 只有当前 app_id 的 `app:{appID}:table:` 会被截断，跨站点或直接 Redis key 会保持原样。
-func TrimTableCachePrefix(appID string, key string) string {
+// TrimTableCachePrefix 去掉当前应用的 table-cache 项目前缀，返回业务逻辑 key。
+// 只有当前 app_id 的 `app:{app_id}:table:` 会被截断，跨站点或直接 Redis key 会保持原样。
+func TrimTableCachePrefix(key string) string {
 	key = strings.TrimSpace(key)
-	if !IsTableCacheKey(appID, key) {
+	if !IsTableCacheKey(key) {
 		return key
 	}
-	return strings.TrimPrefix(TrimAppScopedPrefix(key), tableCacheLogicalPrefix())
+	return strings.TrimPrefix(TrimPrefix(key), tableCacheLogicalPrefix())
 }
 
 func tableCacheLogicalPrefix() string {

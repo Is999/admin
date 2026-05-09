@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
+	"admin/internal/config"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -20,7 +22,12 @@ func seedBoolSecurityConfig(t *testing.T, client *redis.Client, uuid string, ena
 	if enabled {
 		value = "true"
 	}
-	cacheKey := keys.TableCachePrefix("site-a") + fmt.Sprintf(keys.SysConfigUUID, uuid)
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-a"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
+	cacheKey := keys.TableCachePrefix() + fmt.Sprintf(keys.SysConfigUUID, uuid)
 	if err := client.HSet(context.Background(), cacheKey, map[string]any{
 		"type":  "6",
 		"value": value,

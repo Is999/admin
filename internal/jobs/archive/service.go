@@ -13,6 +13,7 @@ import (
 
 	"admin/common/embedasset"
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/infra/loggerx"
 	redislock "admin/internal/infra/redsync"
@@ -1865,43 +1866,39 @@ func (s *Service) redisClient() redis.UniversalClient {
 	return s.svcCtx.Rds
 }
 
-// archiveAppID 返回归档服务 Redis key 使用的 app_id。
-func (s *Service) archiveAppID() (string, error) {
+// ensureRedisNamespace 校验归档服务已经注入 Redis 命名空间配置。
+func (s *Service) ensureRedisNamespace() error {
 	if s == nil || s.svcCtx == nil {
-		return "", errors.Errorf("归档服务上下文未初始化，无法获取 app_id")
+		return errors.Errorf("归档服务上下文未初始化，无法获取 app_id")
 	}
-	appID := keys.NormalizeAppID(s.svcCtx.CurrentConfig().AppID)
-	if appID == "" {
-		return "", errors.Errorf("归档服务缺少 app_id 配置")
+	if runtimecfg.AppID() == "" {
+		return errors.Errorf("归档服务缺少 app_id 配置")
 	}
-	return appID, nil
+	return nil
 }
 
 // archiveJobPlanKey 返回当前 app_id 作用域下的区间规划锁 key。
 func (s *Service) archiveJobPlanKey(jobName string) (string, error) {
-	appID, err := s.archiveAppID()
-	if err != nil {
+	if err := s.ensureRedisNamespace(); err != nil {
 		return "", errors.Tag(err)
 	}
-	return keys.ArchiveJobPlanRedisKey(appID, jobName), nil
+	return keys.ArchiveJobPlanRedisKey(jobName), nil
 }
 
 // archiveJobWatermarkKey 返回当前 app_id 作用域下的水位推进锁 key。
 func (s *Service) archiveJobWatermarkKey(jobName string) (string, error) {
-	appID, err := s.archiveAppID()
-	if err != nil {
+	if err := s.ensureRedisNamespace(); err != nil {
 		return "", errors.Tag(err)
 	}
-	return keys.ArchiveJobWatermarkRedisKey(appID, jobName), nil
+	return keys.ArchiveJobWatermarkRedisKey(jobName), nil
 }
 
 // archiveJobCleanupKey 返回当前 app_id 作用域下的历史表清理锁 key。
 func (s *Service) archiveJobCleanupKey(jobName string) (string, error) {
-	appID, err := s.archiveAppID()
-	if err != nil {
+	if err := s.ensureRedisNamespace(); err != nil {
 		return "", errors.Tag(err)
 	}
-	return keys.ArchiveJobCleanupRedisKey(appID, jobName), nil
+	return keys.ArchiveJobCleanupRedisKey(jobName), nil
 }
 
 // safeDelayMinutes 返回当前归档模块生效的安全延迟分钟数。

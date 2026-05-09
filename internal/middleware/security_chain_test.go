@@ -6,9 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/security"
 	"admin/internal/svc"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestSignatureMiddlewareRejectsRequestSignAll(t *testing.T) {
@@ -41,6 +45,28 @@ func TestSignatureMiddlewareRejectsResponseSignAll(t *testing.T) {
 	}, "demo-app", "trace", "1700000000", security.SignatureTypeMD5, httptest.NewRequest(http.MethodPost, "/api/demo", nil))
 	if err == nil || !strings.Contains(err.Error(), "全量字段") {
 		t.Fatalf("signResponse() error = %v, want full-field rejection", err)
+	}
+}
+
+func TestSignatureMiddlewareMarkRequestVerifiedFailsClosedOnAppIDMismatch(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-b"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
+
+	middleware := NewSignatureMiddleware(svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
+	err := middleware.markRequestVerified(httptest.NewRequest(http.MethodPost, "/api/demo", nil), "site-a", "trace-1")
+	if err == nil || !strings.Contains(err.Error(), "app_id") {
+		t.Fatalf("markRequestVerified() error = %v, want app_id mismatch", err)
+	}
+	if server.Exists("app:site-a:signature:request:trace-1") || server.Exists("app:site-b:signature:request:trace-1") {
+		t.Fatal("app_id 不一致时不应写入签名防重放缓存")
 	}
 }
 

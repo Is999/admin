@@ -1,10 +1,15 @@
-package keys
+package keys_test
 
-import "testing"
+import (
+	"testing"
+
+	keys "admin/common/rediskeys"
+)
 
 func TestTableCachePrefix(t *testing.T) {
-	if got, want := TableCachePrefix("site-a"), "app:site-a:table:"; got != want {
-		t.Fatalf("TableCachePrefix() = %q, want %q", got, want)
+	useAppID(t, "site-a")
+	if got, want := keys.TableCachePrefix(), "app:site-a:table:"; got != want {
+		t.Fatalf("keys.TableCachePrefix() = %q, want %q", got, want)
 	}
 }
 
@@ -25,8 +30,9 @@ func TestIsTableCacheKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsTableCacheKey(tt.appID, tt.key); got != tt.want {
-				t.Fatalf("IsTableCacheKey() = %t, want %t", got, tt.want)
+			useAppID(t, tt.appID)
+			if got := keys.IsTableCacheKey(tt.key); got != tt.want {
+				t.Fatalf("keys.IsTableCacheKey() = %t, want %t", got, tt.want)
 			}
 		})
 	}
@@ -73,8 +79,9 @@ func TestTrimTableCachePrefix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := TrimTableCachePrefix(tt.appID, tt.key); got != tt.want {
-				t.Fatalf("TrimTableCachePrefix() = %q, want %q", got, tt.want)
+			useAppID(t, tt.appID)
+			if got := keys.TrimTableCachePrefix(tt.key); got != tt.want {
+				t.Fatalf("keys.TrimTableCachePrefix() = %q, want %q", got, tt.want)
 			}
 		})
 	}

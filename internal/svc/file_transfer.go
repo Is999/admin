@@ -9,6 +9,7 @@ import (
 	"time"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/pkg/transfer"
 
@@ -45,6 +46,10 @@ func (r *FileTransferRuntime) UploadManager(cfg config.FileStorageConfig, appID 
 	if client == nil {
 		return nil, errors.Errorf("文件上传 Redis 客户端未初始化")
 	}
+	appID = strings.TrimSpace(appID)
+	if appID == "" || appID != runtimecfg.AppID() {
+		return nil, errors.Errorf("文件上传 app_id 与运行配置不一致")
+	}
 	fingerprint := uploadManagerFingerprint(cfg.UploadSession, appID)
 
 	// 高并发请求下优先走读锁快速路径，配置不变时无额外分配。
@@ -62,13 +67,20 @@ func (r *FileTransferRuntime) UploadManager(cfg config.FileStorageConfig, appID 
 	if r.uploadManager != nil && r.uploadManagerFingerprint == fingerprint {
 		return r.uploadManager, nil
 	}
+	sessionKey := keys.WithPrefix(keys.FileTransferUploadSession)
+	chunksKey := keys.WithPrefix(keys.FileTransferUploadChunks)
+	fingerprintKey := keys.WithPrefix(keys.FileTransferUploadFingerprint)
+	objectIndexKey := keys.WithPrefix(keys.FileTransferUploadObjectIndex)
+	if sessionKey == "" || chunksKey == "" || fingerprintKey == "" || objectIndexKey == "" {
+		return nil, errors.Errorf("文件上传 Redis key 模板为空")
+	}
 	manager := transfer.NewLocalUploadManager(
 		client,
 		fileTransferRootDir(cfg.UploadSession),
-		keys.AppScopedKey(appID, keys.FileTransferUploadSession),
-		keys.AppScopedKey(appID, keys.FileTransferUploadChunks),
-		keys.AppScopedKey(appID, keys.FileTransferUploadFingerprint),
-		keys.AppScopedKey(appID, keys.FileTransferUploadObjectIndex),
+		sessionKey,
+		chunksKey,
+		fingerprintKey,
+		objectIndexKey,
 		fileTransferUploadSessionTTL(cfg),
 	)
 	r.uploadManager = manager
@@ -124,7 +136,7 @@ func uploadManagerFingerprint(cfg config.FileStorageUploadSessionConfig, appID s
 	}{
 		RootDir:    fileTransferRootDir(cfg),
 		TTLSeconds: int(fileTransferUploadSessionTTL(config.FileStorageConfig{UploadSession: cfg}) / time.Second),
-		AppID:      keys.NormalizeAppID(appID),
+		AppID:      strings.TrimSpace(appID),
 	})
 	if err != nil {
 		return ""

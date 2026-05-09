@@ -28,12 +28,12 @@ func NewCacheLogic(ctx context.Context, svcCtx *svc.ServiceContext) *CacheLogic 
 
 // getAdminInfoKey 统一管理员缓存 key 格式，避免业务层散落拼接字符串。
 func (l *CacheLogic) getAdminInfoKey(adminID int) string {
-	return keys.AdminInfoRedisKey(l.AppID(), adminID)
+	return keys.AdminInfoRedisKey(adminID)
 }
 
 // getAdminLogoutTokenKey 统一管理员登出令牌标记 key，避免中间件和业务层重复拼接。
 func (l *CacheLogic) getAdminLogoutTokenKey(adminID int) string {
-	return keys.AdminLogoutTokenRedisKey(l.AppID(), adminID)
+	return keys.AdminLogoutTokenRedisKey(adminID)
 }
 
 // ClearAdminLogoutToken 清理管理员显式登出标记，登录成功后允许新 token 正常回源会话。

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/pkg/storage"
 	"admin/pkg/transfer"
@@ -160,6 +161,11 @@ func TestServiceContextFileTransferUploadManagerCachesByConfig(t *testing.T) {
 	})
 
 	rootDir := t.TempDir()
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-a"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
 	svcCtx := NewServiceContext(config.Config{
 		AppID: "site-a",
 		FileStorage: config.FileStorageConfig{
@@ -221,6 +227,33 @@ func TestServiceContextFileTransferUploadManagerCachesByConfig(t *testing.T) {
 	}
 	if third == first {
 		t.Fatal("上传会话配置变化后应重建上传管理器实例")
+	}
+}
+
+// TestFileTransferUploadManagerFailsClosedOnAppIDMismatch 确保上传会话缓存不会写入错误站点命名空间。
+func TestFileTransferUploadManagerFailsClosedOnAppIDMismatch(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
+
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-b"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
+	svcCtx := NewServiceContext(config.Config{
+		AppID: "site-a",
+		FileStorage: config.FileStorageConfig{
+			UploadSession: config.FileStorageUploadSessionConfig{
+				RootDir: t.TempDir(),
+			},
+		},
+	}, Dependencies{Rds: client})
+
+	if _, err := svcCtx.FileTransferUploadManager(); err == nil || !strings.Contains(err.Error(), "app_id") {
+		t.Fatalf("FileTransferUploadManager() error = %v, want app_id mismatch", err)
 	}
 }
 

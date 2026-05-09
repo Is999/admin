@@ -24,6 +24,7 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
+// 任务配置展示常量定义分页、脱敏占位和前端值类型。
 const (
 	taskConfigDefaultPage     = 1
 	taskConfigMaskPlaceholder = "****"
@@ -36,12 +37,13 @@ const (
 )
 
 type maskedTaskConfigView struct {
-	items          []types.TaskConfigItem
-	sections       []types.TaskConfigSectionStat
-	sensitiveTotal int
-	snapshotYAML   string
+	items          []types.TaskConfigItem        // items 表示扁平化后的配置项列表
+	sections       []types.TaskConfigSectionStat // sections 表示按一级配置段聚合的统计
+	sensitiveTotal int                           // sensitiveTotal 表示命中敏感规则的配置项数量
+	snapshotYAML   string                        // snapshotYAML 表示脱敏后的完整运行配置快照
 }
 
+// 任务配置敏感值识别规则用于隐藏地址、主机和凭据类配置。
 var (
 	taskConfigIPv4Pattern = regexp.MustCompile(`(?:^|[^\d])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:$|[^\d])`)
 	taskConfigHostPattern = regexp.MustCompile(`(?i)\b(?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}):\d{2,5}\b`)

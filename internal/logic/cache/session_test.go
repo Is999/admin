@@ -14,8 +14,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// TestAdminSessionCacheUsesAppScopedKey 验证管理员登录态只写入 app_id 命名空间下的 Redis key。
-func TestAdminSessionCacheUsesAppScopedKey(t *testing.T) {
+// TestAdminSessionCacheUsesAppPrefix 验证管理员登录态只写入 app_id 命名空间下的 Redis key。
+func TestAdminSessionCacheUsesAppPrefix(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() {
@@ -38,13 +38,13 @@ func TestAdminSessionCacheUsesAppScopedKey(t *testing.T) {
 	if server.Exists(keys.AdminInfoLogicalKey(7)) {
 		t.Fatal("不应写入裸管理员登录态 key")
 	}
-	if !server.Exists(keys.AdminInfoRedisKey("site-a", 7)) {
+	if !server.Exists(keys.AdminInfoRedisKey(7)) {
 		t.Fatal("期望写入 app_id 命名空间下的管理员登录态 key")
 	}
 }
 
-// TestAdminLogoutTokenUsesAppScopedKey 验证登出标记不会写入裸 Redis key。
-func TestAdminLogoutTokenUsesAppScopedKey(t *testing.T) {
+// TestAdminLogoutTokenUsesAppPrefix 验证登出标记不会写入裸 Redis key。
+func TestAdminLogoutTokenUsesAppPrefix(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() {
@@ -59,7 +59,7 @@ func TestAdminLogoutTokenUsesAppScopedKey(t *testing.T) {
 	if server.Exists(keys.AdminLogoutTokenLogicalKey(7)) {
 		t.Fatal("不应写入裸管理员登出标记 key")
 	}
-	if !server.Exists(keys.AdminLogoutTokenRedisKey("site-a", 7)) {
+	if !server.Exists(keys.AdminLogoutTokenRedisKey(7)) {
 		t.Fatal("期望写入 app_id 命名空间下的管理员登出标记 key")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/Is999/go-utils/errors"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/helper"
 	"admin/internal/config"
 	"admin/internal/infra/loggerx"
@@ -210,7 +211,7 @@ func New(cfg config.TaskQueueConfig, client redis.UniversalClient) *Manager {
 	if !cfg.Enabled || client == nil {
 		return nil
 	}
-	if keys.NormalizeAppID(cfg.AppID) == "" {
+	if strings.TrimSpace(cfg.AppID) == "" {
 		return nil
 	}
 	m := &Manager{
@@ -237,11 +238,17 @@ func (m *Manager) appNamespace() string {
 	if m == nil {
 		return ""
 	}
-	appID := keys.NormalizeAppID(m.CurrentConfig().AppID)
+	appID := strings.TrimSpace(m.CurrentConfig().AppID)
 	if appID == "" {
 		return ""
 	}
 	return appID
+}
+
+// useRedisNamespace 将当前任务管理器配置的 app_id 绑定到 Redis key helper。
+func (m *Manager) useRedisNamespace() bool {
+	appID := m.appNamespace()
+	return appID != "" && appID == runtimecfg.AppID() && keys.Prefix() != ""
 }
 
 // namespacedQueueName 返回底层 Asynq 实际使用的队列名。
@@ -251,7 +258,10 @@ func (m *Manager) namespacedQueueName(queue string) string {
 	if queue == "" {
 		return ""
 	}
-	return keys.TaskQueueName(m.appNamespace(), queue)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskQueueName(queue)
 }
 
 // displayQueueName 把底层带站点前缀的队列名还原成对外展示的逻辑队列名。
@@ -265,7 +275,10 @@ func (m *Manager) displayQueueName(queue string) string {
 
 // workflowKeyPrefix 返回当前站点在 Redis 中的工作流 key 前缀。
 func (m *Manager) workflowKeyPrefix() string {
-	return keys.TaskWorkflowPrefix(m.appNamespace())
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowPrefix()
 }
 
 // namespacedGroup 返回当前站点下聚合任务使用的分组名。
@@ -274,7 +287,10 @@ func (m *Manager) namespacedGroup(group string) string {
 	if group == "" {
 		return ""
 	}
-	return keys.TaskQueueName(m.appNamespace(), group)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskQueueName(group)
 }
 
 // displayGroupName 把底层聚合分组名还原成对外展示名称。
@@ -292,7 +308,10 @@ func (m *Manager) namespacedUniqueKey(key string) string {
 	if key == "" {
 		return ""
 	}
-	return keys.TaskQueueName(m.appNamespace(), key)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskQueueName(key)
 }
 
 // CurrentConfig 返回当前生效的任务系统配置快照。
@@ -318,7 +337,7 @@ func (m *Manager) UpdateConfig(cfg config.TaskQueueConfig) {
 
 // IsEnabled 返回任务系统是否启用。
 func (m *Manager) IsEnabled() bool {
-	return m != nil && m.client != nil && m.redis != nil
+	return m != nil && m.client != nil && m.redis != nil && m.useRedisNamespace()
 }
 
 // EnqueueTask 提供轻量级基础任务投递入口。
@@ -867,7 +886,10 @@ func (m *Manager) writeTaskResult(ctx context.Context, task *asynq.Task, meta *r
 
 // taskRuntimeKey 返回任务运行耗时快照 Redis key。
 func (m *Manager) taskRuntimeKey(taskID string) string {
-	return keys.TaskRuntimeKey(m.appNamespace(), taskID)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskRuntimeKey(taskID)
 }
 
 // taskRuntimeNeedsWorkflowRetention 判断当前任务运行快照是否需要对齐工作流保留窗口。
@@ -1785,7 +1807,7 @@ func (m *Manager) visibleServerQueues(queues map[string]int) (map[string]int, bo
 		return nil, false
 	}
 	result := make(map[string]int, len(queues))
-	prefix := keys.TaskQueueNameScope(m.appNamespace())
+	prefix := keys.TaskQueueNameScope()
 	for queueName, weight := range queues {
 		queueName = strings.TrimSpace(queueName)
 		if queueName == "" || !strings.HasPrefix(queueName, prefix) {
@@ -1819,7 +1841,7 @@ func (m *Manager) visibleQueueNames(queueNames []string) []string {
 	if len(queueNames) == 0 {
 		return nil
 	}
-	prefix := keys.TaskQueueNameScope(m.appNamespace())
+	prefix := keys.TaskQueueNameScope()
 	result := make([]string, 0, len(queueNames))
 	for _, queueName := range queueNames {
 		queueName = strings.TrimSpace(queueName)
@@ -3126,53 +3148,83 @@ func notifyPeriodicTaskConfigInvalid(index int, item config.TaskPeriodicConfig, 
 
 // workflowMetaKey 返回工作流主记录在 Redis 中的 key。
 func (m *Manager) workflowMetaKey(workflowID string) string {
-	return keys.TaskWorkflowMetaKey(m.appNamespace(), workflowID)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowMetaKey(workflowID)
 }
 
 // workflowNodesKey 返回工作流节点集合在 Redis 中的 key。
 func (m *Manager) workflowNodesKey(workflowID string) string {
-	return keys.TaskWorkflowNodesKey(m.appNamespace(), workflowID)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowNodesKey(workflowID)
 }
 
 // workflowNodeKey 返回单个工作流节点状态记录的 Redis key。
 func (m *Manager) workflowNodeKey(workflowID, nodeName string) string {
-	return keys.TaskWorkflowNodeKey(m.appNamespace(), workflowID, nodeName)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowNodeKey(workflowID, nodeName)
 }
 
 // workflowNodeScheduledKey 返回节点调度去重标记的 Redis key。
 func (m *Manager) workflowNodeScheduledKey(workflowID, nodeName string) string {
-	return keys.TaskWorkflowNodeScheduledKey(m.appNamespace(), workflowID, nodeName)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowNodeScheduledKey(workflowID, nodeName)
 }
 
 // workflowNodeFinalizedKey 返回节点完成收口标记的 Redis key。
 func (m *Manager) workflowNodeFinalizedKey(workflowID, nodeName string) string {
-	return keys.TaskWorkflowNodeFinalizedKey(m.appNamespace(), workflowID, nodeName)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowNodeFinalizedKey(workflowID, nodeName)
 }
 
 // workflowInstanceKey 返回单个分片任务实例终态巡检 Redis key。
 // 终态去重标记已收敛到 workflowNodeKey 对应 hash 内，此方法用于回归确认不再写入实例散列 key。
 func (m *Manager) workflowInstanceKey(workflowID, nodeName string, shardIndex int) string {
-	return keys.TaskWorkflowNodeInstanceKey(m.appNamespace(), workflowID, nodeName, shardIndex)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowNodeInstanceKey(workflowID, nodeName, shardIndex)
 }
 
 // workflowCompletedKey 返回工作流完成标记的 Redis key。
 func (m *Manager) workflowCompletedKey(workflowID string) string {
-	return keys.TaskWorkflowCompletedKey(m.appNamespace(), workflowID)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowCompletedKey(workflowID)
 }
 
 // workflowFailedKey 返回工作流失败标记的 Redis key。
 func (m *Manager) workflowFailedKey(workflowID string) string {
-	return keys.TaskWorkflowFailedKey(m.appNamespace(), workflowID)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowFailedKey(workflowID)
 }
 
 // workflowUniqueKey 返回工作流幂等占位记录的 Redis key。
 func (m *Manager) workflowUniqueKey(name, key string) string {
-	return keys.TaskWorkflowUniqueKey(m.appNamespace(), name, key)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowUniqueKey(name, key)
 }
 
 // workflowUniqueLockKey 返回工作流幂等预占时使用的短锁 Redis key。
 func (m *Manager) workflowUniqueLockKey(name, key string) string {
-	return keys.TaskWorkflowUniqueLockKey(m.appNamespace(), name, key)
+	if !m.useRedisNamespace() {
+		return ""
+	}
+	return keys.TaskWorkflowUniqueLockKey(name, key)
 }
 
 // workflowUniqueLockTTL 返回幂等预占互斥锁的超时时间。
@@ -3352,7 +3404,7 @@ func (m *Manager) schedulerLeaseKey() string {
 
 // schedulerLeaseKeyByConfig 根据给定配置计算调度 leader 锁的 Redis key。
 func (m *Manager) schedulerLeaseKeyByConfig(cfg config.TaskQueueConfig) string {
-	return keys.TaskSchedulerLeaderRedisKey(cfg.AppID, cfg.Scheduler.LeaseKey)
+	return keys.TaskSchedulerLeaderRedisKey(cfg.Scheduler.LeaseKey)
 }
 
 // schedulerLeaseTTL 返回调度 leader 锁租约时长。

@@ -1,9 +1,6 @@
 package repository
 
 import (
-	"context"
-
-	"admin/internal/jobs/usertag/queryplan"
 	"admin/internal/jobs/usertag/route"
 	"admin/internal/svc"
 
@@ -37,16 +34,4 @@ func NewRuntimeDeps(svcCtx *svc.ServiceContext, plan route.ShardPlan) RuntimeDep
 		Redis:     svcCtx.Rds,
 		ShardPlan: plan,
 	}
-}
-
-// QueryExecutor 定义按查询计划执行数据访问的最小接口。
-// 具体仓储需要先 Validate 计划，再执行字段最小化与条件下推。
-type QueryExecutor interface {
-	Execute(ctx context.Context, plan queryplan.Plan, dest any) error
-}
-
-// OutboxRepository 定义标签得失事件 outbox 的最小访问接口。
-type OutboxRepository interface {
-	Append(ctx context.Context, workflowID string, shard int, rows any) error            // 追加最终标签差异事件
-	Drain(ctx context.Context, workflowID string, shard int, batchSize int) (int, error) // 派发并标记 outbox 事件
 }

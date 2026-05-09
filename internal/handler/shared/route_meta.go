@@ -30,6 +30,7 @@ func newAuditRouteMeta(alias middleware.RouteAlias, action model.AdminLogAction,
 	}
 }
 
+// 路由元数据变量集中维护路由别名、审计动作和中文说明，是路由注册与审计的统一契约。
 var (
 	// 认证模块
 	AuthCaptcha                = newRouteMeta("auth.captcha", "获取登录图形验证码")

@@ -45,11 +45,10 @@ func TableCacheManager(base *corelogic.BaseLogic) (*tablecache.Manager, error) {
 // tableCacheKeyPrefix 返回当前站点 table-cache 托管缓存使用的 Redis Key 前缀。
 // 前缀来源于运行期 app_id，确保多站点共用 Redis 时权限、配置和秘钥缓存不会相互覆盖。
 func tableCacheKeyPrefix(base *corelogic.BaseLogic) string {
-	appID := tableCacheAppID(base)
-	if appID == "" {
+	if base == nil || base.AppID() == "" {
 		return ""
 	}
-	return keys.TableCachePrefix(appID)
+	return keys.TableCachePrefix()
 }
 
 // tableCachePhysicalKey 把逻辑缓存 key 转换为 table-cache 当前要求的真实 Redis key。
@@ -57,7 +56,13 @@ func tableCacheKeyPrefix(base *corelogic.BaseLogic) string {
 func tableCachePhysicalKey(base *corelogic.BaseLogic, key string) string {
 	key = strings.TrimSpace(key)
 	prefix := tableCacheKeyPrefix(base)
-	if key == "" || prefix == "" || strings.HasPrefix(key, prefix) || keys.HasAppScopedPrefix(key) {
+	if key == "" || prefix == "" || strings.HasPrefix(key, prefix) {
+		return key
+	}
+	if keys.IsForeignKey(key) {
+		return ""
+	}
+	if keys.HasPrefix(key) {
 		return key
 	}
 	return prefix + key
@@ -71,20 +76,15 @@ func TableCachePhysicalKey(base *corelogic.BaseLogic, key string) string {
 // tableCacheLogicalKey 去掉 table-cache 项目级前缀，供分类、脱敏和模板匹配使用。
 func tableCacheLogicalKey(base *corelogic.BaseLogic, key string) string {
 	key = strings.TrimSpace(key)
-	return keys.TrimTableCachePrefix(tableCacheAppID(base), key)
+	if base == nil || base.Svc == nil {
+		return key
+	}
+	return keys.TrimTableCachePrefix(key)
 }
 
 // TableCacheLogicalKey 去掉 table-cache 项目级前缀。
 func TableCacheLogicalKey(base *corelogic.BaseLogic, key string) string {
 	return tableCacheLogicalKey(base, key)
-}
-
-// tableCacheAppID 返回当前站点 table-cache 托管缓存使用的 App ID。
-func tableCacheAppID(base *corelogic.BaseLogic) string {
-	if base == nil || base.Svc == nil {
-		return ""
-	}
-	return base.AppID()
 }
 
 // tableCachePhysicalKeys 批量转换 table-cache 托管缓存 key，并过滤空值。

@@ -5,11 +5,13 @@ import (
 	cachelogic "admin/internal/logic/cache"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"admin/common/codes"
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -17,6 +19,21 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
+
+func TestMain(m *testing.M) {
+	runtimecfg.Set(config.Config{AppID: "site-a"})
+	os.Exit(m.Run())
+}
+
+// useCacheManageTestAppID 为当前缓存管理测试注入 Redis key 命名空间。
+func useCacheManageTestAppID(t *testing.T, appID string) {
+	t.Helper()
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: appID})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
+}
 
 // TestMaskCacheValueForAdminInfo 验证管理员登录态缓存按字段级规则展示，
 // 仅遮罩 token 等通用敏感字段，保留资料字段与备注原样展示。
@@ -38,7 +55,8 @@ func TestMaskCacheValueForAdminInfo(t *testing.T) {
 		"username":          "admin",
 	}
 
-	got := maskCacheValue(keys.AdminInfoRedisKey("site-a", 1), value)
+	useCacheManageTestAppID(t, "site-a")
+	got := maskCacheValue(keys.AdminInfoRedisKey(1), value)
 	masked, ok := got.(map[string]string)
 	if !ok {
 		t.Fatalf("maskCacheValue() type = %T, want map[string]string", got)
@@ -99,7 +117,8 @@ func TestMaskCacheValueForReplayTicket(t *testing.T) {
 		"status":         "1",
 	}
 
-	got := maskCacheValue(keys.AdminMFATwoStepTicketRedisKey("site-a", 7, "demo"), value)
+	useCacheManageTestAppID(t, "site-a")
+	got := maskCacheValue(keys.AdminMFATwoStepTicketRedisKey(7, "demo"), value)
 	masked, ok := got.(map[string]string)
 	if !ok {
 		t.Fatalf("maskCacheValue() type = %T, want map[string]string", got)
@@ -127,17 +146,18 @@ func TestNormalizeCacheSearchPatternRejectsDangerousBroadScan(t *testing.T) {
 
 // TestMatchCacheListItemSupportsTemplatePrefixOnly 验证模板缓存支持前缀筛选，普通缓存仍保持精确匹配。
 func TestMatchCacheListItemSupportsTemplatePrefixOnly(t *testing.T) {
+	useCacheManageTestAppID(t, "site-a")
 	templateItem := types.CacheItem{
 		Index:      "admin_info",
-		Key:        keys.AdminInfoPatternRedisKey("site-a"),
-		KeyTitle:   keys.AdminInfoPatternRedisKey("site-a"),
-		ExampleKey: keys.AdminInfoRedisKey("site-a", 1),
+		Key:        keys.AdminInfoPatternRedisKey(),
+		KeyTitle:   keys.AdminInfoPatternRedisKey(),
+		ExampleKey: keys.AdminInfoRedisKey(1),
 		IsTemplate: true,
 	}
 	if !matchCacheListItem(templateItem, keys.KeyTemplatePrefix(keys.AdminInfoLogicalPattern())) {
 		t.Fatal("期望模板缓存支持按固定前缀匹配")
 	}
-	if !matchCacheListItem(templateItem, keys.AdminInfoRedisKey("site-a", 1)) {
+	if !matchCacheListItem(templateItem, keys.AdminInfoRedisKey(1)) {
 		t.Fatal("期望模板缓存支持按示例 key 精确匹配")
 	}
 
@@ -391,7 +411,7 @@ func TestCacheSearchCandidateMatchesLogicalTableCachePattern(t *testing.T) {
 	if adminTarget == nil {
 		t.Fatal("matchSearchTemplateTarget(admin info wildcard) returned nil")
 	}
-	if !logicObj.cacheSearchCandidateMatches(adminInfoWildcard, keys.AdminInfoRedisKey("site-a", 1), adminTarget) {
+	if !logicObj.cacheSearchCandidateMatches(adminInfoWildcard, keys.AdminInfoRedisKey(1), adminTarget) {
 		t.Fatal("cacheSearchCandidateMatches(admin info) = false, want true")
 	}
 }
@@ -401,8 +421,8 @@ func TestCacheTemplateDefinitionsUsePhysicalKeys(t *testing.T) {
 	logicObj := &SystemCacheLogic{
 		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{})),
 	}
-	prefix := keys.TableCachePrefix("site-a")
-	appPrefix := keys.AppScopedPrefix("site-a")
+	prefix := keys.TableCachePrefix()
+	appPrefix := keys.Prefix()
 	for _, item := range logicObj.cacheItems() {
 		if item.Index == "admin_info" {
 			if !strings.HasPrefix(item.Key, appPrefix) || !strings.HasPrefix(item.KeyTitle, appPrefix) || !strings.HasPrefix(item.ExampleKey, appPrefix) {
@@ -518,14 +538,14 @@ func TestSearchKeysExactLogicalTableCacheKeyFindsPhysicalKey(t *testing.T) {
 	}
 }
 
-// TestKeyInfoLogicalAdminInfoKeyReadsAppScopedKey 验证详情接口输入逻辑 key 时读取 app_id 命名空间下的真实缓存。
-func TestKeyInfoLogicalAdminInfoKeyReadsAppScopedKey(t *testing.T) {
+// TestKeyInfoLogicalAdminInfoKeyReadsAppPrefix 验证详情接口输入逻辑 key 时读取 app_id 命名空间下的真实缓存。
+func TestKeyInfoLogicalAdminInfoKeyReadsAppPrefix(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	logicObj := &SystemCacheLogic{
 		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})),
 	}
-	physicalKey := keys.AdminInfoRedisKey("site-a", 7)
+	physicalKey := keys.AdminInfoRedisKey(7)
 	if err := client.HSet(context.Background(), physicalKey, map[string]any{
 		"id":       "7",
 		"username": "admin",

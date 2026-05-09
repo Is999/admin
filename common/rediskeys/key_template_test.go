@@ -1,6 +1,10 @@
-package keys
+package keys_test
 
-import "testing"
+import (
+	"testing"
+
+	keys "admin/common/rediskeys"
+)
 
 func TestKeyTemplatePrefix(t *testing.T) {
 	tests := []struct {
@@ -37,8 +41,8 @@ func TestKeyTemplatePrefix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := KeyTemplatePrefix(tt.template); got != tt.want {
-				t.Fatalf("KeyTemplatePrefix() = %q, want %q", got, tt.want)
+			if got := keys.KeyTemplatePrefix(tt.template); got != tt.want {
+				t.Fatalf("keys.KeyTemplatePrefix() = %q, want %q", got, tt.want)
 			}
 		})
 	}

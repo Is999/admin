@@ -16,6 +16,7 @@ import (
 //go:embed assets/*.sql assets/*.sql.tmpl
 var migrationAssets embed.FS
 
+// migrationAssetDir 表示内置迁移 SQL 资产所在目录。
 const migrationAssetDir = "assets"
 
 // Migration 描述一个数据库迁移资产。
@@ -38,6 +39,7 @@ type migrationSpec struct {
 	destructive   bool   // 是否含破坏性或种子数据语句
 }
 
+// defaultMigrationSpecs 定义内置迁移清单，顺序即执行顺序。
 var defaultMigrationSpecs = []migrationSpec{
 	{version: "202606050001", name: "bootstrap_admin_table", asset: "admin.sql", bootstrapOnly: true, destructive: true},
 	{version: "202606050002", name: "bootstrap_ops", asset: "bootstrap.sql", bootstrapOnly: true, destructive: true},

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/security"
 	"admin/internal/svc"
@@ -156,6 +157,11 @@ func TestSecretKeyLogicFallsBackWhenAppIDDiffers(t *testing.T) {
 
 // TestDeleteSecretKeyCacheDeletesRouteAndVersionCaches 验证当前秘钥 UUID 变更时会同时清理路由与版本材料缓存。
 func TestDeleteSecretKeyCacheDeletesRouteAndVersionCaches(t *testing.T) {
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-a"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})

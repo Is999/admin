@@ -1,16 +1,21 @@
-package keys
+package keys_test
 
-import "testing"
+import (
+	"testing"
+
+	keys "admin/common/rediskeys"
+)
 
 // TestArchiveRedisKeys 验证归档锁 key 统一使用 archive 二级前缀。
 func TestArchiveRedisKeys(t *testing.T) {
-	if got := ArchiveJobPlanRedisKey("215", "admin_log"); got != "app:215:archive:job:admin_log:plan" {
-		t.Fatalf("ArchiveJobPlanRedisKey() = %q", got)
+	useAppID(t, "215")
+	if got := keys.ArchiveJobPlanRedisKey("admin_log"); got != "app:215:archive:job:admin_log:plan" {
+		t.Fatalf("keys.ArchiveJobPlanRedisKey() = %q", got)
 	}
-	if got := ArchiveJobWatermarkRedisKey("215", "admin_log"); got != "app:215:archive:job:admin_log:watermark" {
-		t.Fatalf("ArchiveJobWatermarkRedisKey() = %q", got)
+	if got := keys.ArchiveJobWatermarkRedisKey("admin_log"); got != "app:215:archive:job:admin_log:watermark" {
+		t.Fatalf("keys.ArchiveJobWatermarkRedisKey() = %q", got)
 	}
-	if got := ArchiveJobCleanupRedisKey("215", "admin_log"); got != "app:215:archive:job:admin_log:cleanup" {
-		t.Fatalf("ArchiveJobCleanupRedisKey() = %q", got)
+	if got := keys.ArchiveJobCleanupRedisKey("admin_log"); got != "app:215:archive:job:admin_log:cleanup" {
+		t.Fatalf("keys.ArchiveJobCleanupRedisKey() = %q", got)
 	}
 }

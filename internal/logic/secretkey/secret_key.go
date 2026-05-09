@@ -860,7 +860,7 @@ func (l *SecretKeyLogic) secretKeyVersionCacheBelongsToAppID(cacheKey string, ap
 	if cacheKey == "" || appID == "" {
 		return false
 	}
-	cacheKey = keys.TrimTableCachePrefix(l.AppID(), cacheKey)
+	cacheKey = keys.TrimTableCachePrefix(cacheKey)
 	return strings.HasPrefix(cacheKey, keys.KeyTemplatePrefix(fmt.Sprintf(keys.SecretKeyAESVersion, appID, ""))) ||
 		strings.HasPrefix(cacheKey, keys.KeyTemplatePrefix(fmt.Sprintf(keys.SecretKeyRSAVersion, appID, "")))
 }

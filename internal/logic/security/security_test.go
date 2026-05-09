@@ -533,7 +533,7 @@ func TestInvalidateAdminRelationCacheDeletesPermissionUUIDs(t *testing.T) {
 	adminID := 7
 
 	stringKeys := []string{
-		keys.AdminInfoRedisKey(base.AppID(), adminID),
+		keys.AdminInfoRedisKey(adminID),
 		cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminProfile, adminID)),
 	}
 	setKeys := []string{

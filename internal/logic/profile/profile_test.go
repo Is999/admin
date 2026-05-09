@@ -29,7 +29,7 @@ func newTestProfileSecurityLogic() *securitylogic.SecurityLogic {
 }
 
 func testLoginMFAFlagKey(logicObj *securitylogic.SecurityLogic, adminID int) string {
-	return keys.LoginCheckMFAFlagRedisKey(logicObj.AppID(), adminID)
+	return keys.LoginCheckMFAFlagRedisKey(adminID)
 }
 
 // seedBoolSecurityConfig 在 Redis 中写入布尔型安全配置缓存，供单测直接复用读取链路。
@@ -42,7 +42,11 @@ func seedBoolSecurityConfig(t *testing.T, client *redis.Client, uuid string, ena
 	if enabled {
 		value = "true"
 	}
-	cacheKey := keys.TableCachePrefix("site-a") + fmt.Sprintf(keys.SysConfigUUID, uuid)
+	_ = svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{})
+	t.Cleanup(func() {
+		_ = svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	})
+	cacheKey := keys.TableCachePrefix() + fmt.Sprintf(keys.SysConfigUUID, uuid)
 	if err := client.HSet(context.Background(), cacheKey, map[string]any{
 		"type":  "6",
 		"value": value,

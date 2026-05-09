@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	cachelogic "admin/internal/logic/cache"
 	"admin/internal/svc"
@@ -20,6 +21,11 @@ import (
 
 // TestVerifyAdminTokenRequiresCachedSession 校验统一 token 校验会同时检查 JWT 与 Redis 登录态。
 func TestVerifyAdminTokenRequiresCachedSession(t *testing.T) {
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-a"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
 	ctx := context.Background()
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})

@@ -35,6 +35,7 @@ func TestNewBaseLogicWithContextUsesRequestMeta(t *testing.T) {
 
 // TestBaseLogicRedisHelpersScopeLogicalKeys 验证通用 Redis helper 会自动追加 app_id 前缀。
 func TestBaseLogicRedisHelpersScopeLogicalKeys(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() {
@@ -72,6 +73,7 @@ func TestBaseLogicRedisHelpersScopeLogicalKeys(t *testing.T) {
 
 // TestBaseLogicAppRedisKeyFailsClosedWithoutAppID 确保运行时缺少 app_id 时不 panic，也不生成裸 Redis key。
 func TestBaseLogicAppRedisKeyFailsClosedWithoutAppID(t *testing.T) {
+	useRuntimeAppID(t, "")
 	if got := (*BaseLogic)(nil).AppID(); got != "" {
 		t.Fatalf("nil AppID() = %q, want empty", got)
 	}
@@ -85,5 +87,14 @@ func TestBaseLogicAppRedisKeyFailsClosedWithoutAppID(t *testing.T) {
 	}
 	if got := logic.AppRedisKey("demo:key"); got != "" {
 		t.Fatalf("empty config AppRedisKey() = %q, want empty", got)
+	}
+}
+
+// TestBaseLogicAppRedisKeyFailsClosedOnAppIDMismatch 确保局部构造的配置不能写入其它站点命名空间。
+func TestBaseLogicAppRedisKeyFailsClosedOnAppIDMismatch(t *testing.T) {
+	useRuntimeAppID(t, "site-b")
+	logic := NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
+	if got := logic.AppRedisKey("demo:key"); got != "" {
+		t.Fatalf("mismatched AppRedisKey() = %q, want empty", got)
 	}
 }

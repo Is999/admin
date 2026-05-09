@@ -553,17 +553,17 @@ func (l *SecurityLogic) mfaFrequencyTTL() time.Duration {
 
 // loginMFAFlagKey 返回当前 app_id 作用域下的登录 MFA 完成标记 key。
 func (l *SecurityLogic) loginMFAFlagKey(adminID int) string {
-	return keys.LoginCheckMFAFlagRedisKey(l.AppID(), adminID)
+	return keys.LoginCheckMFAFlagRedisKey(adminID)
 }
 
 // mfaTwoStepTicketKey 返回当前 app_id 作用域下的 MFA 二次票据 key。
 func (l *SecurityLogic) mfaTwoStepTicketKey(adminID int, ticketKey string) string {
-	return keys.AdminMFATwoStepTicketRedisKey(l.AppID(), adminID, ticketKey)
+	return keys.AdminMFATwoStepTicketRedisKey(adminID, ticketKey)
 }
 
 // mfaTwoStepIndexKey 返回当前 app_id 作用域下的 MFA 二次票据索引 key。
 func (l *SecurityLogic) mfaTwoStepIndexKey(adminID int) string {
-	return keys.AdminMFATwoStepIndexRedisKey(l.AppID(), adminID)
+	return keys.AdminMFATwoStepIndexRedisKey(adminID)
 }
 
 // mfaTwoStepIndexTTL 返回 MFA 二次票据索引过期时间，索引稍长于票据本体以覆盖清理时钟抖动。

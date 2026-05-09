@@ -9,6 +9,7 @@ import (
 )
 
 func TestCacheLockKeyUsesAppNamespace(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
 	base := NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
 	got := base.cacheLockKey("app:site-a:admin:info:1")
 	want := "app:site-a:cache:rebuild:lock:admin:info:1"
@@ -18,6 +19,7 @@ func TestCacheLockKeyUsesAppNamespace(t *testing.T) {
 }
 
 func TestCacheLockKeyTrimsTableCacheNamespace(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
 	base := NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
 	got := base.cacheLockKey("app:site-a:table:role_tree")
 	want := "app:site-a:cache:rebuild:lock:role_tree"

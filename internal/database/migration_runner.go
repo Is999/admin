@@ -103,6 +103,7 @@ func RunMigrations(ctx context.Context, store MigrationStore, migrations []Migra
 	return results, nil
 }
 
+// newMigrationRunItem 从迁移资产生成本轮执行状态快照。
 func newMigrationRunItem(migration Migration) MigrationRunItem {
 	return MigrationRunItem{
 		Version:  migration.Version,
@@ -112,6 +113,7 @@ func newMigrationRunItem(migration Migration) MigrationRunItem {
 	}
 }
 
+// blockMigrationReason 返回迁移被启动安全策略拦截的原因。
 func blockMigrationReason(migration Migration, options MigrationRunOptions) string {
 	if migration.BootstrapOnly && !options.AllowBootstrap {
 		return "bootstrap-only 迁移需要显式允许"
@@ -122,6 +124,7 @@ func blockMigrationReason(migration Migration, options MigrationRunOptions) stri
 	return ""
 }
 
+// validateMigrationList 校验内置迁移清单的完整性、顺序和破坏性标记。
 func validateMigrationList(migrations []Migration) error {
 	if len(migrations) == 0 {
 		return errors.Errorf("数据库迁移清单不能为空")
@@ -155,10 +158,12 @@ func validateMigrationList(migrations []Migration) error {
 	return nil
 }
 
+// sameChecksum 比较迁移 checksum，忽略首尾空白和大小写差异。
 func sameChecksum(left string, right string) bool {
 	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
 }
 
+// containsDestructiveSQL 检测迁移 SQL 是否包含需人工确认的破坏性语句。
 func containsDestructiveSQL(sqlText string) bool {
 	for _, statement := range splitMigrationStatements(sqlText) {
 		normalized := normalizeMigrationStatement(statement)
@@ -177,11 +182,13 @@ func containsDestructiveSQL(sqlText string) bool {
 	return false
 }
 
+// normalizeMigrationStatement 规整 SQL 语句，便于破坏性关键字匹配。
 func normalizeMigrationStatement(statement string) string {
 	statement = trimLeadingSQLComments(statement)
 	return strings.ToUpper(strings.Join(strings.Fields(statement), " "))
 }
 
+// destructiveMigrationSQLMarkers 定义必须显式授权才能执行的破坏性 SQL 片段。
 var destructiveMigrationSQLMarkers = []string{
 	"DROP TABLE",
 	"DROP DATABASE",

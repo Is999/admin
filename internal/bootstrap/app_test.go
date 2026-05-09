@@ -10,6 +10,7 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/svc"
 	"admin/internal/task/queue"
@@ -54,6 +55,11 @@ func TestAppUpdateConfigPropagatesTaskManagerSnapshot(t *testing.T) {
 		_ = client.Close()
 		server.Close()
 	})
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "old-app"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
 
 	manager := taskqueue.New(config.TaskQueueConfig{
 		Enabled:      true,
@@ -76,6 +82,7 @@ func TestAppUpdateConfigPropagatesTaskManagerSnapshot(t *testing.T) {
 		TaskManager:    manager,
 	}
 
+	runtimecfg.Set(config.Config{AppID: "site-1"})
 	app.UpdateConfig(config.Config{
 		AppID: "site-1",
 		Task: config.TaskQueueConfig{
@@ -95,8 +102,36 @@ func TestAppUpdateConfigPropagatesTaskManagerSnapshot(t *testing.T) {
 	}
 }
 
+// TestBuildServiceContextDoesNotPublishRuntimeConfigOnFailure 确保启动失败不会污染进程级运行配置。
+func TestBuildServiceContextDoesNotPublishRuntimeConfigOnFailure(t *testing.T) {
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "stable-app"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
+
+	svcCtx, shutdown, err := BuildServiceContext(context.Background(), config.Config{AppID: "failed-app"})
+	if err == nil {
+		if svcCtx != nil {
+			_ = closeServiceContextResources(svcCtx, nil, false)
+		}
+		if shutdown != nil {
+			_ = shutdown(context.Background())
+		}
+		t.Fatal("期望缺少 MySQL 配置时启动失败")
+	}
+	if got := runtimecfg.AppID(); got != "stable-app" {
+		t.Fatalf("启动失败后 runtimecfg.AppID() = %q, want stable-app", got)
+	}
+}
+
 // TestCollectorConfigWithAppIDScopesRedisStream 确保 Collector Redis Stream 按 app_id 隔离。
 func TestCollectorConfigWithAppIDScopesRedisStream(t *testing.T) {
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-1"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
 	cfg := collectorConfigWithAppID(config.Config{
 		AppID: "site-1",
 		Collector: config.CollectorConfig{
@@ -107,14 +142,15 @@ func TestCollectorConfigWithAppIDScopesRedisStream(t *testing.T) {
 		t.Fatalf("期望 Collector Redis Stream 按 app_id 加前缀，实际为 %q", got)
 	}
 
+	runtimecfg.Set(config.Config{AppID: "site-2"})
 	cfg = collectorConfigWithAppID(config.Config{
 		AppID: "site-2",
 		Collector: config.CollectorConfig{
 			Redis: config.CollectorRedisConfig{Stream: "app:site-1:collector:events"},
 		},
 	})
-	if got := cfg.Redis.Stream; got != "app:site-1:collector:events" {
-		t.Fatalf("期望已带其它 app 前缀的 Collector Redis Stream 保持原样，实际为 %q", got)
+	if got := cfg.Redis.Stream; got != "" {
+		t.Fatalf("期望已带其它 app 前缀的 Collector Redis Stream 失败闭合，实际为 %q", got)
 	}
 }
 
@@ -359,6 +395,53 @@ hot_reload:
 	}
 	if app.CurrentConfig().Name != "test" {
 		t.Fatalf("期望应用配置已按显式文件刷新，实际 Name=%q", app.CurrentConfig().Name)
+	}
+}
+
+// TestReloadConfigFileSkipsUnchangedSnapshot 确保配置未变化时不重复发布运行态配置。
+func TestReloadConfigFileSkipsUnchangedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configFile, []byte(minimalConfigYAML(`
+hot_reload:
+  enabled: false
+`)), 0o644); err != nil {
+		t.Fatalf("写入配置文件失败: %v", err)
+	}
+	cfg, err := LoadConfig(configFile)
+	if err != nil {
+		t.Fatalf("加载初始配置失败: %v", err)
+	}
+	fingerprint, err := configBundleFingerprint(configFile)
+	if err != nil {
+		t.Fatalf("计算配置指纹失败: %v", err)
+	}
+	svcCtx := svc.NewServiceContext(cfg, svc.Dependencies{})
+	svcCtx.UpdateHotReloadStatus(svc.HotReloadStatus{
+		ConfigVersion: fingerprint,
+		ReloadCount:   3,
+	})
+	app := &App{ServiceContext: svcCtx}
+	app.UpdateConfig(cfg)
+
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "stable-app"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
+	if _, err = app.reloadConfigFile(context.Background(), "manual_api", configFile); err != nil {
+		t.Fatalf("无变化热加载失败: %v", err)
+	}
+
+	status := svcCtx.CurrentHotReloadStatus()
+	if status.ReloadCount != 3 {
+		t.Fatalf("配置无变化不应增加 ReloadCount，实际为 %d", status.ReloadCount)
+	}
+	if status.LastMessage != "配置无变化" {
+		t.Fatalf("期望记录配置无变化，实际为 %q", status.LastMessage)
+	}
+	if got := runtimecfg.AppID(); got != "stable-app" {
+		t.Fatalf("配置无变化不应重复设置 runtimecfg，实际 app_id=%q", got)
 	}
 }
 

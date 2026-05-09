@@ -65,7 +65,7 @@ func CacheIsEmptyMarker(value string) bool {
 
 // cacheLockKey 返回当前 app_id 作用域下的缓存重建锁 Redis 键。
 func (l *BaseLogic) cacheLockKey(cacheKey string) string {
-	cacheKey = keys.TrimAppScopedPrefix(keys.TrimTableCachePrefix(l.AppID(), cacheKey))
+	cacheKey = keys.TrimPrefix(keys.TrimTableCachePrefix(cacheKey))
 	return l.AppRedisKey(fmt.Sprintf(keys.CacheRebuildLock, cacheKey))
 }
 

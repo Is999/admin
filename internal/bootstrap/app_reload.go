@@ -302,18 +302,23 @@ func (a *App) reloadConfigFile(ctx context.Context, source string, configFile st
 		a.markHotReloadFailure("读取配置文件指纹失败", err, "", source, "fingerprint", configFile)
 		return "", errors.Tag(err)
 	}
+	previousFingerprint := a.CurrentConfigVersion()
+	if previousFingerprint != "" && currentFingerprint == previousFingerprint {
+		a.markHotReloadUnchanged(configFile, source, currentFingerprint)
+		return previousFingerprint, nil
+	}
 	cfg, err := LoadConfig(configFile)
 	if err != nil {
 		a.markHotReloadFailure("配置热加载失败", err, currentFingerprint, source, "load", configFile)
 		return "", errors.Tag(err)
 	}
 
-	previousFingerprint := a.CurrentConfigVersion()
 	restartRequired, restartReason := detectHotReloadRestartImpact(beforeCfg, cfg)
 	effectiveCfg := cfg
 	if restartRequired {
 		effectiveCfg = buildHotReloadEffectiveConfig(beforeCfg, cfg)
 	}
+	publishRuntimeConfig(effectiveCfg)
 	a.UpdateConfig(effectiveCfg)
 	now := time.Now()
 	successMessage := "配置热加载成功"
@@ -359,6 +364,25 @@ func (a *App) reloadConfigFile(ctx context.Context, source string, configFile st
 		a.stopConfigHotReload()
 	}
 	return previousFingerprint, nil
+}
+
+// markHotReloadUnchanged 记录一次无配置变更的热加载检查，不刷新运行配置快照。
+func (a *App) markHotReloadUnchanged(configFile, source, fingerprint string) {
+	if a == nil {
+		return
+	}
+	now := time.Now()
+	a.refreshHotReloadStatus(func(status svc.HotReloadStatus) svc.HotReloadStatus {
+		status.ConfigFile = strings.TrimSpace(configFile)
+		status.ConfigVersion = strings.TrimSpace(fingerprint)
+		status.ConfigSummary = buildHotReloadConfigSummary(a.CurrentConfig())
+		status.LastStatus = "success"
+		status.LastMessage = "配置无变化"
+		status.LastTriggerSource = normalizeHotReloadSource(source)
+		status.LastFailureCategory = ""
+		status.LastCheckedAt = now
+		return status
+	})
 }
 
 // CurrentConfigVersion 返回当前热加载状态中的配置版本指纹。

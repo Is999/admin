@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/task/queue"
 	"admin/internal/types"
@@ -47,6 +48,11 @@ func TestTaskFailureLarkAlertSendsOnArchivedTask(t *testing.T) {
 	t.Cleanup(func() {
 		_ = client.Close()
 		redisServer.Close()
+	})
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-1"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
 	})
 
 	manager := taskqueue.New(config.TaskQueueConfig{

@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS `user_tag_event_outbox` (
   `event_id` varchar(120) NOT NULL COMMENT '事件幂等ID',
   `uid` bigint NOT NULL COMMENT '用户ID',
   `tag_type` int NOT NULL COMMENT '标签类型',
+  `tag_source` tinyint NOT NULL DEFAULT 0 COMMENT '标签来源：0系统 1人工',
   `action` varchar(20) NOT NULL COMMENT '动作：gain/lost',
   `source_node` varchar(40) NOT NULL DEFAULT '' COMMENT '来源节点',
   `shard_no` tinyint NOT NULL DEFAULT 0 COMMENT 'uid取模分片',

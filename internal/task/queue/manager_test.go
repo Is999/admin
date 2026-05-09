@@ -13,6 +13,7 @@ import (
 	"github.com/Is999/go-utils/errors"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/requestctx"
 	"admin/internal/svc"
@@ -394,6 +395,7 @@ func TestManagerNamespacesTaskArtifactsByAppID(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
+	useRuntimeAppID(t, "215")
 	manager.UpdateConfig(config.TaskQueueConfig{
 		Enabled:      true,
 		AppID:        "215",
@@ -410,8 +412,8 @@ func TestManagerNamespacesTaskArtifactsByAppID(t *testing.T) {
 	if got := manager.namespacedQueueName(QueueMaintenance); got != "app:215:maintenance" {
 		t.Fatalf("期望 maintenance 队列带站点命名空间，实际为 %q", got)
 	}
-	if got := manager.namespacedQueueName("app:102:maintenance"); got != "app:102:maintenance" {
-		t.Fatalf("期望其它站点完整队列名保持原样，实际为 %q", got)
+	if got := manager.namespacedQueueName("app:102:maintenance"); got != "" {
+		t.Fatalf("期望其它站点完整队列名失败闭合，实际为 %q", got)
 	}
 	if got := manager.displayQueueName("app:215:maintenance"); got != QueueMaintenance {
 		t.Fatalf("期望展示逻辑队列名 maintenance，实际为 %q", got)
@@ -431,8 +433,8 @@ func TestManagerNamespacesTaskArtifactsByAppID(t *testing.T) {
 			LeaseKey: "app:102:task:scheduler:leader",
 		},
 	})
-	if got := manager.schedulerLeaseKey(); got != "app:102:task:scheduler:leader" {
-		t.Fatalf("期望其它站点调度租约键保持原样，实际为 %q", got)
+	if got := manager.schedulerLeaseKey(); got != "" {
+		t.Fatalf("期望其它站点调度租约键失败闭合，实际为 %q", got)
 	}
 	if got := manager.workflowMetaKey("wf-1"); got != "app:215:task:workflow:wf-1:meta" {
 		t.Fatalf("期望工作流元数据键带站点命名空间，实际为 %q", got)
@@ -446,11 +448,32 @@ func TestManagerNamespacesTaskArtifactsByAppID(t *testing.T) {
 	}
 }
 
+// TestManagerFailsClosedOnRuntimeAppIDMismatch 确保任务实例不会在错误运行态下写入其它站点命名空间。
+func TestManagerFailsClosedOnRuntimeAppIDMismatch(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	useRuntimeAppID(t, "2")
+	if manager.IsEnabled() {
+		t.Fatal("运行态 app_id 与任务配置不一致时任务系统应失败关闭")
+	}
+	if got := manager.namespacedQueueName(QueueDefault); got != "" {
+		t.Fatalf("mismatched namespacedQueueName() = %q, want empty", got)
+	}
+	if got := manager.workflowMetaKey("wf-1"); got != "" {
+		t.Fatalf("mismatched workflowMetaKey() = %q, want empty", got)
+	}
+	if err := manager.EnqueueTask(context.Background(), TypeWorkflowNoop, []byte(`{}`)); !errors.Is(err, ErrTaskQueueDisabled) {
+		t.Fatalf("mismatched EnqueueTask() error = %v, want ErrTaskQueueDisabled", err)
+	}
+}
+
 // TestVisibleServerQueuesFiltersByAppID 验证共享 Redis 下 worker 快照只展示当前站点队列。
 func TestVisibleServerQueuesFiltersByAppID(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
+	useRuntimeAppID(t, "2")
 	manager.UpdateConfig(config.TaskQueueConfig{
 		Enabled: true,
 		AppID:   "2",
@@ -466,7 +489,7 @@ func TestVisibleServerQueuesFiltersByAppID(t *testing.T) {
 		t.Fatal("期望包含当前站点队列的 worker 可见，实际为不可见")
 	}
 	if len(queues) != 2 || queues[QueueDefault] != 3 || queues[QueueMaintenance] != 1 {
-		t.Fatalf("期望只返回 215 站点逻辑队列，实际为 %+v", queues)
+		t.Fatalf("期望只返回当前站点逻辑队列，实际为 %+v", queues)
 	}
 
 	_, visible = manager.visibleServerQueues(map[string]int{
@@ -1624,6 +1647,7 @@ func TestCompletedTaskTTLUsesNamespacedQueue(t *testing.T) {
 	cfg := manager.CurrentConfig()
 	cfg.AppID = "17"
 	cfg.CompletedRetentionSeconds = 60
+	useRuntimeAppID(t, cfg.AppID)
 	manager.UpdateConfig(cfg)
 
 	if err := manager.RegisterHandler("demo:namespaced-complete-ttl", asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
@@ -2496,6 +2520,7 @@ func newTestManager(t *testing.T) (*Manager, func()) {
 			QueueMaintenance: 1,
 		},
 	}
+	useRuntimeAppID(t, cfg.AppID)
 	manager := New(cfg, client)
 	if manager == nil {
 		t.Fatal("期望成功创建测试任务管理器")
@@ -2506,6 +2531,15 @@ func newTestManager(t *testing.T) (*Manager, func()) {
 		server.Close()
 	}
 	return manager, cleanup
+}
+
+func useRuntimeAppID(t *testing.T, appID string) {
+	t.Helper()
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: appID})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
 }
 
 func newTestRedis(t *testing.T) (*miniredis.Miniredis, redis.UniversalClient) {

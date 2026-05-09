@@ -7,6 +7,7 @@ import (
 	"time"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/internal/jobs/usertag/types"
 
 	"github.com/Is999/go-utils/errors"
@@ -387,35 +388,32 @@ func (r *TagRepository) workflowLeaseClient() (redis.UniversalClient, error) {
 	return r.deps.Redis, nil
 }
 
-// workflowAppID 返回用户标签工作流 Redis key 使用的 app_id。
-func (r *TagRepository) workflowAppID() (string, error) {
+// ensureWorkflowRedisNamespace 校验用户标签工作流已经注入 Redis 命名空间配置。
+func (r *TagRepository) ensureWorkflowRedisNamespace() error {
 	if r == nil || r.deps.Service == nil {
-		return "", errors.Errorf("用户标签仓储上下文未初始化，无法获取 app_id")
+		return errors.Errorf("用户标签仓储上下文未初始化，无法获取 app_id")
 	}
-	appID := keys.NormalizeAppID(r.deps.Service.CurrentConfig().AppID)
-	if appID == "" {
-		return "", errors.Errorf("用户标签工作流缺少 app_id 配置")
+	if runtimecfg.AppID() == "" {
+		return errors.Errorf("用户标签工作流缺少 app_id 配置")
 	}
-	return appID, nil
+	return nil
 }
 
 // workflowLeaseKey 返回当前 app_id 作用域下的用户标签写工作流租约 key。
 func (r *TagRepository) workflowLeaseKey() (string, error) {
-	appID, err := r.workflowAppID()
-	if err != nil {
+	if err := r.ensureWorkflowRedisNamespace(); err != nil {
 		return "", errors.Tag(err)
 	}
-	return keys.UserTagWorkflowLeaseRedisKey(appID), nil
+	return keys.UserTagWorkflowLeaseRedisKey(), nil
 }
 
 // workflowFinalDoneKey 返回当前 workflow 的最终分片完成屏障 key。
 // key 中包含 app_id 和 workflow_id，避免多站点共用 Redis 时互相影响。
 func (r *TagRepository) workflowFinalDoneKey(workflowID string) (string, error) {
-	appID, err := r.workflowAppID()
-	if err != nil {
+	if err := r.ensureWorkflowRedisNamespace(); err != nil {
 		return "", errors.Tag(err)
 	}
-	return keys.UserTagWorkflowFinalDoneRedisKey(appID, workflowID), nil
+	return keys.UserTagWorkflowFinalDoneRedisKey(workflowID), nil
 }
 
 func workflowLeaseOwner(opts types.RuntimeOptions) (string, error) {

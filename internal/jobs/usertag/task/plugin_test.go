@@ -23,7 +23,7 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureReleasesFullOwner(t *testing.T
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "215"}, svc.Dependencies{Rds: client})
 	ctx := context.Background()
-	leaseKey := keys.UserTagWorkflowLeaseRedisKey("215")
+	leaseKey := keys.UserTagWorkflowLeaseRedisKey()
 	if err := client.Set(ctx, leaseKey, "wf-full|full", time.Hour).Err(); err != nil {
 		t.Fatalf("seed full lease failed: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestReleaseUserTagWorkflowLeaseOnFinalFailureSkipsNonFull(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "215"}, svc.Dependencies{Rds: client})
 	ctx := context.Background()
-	leaseKey := keys.UserTagWorkflowLeaseRedisKey("215")
+	leaseKey := keys.UserTagWorkflowLeaseRedisKey()
 	if err := client.Set(ctx, leaseKey, "wf-full|full", time.Hour).Err(); err != nil {
 		t.Fatalf("seed full lease failed: %v", err)
 	}
@@ -93,5 +93,19 @@ func TestUserTagStageHandlerSpecsCoverMainSkeletonNodes(t *testing.T) {
 		if got[node] != taskType {
 			t.Fatalf("node=%s taskType=%s want=%s specs=%+v", node, got[node], taskType, specs)
 		}
+	}
+}
+
+// TestUserTagEventOutboxRetryScanOptionsScansAllShards 验证异常扫描任务不会只锁定 0 号 outbox 分片。
+func TestUserTagEventOutboxRetryScanOptionsScansAllShards(t *testing.T) {
+	opts, err := userTagEventOutboxRetryScanOptions(Defaults{ShardTotal: 10, BatchSize: 100, EventBatchSize: 50, WorkerCount: 2, EventHookEnabled: true})
+	if err != nil {
+		t.Fatalf("userTagEventOutboxRetryScanOptions() error = %v", err)
+	}
+	if opts.ShardTotal != 1 {
+		t.Fatalf("retry scan should run as single unsharded worker, ShardTotal=%d", opts.ShardTotal)
+	}
+	if !opts.EventHookEnabled || opts.BatchSize != 50 {
+		t.Fatalf("unexpected retry scan options: %+v", opts)
 	}
 }

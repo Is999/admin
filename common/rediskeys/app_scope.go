@@ -1,30 +1,28 @@
 package keys
 
-import "strings"
-
-const (
-	// AppScopedDataPrefix 表示 Redis 缓存和锁的 app_id 命名空间前缀。
-	AppScopedDataPrefix = "app:"
+import (
+	"admin/common/runtimecfg"
+	"strings"
 )
 
-// NormalizeAppID 裁剪 Redis 命名空间使用的 app_id。
-func NormalizeAppID(appID string) string {
-	return strings.TrimSpace(appID)
-}
+const (
+	// ScopeRoot 表示 Redis 缓存和锁的 app_id 命名空间根前缀。
+	ScopeRoot = "app:"
+)
 
-// HasAppScopedPrefix 判断值是否已经带有完整 app_id 命名空间。
-func HasAppScopedPrefix(key string) bool {
-	_, ok := AppScopedAppID(key)
+// HasPrefix 判断值是否已经带有完整 app_id 命名空间。
+func HasPrefix(key string) bool {
+	_, ok := Owner(key)
 	return ok
 }
 
-// AppScopedAppID 解析完整 app_id 命名空间中的 app_id。
-func AppScopedAppID(key string) (string, bool) {
+// Owner 解析完整 app_id 命名空间中的 app_id。
+func Owner(key string) (string, bool) {
 	key = strings.TrimSpace(key)
-	if !strings.HasPrefix(key, AppScopedDataPrefix) {
+	if !strings.HasPrefix(key, ScopeRoot) {
 		return "", false
 	}
-	rest := strings.TrimPrefix(key, AppScopedDataPrefix)
+	rest := strings.TrimPrefix(key, ScopeRoot)
 	index := strings.Index(rest, ":")
 	if index <= 0 || index >= len(rest)-1 {
 		return "", false
@@ -32,46 +30,48 @@ func AppScopedAppID(key string) (string, bool) {
 	return rest[:index], true
 }
 
-// IsForeignAppScopedKey 判断完整 Redis key 是否属于其它 app_id。
-func IsForeignAppScopedKey(appID string, key string) bool {
-	ownerAppID, ok := AppScopedAppID(key)
-	appID = NormalizeAppID(appID)
-	return ok && appID != "" && ownerAppID != appID
+// IsForeignKey 判断完整 Redis key 是否属于其它 app_id。
+func IsForeignKey(key string) bool {
+	ownerAppID, ok := Owner(key)
+	appID := runtimecfg.AppID()
+	return ok && (appID == "" || ownerAppID != appID)
 }
 
-// AppScopedPrefix 返回指定 app_id 的直接 Redis 命名空间前缀。
-// app_id 缺失属于启动期配置错误；运行期 helper 返回空前缀，避免 panic 打挂服务。
-func AppScopedPrefix(appID string) string {
-	appID = NormalizeAppID(appID)
+// Prefix 返回当前应用 Redis key 命名空间前缀。
+func Prefix() string {
+	appID := runtimecfg.AppID()
 	if appID == "" {
 		return ""
 	}
-	return AppScopedDataPrefix + appID + ":"
+	return ScopeRoot + appID + ":"
 }
 
-// AppScopedKey 给内部业务 key 追加 app_id 命名空间。
-// 外部传入的完整 Redis key 必须先校验归属，避免跨站点 key 被改写到当前 app_id。
-func AppScopedKey(appID string, key string) string {
+// WithPrefix 给内部业务 key 追加当前应用 app_id 命名空间。
+// 外部传入的完整 Redis key 必须属于当前 app_id，避免跨站点 key 串用。
+func WithPrefix(key string) string {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return key
 	}
-	if HasAppScopedPrefix(key) {
+	if ownerAppID, ok := Owner(key); ok {
+		if ownerAppID != runtimecfg.AppID() {
+			return ""
+		}
 		return key
 	}
-	prefix := AppScopedPrefix(appID)
+	prefix := Prefix()
 	if prefix == "" {
 		return ""
 	}
 	return prefix + key
 }
 
-// TrimAppScopedPrefix 去掉任意 app_id 的直接 Redis 命名空间前缀。
-func TrimAppScopedPrefix(key string) string {
+// TrimPrefix 去掉任意 app_id 的直接 Redis 命名空间前缀。
+func TrimPrefix(key string) string {
 	key = strings.TrimSpace(key)
-	appID, ok := AppScopedAppID(key)
+	appID, ok := Owner(key)
 	if !ok {
 		return key
 	}
-	return strings.TrimPrefix(key, AppScopedPrefix(appID))
+	return strings.TrimPrefix(key, ScopeRoot+appID+":")
 }

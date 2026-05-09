@@ -15,6 +15,7 @@ const (
 	minAdminAppKeyLength    = 16 // 生产 app_key 最小长度
 )
 
+// Collector 载体枚举限定配置文件可声明的事件投递通道。
 const (
 	adminCollectorTransportAuto  = "auto"
 	adminCollectorTransportKafka = "kafka"
@@ -66,8 +67,7 @@ func validateAdminCollectorConfig(c config.Config) error {
 	if cfg.Redis.Enabled && strings.TrimSpace(cfg.Redis.Stream) == "" {
 		return errors.Errorf("collector.redis.enabled=true 时必须配置 collector.redis.stream")
 	}
-	if keys.IsForeignAppScopedKey(c.AppID, cfg.Redis.Stream) {
-		ownerAppID, _ := keys.AppScopedAppID(cfg.Redis.Stream)
+	if ownerAppID, ok := keys.Owner(cfg.Redis.Stream); ok && strings.TrimSpace(c.AppID) != ownerAppID {
 		return errors.Errorf("collector.redis.stream 属于其它 app_id[%s]", ownerAppID)
 	}
 
@@ -185,6 +185,7 @@ func validateProductionConfig(c config.Config) error {
 	return nil
 }
 
+// validateBinaryStatus 校验配置中的二值开关只能使用 0 或 1。
 func validateBinaryStatus(name string, value int) error {
 	if value != 0 && value != 1 {
 		return errors.Errorf("%s 只能为 0 或 1", name)
@@ -192,6 +193,7 @@ func validateBinaryStatus(name string, value int) error {
 	return nil
 }
 
+// validateSecretKeyVersion 校验单个秘钥版本在当前签名和加密开关下具备必要材料。
 func validateSecretKeyVersion(prefix string, index int, cfg config.SecuritySecretKeyVersionConfig, signStatus, cryptoStatus int) error {
 	name := prefix
 	if index >= 0 {
@@ -219,6 +221,7 @@ func validateSecretKeyVersion(prefix string, index int, cfg config.SecuritySecre
 	return nil
 }
 
+// securitySecretKeyTouched 判断 secret_key 是否显式配置过任一字段。
 func securitySecretKeyTouched(cfg config.SecuritySecretKeyConfig) bool {
 	return strings.TrimSpace(cfg.KeyVersion) != "" ||
 		strings.TrimSpace(cfg.AESKey) != "" ||
@@ -239,6 +242,7 @@ func securitySecretKeyTouched(cfg config.SecuritySecretKeyConfig) bool {
 		len(cfg.Versions) > 0
 }
 
+// isProductionMode 判断当前运行模式是否属于生产环境。
 func isProductionMode(mode string) bool {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "pro", "prod", "production":
@@ -248,6 +252,7 @@ func isProductionMode(mode string) bool {
 	}
 }
 
+// isPlaceholderSecret 判断密钥值是否仍是示例占位内容。
 func isPlaceholderSecret(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
@@ -261,6 +266,7 @@ func isPlaceholderSecret(value string) bool {
 	return false
 }
 
+// nonEmptyStrings 过滤空白字符串，避免配置数组里的空项参与校验。
 func nonEmptyStrings(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {

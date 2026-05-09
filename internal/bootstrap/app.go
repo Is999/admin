@@ -115,6 +115,7 @@ func BuildServiceContext(ctx context.Context, c config.Config) (*svc.ServiceCont
 	// 审计日志使用主库写连接。
 	resources.Audit = audit.NewRecorder(svcCtx.WriteDB(svc.DatabaseMain), c.Observability.LogBodyMaxBytes)
 	svcCtx.Audit = resources.Audit
+	publishRuntimeConfig(c)
 	return svcCtx, shutdown, nil
 }
 

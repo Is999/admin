@@ -18,7 +18,7 @@ type templateSearchTarget struct {
 	providerName string                                    // providerName 表示当前模板搜索提供器名称，便于日志定位具体枚举策略。
 	templateKey  string                                    // templateKey 表示当前 provider 负责的模板缓存键定义。
 	tableCache   bool                                      // tableCache 表示候选 key 来自 table-cache 托管目标。
-	appScoped    bool                                      // appScoped 表示候选 key 来自普通 app 作用域缓存。
+	appPrefix    bool                                      // appPrefix 表示候选 key 来自普通 app_id 前缀缓存。
 	buildKeys    func(*SystemCacheLogic) ([]string, error) // buildKeys 负责枚举当前模板缓存的候选实例 key。
 }
 
@@ -38,10 +38,10 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 	targets = append(targets,
 		templateSearchTarget{
 			providerName: "admin_enabled_ids",
-			templateKey:  keys.AdminInfoPatternRedisKey(l.AppID()),
-			appScoped:    true,
+			templateKey:  keys.AdminInfoPatternRedisKey(),
+			appPrefix:    true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildAppAdminRedisKeys(keys.AdminInfoRedisKey)
+				return l.buildAppAdminKeys(keys.AdminInfoRedisKey)
 			},
 		},
 		templateSearchTarget{
@@ -49,7 +49,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminRoleIDsPattern),
 			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildTableCacheAdminScopedKeys(keys.AdminRoleIDs)
+				return l.buildTableAdminKeys(keys.AdminRoleIDs)
 			},
 		},
 		templateSearchTarget{
@@ -57,7 +57,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminPermissionIDsPattern),
 			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildTableCacheAdminScopedKeys(keys.AdminPermissionIDs)
+				return l.buildTableAdminKeys(keys.AdminPermissionIDs)
 			},
 		},
 		templateSearchTarget{
@@ -65,7 +65,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminPermissionUUIDsPattern),
 			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildTableCacheAdminScopedKeys(keys.AdminPermissionUUIDs)
+				return l.buildTableAdminKeys(keys.AdminPermissionUUIDs)
 			},
 		},
 		templateSearchTarget{
@@ -73,7 +73,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminProfilePattern),
 			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildTableCacheAdminScopedKeys(keys.AdminProfile)
+				return l.buildTableAdminKeys(keys.AdminProfile)
 			},
 		},
 		templateSearchTarget{
@@ -81,7 +81,7 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminRolesDetailPattern),
 			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildTableCacheAdminScopedKeys(keys.AdminRolesDetail)
+				return l.buildTableAdminKeys(keys.AdminRolesDetail)
 			},
 		},
 	)
@@ -99,7 +99,7 @@ func (l *SystemCacheLogic) matchSearchTemplateTarget(pattern string) *templateSe
 	for i := range targets {
 		prefix := strings.TrimSpace(cachelogic.CacheTemplatePrefix(targets[i].templateKey))
 		logicalPrefix := strings.TrimSpace(cachelogic.CacheTemplatePrefix(cachelogic.TableCacheLogicalKey(l.BaseLogic, targets[i].templateKey)))
-		appLogicalPrefix := strings.TrimSpace(cachelogic.CacheTemplatePrefix(keys.TrimAppScopedPrefix(targets[i].templateKey)))
+		appLogicalPrefix := strings.TrimSpace(cachelogic.CacheTemplatePrefix(keys.TrimPrefix(targets[i].templateKey)))
 		if prefix == "" && logicalPrefix == "" && appLogicalPrefix == "" {
 			continue
 		}
@@ -132,9 +132,9 @@ func (l *SystemCacheLogic) listEnabledAdminIDs() ([]int, error) {
 	return ids, nil
 }
 
-// buildAdminScopedKeys 基于启用管理员 ID 列表批量拼出管理员维度模板缓存实例 key。
+// buildAdminKeys 基于启用管理员 ID 列表批量拼出管理员维度模板缓存实例 key。
 // 这样新增管理员模板缓存时只需传入 key format，避免在注册表里重复写同一套循环逻辑。
-func (l *SystemCacheLogic) buildAdminScopedKeys(keyFormat string) ([]string, error) {
+func (l *SystemCacheLogic) buildAdminKeys(keyFormat string) ([]string, error) {
 	adminIDs, err := l.listEnabledAdminIDs()
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -149,17 +149,8 @@ func (l *SystemCacheLogic) buildAdminScopedKeys(keyFormat string) ([]string, err
 	return keysList, nil
 }
 
-// buildAppAdminScopedKeys 基于启用管理员 ID 列表批量拼出 app_id 作用域下的管理员实例 key。
-func (l *SystemCacheLogic) buildAppAdminScopedKeys(keyFormat string) ([]string, error) {
-	keysList, err := l.buildAdminScopedKeys(keyFormat)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	return l.AppRedisKeys(keysList...), nil
-}
-
-// buildAppAdminRedisKeys 基于启用管理员 ID 列表批量生成 app_id 作用域实例 key。
-func (l *SystemCacheLogic) buildAppAdminRedisKeys(buildKey func(string, int) string) ([]string, error) {
+// buildAppAdminKeys 基于启用管理员 ID 列表批量生成 app_id 前缀实例 key。
+func (l *SystemCacheLogic) buildAppAdminKeys(buildKey func(int) string) ([]string, error) {
 	adminIDs, err := l.listEnabledAdminIDs()
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -169,15 +160,15 @@ func (l *SystemCacheLogic) buildAppAdminRedisKeys(buildKey func(string, int) str
 		if adminID <= 0 {
 			continue
 		}
-		keysList = append(keysList, buildKey(l.AppID(), adminID))
+		keysList = append(keysList, buildKey(adminID))
 	}
 	return keysList, nil
 }
 
-// buildTableCacheAdminScopedKeys 基于启用管理员 ID 列表批量拼出 table-cache 真实实例 key。
+// buildTableAdminKeys 基于启用管理员 ID 列表批量拼出 table-cache 真实实例 key。
 // 管理后台搜索会直接校验 Redis 物理 key 是否存在，因此这里统一补 table-cache 项目前缀。
-func (l *SystemCacheLogic) buildTableCacheAdminScopedKeys(keyFormat string) ([]string, error) {
-	keysList, err := l.buildAdminScopedKeys(keyFormat)
+func (l *SystemCacheLogic) buildTableAdminKeys(keyFormat string) ([]string, error) {
+	keysList, err := l.buildAdminKeys(keyFormat)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}

@@ -18,12 +18,6 @@ const (
 // sqlTemplatePlaceholderRegexp 匹配受控 SQL 模板占位符，并兼容 SQL formatter 插入的空格或换行。
 var sqlTemplatePlaceholderRegexp = regexp.MustCompile(`\{\{\s*([A-Za-z0-9_]+)\s*\}\}`)
 
-// tagResultCopySystemTagsTemplate 保存 full 临时表复制系统标签的 MySQL INSERT SELECT 模板。
-// 模板只替换已转义表名，标签来源和类型仍通过 GORM Exec 参数绑定。
-//
-//go:embed assets/tag_result_copy_system_tags.sql.tmpl
-var tagResultCopySystemTagsTemplate string
-
 // userTagTruncateTableTemplate 保存用户标签结果/快照表清理 DDL 模板。
 // 表名来自固定分片命名并统一反引号保护，避免在业务方法中拼接 TRUNCATE SQL。
 //

@@ -23,6 +23,7 @@ type deleteCommandCaptureHook struct {
 
 // TestTableCacheKeyScope 验证 table-cache 使用独立的 app:{id}:table:{key} 命名空间。
 func TestTableCacheKeyScope(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
 
 	tests := []struct {
@@ -41,9 +42,9 @@ func TestTableCacheKeyScope(t *testing.T) {
 			want: "app:site-a:table:role_tree",
 		},
 		{
-			name: "keeps other app table cache key unchanged",
+			name: "rejects other app table cache key",
 			key:  "app:site-b:table:role_tree",
-			want: "app:site-b:table:role_tree",
+			want: "",
 		},
 		{
 			name: "keeps direct app key unchanged",
@@ -63,6 +64,7 @@ func TestTableCacheKeyScope(t *testing.T) {
 
 // TestTableCacheLogicalKey 只去掉 table-cache 前缀，不截断普通 app 级 Redis key。
 func TestTableCacheLogicalKey(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
 
 	tests := []struct {
@@ -182,7 +184,7 @@ func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(
 		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, 8)),
 		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, 8)),
 		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 8)),
-		keys.AdminInfoRedisKey(base.AppID(), 7),
+		keys.AdminInfoRedisKey(7),
 		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminProfile, 7)),
 	}
 	for _, key := range append(targetKeys, untouchedKeys...) {

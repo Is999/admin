@@ -90,17 +90,18 @@ func NewServiceContext(c config.Config, deps Dependencies) *ServiceContext {
 }
 
 // ScopedWithContext 基于当前 ServiceContext 构造一份绑定请求上下文的只读作用域副本。
-// 这里显式复制依赖引用和原子快照，避免直接复制 atomic.Value 带来的并发风险。
+// 这里只复制当前快照，不发布 runtimecfg，避免请求作用域覆盖进程级运行配置。
 func (s *ServiceContext) ScopedWithContext(ctx context.Context) *ServiceContext {
 	if s == nil {
 		return nil
 	}
-	scoped := NewServiceContext(s.CurrentConfig(), Dependencies{
+	scoped := &ServiceContext{
 		SiteDBs: s.SiteDBs.WithContext(ctx),
 		Kafka:   s.Kafka,
 		Rds:     s.Rds,
 		Audit:   s.Audit,
-	})
+	}
+	scoped.configValue.Store(s.CurrentConfig())
 	scoped.Task = s.Task
 	scoped.ConfigReload = s.ConfigReload
 	scoped.Collector = s.Collector

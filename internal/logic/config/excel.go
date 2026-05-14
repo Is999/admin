@@ -37,6 +37,7 @@ const (
 	sysConfigExcelLockTTL = 2 * time.Minute
 )
 
+// sysConfigExcelHeaders 定义系统配置 Excel 导入导出的固定列顺序。
 var sysConfigExcelHeaders = []any{
 	"配置ID",
 	"配置UUID",

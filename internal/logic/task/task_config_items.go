@@ -26,16 +26,17 @@ import (
 
 // 任务配置展示常量定义分页、脱敏占位和前端值类型。
 const (
-	taskConfigDefaultPage     = 1
-	taskConfigMaskPlaceholder = "****"
-	taskConfigValueBool       = "bool"
-	taskConfigValueList       = "list"
-	taskConfigValueNull       = "null"
-	taskConfigValueNumber     = "number"
-	taskConfigValueObject     = "object"
-	taskConfigValueString     = "string"
+	taskConfigDefaultPage     = 1        // 配置项查询默认页码
+	taskConfigMaskPlaceholder = "****"   // 敏感配置值统一脱敏占位符
+	taskConfigValueBool       = "bool"   // 配置项布尔值类型
+	taskConfigValueList       = "list"   // 配置项列表值类型
+	taskConfigValueNull       = "null"   // 配置项空值类型
+	taskConfigValueNumber     = "number" // 配置项数字值类型
+	taskConfigValueObject     = "object" // 配置项对象值类型
+	taskConfigValueString     = "string" // 配置项字符串值类型
 )
 
+// maskedTaskConfigView 表示配置项列表、分组统计和脱敏快照的聚合视图。
 type maskedTaskConfigView struct {
 	items          []types.TaskConfigItem        // items 表示扁平化后的配置项列表
 	sections       []types.TaskConfigSectionStat // sections 表示按一级配置段聚合的统计
@@ -45,8 +46,8 @@ type maskedTaskConfigView struct {
 
 // 任务配置敏感值识别规则用于隐藏地址、主机和凭据类配置。
 var (
-	taskConfigIPv4Pattern = regexp.MustCompile(`(?:^|[^\d])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:$|[^\d])`)
-	taskConfigHostPattern = regexp.MustCompile(`(?i)\b(?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}):\d{2,5}\b`)
+	taskConfigIPv4Pattern = regexp.MustCompile(`(?:^|[^\d])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:$|[^\d])`)       // 识别配置值中的 IPv4 地址片段
+	taskConfigHostPattern = regexp.MustCompile(`(?i)\b(?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}):\d{2,5}\b`) // 识别配置值中的主机端口片段
 )
 
 // GetConfigReloadItems 查询当前运行态配置快照中的配置项。

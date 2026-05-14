@@ -19,10 +19,12 @@ const (
 	taskMetricResultFailed      = "failed"  // 任务失败结果 label
 )
 
+// 任务队列指标变量集中定义执行次数、耗时和业务处理量统计。
 var (
-	taskMetricsOnce      sync.Once
+	taskMetricsOnce sync.Once // 保证任务指标只注册一次
+	// taskMetricLabelGuard 保护任务队列动态指标标签白名单。
 	taskMetricLabelGuard = struct {
-		mu        sync.RWMutex
+		mu        sync.RWMutex        // 保护动态 label 白名单
 		queues    map[string]struct{} // 已允许的 queue label 集合
 		taskTypes map[string]struct{} // 已允许的 task_type label 集合
 	}{
@@ -30,6 +32,7 @@ var (
 		taskTypes: make(map[string]struct{}),
 	}
 
+	// taskExecutionsTotal 统计任务执行结果次数。
 	taskExecutionsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "admin",
@@ -39,6 +42,7 @@ var (
 		},
 		[]string{"queue", "task_type", "result"},
 	)
+	// taskExecutionDuration 统计任务执行耗时分布。
 	taskExecutionDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "admin",
@@ -49,6 +53,7 @@ var (
 		},
 		[]string{"queue", "task_type", "result"},
 	)
+	// taskProcessedItemsTotal 统计任务执行快照中的业务处理数量。
 	taskProcessedItemsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "admin",

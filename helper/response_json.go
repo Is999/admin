@@ -29,12 +29,12 @@ type ResponseJSON struct {
 
 // JsonResp 用链式写法封装统一响应，并在写出响应前把 HTTP/Biz 结果同步回请求元数据。
 type JsonResp struct {
-	ctx        context.Context
-	write      http.ResponseWriter
-	httpStatus *int
-	code       *int
-	message    *string
-	err        error
+	ctx        context.Context     // 请求上下文，用于回填响应元数据
+	write      http.ResponseWriter // HTTP 响应写入器
+	httpStatus *int                // 显式 HTTP 状态码
+	code       *int                // 显式业务码
+	message    *string             // 显式响应文案
+	err        error               // 内部错误对象，仅用于日志、审计和 trace
 }
 
 // NewJsonResp 创建响应写入器，ctx 用于回填 request meta 和复用 go-zero 的上下文日志能力。

@@ -25,6 +25,7 @@ const (
 	loginCaptchaLength = 4
 )
 
+// loginCaptchaAlphabet 定义验证码可选字符，去掉易混淆字符。
 var loginCaptchaAlphabet = []rune("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
 
 // BuildLoginCaptcha 生成登录图形验证码并写入 Redis。

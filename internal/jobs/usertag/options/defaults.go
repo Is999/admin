@@ -47,6 +47,7 @@ func positiveOr(value, fallback int) int {
 	return fallback
 }
 
+// boundedPositiveOr 返回正数配置并限制最大值。
 func boundedPositiveOr(value, fallback, max int) int {
 	value = positiveOr(value, fallback)
 	if value > max {

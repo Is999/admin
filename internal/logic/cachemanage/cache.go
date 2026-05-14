@@ -47,6 +47,7 @@ const (
 	cacheMaskedValue = "******"
 )
 
+// sensitiveCacheKeyPatterns 定义缓存管理页面必须隐藏值内容的 Redis key 模板。
 var sensitiveCacheKeyPatterns = []string{
 	keys.AdminMFATwoStepTicketPattern,
 }

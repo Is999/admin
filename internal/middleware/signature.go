@@ -29,6 +29,7 @@ type SignatureMiddleware struct {
 	svc *svc.ServiceContext // 签名中间件依赖的配置、缓存和秘钥读取服务
 }
 
+// signatureReplayTTL 表示签名防重放缓存保留时间。
 const signatureReplayTTL = 5 * time.Minute
 
 // NewSignatureMiddleware 创建签名中间件实例。

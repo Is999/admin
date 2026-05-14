@@ -140,10 +140,10 @@ func (s Snapshot) Empty() bool {
 
 // Tracker 在单个任务 context 内累计处理量和耗时。
 type Tracker struct {
-	mu        sync.Mutex
-	name      string
-	startedAt time.Time
-	details   map[string]*Detail
+	mu        sync.Mutex         // 保护 details 累计状态
+	name      string             // 当前统计器名称
+	startedAt time.Time          // 统计开始时间
+	details   map[string]*Detail // 按业务动作聚合的处理明细
 }
 
 // New 创建新的执行统计器。

@@ -109,8 +109,8 @@ func (l *SystemCacheLogic) WarmupTemplate(req *types.CacheWarmupReq) *types.BizR
 
 // warmupTemplateTarget 定义“模板 key → 如何枚举实例 key”的白名单配置。
 type warmupTemplateTarget struct {
-	templateKey string
-	buildKeys   func(*SystemCacheLogic) ([]string, error)
+	templateKey string                                    // 允许预热的缓存模板 key
+	buildKeys   func(*SystemCacheLogic) ([]string, error) // 实例 key 枚举函数
 }
 
 // matchWarmupTemplateTarget 根据模板 key 找到对应的预热枚举策略。

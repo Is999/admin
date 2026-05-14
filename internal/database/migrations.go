@@ -13,6 +13,8 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
+// migrationAssets 嵌入内置数据库迁移 SQL 资产。
+//
 //go:embed assets/*.sql assets/*.sql.tmpl
 var migrationAssets embed.FS
 

@@ -19,8 +19,8 @@ type RoleListReq struct {
 	Status      *int   `json:"status,optional" form:"status,optional"`             // 角色状态筛选
 	Pid         *int   `json:"pid,optional" form:"pid,optional"`                   // 父级 ID 筛选
 	IsGenealogy int    `json:"is_genealogy,optional" form:"is_genealogy,optional"` // 是否按族谱筛选：1 是，0 否
-	GetOrderReq
-	GetPageReq // 搜索接口分页参数；详情接口会忽略该字段
+	GetOrderReq        // 复用排序参数
+	GetPageReq         // 搜索接口分页参数；详情接口会忽略该字段
 }
 
 // Validate 校验角色列表请求。
@@ -189,8 +189,8 @@ type PermissionListReq struct {
 	Status      *int   `json:"status,optional" form:"status,optional"`             // 权限状态筛选
 	Pid         *int   `json:"pid,optional" form:"pid,optional"`                   // 父级 ID 筛选
 	IsGenealogy int    `json:"is_genealogy,optional" form:"is_genealogy,optional"` // 是否按族谱筛选：1 是，0 否
-	GetOrderReq
-	GetPageReq
+	GetOrderReq        // 复用排序参数
+	GetPageReq         // 复用分页参数
 }
 
 // Validate 校验权限列表查询请求。
@@ -340,11 +340,11 @@ type PermissionMaxUUIDResp struct {
 
 // SysConfigListReq 表示系统常量配置列表查询请求。
 type SysConfigListReq struct {
-	UUID     string `json:"uuid,optional" form:"uuid,optional"`         // 配置 UUID 筛选
-	Title    string `json:"title,optional" form:"title,optional"`       // 配置标题筛选
-	PagePath string `json:"pagePath,optional" form:"pagePath,optional"` // 页面路径筛选
-	GetOrderReq
-	GetPageReq
+	UUID        string `json:"uuid,optional" form:"uuid,optional"`         // 配置 UUID 筛选
+	Title       string `json:"title,optional" form:"title,optional"`       // 配置标题筛选
+	PagePath    string `json:"pagePath,optional" form:"pagePath,optional"` // 页面路径筛选
+	GetOrderReq        // 复用排序参数
+	GetPageReq         // 复用分页参数
 }
 
 // Validate 校验系统常量配置列表请求。
@@ -521,8 +521,8 @@ type SecretKeyListReq struct {
 	SignStatus    *int   `json:"signStatus,optional" form:"signStatus,optional"`       // 签名验签状态筛选：1 启用，0 停用
 	CryptoStatus  *int   `json:"cryptoStatus,optional" form:"cryptoStatus,optional"`   // 加密解密状态筛选：1 启用，0 停用
 	StableVersion string `json:"stableVersion,optional" form:"stableVersion,optional"` // 稳定版本筛选
-	GetOrderReq
-	GetPageReq
+	GetOrderReq          // 复用排序参数
+	GetPageReq           // 复用分页参数
 }
 
 // Validate 校验秘钥管理列表查询请求。
@@ -916,9 +916,9 @@ func (r *CacheListReq) Validate() error {
 
 // CacheKeyReq 表示缓存键查询请求。
 type CacheKeyReq struct {
-	Key    string `json:"key,optional" form:"key,optional"`       // Redis 缓存键
-	Source string `json:"source,optional" form:"source,optional"` // 请求来源：manual_search/route_jump/template_locate/template_drawer
-	GetPageReq
+	Key        string `json:"key,optional" form:"key,optional"`       // Redis 缓存键
+	Source     string `json:"source,optional" form:"source,optional"` // 请求来源：manual_search/route_jump/template_locate/template_drawer
+	GetPageReq        // 复用分页参数
 }
 
 // Validate 校验缓存键查询请求。

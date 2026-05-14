@@ -2,7 +2,7 @@ package types
 
 // ListCollectorTasksReq 表示 Collector 任务列表查询请求。
 type ListCollectorTasksReq struct {
-	GetPageReq
+	GetPageReq // 复用分页参数
 
 	BizType   string `form:"bizType,optional"`   // 业务类型过滤
 	Transport string `form:"transport,optional"` // 传输通道过滤

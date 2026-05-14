@@ -37,13 +37,13 @@ func (r *UUIDPathReq) Validate() error {
 
 // AdminListReq 表示管理员列表查询请求。
 type AdminListReq struct {
-	Username  string `json:"username,optional" form:"username,optional"`   // 登录用户名筛选
-	RealName  string `json:"realName,optional" form:"realName,optional"`   // 真实姓名筛选
-	Status    *int   `json:"status,optional" form:"status,optional"`       // 账号状态筛选：1 正常，0 禁用
-	RoleID    *int   `json:"roleID,optional" form:"roleID,optional"`       // 角色 ID 筛选
-	CreatedAt string `json:"createdAt,optional" form:"createdAt,optional"` // 创建时间筛选预留字段
-	GetOrderReq
-	GetPageReq
+	Username    string `json:"username,optional" form:"username,optional"`   // 登录用户名筛选
+	RealName    string `json:"realName,optional" form:"realName,optional"`   // 真实姓名筛选
+	Status      *int   `json:"status,optional" form:"status,optional"`       // 账号状态筛选：1 正常，0 禁用
+	RoleID      *int   `json:"roleID,optional" form:"roleID,optional"`       // 角色 ID 筛选
+	CreatedAt   string `json:"createdAt,optional" form:"createdAt,optional"` // 创建时间筛选预留字段
+	GetOrderReq        // 复用排序参数
+	GetPageReq         // 复用分页参数
 }
 
 // Validate 校验管理员列表查询请求。

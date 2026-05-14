@@ -65,6 +65,7 @@ func ServeStream(w http.ResponseWriter, r *http.Request, reader io.Reader, fileN
 	return errors.Tag(err)
 }
 
+// serveFile 以受控响应头输出本地文件，支持浏览器 Range 下载。
 func serveFile(w http.ResponseWriter, r *http.Request, filePath string, fileName string, contentType string, disposition string) error {
 	filePath = strings.TrimSpace(filePath)
 	if filePath == "" {

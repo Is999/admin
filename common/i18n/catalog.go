@@ -10,6 +10,8 @@ import (
 	"golang.org/x/text/language"
 )
 
+// localeFS 嵌入后端多语言 JSON 资产。
+//
 //go:embed locales/active.*.json
 var localeFS embed.FS
 

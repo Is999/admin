@@ -337,7 +337,7 @@ type AlertConfig struct {
 
 // Config 是服务总配置，除 go-zero RestConf 外，补充数据库、Redis、JWT 与可观测性参数。
 type Config struct {
-	rest.RestConf
+	rest.RestConf                       // go-zero HTTP 基础配置
 	RunMode         int                 `json:"run_mode,optional"`                     // 进程启动模式位掩码；未显式传 `-mode` 时作为兜底值
 	AppID           string              `json:"app_id,optional"`                       // 站点/应用 ID（如 1）
 	AppKey          string              `json:"app_key,optional"`                      // 全局应用密钥，用于 MFA 秘钥等敏感数据的库内加解密

@@ -105,6 +105,7 @@ func Setup(ctx context.Context, cfg config.ObservabilityConfig) (func(context.Co
 	return tp.Shutdown, nil
 }
 
+// normalizeOTLPProtocol 归一化 OTLP 协议别名，默认使用 grpc。
 func normalizeOTLPProtocol(protocol string) string {
 	protocol = strings.TrimSpace(strings.ToLower(protocol))
 	switch protocol {
@@ -117,6 +118,7 @@ func normalizeOTLPProtocol(protocol string) string {
 	}
 }
 
+// normalizeOTLPEndpoint 拆分 OTLP endpoint，返回 host 与 HTTP path。
 func normalizeOTLPEndpoint(endpoint string) (string, string) {
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" {

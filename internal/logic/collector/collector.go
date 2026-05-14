@@ -19,14 +19,14 @@ import (
 
 // Collector 概览默认参数限制后台聚合批次、缓存时间和展示数量。
 const (
-	defaultCollectorOverviewKafkaBatchSize    = 500
-	defaultCollectorOverviewRedisCount        = 500
-	defaultCollectorOverviewDBRunnerBatchSize = 500
-	defaultCollectorOverviewDBRunnerInterval  = 1
-	defaultCollectorOverviewRunningLease      = 600
-	defaultCollectorOverviewMaxRetryTimes     = 8
-	defaultCollectorOverviewBizTypeTopLimit   = 5
-	collectorOverviewCacheTTL                 = 5 * time.Second
+	defaultCollectorOverviewKafkaBatchSize    = 500             // 概览展示 Kafka 默认批量拉取数量
+	defaultCollectorOverviewRedisCount        = 500             // 概览展示 Redis Stream 默认查询数量
+	defaultCollectorOverviewDBRunnerBatchSize = 500             // 概览展示 DB runner 默认批次大小
+	defaultCollectorOverviewDBRunnerInterval  = 1               // 概览展示 DB runner 默认轮询间隔秒数
+	defaultCollectorOverviewRunningLease      = 600             // 概览展示 DB outbox 默认运行租约秒数
+	defaultCollectorOverviewMaxRetryTimes     = 8               // 概览展示 DB outbox 默认最大重试次数
+	defaultCollectorOverviewBizTypeTopLimit   = 5               // 概览展示 biz_type 排行数量上限
+	collectorOverviewCacheTTL                 = 5 * time.Second // Collector 概览短缓存有效期
 )
 
 // collectorOverviewCache 概览缓存

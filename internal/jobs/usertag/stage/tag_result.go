@@ -10,7 +10,7 @@ import (
 
 // PrepareStage 负责清理当前工作流运行期状态，并在 full 模式清空预建临时表。
 type PrepareStage struct {
-	Base
+	Base                           // 阶段基础信息，提供统一阶段名
 	repo *repository.TagRepository // 标签结果仓储
 }
 
@@ -40,7 +40,7 @@ func (s *PrepareStage) Run(ctx *runtimectx.Context, plans map[string]any) (Resul
 
 // FinalizeStage 负责 full 模式最终切表。
 type FinalizeStage struct {
-	Base
+	Base                           // 阶段基础信息，提供统一阶段名
 	repo *repository.TagRepository // 标签结果仓储
 }
 
@@ -68,7 +68,7 @@ func (s *FinalizeStage) Run(ctx *runtimectx.Context, plans map[string]any) (Resu
 
 // DispatchHooksStage 负责派发标签得到和失去事件 hook。
 type DispatchHooksStage struct {
-	Base
+	Base                           // 阶段基础信息，提供统一阶段名
 	repo *repository.TagRepository // 标签结果仓储
 }
 

@@ -116,12 +116,12 @@ type AdminMessageItem struct {
 
 // AdminMessageSentQueryReq 表示管理员已发送消息分页查询请求参数。
 type AdminMessageSentQueryReq struct {
-	Type      string `json:"type,optional" form:"type,optional"`           // 消息类型筛选
-	Level     *int   `json:"level,optional" form:"level,optional"`         // 消息等级筛选（可选）
-	Keyword   string `json:"keyword,optional" form:"keyword,optional"`     // 关键字（标题/内容模糊匹配）
-	StartTime string `json:"startTime,optional" form:"startTime,optional"` // 起始时间（格式：YYYY-MM-DD HH:MM:SS）
-	EndTime   string `json:"endTime,optional" form:"endTime,optional"`     // 结束时间（格式：YYYY-MM-DD HH:MM:SS）
-	GetPageReq
+	Type       string `json:"type,optional" form:"type,optional"`           // 消息类型筛选
+	Level      *int   `json:"level,optional" form:"level,optional"`         // 消息等级筛选（可选）
+	Keyword    string `json:"keyword,optional" form:"keyword,optional"`     // 关键字（标题/内容模糊匹配）
+	StartTime  string `json:"startTime,optional" form:"startTime,optional"` // 起始时间（格式：YYYY-MM-DD HH:MM:SS）
+	EndTime    string `json:"endTime,optional" form:"endTime,optional"`     // 结束时间（格式：YYYY-MM-DD HH:MM:SS）
+	GetPageReq        // 复用分页参数
 }
 
 // Validate 校验并归一化已发送查询参数。

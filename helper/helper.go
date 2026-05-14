@@ -7,9 +7,9 @@ import (
 
 // CtxAdmin 存储上下文中的管理员信息。
 type CtxAdmin struct {
-	ID   int
-	Name string
-	IP   string
+	ID   int    // 管理员 ID
+	Name string // 管理员用户名
+	IP   string // 客户端 IP
 }
 
 // GetCtxAdmin 从请求元数据中提取管理员信息。

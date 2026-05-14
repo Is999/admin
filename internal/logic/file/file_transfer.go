@@ -39,7 +39,7 @@ const (
 
 // FileTransferLogic 承载导入导出文件上传下载通用逻辑。
 type FileTransferLogic struct {
-	*corelogic.BaseLogic
+	*corelogic.BaseLogic // 复用请求上下文、数据库、Redis 和审计能力
 }
 
 // FileUploadPolicy 描述不同业务文件的安全校验与访问控制规则。

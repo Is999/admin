@@ -360,4 +360,5 @@ func (s *S3Storage) isTrustedObjectHost(host string) bool {
 		host == strings.ToLower("s3."+s.region+".amazonaws.com")
 }
 
+// 编译期确认 S3Storage 实现 ObjectStorage。
 var _ ObjectStorage = (*S3Storage)(nil)

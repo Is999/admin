@@ -155,15 +155,17 @@ func ApplyStreamExportShardedOpts[T any, C any, S any](base StreamExportShardedO
 	return base
 }
 
+// exportChunk 表示单个分片查询完成后等待顺序写入的结果块。
 type exportChunk struct {
-	shardIndex int
-	sequence   int
-	rows       [][]any
-	itemCount  int
-	total      int64
-	done       bool
+	shardIndex int     // 分片序号
+	sequence   int     // 分片内块序号
+	rows       [][]any // 已转换好的 Excel 行
+	itemCount  int     // 当前块对应的原始数据条数
+	total      int64   // 分片或全局总数快照
+	done       bool    // 当前分片是否已经读完
 }
 
+// progressReporter 记录最近一次进度上报时间和行数，用于节流。
 type progressReporter struct {
 	lastReportedAt time.Time // 最近一次上报时间
 	lastRows       int64     // 最近一次上报时的已处理行数
@@ -514,6 +516,7 @@ func pendingExportChunkCount(pending map[int]map[int]exportChunk) int {
 	return total
 }
 
+// reportStreamExportProgress 按节流策略上报流式导出进度。
 func reportStreamExportProgress[T any, C any, S any](opt StreamExportShardedOptions[T, C, S], reporter *progressReporter, processed int64, total int64, startedAt time.Time, force bool) error {
 	if opt.Progress == nil {
 		return nil
@@ -538,6 +541,7 @@ func reportStreamExportProgress[T any, C any, S any](opt StreamExportShardedOpti
 	return nil
 }
 
+// shouldReportStreamExportProgress 判断本次处理量或时间间隔是否达到进度上报条件。
 func shouldReportStreamExportProgress[T any, C any, S any](opt StreamExportShardedOptions[T, C, S], reporter *progressReporter, processed int64, now time.Time) bool {
 	if reporter == nil {
 		return true
@@ -615,6 +619,7 @@ func streamExportRetryDelay(base time.Duration, attempt int) time.Duration {
 	return delay
 }
 
+// writeExportHeader 写入导出表头，并在需要时应用统一表头样式。
 func writeExportHeader(workbook *excelize.File, streamWriter *excelize.StreamWriter, header []any, headerStyle *excelize.Style) error {
 	if len(header) == 0 {
 		return nil
@@ -636,6 +641,7 @@ func writeExportHeader(workbook *excelize.File, streamWriter *excelize.StreamWri
 	return nil
 }
 
+// sendExportError 非阻塞发送导出错误，避免多个 goroutine 同时失败时阻塞。
 func sendExportError(errCh chan error, err error) {
 	if err == nil {
 		return

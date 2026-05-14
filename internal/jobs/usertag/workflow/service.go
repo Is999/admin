@@ -28,12 +28,12 @@ const (
 // Service 是 usertag 工作流编排服务。
 // 当前只注册可调度、可观测的骨架阶段，不内置具体标签业务逻辑。
 type Service struct {
-	ctx      context.Context        // 当前请求上下文
-	svcCtx   *svc.ServiceContext    // 全局依赖上下文
-	defaults options.Defaults       // 默认运行参数
-	repos    repository.RuntimeDeps // 外部依赖集合
-	tagRepo  *repository.TagRepository
-	stages   map[string]stage.Stage // 已注册阶段，key 为阶段名称
+	ctx      context.Context           // 当前请求上下文
+	svcCtx   *svc.ServiceContext       // 全局依赖上下文
+	defaults options.Defaults          // 默认运行参数
+	repos    repository.RuntimeDeps    // 外部依赖集合
+	tagRepo  *repository.TagRepository // 标签结果仓储
+	stages   map[string]stage.Stage    // 已注册阶段，key 为阶段名称
 }
 
 // NewService 创建 usertag 工作流服务。

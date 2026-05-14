@@ -479,6 +479,7 @@ func (l *SecurityLogic) UserPermissionUUIDsWithCache(userID int) ([]string, erro
 	return l.userPermissionUUIDsWithCache(userID)
 }
 
+// routePermissionIDsFromModuleCache 从权限模块缓存反查路由关联权限 ID。
 func (l *SecurityLogic) routePermissionIDsFromModuleCache(routeAlias string) ([]int, bool, error) {
 	routeAlias = strings.TrimSpace(routeAlias)
 	if routeAlias == "" || l.Redis() == nil {
@@ -519,6 +520,7 @@ func (l *SecurityLogic) routePermissionIDsFromModuleCache(routeAlias string) ([]
 	return permissionIDs, true, nil
 }
 
+// readPositiveIntSetCache 读取缓存中的正整数集合并保持排序结果。
 func (l *SecurityLogic) readPositiveIntSetCache(cacheKey string, label string) ([]int, bool, error) {
 	values, found, err := l.readStringSetCache(cacheKey)
 	if err != nil || !found {
@@ -528,6 +530,7 @@ func (l *SecurityLogic) readPositiveIntSetCache(cacheKey string, label string) (
 	return permissionIDs, true, errors.Tag(err)
 }
 
+// readStringSetCache 读取缓存集合，支持空集合标记避免穿透。
 func (l *SecurityLogic) readStringSetCache(cacheKey string) ([]string, bool, error) {
 	if l.Redis() == nil {
 		return nil, false, nil
@@ -546,6 +549,7 @@ func (l *SecurityLogic) readStringSetCache(cacheKey string) ([]string, bool, err
 	return values, true, nil
 }
 
+// writeStringSetCache 重建字符串集合缓存，空集合写入统一空标记。
 func (l *SecurityLogic) writeStringSetCache(cacheKey string, values []string) error {
 	if l.Redis() == nil {
 		return nil
@@ -597,67 +601,67 @@ func OperateMFABizResult(err error, operation string) *types.BizResult {
 // permissionAllowlist 显式列出只依赖登录态和账号状态的个人/会话接口。
 // 这些接口不走权限表，但仍会经过 token、账号状态、IP 与 MFA 校验，不属于未配置权限的默认放行。
 var permissionAllowlist = map[string]bool{
-	"auth.refresh":              true,
-	"auth.logout":               true,
-	"auth.codes":                true,
-	"auth.profile":              true,
-	"role.tree.options":         true,
-	"profile.mine":              true,
-	"profile.permissions":       true,
-	"profile.check_secure":      true,
-	"profile.check_mfa":         true,
-	"profile.update_password":   true,
-	"profile.update_mine":       true,
-	"profile.update_mfa_status": true,
-	"profile.update_mfa_secret": true,
+	"auth.refresh":              true, // 刷新访问令牌不要求后台权限码。
+	"auth.logout":               true, // 管理员退出登录不要求后台权限码。
+	"auth.codes":                true, // 获取当前用户权限码不要求后台权限码。
+	"auth.profile":              true, // 获取当前登录资料不要求后台权限码。
+	"role.tree.options":         true, // 查询角色树下拉不要求后台权限码。
+	"profile.mine":              true, // 获取当前管理员资料不要求后台权限码。
+	"profile.permissions":       true, // 获取当前管理员角色权限不要求后台权限码。
+	"profile.check_secure":      true, // 校验当前管理员密码不要求后台权限码。
+	"profile.check_mfa":         true, // 校验当前管理员MFA动态码不要求后台权限码。
+	"profile.update_password":   true, // 个人中心修改密码不要求后台权限码。
+	"profile.update_mine":       true, // 个人中心修改资料不要求后台权限码。
+	"profile.update_mfa_status": true, // 个人中心修改MFA状态不要求后台权限码。
+	"profile.update_mfa_secret": true, // 个人中心修改MFA秘钥不要求后台权限码。
 	// 个人中心刷新 MFA 绑定秘钥属于当前登录账号的自助安全操作，
 	// 只依赖登录态、账号状态和后续 MFA 二次校验，不额外绑定后台业务权限码。
-	"profile.refresh_mfa_secret": true,
-	"profile.update_avatar":      true,
+	"profile.refresh_mfa_secret": true, // 个人中心重新生成MFA秘钥不要求后台权限码。
+	"profile.update_avatar":      true, // 个人中心修改头像不要求后台权限码。
 	// 权限 UUID 预览只生成候选值，不写权限表；新增/编辑权限仍由权限保存接口做权限控制。
-	"permission.max_uuid": true,
+	"permission.max_uuid": true, // 查询下一个权限UUID不要求后台权限码。
 	// 消息中心属于个人收件箱能力，仅依赖登录态与账号安全校验，不绑定后台权限码。
-	"message.list":          true,
-	"message.sent_list":     true,
-	"message.receivers":     true,
-	"message.unread_count":  true,
-	"message.notifications": true,
-	"message.mark_read":     true,
-	"message.delete":        true,
-	"message.send":          true,
-	"message.handle":        true,
+	"message.list":          true, // 查询管理员消息收件箱不要求后台权限码。
+	"message.sent_list":     true, // 查询管理员已发送消息不要求后台权限码。
+	"message.receivers":     true, // 查询管理员消息收件人明细不要求后台权限码。
+	"message.unread_count":  true, // 查询管理员未读消息数量不要求后台权限码。
+	"message.notifications": true, // 查询管理员通知列表不要求后台权限码。
+	"message.mark_read":     true, // 标记管理员消息已读不要求后台权限码。
+	"message.delete":        true, // 删除管理员消息不要求后台权限码。
+	"message.send":          true, // 发送管理员消息不要求后台权限码。
+	"message.handle":        true, // 标记管理员消息已处理不要求后台权限码。
 }
 
 // passwordResetAllowlist 显式列出“必须先修改密码”状态下仍允许访问的自助接口。
 var passwordResetAllowlist = map[string]bool{
-	"auth.refresh":               true,
-	"auth.logout":                true,
-	"auth.codes":                 true,
-	"auth.profile":               true,
-	"profile.mine":               true,
-	"profile.permissions":        true,
-	"profile.check_secure":       true,
-	"profile.check_mfa":          true,
-	"profile.update_password":    true,
-	"profile.update_mine":        true,
-	"profile.update_mfa_status":  true,
-	"profile.update_mfa_secret":  true,
-	"profile.refresh_mfa_secret": true,
-	"profile.update_avatar":      true,
-	"message.notifications":      true,
+	"auth.refresh":               true, // 刷新访问令牌在强制改密阶段允许访问。
+	"auth.logout":                true, // 管理员退出登录在强制改密阶段允许访问。
+	"auth.codes":                 true, // 获取当前用户权限码在强制改密阶段允许访问。
+	"auth.profile":               true, // 获取当前登录资料在强制改密阶段允许访问。
+	"profile.mine":               true, // 获取当前管理员资料在强制改密阶段允许访问。
+	"profile.permissions":        true, // 获取当前管理员角色权限在强制改密阶段允许访问。
+	"profile.check_secure":       true, // 校验当前管理员密码在强制改密阶段允许访问。
+	"profile.check_mfa":          true, // 校验当前管理员MFA动态码在强制改密阶段允许访问。
+	"profile.update_password":    true, // 个人中心修改密码在强制改密阶段允许访问。
+	"profile.update_mine":        true, // 个人中心修改资料在强制改密阶段允许访问。
+	"profile.update_mfa_status":  true, // 个人中心修改MFA状态在强制改密阶段允许访问。
+	"profile.update_mfa_secret":  true, // 个人中心修改MFA秘钥在强制改密阶段允许访问。
+	"profile.refresh_mfa_secret": true, // 个人中心重新生成MFA秘钥在强制改密阶段允许访问。
+	"profile.update_avatar":      true, // 个人中心修改头像在强制改密阶段允许访问。
+	"message.notifications":      true, // 查询管理员通知列表在强制改密阶段允许访问。
 }
 
 // loginMFAAllowlist 显式列出“正在完成登录 MFA 校验”时允许访问的会话接口。
 // 这里必须至少放行 MFA 动态码校验接口本身，避免“校验 MFA 的接口自己又被要求先完成 MFA”形成递归拦截。
 var loginMFAAllowlist = map[string]bool{
-	"auth.refresh":               true,
-	"auth.logout":                true,
-	"auth.codes":                 true,
-	"profile.check_mfa":          true,
-	"profile.refresh_mfa_secret": true,
-	"profile.update_mfa_status":  true,
-	"profile.mine":               true,
-	"message.notifications":      true,
+	"auth.refresh":               true, // 刷新访问令牌在登录 MFA 阶段允许访问。
+	"auth.logout":                true, // 管理员退出登录在登录 MFA 阶段允许访问。
+	"auth.codes":                 true, // 获取当前用户权限码在登录 MFA 阶段允许访问。
+	"profile.check_mfa":          true, // 校验当前管理员MFA动态码在登录 MFA 阶段允许访问。
+	"profile.refresh_mfa_secret": true, // 个人中心重新生成MFA秘钥在登录 MFA 阶段允许访问。
+	"profile.update_mfa_status":  true, // 个人中心修改MFA状态在登录 MFA 阶段允许访问。
+	"profile.mine":               true, // 获取当前管理员资料在登录 MFA 阶段允许访问。
+	"message.notifications":      true, // 查询管理员通知列表在登录 MFA 阶段允许访问。
 }
 
 // checkAdminNeedResetPassword 校验管理员是否处于必须先修改登录密码状态。

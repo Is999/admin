@@ -59,22 +59,22 @@ const (
 
 // AdminExportLogic 承载管理员列表异步导出、进度查询和文件下载准备逻辑。
 type AdminExportLogic struct {
-	*corelogic.BaseLogic
+	*corelogic.BaseLogic // 复用请求上下文、数据库、Redis 和审计能力
 }
 
 // adminExportStatusSnapshot 表示写入 Redis 的管理员导出任务完整快照。
 // 对前端隐藏的内部字段不能直接依赖 `types.AdminExportStatusResp` 的 JSON 标签持久化，
 // 这里单独展开，避免下载阶段丢失对象 key、本地路径和权限校验所需信息。
 type adminExportStatusSnapshot struct {
-	types.AdminExportStatusResp
-	FilePath           string `json:"filePath"`           // 服务器本地文件路径
-	ObjectKey          string `json:"objectKey"`          // 统一存储对象 key
-	StorageType        string `json:"storageType"`        // 统一存储类型
-	ContentType        string `json:"contentType"`        // 文件 MIME
-	LastCursorID       int    `json:"lastCursorId"`       // 最近处理到的管理员 ID
-	OperatorID         int    `json:"operatorId"`         // 发起导出的管理员 ID
-	RequestFingerprint string `json:"requestFingerprint"` // 归一化导出条件指纹
-	AuthorizedAdminIDs []int  `json:"authorizedAdminIds"` // 允许复用该导出结果的管理员 ID 列表
+	types.AdminExportStatusResp        // 对外导出状态响应字段
+	FilePath                    string `json:"filePath"`           // 服务器本地文件路径
+	ObjectKey                   string `json:"objectKey"`          // 统一存储对象 key
+	StorageType                 string `json:"storageType"`        // 统一存储类型
+	ContentType                 string `json:"contentType"`        // 文件 MIME
+	LastCursorID                int    `json:"lastCursorId"`       // 最近处理到的管理员 ID
+	OperatorID                  int    `json:"operatorId"`         // 发起导出的管理员 ID
+	RequestFingerprint          string `json:"requestFingerprint"` // 归一化导出条件指纹
+	AuthorizedAdminIDs          []int  `json:"authorizedAdminIds"` // 允许复用该导出结果的管理员 ID 列表
 }
 
 // NewAdminExportLogic 创建绑定 HTTP 请求上下文的管理员导出逻辑对象。
@@ -607,6 +607,7 @@ func (l *AdminExportLogic) buildExportShards(req *types.AdminExportReq, total in
 	return excel.BuildOrderedIDShards(minID, maxID, shardCount), nil
 }
 
+// adminIDRange 表示当前筛选条件命中的管理员主键范围。
 type adminIDRange struct {
 	MinID int `gorm:"column:min_id"` // 最小管理员 ID
 	MaxID int `gorm:"column:max_id"` // 最大管理员 ID

@@ -658,6 +658,7 @@ func truncateString(value string, limit int) string {
 	return value[:limit]
 }
 
+// simpleIdentPattern 限制动态表名和列名只能使用安全标识符。
 var simpleIdentPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // quoteIdent 返回安全 MySQL 标识符。

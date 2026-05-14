@@ -143,6 +143,7 @@ type ActionLogParam struct {
 // Method 定义为字符串类型，用作内部方法标识。
 type Method string
 
+// method 保留内部短别名，便于审计映射常量集中声明。
 type method = Method
 
 // 统一维护各 Handler 的方法名常量，确保审计映射和调用点使用同一标识。

@@ -306,6 +306,7 @@ func hasCipherWholeBody(fields []string) bool {
 	return false
 }
 
+// isEmptySecurityFieldValue 判断字段值是否为空，空值不进入字段级加解密。
 func isEmptySecurityFieldValue(value any) bool {
 	if value == nil {
 		return true

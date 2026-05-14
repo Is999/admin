@@ -16,8 +16,8 @@ import (
 
 // Meta 描述管理员日志查询元信息。
 type Meta struct {
-	ArchiveEnabled bool `json:"archiveEnabled"`
-	QueryWriteDB   bool `json:"queryWriteDB"`
+	ArchiveEnabled bool `json:"archiveEnabled"` // 是否启用归档查询能力
+	QueryWriteDB   bool `json:"queryWriteDB"`   // 是否强制走写库查询
 }
 
 // adminLogOrderPattern 约束管理员日志列表动态排序字段，避免 ORDER BY 注入。
@@ -54,6 +54,7 @@ func QueryDirect(ctx context.Context, db *gorm.DB, req *types.AdminLogQueryReq, 
 	return items, total, meta, nil
 }
 
+// applyFilters 将审计日志筛选条件追加到 GORM 查询。
 func applyFilters(query *gorm.DB, req *types.AdminLogQueryReq, startTime, endTime *time.Time) *gorm.DB {
 	if req.TraceID != "" {
 		query = query.Where("trace_id = ?", req.TraceID)
@@ -76,6 +77,7 @@ func applyFilters(query *gorm.DB, req *types.AdminLogQueryReq, startTime, endTim
 	return query
 }
 
+// applyOrder 应用白名单校验后的审计日志排序。
 func applyOrder(query *gorm.DB, orderBy, order string) (*gorm.DB, error) {
 	orderClause, err := buildOrderClause(orderBy, order)
 	if err != nil {
@@ -87,6 +89,7 @@ func applyOrder(query *gorm.DB, orderBy, order string) (*gorm.DB, error) {
 	return query.Order(orderClause), nil
 }
 
+// buildOrderClause 构造安全的 ORDER BY 片段。
 func buildOrderClause(orderBy, order string) (string, error) {
 	orderBy = strings.TrimSpace(orderBy)
 	if orderBy == "" {
@@ -105,6 +108,7 @@ func buildOrderClause(orderBy, order string) (string, error) {
 	return fmt.Sprintf("%s %s", quoteIdent(orderBy), normalizedOrder), nil
 }
 
+// quoteIdent 转义 MySQL 标识符，避免动态排序字段注入。
 func quoteIdent(name string) string {
 	name = strings.TrimSpace(name)
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"

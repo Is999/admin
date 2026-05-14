@@ -2,6 +2,7 @@ package keys
 
 import "strings"
 
+// tableCacheSegment 表示 table-cache 业务在应用命名空间下的二级前缀。
 const tableCacheSegment = "table"
 
 // TableCachePrefix 返回当前应用 table-cache 真实 Redis Key 前缀。
@@ -32,6 +33,7 @@ func TrimTableCachePrefix(key string) string {
 	return strings.TrimPrefix(TrimPrefix(key), tableCacheLogicalPrefix())
 }
 
+// tableCacheLogicalPrefix 返回不含 app_id 的 table-cache 逻辑前缀。
 func tableCacheLogicalPrefix() string {
 	return tableCacheSegment + ":"
 }

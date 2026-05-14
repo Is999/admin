@@ -71,9 +71,9 @@ type UploadSession struct {
 // uploadSessionSnapshot 表示写入 Redis 的上传会话快照。
 // 该结构在对外响应字段之外，额外持久化归属与临时路径信息，避免分片续传时状态丢失。
 type uploadSessionSnapshot struct {
-	UploadSession
-	OperatorID int    `json:"operatorId"` // 发起上传的管理员 ID
-	TempPath   string `json:"tempPath"`   // 上传中的临时文件路径
+	UploadSession        // 对外上传会话字段
+	OperatorID    int    `json:"operatorId"` // 发起上传的管理员 ID
+	TempPath      string `json:"tempPath"`   // 上传中的临时文件路径
 }
 
 // InitUploadReq 表示初始化断点续传上传会话的参数。

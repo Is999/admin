@@ -57,18 +57,18 @@ const (
 	// GroupCacheRefresh 是缓存刷新任务的聚合分组。
 	GroupCacheRefresh = "cache-refresh"
 
-	headerLocale       = "x-app-locale"
-	headerUserID       = "x-app-user-id"
-	headerUserName     = "x-app-user-name"
-	headerTaskName     = "x-app-task-name"
-	headerTaskSource   = "x-app-task-source"
-	HeaderPeriodicName = "x-app-periodic-name" // 周期任务原始名称
-	headerWorkflowID   = "x-app-workflow-id"
-	headerWorkflowName = "x-app-workflow-name"
-	headerWorkflowNode = "x-app-workflow-node"
-	headerShardIndex   = "x-app-workflow-shard-index"
-	headerShardTotal   = "x-app-workflow-shard-total"
-	headerAppID        = "x-app-id"
+	headerLocale       = "x-app-locale"               // 任务透传的语言标识
+	headerUserID       = "x-app-user-id"              // 任务透传的操作者 ID
+	headerUserName     = "x-app-user-name"            // 任务透传的操作者名称
+	headerTaskName     = "x-app-task-name"            // 任务展示名称
+	headerTaskSource   = "x-app-task-source"          // 任务触发来源
+	HeaderPeriodicName = "x-app-periodic-name"        // 周期任务原始名称
+	headerWorkflowID   = "x-app-workflow-id"          // 工作流实例 ID
+	headerWorkflowName = "x-app-workflow-name"        // 工作流名称
+	headerWorkflowNode = "x-app-workflow-node"        // 工作流节点名称
+	headerShardIndex   = "x-app-workflow-shard-index" // 工作流分片序号
+	headerShardTotal   = "x-app-workflow-shard-total" // 工作流分片总数
+	headerAppID        = "x-app-id"                   // 当前应用 app_id
 
 	taskSearchFieldTaskName     = "taskName"     // 任务结果或兼容 payload 中的展示名称字段
 	taskSearchFieldTaskType     = "taskType"     // 任务结果中回写的任务类型字段

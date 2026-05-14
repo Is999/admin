@@ -52,8 +52,8 @@ func (r *SecurityDebugSignReq) NormalizedSignFields() []string {
 
 // SecurityDebugVerifyReq 表示安全调试台“验签”请求。
 type SecurityDebugVerifyReq struct {
-	SecurityDebugSignReq
-	Sign string `json:"sign"` // 待校验签名值
+	SecurityDebugSignReq        // 复用签名请求字段
+	Sign                 string `json:"sign"` // 待校验签名值
 }
 
 // Validate 校验验签调试请求。
@@ -147,8 +147,8 @@ type SecurityDebugSignResp struct {
 
 // SecurityDebugVerifyResp 表示验签调试结果。
 type SecurityDebugVerifyResp struct {
-	SecurityDebugSignResp
-	Verified bool `json:"verified"` // 是否验签成功
+	SecurityDebugSignResp      // 复用签名结果字段
+	Verified              bool `json:"verified"` // 是否验签成功
 }
 
 // SecurityDebugCipherResp 表示加密或解密调试结果。

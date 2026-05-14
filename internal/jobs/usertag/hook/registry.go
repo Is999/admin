@@ -14,6 +14,7 @@ var (
 	// ErrNoHandlers 表示事件 outbox 中已有待派发事件，但当前进程未注册任何 hook。
 	ErrNoHandlers = errors.New("用户标签变更事件 hook 未注册")
 
+	// defaultRegistry 保存进程级用户标签事件 hook 注册表。
 	defaultRegistry = NewRegistry()
 )
 
@@ -25,8 +26,8 @@ type Handler interface {
 
 // Registry 保存用户标签事件 hook 注册表。
 type Registry struct {
-	mu       sync.RWMutex
-	handlers []Handler
+	mu       sync.RWMutex // 保护 handlers 注册表
+	handlers []Handler    // 已注册的用户标签事件处理器
 }
 
 // NewRegistry 创建空 hook 注册表。

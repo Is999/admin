@@ -28,8 +28,8 @@ type Plugin interface {
 
 // PluginFunc 允许通过函数快速声明一个插件，减少样板代码。
 type PluginFunc struct {
-	name  string
-	setup func(*Runtime) error
+	name  string               // 插件名称
+	setup func(*Runtime) error // 插件注册函数
 }
 
 // NewPluginFunc 创建一个函数式插件。

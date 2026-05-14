@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// accessLogIgnorePathSet 定义无需输出访问日志的高频或低价值路由。
 var accessLogIgnorePathSet = map[string]struct{}{
 	"/api/live":                         {}, // 当前存活检查入口由探针高频访问，默认不打印访问日志，避免无效噪音淹没有效业务日志。
 	"/api/ready":                        {}, // 当前就绪检查入口由探针高频访问，默认不打印访问日志，异常时由 ready handler 单独打印错误链路。

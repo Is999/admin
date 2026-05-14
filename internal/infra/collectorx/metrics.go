@@ -10,7 +10,8 @@ import (
 
 // Collector 指标变量集中定义 outbox 落地、Processor 批量处理和结果统计。
 var (
-	collectorMetricsOnce        sync.Once
+	collectorMetricsOnce sync.Once // 保证 Collector 指标只注册一次
+	// collectorMetricBizTypeGuard 保护 Collector biz_type 指标标签白名单。
 	collectorMetricBizTypeGuard = struct {
 		mu      sync.RWMutex        // 保护 biz_type label 集合，避免高基数维度无限增长
 		allowed map[string]struct{} // 已明确放行的业务类型标签
@@ -18,6 +19,7 @@ var (
 		allowed: make(map[string]struct{}),
 	}
 
+	// collectorOutboxPersistEventsTotal 统计 Collector 写入 outbox 的事件数量。
 	collectorOutboxPersistEventsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "admin",
@@ -27,6 +29,7 @@ var (
 		},
 		[]string{"transport"},
 	)
+	// collectorOutboxPersistDuration 统计 Collector 写入 outbox 的耗时分布。
 	collectorOutboxPersistDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "admin",
@@ -37,6 +40,7 @@ var (
 		},
 		[]string{"transport"},
 	)
+	// collectorProcessorBatchSize 统计 Collector Processor 单批事件数量。
 	collectorProcessorBatchSize = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "admin",
@@ -47,6 +51,7 @@ var (
 		},
 		[]string{"biz_type"},
 	)
+	// collectorProcessorBatchDuration 统计 Collector Processor 单批处理耗时。
 	collectorProcessorBatchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "admin",
@@ -57,6 +62,7 @@ var (
 		},
 		[]string{"biz_type", "result"},
 	)
+	// collectorProcessorEventsTotal 统计进入 Collector Processor 后的事件结果数量。
 	collectorProcessorEventsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "admin",

@@ -22,8 +22,8 @@ const (
 
 // archiveExecutePayload 描述单个归档执行节点的任务负载。
 type archiveExecutePayload struct {
-	taskqueue.WorkflowTaskMeta
-	Targets []string `json:"targets,omitempty"` // 当前工作流要求处理的归档目标列表
+	taskqueue.WorkflowTaskMeta          // 工作流调度注入的任务上下文
+	Targets                    []string `json:"targets,omitempty"` // 当前工作流要求处理的归档目标列表
 }
 
 // Runtime 描述归档任务注册所需的最小运行时能力。

@@ -44,6 +44,7 @@ func resolveExplicitRunMode(flagSet *flag.FlagSet, mode *int) *int {
 	return &resolvedMode
 }
 
+// main 负责解析命令行参数并交给 runApp 控制进程退出码。
 func main() {
 	flag.Parse()
 	if *showVersion {

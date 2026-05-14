@@ -52,9 +52,9 @@ type JobSnapshot struct {
 
 // RedisStore 表示基于 Redis 的通用任务状态存储。
 type RedisStore struct {
-	client     redis.UniversalClient
-	keyPattern string
-	ttl        time.Duration
+	client     redis.UniversalClient // Redis 客户端
+	keyPattern string                // 任务状态 key 模板
+	ttl        time.Duration         // 任务状态保留时间
 }
 
 // ExportProgress 表示导出任务当前进度快照。

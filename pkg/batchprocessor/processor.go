@@ -11,19 +11,19 @@ import (
 // processor 负责单个 bizType 的“周期触发/手动触发 -> 批量处理”能力。
 // 具体如何处理由业务 Module.Process 实现，processor 只负责调度与并发控制。
 type processor struct {
-	bizType string // 业务类型
-	module  Module // 业务模块实现
-	policy  Policy // 当前 bizType 的处理策略
-	ctx     context.Context
-	cancel  context.CancelFunc
+	bizType string             // 业务类型
+	module  Module             // 业务模块实现
+	policy  Policy             // 当前 bizType 的处理策略
+	ctx     context.Context    // 后台处理器生命周期上下文
+	cancel  context.CancelFunc // 后台处理器停止函数
 
 	processLimiter chan struct{}                         // 全局 process 并发限制器，避免多个 bizType 同时执行冲击下游
 	randDuration   func(max time.Duration) time.Duration // 随机抖动函数，用于打散周期触发尖峰
 
-	triggerCh chan struct{} // 处理触发信号队列（cap=ProcessConcurrency，避免丢弃触发）
-	stopCh    chan struct{} // 停止信号
-	stopOnce  sync.Once     // 确保停止信号只关闭一次
-	wg        sync.WaitGroup
+	triggerCh chan struct{}  // 处理触发信号队列（cap=ProcessConcurrency，避免丢弃触发）
+	stopCh    chan struct{}  // 停止信号
+	stopOnce  sync.Once      // 确保停止信号只关闭一次
+	wg        sync.WaitGroup // 等待调度器和 worker 退出
 }
 
 // newProcessor 创建单个 bizType 的处理器；当 policy.ProcessEnabled=false 时返回 nil。

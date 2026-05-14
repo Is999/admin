@@ -62,6 +62,7 @@ func ValidateSecurityJSONValue(scope string, field string, value any) ([]byte, e
 	return body, nil
 }
 
+// isComplexSecurityValue 判断字段值是否需要按 JSON 结构校验大小。
 func isComplexSecurityValue(value any) bool {
 	if value == nil {
 		return false

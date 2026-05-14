@@ -169,9 +169,10 @@ const (
 	defaultVirusScannerName = "noop"
 )
 
+// objectStorageFactories 保存对象存储类型到工厂函数的注册表。
 var objectStorageFactories = struct {
-	mu        sync.RWMutex
-	factories map[string]ObjectStorageFactory
+	mu        sync.RWMutex                    // 保护 factories 注册表
+	factories map[string]ObjectStorageFactory // 存储类型到工厂函数的映射
 }{
 	factories: map[string]ObjectStorageFactory{
 		TypeLocal: func(cfg config.FileStorageConfig) (ObjectStorage, error) {
@@ -183,9 +184,10 @@ var objectStorageFactories = struct {
 	},
 }
 
+// virusScannerFactories 保存病毒扫描器名称到工厂函数的注册表。
 var virusScannerFactories = struct {
-	mu        sync.RWMutex
-	factories map[string]VirusScannerFactory
+	mu        sync.RWMutex                   // 保护 factories 注册表
+	factories map[string]VirusScannerFactory // 扫描器名称到工厂函数的映射
 }{
 	factories: map[string]VirusScannerFactory{
 		defaultVirusScannerName: func() VirusScanner {
@@ -646,6 +648,7 @@ func buildInlineHeaders(contentType string, fileName string, disposition string)
 	return headers
 }
 
+// noopVirusScanner 表示不执行实际扫描的默认病毒扫描器。
 type noopVirusScanner struct{}
 
 // ScanFile 默认不执行任何病毒扫描；后续可替换为 ClamAV 或云查毒实现。

@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	// userTagWorkflowLeaseTTL 表示用户标签工作流互斥租约保留时间。
 	userTagWorkflowLeaseTTL = 24 * time.Hour
 	// userTagWorkflowLeaseOwnerSeparator 仅用于提升 owner 可读性。
 	userTagWorkflowLeaseOwnerSeparator = "|"
@@ -416,6 +417,7 @@ func (r *TagRepository) workflowFinalDoneKey(workflowID string) (string, error) 
 	return keys.UserTagWorkflowFinalDoneRedisKey(workflowID), nil
 }
 
+// workflowLeaseOwner 生成 workflowID 和 mode 组成的租约 owner。
 func workflowLeaseOwner(opts types.RuntimeOptions) (string, error) {
 	workflowID := strings.TrimSpace(opts.WorkflowID)
 	if workflowID == "" {

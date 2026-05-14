@@ -278,7 +278,7 @@ func rewriteClusterAddr(addr string, addrMap map[string]string) string {
 
 // hook 负责把 go-redis 命令执行结果转成结构化日志。
 type hook struct {
-	slowThreshold time.Duration
+	slowThreshold time.Duration // Redis 慢命令日志阈值
 }
 
 // newHook 根据慢查询阈值创建 Redis 日志 hook。

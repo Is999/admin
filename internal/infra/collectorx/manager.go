@@ -22,15 +22,15 @@ import (
 
 // Collector 默认运行参数限制单轮处理规模、租约和慢批次日志阈值。
 const (
-	defaultDBRunnerBatchSize       = 500
-	defaultDBRunnerIntervalSeconds = 1
-	defaultDBRunningLeaseSeconds   = 600
-	defaultDBMaxRetryTimes         = 8
-	defaultRedisClaimIdle          = 30 * time.Second
-	defaultKafkaFetchBatchSize     = 500
-	defaultKafkaFetchWait          = 20 * time.Millisecond
-	maxCollectorCarrierBatchSize   = 5000
-	slowCollectorBatchThreshold    = 200 * time.Millisecond
+	defaultDBRunnerBatchSize       = 500                    // DB outbox 单轮领取的默认事件数量
+	defaultDBRunnerIntervalSeconds = 1                      // DB outbox 空轮询后的默认等待秒数
+	defaultDBRunningLeaseSeconds   = 600                    // DB outbox 运行中事件的默认租约秒数
+	defaultDBMaxRetryTimes         = 8                      // DB outbox 事件默认最大重试次数
+	defaultRedisClaimIdle          = 30 * time.Second       // Redis Stream pending 消息可重新 claim 的默认空闲时长
+	defaultKafkaFetchBatchSize     = 500                    // Kafka 单轮最多拉取的默认消息数量
+	defaultKafkaFetchWait          = 20 * time.Millisecond  // Kafka 聚合批次的默认等待时长
+	maxCollectorCarrierBatchSize   = 5000                   // Collector 单批载体处理数量上限
+	slowCollectorBatchThreshold    = 200 * time.Millisecond // Collector 批量处理慢日志阈值
 )
 
 // Manager 负责通用收集器的事件投递、可靠落地、批量消费和失败重试。

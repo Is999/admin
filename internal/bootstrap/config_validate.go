@@ -17,10 +17,10 @@ const (
 
 // Collector 载体枚举限定配置文件可声明的事件投递通道。
 const (
-	adminCollectorTransportAuto  = "auto"
-	adminCollectorTransportKafka = "kafka"
-	adminCollectorTransportRedis = "redis"
-	adminCollectorTransportDB    = "db"
+	adminCollectorTransportAuto  = "auto"  // 自动选择可用的 Collector 载体
+	adminCollectorTransportKafka = "kafka" // 强制使用 Kafka 作为 Collector 载体
+	adminCollectorTransportRedis = "redis" // 强制使用 Redis Stream 作为 Collector 载体
+	adminCollectorTransportDB    = "db"    // 强制使用数据库 outbox 作为 Collector 载体
 )
 
 // validateCoreConfig 校验所有环境都必须满足的基础配置。

@@ -17,7 +17,7 @@
 ## 必跑检查
 
 - 后端改动优先运行 `go test ./...`；范围小或环境受限时至少运行相关包测试，并说明原因。
-- 前端改动在 `../gozero-admin-vue` 运行 `pnpm -F @vben/web-antd run typecheck`，必要时补 lint/build。
+- 前端改动在 `../admin-vue` 运行 `pnpm -F @vben/web-antd run typecheck`，必要时补 lint/build。
 - 完成后运行对应仓库的 `git diff --check`。
 - 每次任务结束前必须检查 `git status --short`；本轮新增且属于交付范围的文件必须执行 `git add` 加入本地仓库索引，不能让应提交文件停留在未跟踪状态，也不能添加无关历史未跟踪文件或本地数据目录。
 

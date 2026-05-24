@@ -5,11 +5,6 @@ import (
 	"strings"
 )
 
-const (
-	// ScopeRoot 表示 Redis 缓存和锁的 app_id 命名空间根前缀。
-	ScopeRoot = "app:"
-)
-
 // HasPrefix 判断值是否已经带有完整 app_id 命名空间。
 func HasPrefix(key string) bool {
 	_, ok := Owner(key)

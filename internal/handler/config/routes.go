@@ -12,41 +12,18 @@ import (
 
 // RegisterRoutes 注册系统常量配置接口。
 func RegisterRoutes(server *rest.Server, serverCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware) {
-	server.AddRoutes([]rest.Route{
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/dicts", // 查询系统常量配置列表
-			Handler: authMw.Handle(ListSysConfigHandler(serverCtx), shared.SysConfigList.Alias),
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/dicts", // 新增系统常量配置
-			Handler: authMw.Handle(AddSysConfigHandler(serverCtx), shared.SysConfigAdd.Alias),
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/dicts/export", // 导出系统常量配置 Excel
-			Handler: authMw.Handle(ExportSysConfigExcelHandler(serverCtx), shared.SysConfigExport.Alias),
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/dicts/import", // 导入系统常量配置 Excel
-			Handler: authMw.Handle(ImportSysConfigExcelHandler(serverCtx), shared.SysConfigImport.Alias),
-		},
-		{
-			Method:  http.MethodPatch,
-			Path:    "/api/dicts/:id", // 编辑系统常量配置
-			Handler: authMw.Handle(UpdateSysConfigHandler(serverCtx), shared.SysConfigUpdate.Alias),
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/dicts/cache/:uuid", // 查看系统常量配置缓存
-			Handler: authMw.Handle(GetSysConfigCacheHandler(serverCtx), shared.SysConfigCache.Alias),
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/dicts/cache/refresh/:uuid", // 刷新系统常量配置缓存
-			Handler: authMw.Handle(RenewSysConfigHandler(serverCtx), shared.SysConfigRenew.Alias),
-		},
-	})
+	shared.AddRouteSpecs(server, serverCtx, authMw, nil, RouteSpecs())
+}
+
+// RouteSpecs 返回系统常量配置路由规格。
+func RouteSpecs() []shared.RouteSpec {
+	return []shared.RouteSpec{
+		shared.AuthRoute(http.MethodGet, "/api/dicts", shared.SysConfigList, ListSysConfigHandler),
+		shared.AuthRoute(http.MethodPost, "/api/dicts", shared.SysConfigAdd, AddSysConfigHandler),
+		shared.AuthRoute(http.MethodGet, "/api/dicts/export", shared.SysConfigExport, ExportSysConfigExcelHandler),
+		shared.AuthRoute(http.MethodPost, "/api/dicts/import", shared.SysConfigImport, ImportSysConfigExcelHandler),
+		shared.AuthRoute(http.MethodPatch, "/api/dicts/:id", shared.SysConfigUpdate, UpdateSysConfigHandler),
+		shared.AuthRoute(http.MethodGet, "/api/dicts/cache/:uuid", shared.SysConfigCache, GetSysConfigCacheHandler),
+		shared.AuthRoute(http.MethodPost, "/api/dicts/cache/refresh/:uuid", shared.SysConfigRenew, RenewSysConfigHandler),
+	}
 }

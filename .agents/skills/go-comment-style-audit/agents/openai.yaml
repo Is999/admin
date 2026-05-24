@@ -1,0 +1,4 @@
+interface:
+  display_name: "Go 注释审计"
+  short_description: "审计 Go 中文注释和可维护性。"
+  default_prompt: "使用 $go-comment-style-audit 扫描这个 Go 仓库的中文注释和可维护性问题。"

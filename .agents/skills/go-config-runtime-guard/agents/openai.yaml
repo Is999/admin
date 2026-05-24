@@ -1,0 +1,4 @@
+interface:
+  display_name: "Go 配置运行时护栏"
+  short_description: "检查配置默认值、热加载和重启边界。"
+  default_prompt: "使用 $go-config-runtime-guard 验证这个配置或热加载改动。"

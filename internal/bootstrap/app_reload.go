@@ -413,60 +413,149 @@ func normalizeHotReloadCheckInterval(seconds int) time.Duration {
 	return 5 * time.Second
 }
 
+// hotReloadRestartChanged 判断一个配置边界是否发生变化。
+type hotReloadRestartChanged func(before, after config.Config) bool
+
+// hotReloadRestartPreserve 保留当前进程仍在使用的旧配置。
+type hotReloadRestartPreserve func(effective *config.Config, before config.Config, after config.Config)
+
+// hotReloadRestartSpec 描述一个热加载后仍需重启才能完全生效的配置边界。
+type hotReloadRestartSpec struct {
+	Reason   string                   // 展示给管理接口和日志的重启原因
+	Changed  hotReloadRestartChanged  // 判断该边界是否发生变化
+	Preserve hotReloadRestartPreserve // 保留当前进程仍在使用的旧配置
+}
+
+// hotReloadRestartSpecs 返回热加载不可在线重建的配置边界，顺序即 restartReason 展示顺序。
+func hotReloadRestartSpecs() []hotReloadRestartSpec {
+	return []hotReloadRestartSpec{
+		{
+			Reason: "run_mode",
+			Changed: func(before, after config.Config) bool {
+				return before.RunMode != after.RunMode
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.RunMode = before.RunMode
+			},
+		},
+		{
+			Reason: componentNameHTTPServer,
+			Changed: func(before, after config.Config) bool {
+				return !reflect.DeepEqual(before.RestConf, after.RestConf)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.RestConf = before.RestConf
+			},
+		},
+		{
+			Reason: "mode",
+			Changed: func(before, after config.Config) bool {
+				return reflect.DeepEqual(before.RestConf, after.RestConf) && strings.TrimSpace(before.Mode) != strings.TrimSpace(after.Mode)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.Mode = before.Mode
+			},
+		},
+		{
+			Reason: "mysql",
+			Changed: func(before, after config.Config) bool {
+				return !reflect.DeepEqual(before.MySQL, after.MySQL)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.MySQL = before.MySQL
+			},
+		},
+		{
+			Reason: "site_mysql",
+			Changed: func(before, after config.Config) bool {
+				return !reflect.DeepEqual(before.SiteMySQL, after.SiteMySQL)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.SiteMySQL = before.SiteMySQL
+			},
+		},
+		{
+			Reason: "redis",
+			Changed: func(before, after config.Config) bool {
+				return !reflect.DeepEqual(before.Redis, after.Redis)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.Redis = before.Redis
+			},
+		},
+		{
+			Reason: "task.runtime",
+			Changed: func(before, after config.Config) bool {
+				return !reflect.DeepEqual(taskRuntimeConfigForRestartCheck(before.Task), taskRuntimeConfigForRestartCheck(after.Task))
+			},
+			Preserve: func(effective *config.Config, before config.Config, after config.Config) {
+				periodic := append([]config.TaskPeriodicConfig(nil), after.Task.Periodic...)
+				effective.Task = before.Task
+				effective.Task.Periodic = periodic
+			},
+		},
+		{
+			Reason: "kafka",
+			Changed: func(before, after config.Config) bool {
+				return !reflect.DeepEqual(before.Kafka, after.Kafka)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.Kafka = before.Kafka
+			},
+		},
+		{
+			Reason: "observability",
+			Changed: func(before, after config.Config) bool {
+				return !reflect.DeepEqual(before.Observability, after.Observability)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.Observability = before.Observability
+			},
+		},
+		{
+			Reason: "workflows.user_tag.enabled",
+			Changed: func(before, after config.Config) bool {
+				return before.Workflows.UserTag.Enabled != after.Workflows.UserTag.Enabled
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.Workflows.UserTag.Enabled = before.Workflows.UserTag.Enabled
+			},
+		},
+	}
+}
+
+// changedHotReloadRestartSpecs 返回本次热加载实际命中的重启边界。
+func changedHotReloadRestartSpecs(before, after config.Config) []hotReloadRestartSpec {
+	specs := hotReloadRestartSpecs()
+	changed := make([]hotReloadRestartSpec, 0, len(specs))
+	for _, spec := range specs {
+		if spec.Changed == nil || !spec.Changed(before, after) {
+			continue
+		}
+		changed = append(changed, spec)
+	}
+	return changed
+}
+
 // buildHotReloadEffectiveConfig 生成本进程可以立即生效的配置快照。
 // 只动态刷新运行期配置；基础设施和任务运行时变更记为待重启。
 func buildHotReloadEffectiveConfig(before, after config.Config) config.Config {
 	effective := after
-	effective.RestConf = before.RestConf
-	effective.RunMode = before.RunMode
-	effective.MySQL = before.MySQL
-	effective.SiteMySQL = before.SiteMySQL
-	effective.Redis = before.Redis
-	effective.Kafka = before.Kafka
-	effective.Observability = before.Observability
-
-	// 任务系统的 Redis、Worker 并发、队列权重等生命周期参数不在线重建；周期任务列表允许调度器同步刷新。
-	periodic := append([]config.TaskPeriodicConfig(nil), after.Task.Periodic...)
-	effective.Task = before.Task
-	effective.Task.Periodic = periodic
-
-	// workflow 插件启停只在 bootstrap 注册阶段生效；其余运行参数可以随配置快照动态刷新。
-	effective.Workflows = after.Workflows
-	effective.Workflows.UserTag.Enabled = before.Workflows.UserTag.Enabled
+	for _, spec := range changedHotReloadRestartSpecs(before, after) {
+		if spec.Preserve == nil {
+			continue
+		}
+		spec.Preserve(&effective, before, after)
+	}
 	return effective
 }
 
 // detectHotReloadRestartImpact 识别本次热加载中哪些配置虽然已加载，但仍需重启进程才能完全生效。
 func detectHotReloadRestartImpact(before, after config.Config) (bool, string) {
-	reasons := make([]string, 0, 8)
-	if before.RunMode != after.RunMode {
-		reasons = append(reasons, "run_mode")
-	}
-	if !reflect.DeepEqual(before.RestConf, after.RestConf) {
-		reasons = append(reasons, "http_server")
-	} else if strings.TrimSpace(before.Mode) != strings.TrimSpace(after.Mode) {
-		reasons = append(reasons, "mode")
-	}
-	if !reflect.DeepEqual(before.MySQL, after.MySQL) {
-		reasons = append(reasons, "mysql")
-	}
-	if !reflect.DeepEqual(before.SiteMySQL, after.SiteMySQL) {
-		reasons = append(reasons, "site_mysql")
-	}
-	if !reflect.DeepEqual(before.Redis, after.Redis) {
-		reasons = append(reasons, "redis")
-	}
-	if !reflect.DeepEqual(taskRuntimeConfigForRestartCheck(before.Task), taskRuntimeConfigForRestartCheck(after.Task)) {
-		reasons = append(reasons, "task.runtime")
-	}
-	if !reflect.DeepEqual(before.Kafka, after.Kafka) {
-		reasons = append(reasons, "kafka")
-	}
-	if !reflect.DeepEqual(before.Observability, after.Observability) {
-		reasons = append(reasons, "observability")
-	}
-	if before.Workflows.UserTag.Enabled != after.Workflows.UserTag.Enabled {
-		reasons = append(reasons, "workflows.user_tag.enabled")
+	changedSpecs := changedHotReloadRestartSpecs(before, after)
+	reasons := make([]string, 0, len(changedSpecs))
+	for _, spec := range changedSpecs {
+		reasons = append(reasons, spec.Reason)
 	}
 	if len(reasons) == 0 {
 		return false, ""

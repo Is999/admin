@@ -17,9 +17,14 @@ import (
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
+const (
+	// PluginNameCore 是任务系统核心插件名称，供内置插件规格复用。
+	PluginNameCore = "core"
+)
+
 // NewCorePlugin 创建任务系统内置核心插件。
 func NewCorePlugin() Plugin {
-	return NewPluginFunc("core", func(runtime *Runtime) error {
+	return NewPluginFunc(PluginNameCore, func(runtime *Runtime) error {
 		// 注册 workflow:trigger 任务类型：解析管理端、周期调度或内部投递的工作流启动请求，并创建对应 DAG 实例。
 		if err := runtime.RegisterHandler(taskqueue.TypeWorkflowTrigger, asynq.HandlerFunc(runtime.handleWorkflowTrigger)); err != nil {
 			return errors.Tag(err)

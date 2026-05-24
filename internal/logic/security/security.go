@@ -21,6 +21,7 @@ import (
 
 	keys "admin/common/rediskeys"
 	"admin/internal/model"
+	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
 
@@ -47,7 +48,7 @@ const (
 
 const (
 	// routePermissionBypassAlias 必须与 middleware.Ignore 保持一致，用于已登录但不绑定业务权限码的通用接口。
-	routePermissionBypassAlias = "ignore"
+	routePermissionBypassAlias = routealias.Ignore
 	// securityOptionalConfigTimeout 表示安全链路读取“可回退”的系统配置时使用的独立短超时。
 	// 登录、鉴权等主链路不应因为这类兜底配置读取抖动而整体超时。
 	securityOptionalConfigTimeout = 500 * time.Millisecond
@@ -124,11 +125,12 @@ func (l *SecurityLogic) CheckAdminAccess(userID int, routeAlias string, currentI
 
 // CheckRoutePermission 根据路由别名校验管理员是否拥有对应权限。
 func (l *SecurityLogic) CheckRoutePermission(userID int, routeAlias string) (bool, error) {
-	if strings.TrimSpace(routeAlias) == routePermissionBypassAlias {
+	alias := routeAliasKey(routeAlias)
+	if alias == routePermissionBypassAlias {
 		// 显式挂 middleware.Ignore 的路由只跳过业务权限表；JWT、账号状态、IP 与 MFA 仍在 CheckAdminAccess 前置校验。
 		return true, nil
 	}
-	if permissionAllowlist[routeAlias] {
+	if permissionAllowlist[alias] {
 		return true, nil
 	}
 
@@ -600,68 +602,73 @@ func OperateMFABizResult(err error, operation string) *types.BizResult {
 
 // permissionAllowlist 显式列出只依赖登录态和账号状态的个人/会话接口。
 // 这些接口不走权限表，但仍会经过 token、账号状态、IP 与 MFA 校验，不属于未配置权限的默认放行。
-var permissionAllowlist = map[string]bool{
-	"auth.refresh":              true, // 刷新访问令牌不要求后台权限码。
-	"auth.logout":               true, // 管理员退出登录不要求后台权限码。
-	"auth.codes":                true, // 获取当前用户权限码不要求后台权限码。
-	"auth.profile":              true, // 获取当前登录资料不要求后台权限码。
-	"role.tree.options":         true, // 查询角色树下拉不要求后台权限码。
-	"profile.mine":              true, // 获取当前管理员资料不要求后台权限码。
-	"profile.permissions":       true, // 获取当前管理员角色权限不要求后台权限码。
-	"profile.check_secure":      true, // 校验当前管理员密码不要求后台权限码。
-	"profile.check_mfa":         true, // 校验当前管理员MFA动态码不要求后台权限码。
-	"profile.update_password":   true, // 个人中心修改密码不要求后台权限码。
-	"profile.update_mine":       true, // 个人中心修改资料不要求后台权限码。
-	"profile.update_mfa_status": true, // 个人中心修改MFA状态不要求后台权限码。
-	"profile.update_mfa_secret": true, // 个人中心修改MFA秘钥不要求后台权限码。
+var permissionAllowlist = map[routealias.Alias]bool{
+	routealias.AuthRefresh:            true, // 刷新访问令牌不要求后台权限码。
+	routealias.AuthLogout:             true, // 管理员退出登录不要求后台权限码。
+	routealias.AuthCodes:              true, // 获取当前用户权限码不要求后台权限码。
+	routealias.AuthProfile:            true, // 获取当前登录资料不要求后台权限码。
+	routealias.RoleTreeOptions:        true, // 查询角色树下拉不要求后台权限码。
+	routealias.ProfileMine:            true, // 获取当前管理员资料不要求后台权限码。
+	routealias.ProfilePermissions:     true, // 获取当前管理员角色权限不要求后台权限码。
+	routealias.ProfileCheckSecure:     true, // 校验当前管理员密码不要求后台权限码。
+	routealias.ProfileCheckMFA:        true, // 校验当前管理员MFA动态码不要求后台权限码。
+	routealias.ProfileUpdatePassword:  true, // 个人中心修改密码不要求后台权限码。
+	routealias.ProfileUpdateMine:      true, // 个人中心修改资料不要求后台权限码。
+	routealias.ProfileUpdateMFAStatus: true, // 个人中心修改MFA状态不要求后台权限码。
+	routealias.ProfileUpdateMFASecret: true, // 个人中心修改MFA秘钥不要求后台权限码。
 	// 个人中心刷新 MFA 绑定秘钥属于当前登录账号的自助安全操作，
 	// 只依赖登录态、账号状态和后续 MFA 二次校验，不额外绑定后台业务权限码。
-	"profile.refresh_mfa_secret": true, // 个人中心重新生成MFA秘钥不要求后台权限码。
-	"profile.update_avatar":      true, // 个人中心修改头像不要求后台权限码。
+	routealias.ProfileRefreshMFASecret: true, // 个人中心重新生成MFA秘钥不要求后台权限码。
+	routealias.ProfileUpdateAvatar:     true, // 个人中心修改头像不要求后台权限码。
 	// 权限 UUID 预览只生成候选值，不写权限表；新增/编辑权限仍由权限保存接口做权限控制。
-	"permission.max_uuid": true, // 查询下一个权限UUID不要求后台权限码。
+	routealias.PermissionMaxUUID: true, // 查询下一个权限UUID不要求后台权限码。
 	// 消息中心属于个人收件箱能力，仅依赖登录态与账号安全校验，不绑定后台权限码。
-	"message.list":          true, // 查询管理员消息收件箱不要求后台权限码。
-	"message.sent_list":     true, // 查询管理员已发送消息不要求后台权限码。
-	"message.receivers":     true, // 查询管理员消息收件人明细不要求后台权限码。
-	"message.unread_count":  true, // 查询管理员未读消息数量不要求后台权限码。
-	"message.notifications": true, // 查询管理员通知列表不要求后台权限码。
-	"message.mark_read":     true, // 标记管理员消息已读不要求后台权限码。
-	"message.delete":        true, // 删除管理员消息不要求后台权限码。
-	"message.send":          true, // 发送管理员消息不要求后台权限码。
-	"message.handle":        true, // 标记管理员消息已处理不要求后台权限码。
+	routealias.AdminMessageList:          true, // 查询管理员消息收件箱不要求后台权限码。
+	routealias.AdminMessageSentList:      true, // 查询管理员已发送消息不要求后台权限码。
+	routealias.AdminMessageReceivers:     true, // 查询管理员消息收件人明细不要求后台权限码。
+	routealias.AdminMessageUnreadCount:   true, // 查询管理员未读消息数量不要求后台权限码。
+	routealias.AdminMessageNotifications: true, // 查询管理员通知列表不要求后台权限码。
+	routealias.AdminMessageMarkRead:      true, // 标记管理员消息已读不要求后台权限码。
+	routealias.AdminMessageDelete:        true, // 删除管理员消息不要求后台权限码。
+	routealias.AdminMessageSend:          true, // 发送管理员消息不要求后台权限码。
+	routealias.AdminMessageHandle:        true, // 标记管理员消息已处理不要求后台权限码。
 }
 
 // passwordResetAllowlist 显式列出“必须先修改密码”状态下仍允许访问的自助接口。
-var passwordResetAllowlist = map[string]bool{
-	"auth.refresh":               true, // 刷新访问令牌在强制改密阶段允许访问。
-	"auth.logout":                true, // 管理员退出登录在强制改密阶段允许访问。
-	"auth.codes":                 true, // 获取当前用户权限码在强制改密阶段允许访问。
-	"auth.profile":               true, // 获取当前登录资料在强制改密阶段允许访问。
-	"profile.mine":               true, // 获取当前管理员资料在强制改密阶段允许访问。
-	"profile.permissions":        true, // 获取当前管理员角色权限在强制改密阶段允许访问。
-	"profile.check_secure":       true, // 校验当前管理员密码在强制改密阶段允许访问。
-	"profile.check_mfa":          true, // 校验当前管理员MFA动态码在强制改密阶段允许访问。
-	"profile.update_password":    true, // 个人中心修改密码在强制改密阶段允许访问。
-	"profile.update_mine":        true, // 个人中心修改资料在强制改密阶段允许访问。
-	"profile.update_mfa_status":  true, // 个人中心修改MFA状态在强制改密阶段允许访问。
-	"profile.update_mfa_secret":  true, // 个人中心修改MFA秘钥在强制改密阶段允许访问。
-	"profile.refresh_mfa_secret": true, // 个人中心重新生成MFA秘钥在强制改密阶段允许访问。
-	"profile.update_avatar":      true, // 个人中心修改头像在强制改密阶段允许访问。
-	"message.notifications":      true, // 查询管理员通知列表在强制改密阶段允许访问。
+var passwordResetAllowlist = map[routealias.Alias]bool{
+	routealias.AuthRefresh:               true, // 刷新访问令牌在强制改密阶段允许访问。
+	routealias.AuthLogout:                true, // 管理员退出登录在强制改密阶段允许访问。
+	routealias.AuthCodes:                 true, // 获取当前用户权限码在强制改密阶段允许访问。
+	routealias.AuthProfile:               true, // 获取当前登录资料在强制改密阶段允许访问。
+	routealias.ProfileMine:               true, // 获取当前管理员资料在强制改密阶段允许访问。
+	routealias.ProfilePermissions:        true, // 获取当前管理员角色权限在强制改密阶段允许访问。
+	routealias.ProfileCheckSecure:        true, // 校验当前管理员密码在强制改密阶段允许访问。
+	routealias.ProfileCheckMFA:           true, // 校验当前管理员MFA动态码在强制改密阶段允许访问。
+	routealias.ProfileUpdatePassword:     true, // 个人中心修改密码在强制改密阶段允许访问。
+	routealias.ProfileUpdateMine:         true, // 个人中心修改资料在强制改密阶段允许访问。
+	routealias.ProfileUpdateMFAStatus:    true, // 个人中心修改MFA状态在强制改密阶段允许访问。
+	routealias.ProfileUpdateMFASecret:    true, // 个人中心修改MFA秘钥在强制改密阶段允许访问。
+	routealias.ProfileRefreshMFASecret:   true, // 个人中心重新生成MFA秘钥在强制改密阶段允许访问。
+	routealias.ProfileUpdateAvatar:       true, // 个人中心修改头像在强制改密阶段允许访问。
+	routealias.AdminMessageNotifications: true, // 查询管理员通知列表在强制改密阶段允许访问。
 }
 
 // loginMFAAllowlist 显式列出“正在完成登录 MFA 校验”时允许访问的会话接口。
 // 这里必须至少放行 MFA 动态码校验接口本身，避免“校验 MFA 的接口自己又被要求先完成 MFA”形成递归拦截。
-var loginMFAAllowlist = map[string]bool{
-	"auth.refresh":               true, // 刷新访问令牌在登录 MFA 阶段允许访问。
-	"auth.logout":                true, // 管理员退出登录在登录 MFA 阶段允许访问。
-	"auth.codes":                 true, // 获取当前用户权限码在登录 MFA 阶段允许访问。
-	"profile.check_mfa":          true, // 校验当前管理员MFA动态码在登录 MFA 阶段允许访问。
-	"profile.refresh_mfa_secret": true, // 个人中心重新生成MFA秘钥在登录 MFA 阶段允许访问。
-	"profile.update_mfa_status":  true, // 个人中心修改MFA状态在登录 MFA 阶段允许访问。
-	"profile.mine":               true, // 获取当前管理员资料在登录 MFA 阶段允许访问。
-	"message.notifications":      true, // 查询管理员通知列表在登录 MFA 阶段允许访问。
+var loginMFAAllowlist = map[routealias.Alias]bool{
+	routealias.AuthRefresh:               true, // 刷新访问令牌在登录 MFA 阶段允许访问。
+	routealias.AuthLogout:                true, // 管理员退出登录在登录 MFA 阶段允许访问。
+	routealias.AuthCodes:                 true, // 获取当前用户权限码在登录 MFA 阶段允许访问。
+	routealias.ProfileCheckMFA:           true, // 校验当前管理员MFA动态码在登录 MFA 阶段允许访问。
+	routealias.ProfileRefreshMFASecret:   true, // 个人中心重新生成MFA秘钥在登录 MFA 阶段允许访问。
+	routealias.ProfileUpdateMFAStatus:    true, // 个人中心修改MFA状态在登录 MFA 阶段允许访问。
+	routealias.ProfileMine:               true, // 获取当前管理员资料在登录 MFA 阶段允许访问。
+	routealias.AdminMessageNotifications: true, // 查询管理员通知列表在登录 MFA 阶段允许访问。
+}
+
+// routeAliasKey 归一化外部传入的路由别名，避免白名单判断受空白字符影响。
+func routeAliasKey(routeAlias string) routealias.Alias {
+	return routealias.Alias(strings.TrimSpace(routeAlias))
 }
 
 // checkAdminNeedResetPassword 校验管理员是否处于必须先修改登录密码状态。
@@ -669,7 +676,7 @@ func (l *SecurityLogic) checkAdminNeedResetPassword(admin *model.Admin, routeAli
 	if admin == nil || admin.NeedResetPassword != 1 {
 		return nil
 	}
-	if passwordResetAllowlist[strings.TrimSpace(routeAlias)] {
+	if passwordResetAllowlist[routeAliasKey(routeAlias)] {
 		return nil
 	}
 	return ErrAdminPasswordResetRequired
@@ -680,7 +687,7 @@ func shouldSkipMFAForPasswordReset(admin *model.Admin, routeAlias string) bool {
 	if admin == nil || admin.NeedResetPassword != 1 {
 		return false
 	}
-	return passwordResetAllowlist[strings.TrimSpace(routeAlias)]
+	return passwordResetAllowlist[routeAliasKey(routeAlias)]
 }
 
 // shouldBypassLoginMFACheck 判断当前路由是否允许跳过“登录态尚未完成 MFA”的前置拦截。
@@ -690,7 +697,7 @@ func shouldBypassLoginMFACheck(admin *model.Admin, routeAlias string) bool {
 	if shouldSkipMFAForPasswordReset(admin, routeAlias) {
 		return true
 	}
-	return loginMFAAllowlist[routeAlias]
+	return loginMFAAllowlist[routeAliasKey(routeAlias)]
 }
 
 // loginCheckMFAFlagTTL 返回 MFA 登录校验标记的默认过期时间，后续 MFA 接口可复用。

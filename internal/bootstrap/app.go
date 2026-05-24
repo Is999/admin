@@ -173,10 +173,6 @@ func New(ctx context.Context, c config.Config, mode int, options ...Option) (*Ap
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if err := ValidateDefaultRegistrationManifest(); err != nil {
-		return nil, errors.Wrap(err, "校验默认注册清单失败")
-	}
-
 	// 初始化数据库、Redis、Kafka 等基础设施
 	svcCtx, shutdown, err := BuildServiceContext(ctx, c)
 	if err != nil {

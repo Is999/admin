@@ -2,9 +2,6 @@ package keys
 
 import "strings"
 
-// tableCacheSegment 表示 table-cache 业务在应用命名空间下的二级前缀。
-const tableCacheSegment = "table"
-
 // TableCachePrefix 返回当前应用 table-cache 真实 Redis Key 前缀。
 // 最终 key 形如 `app:{app_id}:table:{key}`，业务 key 本身不带 table 前缀。
 func TableCachePrefix() string {

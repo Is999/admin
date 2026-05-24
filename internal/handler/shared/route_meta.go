@@ -3,6 +3,7 @@ package shared
 import (
 	"admin/internal/middleware"
 	"admin/internal/model"
+	"admin/internal/routealias"
 )
 
 // RouteMeta 描述一条业务路由的统一元数据。
@@ -36,69 +37,69 @@ var (
 	// AuthCaptcha 获取登录图形验证码。
 	AuthCaptcha = newRouteMeta("auth.captcha", "获取登录图形验证码")
 	// AuthLogin 管理员登录。
-	AuthLogin = newRouteMeta("auth.login", "管理员登录")
+	AuthLogin = newRouteMeta(routealias.AuthLogin, "管理员登录")
 	// AuthRefresh 刷新访问令牌。
-	AuthRefresh = newRouteMeta("auth.refresh", "刷新访问令牌")
+	AuthRefresh = newRouteMeta(routealias.AuthRefresh, "刷新访问令牌")
 	// AuthLogout 管理员退出登录。
-	AuthLogout = newRouteMeta("auth.logout", "管理员退出登录")
+	AuthLogout = newRouteMeta(routealias.AuthLogout, "管理员退出登录")
 	// AuthCodes 获取当前用户权限码。
-	AuthCodes = newRouteMeta("auth.codes", "获取当前用户权限码")
+	AuthCodes = newRouteMeta(routealias.AuthCodes, "获取当前用户权限码")
 	// AuthProfile 获取当前登录资料。
-	AuthProfile = newRouteMeta("auth.profile", "获取当前登录资料")
+	AuthProfile = newRouteMeta(routealias.AuthProfile, "获取当前登录资料")
 	// AuthVerifyAccount 验证账号并生成MFA绑定信息。
-	AuthVerifyAccount = newRouteMeta("auth.verify_account", "验证账号并生成MFA绑定信息")
+	AuthVerifyAccount = newRouteMeta(routealias.AuthVerifyAccount, "验证账号并生成MFA绑定信息")
 	// DocsSession 创建文档访问会话。
-	DocsSession = newRouteMeta("docs.index", "创建文档访问会话")
+	DocsSession = newRouteMeta(routealias.DocsIndex, "创建文档访问会话")
 	// InternalInitAdminBootstrap 内网初始化管理员账号。
 	InternalInitAdminBootstrap = newRouteMeta("internal.auth.init_admin_bootstrap", "内网初始化管理员账号")
 	// ProfileMine 获取当前管理员资料。
-	ProfileMine = newRouteMeta("profile.mine", "获取当前管理员资料")
+	ProfileMine = newRouteMeta(routealias.ProfileMine, "获取当前管理员资料")
 	// ProfilePermissions 获取当前管理员角色权限。
-	ProfilePermissions = newRouteMeta("profile.permissions", "获取当前管理员角色权限")
+	ProfilePermissions = newRouteMeta(routealias.ProfilePermissions, "获取当前管理员角色权限")
 	// ProfileCheckSecure 校验当前管理员密码。
-	ProfileCheckSecure = newRouteMeta("profile.check_secure", "校验当前管理员密码")
+	ProfileCheckSecure = newRouteMeta(routealias.ProfileCheckSecure, "校验当前管理员密码")
 	// ProfileCheckMFA 校验当前管理员MFA动态码。
-	ProfileCheckMFA = newRouteMeta("profile.check_mfa", "校验当前管理员MFA动态码")
+	ProfileCheckMFA = newRouteMeta(routealias.ProfileCheckMFA, "校验当前管理员MFA动态码")
 	// ProfileUpdatePassword 个人中心修改密码。
-	ProfileUpdatePassword = newAuditRouteMeta("profile.update_password", model.ActionAdminPasswordReset, "个人中心修改密码")
+	ProfileUpdatePassword = newAuditRouteMeta(routealias.ProfileUpdatePassword, model.ActionAdminPasswordReset, "个人中心修改密码")
 	// ProfileUpdateMine 个人中心修改资料。
-	ProfileUpdateMine = newAuditRouteMeta("profile.update_mine", model.ActionAdminUpdate, "个人中心修改资料")
+	ProfileUpdateMine = newAuditRouteMeta(routealias.ProfileUpdateMine, model.ActionAdminUpdate, "个人中心修改资料")
 	// ProfileUpdateMFA 个人中心修改MFA状态。
-	ProfileUpdateMFA = newAuditRouteMeta("profile.update_mfa_status", model.ActionAdminUpdate, "个人中心修改MFA状态")
+	ProfileUpdateMFA = newAuditRouteMeta(routealias.ProfileUpdateMFAStatus, model.ActionAdminUpdate, "个人中心修改MFA状态")
 	// ProfileUpdateMFAKey 个人中心修改MFA秘钥。
-	ProfileUpdateMFAKey = newAuditRouteMeta("profile.update_mfa_secret", model.ActionAdminUpdate, "个人中心修改MFA秘钥")
+	ProfileUpdateMFAKey = newAuditRouteMeta(routealias.ProfileUpdateMFASecret, model.ActionAdminUpdate, "个人中心修改MFA秘钥")
 	// ProfileRefreshMFAKey 个人中心重新生成MFA秘钥。
-	ProfileRefreshMFAKey = newAuditRouteMeta("profile.refresh_mfa_secret", model.ActionAdminUpdate, "个人中心重新生成MFA秘钥")
+	ProfileRefreshMFAKey = newAuditRouteMeta(routealias.ProfileRefreshMFASecret, model.ActionAdminUpdate, "个人中心重新生成MFA秘钥")
 	// ProfileUpdateAvatar 个人中心修改头像。
-	ProfileUpdateAvatar = newAuditRouteMeta("profile.update_avatar", model.ActionAdminUpdate, "个人中心修改头像")
+	ProfileUpdateAvatar = newAuditRouteMeta(routealias.ProfileUpdateAvatar, model.ActionAdminUpdate, "个人中心修改头像")
 	// AdminBuildMFAURL 生成管理员MFA绑定地址。
-	AdminBuildMFAURL = newAuditRouteMeta("admin.mfa_secret_url", model.ActionAdminUpdate, "生成管理员MFA绑定地址")
+	AdminBuildMFAURL = newAuditRouteMeta(routealias.AdminBuildMFAURL, model.ActionAdminUpdate, "生成管理员MFA绑定地址")
 	// AdminMFAStatus 修改管理员MFA状态。
-	AdminMFAStatus = newAuditRouteMeta("admin.mfa_status.update", model.ActionAdminUpdate, "修改管理员MFA状态")
+	AdminMFAStatus = newAuditRouteMeta(routealias.AdminMFAStatus, model.ActionAdminUpdate, "修改管理员MFA状态")
 
 	// 管理员模块
 	// AdminLogQuery 查询管理员审计日志。
 	AdminLogQuery = newAuditRouteMeta("admin.log.query", model.ActionAdminLogQuery, "查询管理员审计日志")
 	// AdminAdd 新增管理员。
-	AdminAdd = newAuditRouteMeta("admin.add", model.ActionAdminAdd, "新增管理员")
+	AdminAdd = newAuditRouteMeta(routealias.AdminAdd, model.ActionAdminAdd, "新增管理员")
 	// AdminList 查询管理员列表。
 	AdminList = newAuditRouteMeta("admin.list", model.ActionAdminList, "查询管理员列表")
 	// AdminInfo 查询管理员详情。
 	AdminInfo = newAuditRouteMeta("admin.info", model.ActionAdminInfo, "查询管理员详情")
 	// AdminUpdate 编辑管理员。
-	AdminUpdate = newAuditRouteMeta("admin.update", model.ActionAdminUpdate, "编辑管理员")
+	AdminUpdate = newAuditRouteMeta(routealias.AdminUpdate, model.ActionAdminUpdate, "编辑管理员")
 	// AdminDelete 删除管理员。
-	AdminDelete = newAuditRouteMeta("admin.delete", model.ActionAdminDelete, "删除管理员")
+	AdminDelete = newAuditRouteMeta(routealias.AdminDelete, model.ActionAdminDelete, "删除管理员")
 	// AdminStatusUpdate 修改管理员状态。
-	AdminStatusUpdate = newAuditRouteMeta("admin.status.update", model.ActionAdminStatusUpdate, "修改管理员状态")
+	AdminStatusUpdate = newAuditRouteMeta(routealias.AdminStatusUpdate, model.ActionAdminStatusUpdate, "修改管理员状态")
 	// AdminPasswordReset 重置管理员密码。
-	AdminPasswordReset = newAuditRouteMeta("admin.password.reset", model.ActionAdminPasswordReset, "重置管理员密码")
+	AdminPasswordReset = newAuditRouteMeta(routealias.AdminPasswordReset, model.ActionAdminPasswordReset, "重置管理员密码")
 	// AdminResetInitialState 重置管理员到首次登录前状态。
-	AdminResetInitialState = newAuditRouteMeta("admin.reset.initial_state", model.ActionAdminPasswordReset, "重置管理员到首次登录前状态")
+	AdminResetInitialState = newAuditRouteMeta(routealias.AdminResetInitialState, model.ActionAdminPasswordReset, "重置管理员到首次登录前状态")
 	// AdminRoleList 查询管理员角色。
 	AdminRoleList = newAuditRouteMeta("admin.role.list", model.ActionAdminRoleList, "查询管理员角色")
 	// AdminRoleUpdate 编辑管理员角色。
-	AdminRoleUpdate = newAuditRouteMeta("admin.role.update", model.ActionAdminRoleUpdate, "编辑管理员角色")
+	AdminRoleUpdate = newAuditRouteMeta(routealias.AdminRoleUpdate, model.ActionAdminRoleUpdate, "编辑管理员角色")
 	// AdminRoleAdd 添加管理员角色。
 	AdminRoleAdd = newAuditRouteMeta("admin.role.add", model.ActionAdminRoleAdd, "添加管理员角色")
 	// AdminRoleDelete 解除管理员角色。
@@ -112,29 +113,29 @@ var (
 
 	// 消息中心模块
 	// AdminMessageList 查询管理员消息收件箱。
-	AdminMessageList = newAuditRouteMeta("message.list", model.ActionAdminMessageList, "查询管理员消息收件箱")
+	AdminMessageList = newAuditRouteMeta(routealias.AdminMessageList, model.ActionAdminMessageList, "查询管理员消息收件箱")
 	// AdminMessageSentList 查询管理员已发送消息。
-	AdminMessageSentList = newAuditRouteMeta("message.sent_list", model.ActionAdminMessageSentList, "查询管理员已发送消息")
+	AdminMessageSentList = newAuditRouteMeta(routealias.AdminMessageSentList, model.ActionAdminMessageSentList, "查询管理员已发送消息")
 	// AdminMessageReceivers 查询管理员消息收件人明细。
-	AdminMessageReceivers = newAuditRouteMeta("message.receivers", model.ActionAdminMessageReceivers, "查询管理员消息收件人明细")
+	AdminMessageReceivers = newAuditRouteMeta(routealias.AdminMessageReceivers, model.ActionAdminMessageReceivers, "查询管理员消息收件人明细")
 	// AdminMessageSend 发送管理员消息。
-	AdminMessageSend = newAuditRouteMeta("message.send", model.ActionAdminMessageSend, "发送管理员消息")
+	AdminMessageSend = newAuditRouteMeta(routealias.AdminMessageSend, model.ActionAdminMessageSend, "发送管理员消息")
 	// AdminMessageMarkRead 标记管理员消息已读。
-	AdminMessageMarkRead = newAuditRouteMeta("message.mark_read", model.ActionAdminMessageMarkRead, "标记管理员消息已读")
+	AdminMessageMarkRead = newAuditRouteMeta(routealias.AdminMessageMarkRead, model.ActionAdminMessageMarkRead, "标记管理员消息已读")
 	// AdminMessageDelete 删除管理员消息。
-	AdminMessageDelete = newAuditRouteMeta("message.delete", model.ActionAdminMessageDelete, "删除管理员消息")
+	AdminMessageDelete = newAuditRouteMeta(routealias.AdminMessageDelete, model.ActionAdminMessageDelete, "删除管理员消息")
 	// AdminMessageHandle 标记管理员消息已处理。
-	AdminMessageHandle = newAuditRouteMeta("message.handle", model.ActionAdminMessageHandle, "标记管理员消息已处理")
+	AdminMessageHandle = newAuditRouteMeta(routealias.AdminMessageHandle, model.ActionAdminMessageHandle, "标记管理员消息已处理")
 	// AdminMessageUnreadCount 查询管理员未读消息数量。
-	AdminMessageUnreadCount = newRouteMeta("message.unread_count", "查询管理员未读消息数量")
+	AdminMessageUnreadCount = newRouteMeta(routealias.AdminMessageUnreadCount, "查询管理员未读消息数量")
 	// AdminMessageNotifications 查询管理员通知列表。
-	AdminMessageNotifications = newRouteMeta("message.notifications", "查询管理员通知列表")
+	AdminMessageNotifications = newRouteMeta(routealias.AdminMessageNotifications, "查询管理员通知列表")
 	// RoleList 查询角色列表。
 	RoleList = newAuditRouteMeta("role.list", model.ActionRoleList, "查询角色列表")
 	// RoleTreeList 查询角色树。
 	RoleTreeList = newRouteMeta("role.tree.list", "查询角色树")
 	// RoleTreeOptions 查询角色树下拉。
-	RoleTreeOptions = newRouteMeta("role.tree.options", "查询角色树下拉")
+	RoleTreeOptions = newRouteMeta(routealias.RoleTreeOptions, "查询角色树下拉")
 	// RoleAdd 新增角色。
 	RoleAdd = newAuditRouteMeta("role.add", model.ActionRoleAdd, "新增角色")
 	// RoleUpdate 编辑角色。
@@ -152,7 +153,7 @@ var (
 	// PermissionTreeList 查询权限树。
 	PermissionTreeList = newRouteMeta("permission.tree.list", "查询权限树")
 	// PermissionMaxUUID 查询下一个权限UUID。
-	PermissionMaxUUID = newRouteMeta("permission.max_uuid", "查询下一个权限UUID")
+	PermissionMaxUUID = newRouteMeta(routealias.PermissionMaxUUID, "查询下一个权限UUID")
 	// PermissionAdd 新增权限。
 	PermissionAdd = newAuditRouteMeta("permission.add", model.ActionPermissionAdd, "新增权限")
 	// PermissionUpdate 编辑权限。
@@ -192,27 +193,27 @@ var (
 	// SecretKeyList 查询秘钥列表。
 	SecretKeyList = newAuditRouteMeta("secretKey.index", model.ActionSecretKeyList, "查询秘钥列表")
 	// SecretKeyGet 查询秘钥详情。
-	SecretKeyGet = newAuditRouteMeta("secretKey.get", model.ActionSecretKeyGet, "查询秘钥详情")
+	SecretKeyGet = newAuditRouteMeta(routealias.SecretKeyGet, model.ActionSecretKeyGet, "查询秘钥详情")
 	// SecretKeyAdd 新增秘钥。
-	SecretKeyAdd = newAuditRouteMeta("secretKey.add", model.ActionSecretKeyAdd, "新增秘钥")
+	SecretKeyAdd = newAuditRouteMeta(routealias.SecretKeyAdd, model.ActionSecretKeyAdd, "新增秘钥")
 	// SecretKeyUpdate 编辑秘钥。
-	SecretKeyUpdate = newAuditRouteMeta("secretKey.edit", model.ActionSecretKeyUpdate, "编辑秘钥")
+	SecretKeyUpdate = newAuditRouteMeta(routealias.SecretKeyUpdate, model.ActionSecretKeyUpdate, "编辑秘钥")
 	// SecretKeyStatus 修改秘钥状态。
-	SecretKeyStatus = newAuditRouteMeta("secretKey.editStatus", model.ActionSecretKeyStatus, "修改秘钥状态")
+	SecretKeyStatus = newAuditRouteMeta(routealias.SecretKeyStatus, model.ActionSecretKeyStatus, "修改秘钥状态")
 	// SecretKeyRenew 刷新秘钥缓存。
-	SecretKeyRenew = newAuditRouteMeta("secretKey.renew", model.ActionSecretKeyRenew, "刷新秘钥缓存")
+	SecretKeyRenew = newAuditRouteMeta(routealias.SecretKeyRenew, model.ActionSecretKeyRenew, "刷新秘钥缓存")
 	// SecretKeyValidate 预检秘钥配置。
-	SecretKeyValidate = newAuditRouteMeta("secretKey.validate", model.ActionSecretKeyValidate, "预检秘钥配置")
+	SecretKeyValidate = newAuditRouteMeta(routealias.SecretKeyValidate, model.ActionSecretKeyValidate, "预检秘钥配置")
 	// SecretKeySelfCheck 执行秘钥自检。
-	SecretKeySelfCheck = newAuditRouteMeta("secretKey.self_check", model.ActionSecretKeySelfCheck, "执行秘钥自检")
+	SecretKeySelfCheck = newAuditRouteMeta(routealias.SecretKeySelfCheck, model.ActionSecretKeySelfCheck, "执行秘钥自检")
 	// SecurityDebugSign 安全调试签名。
-	SecurityDebugSign = newAuditRouteMeta("security.debug.sign", model.ActionSecurityDebugSign, "安全调试签名")
+	SecurityDebugSign = newAuditRouteMeta(routealias.SecurityDebugSign, model.ActionSecurityDebugSign, "安全调试签名")
 	// SecurityDebugVerify 安全调试验签。
-	SecurityDebugVerify = newAuditRouteMeta("security.debug.verify", model.ActionSecurityDebugVerify, "安全调试验签")
+	SecurityDebugVerify = newAuditRouteMeta(routealias.SecurityDebugVerify, model.ActionSecurityDebugVerify, "安全调试验签")
 	// SecurityDebugEncrypt 安全调试加密。
-	SecurityDebugEncrypt = newAuditRouteMeta("security.debug.encrypt", model.ActionSecurityDebugEncrypt, "安全调试加密")
+	SecurityDebugEncrypt = newAuditRouteMeta(routealias.SecurityDebugEncrypt, model.ActionSecurityDebugEncrypt, "安全调试加密")
 	// SecurityDebugDecrypt 安全调试解密。
-	SecurityDebugDecrypt = newAuditRouteMeta("security.debug.decrypt", model.ActionSecurityDebugDecrypt, "安全调试解密")
+	SecurityDebugDecrypt = newAuditRouteMeta(routealias.SecurityDebugDecrypt, model.ActionSecurityDebugDecrypt, "安全调试解密")
 
 	// 任务系统模块
 	// TaskEnqueue 手动投递任务。
@@ -258,5 +259,5 @@ var (
 	// UserTagRecalculate 指定标签重新计算。
 	UserTagRecalculate = newAuditRouteMeta("user_tag.recalculate", model.ActionUserTagRecalculate, "指定标签重新计算")
 	// UserTagWorkflowLeaseRelease 释放用户标签工作流互斥锁。
-	UserTagWorkflowLeaseRelease = newAuditRouteMeta("user_tag.workflow_lease.release", model.ActionUserTagWorkflowLeaseRelease, "释放用户标签工作流互斥锁")
+	UserTagWorkflowLeaseRelease = newAuditRouteMeta(routealias.UserTagWorkflowLeaseRelease, model.ActionUserTagWorkflowLeaseRelease, "释放用户标签工作流互斥锁")
 )

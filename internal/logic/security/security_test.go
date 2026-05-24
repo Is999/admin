@@ -18,6 +18,7 @@ import (
 	keys "admin/common/rediskeys"
 	"admin/internal/config"
 	"admin/internal/model"
+	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
 
@@ -96,15 +97,15 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 	}
 	requiredModules := []string{
 		"admin.list",
-		"admin.add",
+		string(routealias.AdminAdd),
 		"admin.info",
-		"admin.update",
-		"admin.delete",
+		string(routealias.AdminUpdate),
+		string(routealias.AdminDelete),
 		"admin.export",
-		"admin.password.reset",
-		"admin.reset.initial_state",
-		"admin.mfa_status.update",
-		"admin.mfa_secret_url",
+		string(routealias.AdminPasswordReset),
+		string(routealias.AdminResetInitialState),
+		string(routealias.AdminMFAStatus),
+		string(routealias.AdminBuildMFAURL),
 		"role.list",
 		"role.tree.list",
 		"role.permission.tree",
@@ -114,7 +115,7 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 		"cache.list",
 		"admin.log.query",
 		"secretKey.index",
-		"secretKey.get",
+		string(routealias.SecretKeyGet),
 		"task.console.index",
 		"task.workflow.status.index",
 		"task.config.reload.index",
@@ -122,7 +123,7 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 		"task.queue.list",
 		"task.items.list",
 		"user_tag.index",
-		"docs.index",
+		string(routealias.DocsIndex),
 		"security.debug.index",
 	}
 	var missing []string
@@ -163,21 +164,21 @@ func TestMFAResultByErrorRecognizesWrappedErrors(t *testing.T) {
 // TestPermissionAllowlistContainsSelfServiceRoutes 验证个人中心与会话接口不要求额外业务权限码。
 func TestPermissionAllowlistContainsSelfServiceRoutes(t *testing.T) {
 	// routeAliases 表示只依赖登录态与账号安全状态的个人中心/会话接口集合。
-	routeAliases := []string{
-		"auth.refresh",
-		"auth.logout",
-		"auth.codes",
-		"auth.profile",
-		"profile.mine",
-		"profile.permissions",
-		"profile.check_secure",
-		"profile.check_mfa",
-		"profile.update_password",
-		"profile.update_mine",
-		"profile.update_mfa_status",
-		"profile.update_mfa_secret",
-		"profile.refresh_mfa_secret",
-		"profile.update_avatar",
+	routeAliases := []routealias.Alias{
+		routealias.AuthRefresh,
+		routealias.AuthLogout,
+		routealias.AuthCodes,
+		routealias.AuthProfile,
+		routealias.ProfileMine,
+		routealias.ProfilePermissions,
+		routealias.ProfileCheckSecure,
+		routealias.ProfileCheckMFA,
+		routealias.ProfileUpdatePassword,
+		routealias.ProfileUpdateMine,
+		routealias.ProfileUpdateMFAStatus,
+		routealias.ProfileUpdateMFASecret,
+		routealias.ProfileRefreshMFASecret,
+		routealias.ProfileUpdateAvatar,
 	}
 	for _, routeAlias := range routeAliases {
 		if !permissionAllowlist[routeAlias] {
@@ -189,9 +190,9 @@ func TestPermissionAllowlistContainsSelfServiceRoutes(t *testing.T) {
 // TestPermissionAllowlistContainsSessionVerifyRoutes 验证锁屏解锁校验接口不要求额外业务权限码。
 func TestPermissionAllowlistContainsSessionVerifyRoutes(t *testing.T) {
 	// routeAliases 表示只依赖登录态与账号状态的会话校验路由别名集合。
-	routeAliases := []string{
-		"profile.check_secure",
-		"profile.check_mfa",
+	routeAliases := []routealias.Alias{
+		routealias.ProfileCheckSecure,
+		routealias.ProfileCheckMFA,
 	}
 	for _, routeAlias := range routeAliases {
 		if !permissionAllowlist[routeAlias] {
@@ -204,18 +205,18 @@ func TestPermissionAllowlistContainsSessionVerifyRoutes(t *testing.T) {
 func TestCheckRoutePermissionAllowsSelfServiceWithoutPermissionStore(t *testing.T) {
 	logicObj := NewSecurityLogic(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
 	// routeAliases 表示不需要查询权限表的自助接口集合。
-	routeAliases := []string{
-		"profile.mine",
-		"profile.update_password",
-		"profile.update_mine",
-		"profile.check_secure",
-		"profile.check_mfa",
-		"profile.update_mfa_status",
-		"profile.refresh_mfa_secret",
-		"profile.update_avatar",
+	routeAliases := []routealias.Alias{
+		routealias.ProfileMine,
+		routealias.ProfileUpdatePassword,
+		routealias.ProfileUpdateMine,
+		routealias.ProfileCheckSecure,
+		routealias.ProfileCheckMFA,
+		routealias.ProfileUpdateMFAStatus,
+		routealias.ProfileRefreshMFASecret,
+		routealias.ProfileUpdateAvatar,
 	}
 	for _, routeAlias := range routeAliases {
-		allowed, err := logicObj.CheckRoutePermission(999, routeAlias)
+		allowed, err := logicObj.CheckRoutePermission(999, string(routeAlias))
 		if err != nil {
 			t.Fatalf("CheckRoutePermission(%s) error = %v", routeAlias, err)
 		}
@@ -228,7 +229,7 @@ func TestCheckRoutePermissionAllowsSelfServiceWithoutPermissionStore(t *testing.
 // TestCheckRoutePermissionAllowsMiddlewareIgnoreWithoutPermissionStore 验证通用上传等 Ignore 路由只校验登录态，不查询业务权限表。
 func TestCheckRoutePermissionAllowsMiddlewareIgnoreWithoutPermissionStore(t *testing.T) {
 	logicObj := NewSecurityLogic(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
-	allowed, err := logicObj.CheckRoutePermission(999, routePermissionBypassAlias)
+	allowed, err := logicObj.CheckRoutePermission(999, string(routePermissionBypassAlias))
 	if err != nil {
 		t.Fatalf("CheckRoutePermission(%s) error = %v", routePermissionBypassAlias, err)
 	}
@@ -239,14 +240,14 @@ func TestCheckRoutePermissionAllowsMiddlewareIgnoreWithoutPermissionStore(t *tes
 
 // TestPermissionAllowlistContainsRoleTreeOptions 验证角色树下拉接口只要求登录态与账号状态，不额外绑定角色管理权限。
 func TestPermissionAllowlistContainsRoleTreeOptions(t *testing.T) {
-	if !permissionAllowlist["role.tree.options"] {
+	if !permissionAllowlist[routealias.RoleTreeOptions] {
 		t.Fatalf("permissionAllowlist missing role.tree.options")
 	}
 }
 
 // TestPermissionAllowlistContainsPermissionMaxUUID 验证权限 UUID 预览接口只要求登录态，不额外绑定权限管理权限。
 func TestPermissionAllowlistContainsPermissionMaxUUID(t *testing.T) {
-	if !permissionAllowlist["permission.max_uuid"] {
+	if !permissionAllowlist[routealias.PermissionMaxUUID] {
 		t.Fatalf("permissionAllowlist missing permission.max_uuid")
 	}
 }
@@ -254,16 +255,16 @@ func TestPermissionAllowlistContainsPermissionMaxUUID(t *testing.T) {
 // TestPermissionAllowlistContainsPersonalMessageRoutes 验证消息中心属于个人收件箱能力，只依赖登录态和账号安全状态。
 func TestPermissionAllowlistContainsPersonalMessageRoutes(t *testing.T) {
 	// routeAliases 表示个人消息收发、已读和处理接口集合；这些接口不按后台角色权限码二次授权。
-	routeAliases := []string{
-		"message.list",
-		"message.sent_list",
-		"message.receivers",
-		"message.unread_count",
-		"message.notifications",
-		"message.mark_read",
-		"message.delete",
-		"message.send",
-		"message.handle",
+	routeAliases := []routealias.Alias{
+		routealias.AdminMessageList,
+		routealias.AdminMessageSentList,
+		routealias.AdminMessageReceivers,
+		routealias.AdminMessageUnreadCount,
+		routealias.AdminMessageNotifications,
+		routealias.AdminMessageMarkRead,
+		routealias.AdminMessageDelete,
+		routealias.AdminMessageSend,
+		routealias.AdminMessageHandle,
 	}
 	for _, routeAlias := range routeAliases {
 		if !permissionAllowlist[routeAlias] {
@@ -275,21 +276,21 @@ func TestPermissionAllowlistContainsPersonalMessageRoutes(t *testing.T) {
 // TestPasswordResetAllowlistContainsForcedResetFlow 验证首次/强制改密阶段不会拦截个人中心必要接口。
 func TestPasswordResetAllowlistContainsForcedResetFlow(t *testing.T) {
 	// routeAliases 表示必须改密状态下仍可访问的自助闭环接口集合。
-	routeAliases := []string{
-		"auth.refresh",
-		"auth.logout",
-		"auth.codes",
-		"auth.profile",
-		"profile.mine",
-		"profile.permissions",
-		"profile.check_secure",
-		"profile.check_mfa",
-		"profile.update_password",
-		"profile.update_mine",
-		"profile.update_mfa_status",
-		"profile.update_mfa_secret",
-		"profile.refresh_mfa_secret",
-		"profile.update_avatar",
+	routeAliases := []routealias.Alias{
+		routealias.AuthRefresh,
+		routealias.AuthLogout,
+		routealias.AuthCodes,
+		routealias.AuthProfile,
+		routealias.ProfileMine,
+		routealias.ProfilePermissions,
+		routealias.ProfileCheckSecure,
+		routealias.ProfileCheckMFA,
+		routealias.ProfileUpdatePassword,
+		routealias.ProfileUpdateMine,
+		routealias.ProfileUpdateMFAStatus,
+		routealias.ProfileUpdateMFASecret,
+		routealias.ProfileRefreshMFASecret,
+		routealias.ProfileUpdateAvatar,
 	}
 	for _, routeAlias := range routeAliases {
 		if !passwordResetAllowlist[routeAlias] {
@@ -301,15 +302,15 @@ func TestPasswordResetAllowlistContainsForcedResetFlow(t *testing.T) {
 // TestLoginMFAAllowlistContainsBindFlow 验证登录 MFA 未完成时，绑定/校验 MFA 的闭环接口不会被自己递归拦截。
 func TestLoginMFAAllowlistContainsBindFlow(t *testing.T) {
 	// routeAliases 表示登录 MFA 前置拦截期间允许访问的最小接口集合。
-	routeAliases := []string{
-		"auth.refresh",
-		"auth.logout",
-		"auth.codes",
-		"profile.check_mfa",
-		"profile.refresh_mfa_secret",
-		"profile.update_mfa_status",
-		"profile.mine",
-		"message.notifications",
+	routeAliases := []routealias.Alias{
+		routealias.AuthRefresh,
+		routealias.AuthLogout,
+		routealias.AuthCodes,
+		routealias.ProfileCheckMFA,
+		routealias.ProfileRefreshMFASecret,
+		routealias.ProfileUpdateMFAStatus,
+		routealias.ProfileMine,
+		routealias.AdminMessageNotifications,
 	}
 	for _, routeAlias := range routeAliases {
 		if !loginMFAAllowlist[routeAlias] {
@@ -321,15 +322,15 @@ func TestLoginMFAAllowlistContainsBindFlow(t *testing.T) {
 // TestAdminSensitiveRoutesRemainPermissionProtected 验证后台代操作敏感接口仍必须走权限表，不被个人中心白名单误放行。
 func TestAdminSensitiveRoutesRemainPermissionProtected(t *testing.T) {
 	// routeAliases 表示管理员管理与后台代操作类敏感接口集合。
-	routeAliases := []string{
-		"admin.add",
-		"admin.update",
-		"admin.delete",
-		"admin.status.update",
-		"admin.password.reset",
-		"admin.reset.initial_state",
-		"admin.mfa_status.update",
-		"admin.mfa_secret_url",
+	routeAliases := []routealias.Alias{
+		routealias.AdminAdd,
+		routealias.AdminUpdate,
+		routealias.AdminDelete,
+		routealias.AdminStatusUpdate,
+		routealias.AdminPasswordReset,
+		routealias.AdminResetInitialState,
+		routealias.AdminMFAStatus,
+		routealias.AdminBuildMFAURL,
 	}
 	for _, routeAlias := range routeAliases {
 		if permissionAllowlist[routeAlias] {
@@ -351,13 +352,13 @@ func TestCheckAdminNeedResetPassword(t *testing.T) {
 	if err := logicObj.checkAdminNeedResetPassword(admin, "admin.list"); err != ErrAdminPasswordResetRequired {
 		t.Fatalf("checkAdminNeedResetPassword(admin.list) = %v, want %v", err, ErrAdminPasswordResetRequired)
 	}
-	if err := logicObj.checkAdminNeedResetPassword(admin, "profile.update_password"); err != nil {
+	if err := logicObj.checkAdminNeedResetPassword(admin, string(routealias.ProfileUpdatePassword)); err != nil {
 		t.Fatalf("checkAdminNeedResetPassword(profile.update_password) = %v, want nil", err)
 	}
-	if err := logicObj.checkAdminNeedResetPassword(admin, "profile.update_mfa_status"); err != nil {
+	if err := logicObj.checkAdminNeedResetPassword(admin, string(routealias.ProfileUpdateMFAStatus)); err != nil {
 		t.Fatalf("checkAdminNeedResetPassword(profile.update_mfa_status) = %v, want nil", err)
 	}
-	if err := logicObj.checkAdminNeedResetPassword(admin, "admin.password.reset"); err != ErrAdminPasswordResetRequired {
+	if err := logicObj.checkAdminNeedResetPassword(admin, string(routealias.AdminPasswordReset)); err != ErrAdminPasswordResetRequired {
 		t.Fatalf("checkAdminNeedResetPassword(admin.password.reset) = %v, want %v", err, ErrAdminPasswordResetRequired)
 	}
 }
@@ -365,18 +366,18 @@ func TestCheckAdminNeedResetPassword(t *testing.T) {
 // TestShouldSkipMFAForPasswordReset 验证必须改密阶段允许白名单路由先跳过登录 MFA 校验。
 func TestShouldSkipMFAForPasswordReset(t *testing.T) {
 	admin := &model.Admin{ID: 8, Name: "admin999", NeedResetPassword: 1}
-	for _, routeAlias := range []string{"profile.update_password", "profile.check_mfa", "profile.update_mfa_status"} {
-		if !shouldSkipMFAForPasswordReset(admin, routeAlias) {
+	for _, routeAlias := range []routealias.Alias{routealias.ProfileUpdatePassword, routealias.ProfileCheckMFA, routealias.ProfileUpdateMFAStatus} {
+		if !shouldSkipMFAForPasswordReset(admin, string(routeAlias)) {
 			t.Fatalf("shouldSkipMFAForPasswordReset(%s) = false, want true", routeAlias)
 		}
 	}
 	if shouldSkipMFAForPasswordReset(admin, "admin.list") {
 		t.Fatalf("shouldSkipMFAForPasswordReset(admin.list) = true, want false")
 	}
-	if shouldSkipMFAForPasswordReset(admin, "admin.password.reset") {
+	if shouldSkipMFAForPasswordReset(admin, string(routealias.AdminPasswordReset)) {
 		t.Fatalf("shouldSkipMFAForPasswordReset(admin.password.reset) = true, want false")
 	}
-	if shouldSkipMFAForPasswordReset(&model.Admin{ID: 8, Name: "admin999"}, "profile.update_password") {
+	if shouldSkipMFAForPasswordReset(&model.Admin{ID: 8, Name: "admin999"}, string(routealias.ProfileUpdatePassword)) {
 		t.Fatalf("shouldSkipMFAForPasswordReset(non-reset profile.update_password) = true, want false")
 	}
 }
@@ -384,15 +385,15 @@ func TestShouldSkipMFAForPasswordReset(t *testing.T) {
 // TestShouldBypassLoginMFACheck 验证登录后首次绑定 MFA 所需的自助接口可以跳过登录态 MFA 前置拦截。
 func TestShouldBypassLoginMFACheck(t *testing.T) {
 	admin := &model.Admin{ID: 8, Name: "admin999"}
-	for _, routeAlias := range []string{"profile.check_mfa", "profile.refresh_mfa_secret", "profile.update_mfa_status"} {
-		if !shouldBypassLoginMFACheck(admin, routeAlias) {
+	for _, routeAlias := range []routealias.Alias{routealias.ProfileCheckMFA, routealias.ProfileRefreshMFASecret, routealias.ProfileUpdateMFAStatus} {
+		if !shouldBypassLoginMFACheck(admin, string(routeAlias)) {
 			t.Fatalf("shouldBypassLoginMFACheck(%s) = false, want true", routeAlias)
 		}
 	}
 	if shouldBypassLoginMFACheck(admin, "admin.list") {
 		t.Fatalf("shouldBypassLoginMFACheck(admin.list) = true, want false")
 	}
-	if shouldBypassLoginMFACheck(admin, "admin.password.reset") {
+	if shouldBypassLoginMFACheck(admin, string(routealias.AdminPasswordReset)) {
 		t.Fatalf("shouldBypassLoginMFACheck(admin.password.reset) = true, want false")
 	}
 }

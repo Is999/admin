@@ -12,17 +12,18 @@ import (
 	cachelogic "admin/internal/logic/cache"
 	securitylogic "admin/internal/logic/security"
 	"admin/internal/requestctx"
+	"admin/internal/routealias"
 	"admin/internal/svc"
 
 	"github.com/Is999/go-utils"
 )
 
 // RouteAlias 是路由在权限/审计体系中的稳定标识，避免直接依赖 URL。
-type RouteAlias string
+type RouteAlias = routealias.Alias
 
 const (
 	// Ignore 表示该路由跳过业务权限校验，但仍要求 token 合法。
-	Ignore RouteAlias = "ignore"
+	Ignore = routealias.Ignore
 )
 
 // AuthMiddleware 负责 JWT 鉴权、Redis token 校验以及请求元数据中的用户信息补全。

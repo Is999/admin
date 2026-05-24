@@ -13,13 +13,12 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
-// runtimeConfigKnownKeys 定义当前版本会主动读取的运行期外部配置顶层键。
-// 该清单只用于按需提取，未知顶层块会被忽略。
-var runtimeConfigKnownKeys = map[string]struct{}{
-	"task_periodic": {}, // 周期任务列表
-	"archive_jobs":  {}, // 归档任务列表
-	"workflows":     {}, // 工作流类配置聚合入口
-}
+// 运行期外部配置支持的顶层配置段。
+const (
+	runtimeConfigSectionTaskPeriodic = "task_periodic" // 周期任务列表
+	runtimeConfigSectionArchiveJobs  = "archive_jobs"  // 归档任务列表
+	runtimeConfigSectionWorkflows    = "workflows"     // 工作流类配置聚合入口
+)
 
 // runtimeConfigFile 描述外部运行期大配置文件。
 // 推荐在 K8s 中把该文件作为独立 ConfigMap key 挂载，主配置只保留 config_files.runtime 路径。
@@ -27,6 +26,58 @@ type runtimeConfigFile struct {
 	TaskPeriodic []config.TaskPeriodicConfig `json:"task_periodic,optional"` // 周期任务列表
 	ArchiveJobs  []config.ArchiveJobConfig   `json:"archive_jobs,optional"`  // 归档任务列表
 	Workflows    config.WorkflowsConfig      `json:"workflows,optional"`     // 工作流类配置聚合入口
+}
+
+// runtimeConfigSectionSpec 描述一个允许运行期外置的配置段。
+type runtimeConfigSectionSpec struct {
+	Key   string                                                               // 外部运行期配置文件中的顶层键
+	apply func(cfg *config.Config, ext runtimeConfigFile, source string) error // 将该配置段合并到主配置
+}
+
+// runtimeConfigSectionSpecs 返回运行期外部配置段规格。
+func runtimeConfigSectionSpecs() []runtimeConfigSectionSpec {
+	return []runtimeConfigSectionSpec{
+		{
+			Key: runtimeConfigSectionTaskPeriodic,
+			apply: func(cfg *config.Config, ext runtimeConfigFile, source string) error {
+				merged, err := mergeTaskPeriodicConfigs(cfg.Task.Periodic, ext.TaskPeriodic, source)
+				if err != nil {
+					return errors.Tag(err)
+				}
+				cfg.Task.Periodic = merged
+				return nil
+			},
+		},
+		{
+			Key: runtimeConfigSectionArchiveJobs,
+			apply: func(cfg *config.Config, ext runtimeConfigFile, source string) error {
+				merged, err := mergeArchiveJobConfigs(cfg.Archive.Jobs, ext.ArchiveJobs, source)
+				if err != nil {
+					return errors.Tag(err)
+				}
+				cfg.Archive.Jobs = merged
+				return nil
+			},
+		},
+		{
+			Key: runtimeConfigSectionWorkflows,
+			apply: func(cfg *config.Config, ext runtimeConfigFile, source string) error {
+				// workflows 是工作流类配置统一入口，运行期文件显式声明后整体覆盖。
+				cfg.Workflows = ext.Workflows
+				return nil
+			},
+		},
+	}
+}
+
+// runtimeConfigSectionKeys 返回当前版本会主动读取的运行期外部配置顶层键。
+func runtimeConfigSectionKeys() map[string]struct{} {
+	specs := runtimeConfigSectionSpecs()
+	keys := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		keys[spec.Key] = struct{}{}
+	}
+	return keys
 }
 
 // applyExternalConfigFiles 按主配置 config_files 声明合并外部大配置文件。
@@ -62,17 +113,13 @@ func applyRuntimeConfigFile(path string, cfg *config.Config) error {
 	if err = conf.LoadFromYamlBytes(content, &ext); err != nil {
 		return errors.Wrapf(err, "加载运行期外部配置失败 file=%s", path)
 	}
-	cfg.Task.Periodic, err = mergeTaskPeriodicConfigs(cfg.Task.Periodic, ext.TaskPeriodic, path)
-	if err != nil {
-		return errors.Tag(err)
-	}
-	cfg.Archive.Jobs, err = mergeArchiveJobConfigs(cfg.Archive.Jobs, ext.ArchiveJobs, path)
-	if err != nil {
-		return errors.Tag(err)
-	}
-	if _, ok := keys["workflows"]; ok {
-		// workflows 是工作流类配置统一入口，运行期文件显式声明后整体覆盖。
-		cfg.Workflows = ext.Workflows
+	for _, spec := range runtimeConfigSectionSpecs() {
+		if _, ok := keys[spec.Key]; !ok {
+			continue
+		}
+		if err = spec.apply(cfg, ext, path); err != nil {
+			return errors.Tag(err)
+		}
 	}
 	return nil
 }
@@ -175,13 +222,14 @@ func runtimeConfigKnownContent(path string) ([]byte, map[string]struct{}, error)
 	if root == nil {
 		return []byte("{}\n"), keys, nil
 	}
+	knownKeys := runtimeConfigSectionKeys()
 	filtered := &yaml.Node{
 		Kind:    yaml.MappingNode,
 		Content: make([]*yaml.Node, 0, len(root.Content)),
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key := strings.TrimSpace(root.Content[i].Value)
-		if _, ok := runtimeConfigKnownKeys[key]; !ok {
+		if _, ok := knownKeys[key]; !ok {
 			continue
 		}
 		keys[key] = struct{}{}

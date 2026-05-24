@@ -2,6 +2,8 @@ package middleware
 
 import (
 	stderrors "errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -11,19 +13,29 @@ import (
 	"admin/internal/requestctx"
 )
 
-// TestShouldIgnoreAccessLog 验证访问日志白名单会跳过健康检查等低价值高频路由。
-func TestShouldIgnoreAccessLog(t *testing.T) {
-	if !shouldIgnoreAccessLog("/api/live") {
-		t.Fatal("expected /api/live to be ignored by access log")
+// TestSkipAccessLogMarksRequestMeta 验证路由 wrapper 会把跳过日志规则写入请求元数据。
+func TestSkipAccessLogMarksRequestMeta(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/live", nil)
+	ctx, meta := requestctx.New(req.Context())
+	req = req.WithContext(ctx)
+	called := false
+	handler := SkipAccessLog(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	handler(httptest.NewRecorder(), req)
+
+	if !called {
+		t.Fatal("expected wrapped handler to be called")
 	}
-	if !shouldIgnoreAccessLog("/api/ready") {
-		t.Fatal("expected /api/ready to be ignored by access log")
+	if !meta.SkipAccessLog {
+		t.Fatal("expected request meta to skip access log")
 	}
-	if !shouldIgnoreAccessLog("/api/metrics") {
-		t.Fatal("expected /api/metrics to be ignored by access log")
+	if !shouldSkipAccessLog(meta) {
+		t.Fatal("expected access log predicate to use request meta")
 	}
-	if shouldIgnoreAccessLog("/api/tasks/queues") {
-		t.Fatal("expected business api path not to be ignored by access log")
+	if shouldSkipAccessLog(&requestctx.Meta{}) {
+		t.Fatal("expected default request meta to keep access log")
 	}
 }
 

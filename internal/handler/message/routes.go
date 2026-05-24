@@ -12,51 +12,20 @@ import (
 
 // RegisterRoutes 注册管理员消息管理相关接口。
 func RegisterRoutes(server *rest.Server, serverCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware) {
-	server.AddRoutes([]rest.Route{
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/admin-messages", // 查询管理员消息收件箱
-			Handler: authMw.Handle(ListAdminMessageHandler(serverCtx), shared.AdminMessageList.Alias),
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/admin-messages/sent", // 查询管理员已发送消息
-			Handler: authMw.Handle(ListAdminMessageSentHandler(serverCtx), shared.AdminMessageSentList.Alias),
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/admin-messages/:id/receivers", // 查询消息收件人已读明细
-			Handler: authMw.Handle(ListAdminMessageReceiversHandler(serverCtx), shared.AdminMessageReceivers.Alias),
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/admin-messages/unread-count", // 查询未读消息数量
-			Handler: authMw.Handle(GetAdminMessageUnreadCountHandler(serverCtx), shared.AdminMessageUnreadCount.Alias),
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/admin-messages/notifications", // 查询顶部铃铛通知列表
-			Handler: authMw.Handle(ListAdminMessageNotificationsHandler(serverCtx), shared.AdminMessageNotifications.Alias),
-		},
-		{
-			Method:  http.MethodPatch,
-			Path:    "/api/admin-messages/read", // 标记消息已读
-			Handler: authMw.Handle(MarkAdminMessageReadHandler(serverCtx), shared.AdminMessageMarkRead.Alias),
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/admin-messages/delete", // 删除消息（软删除）
-			Handler: authMw.Handle(DeleteAdminMessageHandler(serverCtx), shared.AdminMessageDelete.Alias),
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/admin-messages/send", // 发送消息
-			Handler: authMw.Handle(SendAdminMessageHandler(serverCtx), shared.AdminMessageSend.Alias),
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/admin-messages/handle", // 标记消息已处理
-			Handler: authMw.Handle(HandleAdminMessageHandler(serverCtx), shared.AdminMessageHandle.Alias),
-		},
-	})
+	shared.AddRouteSpecs(server, serverCtx, authMw, nil, RouteSpecs())
+}
+
+// RouteSpecs 返回管理员消息管理路由规格。
+func RouteSpecs() []shared.RouteSpec {
+	return []shared.RouteSpec{
+		shared.AuthRoute(http.MethodGet, "/api/admin-messages", shared.AdminMessageList, ListAdminMessageHandler),
+		shared.AuthRoute(http.MethodGet, "/api/admin-messages/sent", shared.AdminMessageSentList, ListAdminMessageSentHandler),
+		shared.AuthRoute(http.MethodGet, "/api/admin-messages/:id/receivers", shared.AdminMessageReceivers, ListAdminMessageReceiversHandler),
+		shared.AuthRoute(http.MethodGet, "/api/admin-messages/unread-count", shared.AdminMessageUnreadCount, GetAdminMessageUnreadCountHandler),
+		shared.AuthRoute(http.MethodGet, "/api/admin-messages/notifications", shared.AdminMessageNotifications, ListAdminMessageNotificationsHandler).WithSkipAccessLog(),
+		shared.AuthRoute(http.MethodPatch, "/api/admin-messages/read", shared.AdminMessageMarkRead, MarkAdminMessageReadHandler),
+		shared.AuthRoute(http.MethodPost, "/api/admin-messages/delete", shared.AdminMessageDelete, DeleteAdminMessageHandler),
+		shared.AuthRoute(http.MethodPost, "/api/admin-messages/send", shared.AdminMessageSend, SendAdminMessageHandler),
+		shared.AuthRoute(http.MethodPost, "/api/admin-messages/handle", shared.AdminMessageHandle, HandleAdminMessageHandler),
+	}
 }

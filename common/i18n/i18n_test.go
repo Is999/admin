@@ -38,6 +38,12 @@ func TestMessageByCode(t *testing.T) {
 	if got := MessageByCode(codes.CheckPasswordReset, LocaleENUS); got != "Password must be changed before continuing" {
 		t.Fatalf("MessageByCode(CheckPasswordReset,en)=%q", got)
 	}
+	if got := MessageByCode(codes.UserTagWorkflowLeaseNotFound, LocaleZHCN); got != "用户标签工作流互斥锁不存在或已释放" {
+		t.Fatalf("MessageByCode(UserTagWorkflowLeaseNotFound,zh-CN)=%q", got)
+	}
+	if got := MessageByCode(999999, LocaleENUS); got != "Failed" {
+		t.Fatalf("MessageByCode(unknown,en)=%q", got)
+	}
 }
 
 // TestMessageCatalogParity 校验中英文语言包 key 完整一致，避免新增文案只补一个语种。
@@ -56,12 +62,13 @@ func TestMessageCatalogParity(t *testing.T) {
 	}
 }
 
-// TestCodeToMessageKeyCatalogCoverage 校验业务码映射到的 key 在所有语言包中都有文案。
-func TestCodeToMessageKeyCatalogCoverage(t *testing.T) {
-	for code, key := range codeToMessageKey {
+// TestCodeContractsCatalogCoverage 校验业务码契约声明的 key 在所有语言包中都有文案。
+func TestCodeContractsCatalogCoverage(t *testing.T) {
+	for _, contract := range codes.DefaultCodeContracts() {
+		key := contract.MessageKey
 		for locale, catalog := range messageCatalog {
 			if catalog[key] == "" {
-				t.Fatalf("code %d key %q missing locale %s message", code, key, locale)
+				t.Fatalf("code %d key %q missing locale %s message", contract.Code, key, locale)
 			}
 		}
 	}

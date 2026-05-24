@@ -1,6 +1,8 @@
 package i18n
 
 import (
+	"admin/common/codes"
+
 	"strconv"
 	"strings"
 
@@ -9,7 +11,7 @@ import (
 
 // MessageByCode 按业务码返回本地化消息，适合作为默认响应文案。
 func MessageByCode(code int, locale string) string {
-	key, ok := codeToMessageKey[code]
+	key, ok := codes.MessageKey(code)
 	if !ok {
 		return MessageByKey(MsgKeyFail, locale)
 	}

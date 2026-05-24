@@ -1,0 +1,4 @@
+interface:
+  display_name: "Go Worker 并发护栏"
+  short_description: "审查 worker、锁、重试和队列安全。"
+  default_prompt: "使用 $go-worker-concurrency-guard 复核这个 worker 或 scheduler 改动。"

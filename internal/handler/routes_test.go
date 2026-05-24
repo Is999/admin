@@ -58,6 +58,33 @@ func TestRegisterHandlersRegistersExpectedRoutes(t *testing.T) {
 	}
 }
 
+// TestBuiltinRouteModuleSpecsValid 确保内置路由模块规格字段完整且能派生真实模块。
+func TestBuiltinRouteModuleSpecsValid(t *testing.T) {
+	specs := BuiltinRouteModuleSpecs()
+	if len(specs) == 0 {
+		t.Fatal("内置路由模块规格不能为空")
+	}
+	seen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		if strings.TrimSpace(spec.Name) == "" {
+			t.Fatalf("内置路由模块规格缺少名称: %+v", spec)
+		}
+		if strings.TrimSpace(spec.File) == "" || strings.TrimSpace(spec.Method) == "" || strings.TrimSpace(spec.Description) == "" {
+			t.Fatalf("内置路由模块规格说明不完整: %+v", spec)
+		}
+		if spec.Routes == nil {
+			t.Fatalf("内置路由模块规格缺少路由规格函数: %s", spec.Name)
+		}
+		if len(spec.Routes()) == 0 {
+			t.Fatalf("内置路由模块规格缺少路由: %s", spec.Name)
+		}
+		if _, ok := seen[spec.Name]; ok {
+			t.Fatalf("内置路由模块规格名称重复: %s", spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
+	}
+}
+
 // TestDefaultRouteContractsAreSelfConsistent 确保契约清单具备最小治理信息。
 func TestDefaultRouteContractsAreSelfConsistent(t *testing.T) {
 	seen := make(map[string]struct{})
@@ -135,6 +162,29 @@ func TestDefaultRouteContractsHaveAccessPolicyAliases(t *testing.T) {
 		if strings.ContainsAny(contract.Alias, " \t\r\n") {
 			t.Fatalf("路由别名不能包含空白字符: %+v", contract)
 		}
+	}
+}
+
+// TestDefaultRouteContractsSkipAccessLog 确保高频低价值路由才标记跳过普通访问日志。
+func TestDefaultRouteContractsSkipAccessLog(t *testing.T) {
+	skipRoutes := map[string]struct{}{
+		http.MethodGet + " /api/live":                         {},
+		http.MethodGet + " /api/ready":                        {},
+		http.MethodGet + " /api/metrics":                      {},
+		http.MethodGet + " /api/admin-messages/notifications": {},
+	}
+	seen := make(map[string]struct{}, len(skipRoutes))
+	for _, contract := range DefaultRouteContracts() {
+		_, wantSkip := skipRoutes[contract.Key()]
+		if contract.SkipAccessLog != wantSkip {
+			t.Fatalf("路由 %s skip_access_log = %v, want %v", contract.Key(), contract.SkipAccessLog, wantSkip)
+		}
+		if wantSkip {
+			seen[contract.Key()] = struct{}{}
+		}
+	}
+	if len(seen) != len(skipRoutes) {
+		t.Fatalf("跳过访问日志路由覆盖不完整: got=%v want=%v", seen, skipRoutes)
 	}
 }
 

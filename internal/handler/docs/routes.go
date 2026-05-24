@@ -13,37 +13,26 @@ import (
 
 // RegisterRoutes 注册 API 文档路由。
 func RegisterRoutes(server *rest.Server, serverCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware) {
-	server.AddRoute(rest.Route{
-		Method:  http.MethodPost,
-		Path:    "/api/docs/session",
-		Handler: authMw.Handle(DocsSessionHandler(), shared.DocsSession.Alias),
-	})
-	// 文档路由单独挂载 JWT 鉴权，避免与主业务路由的鉴权链互相耦合。
-	server.AddRoutes(
-		rest.WithMiddleware(
-			middleware.DocsJwtMiddleware(serverCtx),
-			[]rest.Route{
-				{
-					Method:  http.MethodGet,
-					Path:    "/api/docs", // 文档首页
-					Handler: sitedocs.Handler(),
-				},
-				{
-					Method:  http.MethodGet,
-					Path:    "/api/docs/:path", // 文档静态资源
-					Handler: sitedocs.Handler(),
-				},
-				{
-					Method:  http.MethodGet,
-					Path:    "/api/docs/:path/:sub", // 二级文档资源
-					Handler: sitedocs.Handler(),
-				},
-				{
-					Method:  http.MethodGet,
-					Path:    "/api/docs/:path/:sub/:file", // 三级文档资源
-					Handler: sitedocs.Handler(),
-				},
-			}...,
-		),
-	)
+	shared.AddRouteSpecs(server, serverCtx, authMw, nil, RouteSpecs())
+}
+
+// RouteSpecs 返回 API 文档路由规格。
+func RouteSpecs() []shared.RouteSpec {
+	return []shared.RouteSpec{
+		shared.AuthRoute(http.MethodPost, "/api/docs/session", shared.DocsSession, docsSessionHandler),
+		shared.DocsRoute(http.MethodGet, "/api/docs", "文档首页", docsSiteHandler),
+		shared.DocsRoute(http.MethodGet, "/api/docs/:path", "文档静态资源", docsSiteHandler),
+		shared.DocsRoute(http.MethodGet, "/api/docs/:path/:sub", "二级文档资源", docsSiteHandler),
+		shared.DocsRoute(http.MethodGet, "/api/docs/:path/:sub/:file", "三级文档资源", docsSiteHandler),
+	}
+}
+
+// docsSessionHandler 返回文档访问会话处理器。
+func docsSessionHandler(*svc.ServiceContext) http.HandlerFunc {
+	return DocsSessionHandler()
+}
+
+// docsSiteHandler 返回文档站静态资源处理器。
+func docsSiteHandler(*svc.ServiceContext) http.HandlerFunc {
+	return sitedocs.Handler()
 }

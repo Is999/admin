@@ -28,6 +28,24 @@ func (s testVirusScanner) ScanFile(context.Context, string, string) error {
 	return nil
 }
 
+// TestRuntimeRegistrySpecsValid 确保 storage 运行时注册入口规格完整且名称唯一。
+func TestRuntimeRegistrySpecsValid(t *testing.T) {
+	specs := RuntimeRegistrySpecs()
+	if len(specs) == 0 {
+		t.Fatal("RuntimeRegistrySpecs() 不能为空")
+	}
+	nameSeen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		if spec.Name == "" || spec.File == "" || spec.Method == "" || spec.Description == "" {
+			t.Fatalf("运行时注册入口规格字段不完整: %+v", spec)
+		}
+		if _, ok := nameSeen[spec.Name]; ok {
+			t.Fatalf("运行时注册入口名称重复: %s", spec.Name)
+		}
+		nameSeen[spec.Name] = struct{}{}
+	}
+}
+
 // TestLocalStorageSaveContentAndOpen 确保本地存储可保存内容并读取对象元信息。
 func TestLocalStorageSaveContentAndOpen(t *testing.T) {
 	rootDir := t.TempDir()

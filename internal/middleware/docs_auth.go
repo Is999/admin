@@ -11,6 +11,7 @@ import (
 	"admin/internal/infra/loggerx"
 	securitylogic "admin/internal/logic/security"
 	"admin/internal/requestctx"
+	"admin/internal/routealias"
 	"admin/internal/svc"
 
 	"github.com/Is999/go-utils"
@@ -24,7 +25,7 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 			ctx, _ := requestctx.New(r.Context())
 			requestctx.SetRequest(ctx, r.Method, r.URL.Path, utils.ClientIP(r))
 			// 文档站统一绑定到 docs.index 权限码，前后端都复用这一条页面权限。
-			requestctx.SetRoute(ctx, "docs.index")
+			requestctx.SetRoute(ctx, string(routealias.DocsIndex))
 			r = r.WithContext(ctx)
 			mode := ""
 			if svcCtx != nil {
@@ -53,7 +54,7 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 			}
 
 			ip := utils.ClientIP(r)
-			if err = securitylogic.NewSecurityLogic(ctx, svcCtx).CheckAdminAccess(identity.UserID, "docs.index", ip, identity.LoginIP); err != nil {
+			if err = securitylogic.NewSecurityLogic(ctx, svcCtx).CheckAdminAccess(identity.UserID, string(routealias.DocsIndex), ip, identity.LoginIP); err != nil {
 				switch {
 				case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
 					helper.NewJsonResp(ctx, w).

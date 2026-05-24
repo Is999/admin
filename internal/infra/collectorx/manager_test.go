@@ -9,6 +9,24 @@ import (
 	"admin/internal/config"
 )
 
+// TestRuntimeRegistrySpecsValid 确保 Collector 运行时注册入口规格完整且名称唯一。
+func TestRuntimeRegistrySpecsValid(t *testing.T) {
+	specs := RuntimeRegistrySpecs()
+	if len(specs) == 0 {
+		t.Fatal("RuntimeRegistrySpecs() 不能为空")
+	}
+	seen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		if spec.Name == "" || spec.File == "" || spec.Method == "" || spec.Description == "" {
+			t.Fatalf("运行时注册入口规格字段不完整: %+v", spec)
+		}
+		if _, ok := seen[spec.Name]; ok {
+			t.Fatalf("运行时注册入口名称重复: %s", spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
+	}
+}
+
 // TestProcessorFuncProcessBatch 确保业务方可以直接用函数注册批量消费逻辑。
 func TestProcessorFuncProcessBatch(t *testing.T) {
 	processor := ProcessorFunc(func(ctx context.Context, events []Event) ([]ProcessResult, error) {

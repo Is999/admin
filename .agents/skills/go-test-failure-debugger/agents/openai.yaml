@@ -1,0 +1,4 @@
+interface:
+  display_name: "Go 测试失败排查"
+  short_description: "复现并修复 Go test、vet 和 race 失败。"
+  default_prompt: "使用 $go-test-failure-debugger 复现并修复这个 Go 验证失败。"

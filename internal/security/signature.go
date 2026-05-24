@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"admin/helper"
+	"admin/internal/routealias"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"
@@ -71,176 +72,176 @@ var securityDebugCipherResponseFields = []string{"appId", "cryptoType", "cipherH
 // secretKeyCheckResponseFields 收口秘钥预检和自检响应中需要回签的轻量字段。
 var secretKeyCheckResponseFields = []string{"uuid", "title", "keyVersion", "mode", "status", "allPassed", "canSave", "canEnable", "runtimeChecked", "cacheRefreshed", "checkedAt", "durationMs"}
 
-// RouteSecurityPolicies 定义后台接口的显式安全策略。
-var RouteSecurityPolicies = map[string]RouteSecurityPolicy{
+// RouteSecurityPolicies 定义后台接口的显式安全策略，key 来自统一路由别名常量。
+var RouteSecurityPolicies = map[routealias.Alias]RouteSecurityPolicy{
 	// auth.login 表示新版登录接口：响应对 token、手机号与 MFA 绑定地址做字段级加密。
-	"auth.login": {
+	routealias.AuthLogin: {
 		RequestSign:    sensitiveIdentityFields,
 		RequestCipher:  []string{"password", "secureCode"},
 		ResponseSign:   []string{"token"},
 		ResponseCipher: []string{"token", "user.phone", "user.buildMFAURL"},
 	},
 	// auth.refresh 表示刷新令牌接口：响应只保护新 token 与刷新标记。
-	"auth.refresh": {
+	routealias.AuthRefresh: {
 		ResponseSign:   []string{"token", "isRefresh"},
 		ResponseCipher: []string{"token"},
 	},
 	// auth.profile 表示登录后初始化接口：token 走响应字段级加密。
-	"auth.profile": {
+	routealias.AuthProfile: {
 		ResponseSign:   []string{"token"},
 		ResponseCipher: []string{"token"},
 	},
 	// auth.verify_account 表示登录预校验接口：保护 token、手机号和二维码。
-	"auth.verify_account": {
+	routealias.AuthVerifyAccount: {
 		RequestSign:    sensitiveIdentityFields,
 		RequestCipher:  []string{"password", "secureCode"},
 		ResponseSign:   []string{"token"},
 		ResponseCipher: []string{"token", "user.phone", "user.buildMFAURL"},
 	},
 	// profile.mine 表示个人中心资料接口：手机号与 MFA 绑定地址属于敏感响应字段，需要字段级加密保护。
-	"profile.mine": {
+	routealias.ProfileMine: {
 		ResponseCipher: []string{"phone", "buildMFAURL"},
 	},
 	// profile.check_secure 表示通用安全码校验接口：仅校验安全码字段签名。
-	"profile.check_secure": {
+	routealias.ProfileCheckSecure: {
 		RequestSign:   []string{"secure"},
 		RequestCipher: []string{"secure"},
 	},
 	// profile.check_mfa 表示 MFA 动态码校验接口：校验动态码、场景和值班绑定秘钥。
-	"profile.check_mfa": {
+	routealias.ProfileCheckMFA: {
 		RequestSign:   []string{"secure", "scenarios", "mfaSecureKey"},
 		RequestCipher: []string{"secure", "mfaSecureKey"},
 	},
 	// admin.add 表示新增管理员接口：资料与初始安全字段统一参与签名。
-	"admin.add": {
+	routealias.AdminAdd: {
 		RequestSign:   sensitiveProfileFields,
 		RequestCipher: sensitiveProfileCipherFields,
 	},
 	// admin.update 表示编辑管理员接口：资料与安全字段统一参与签名。
-	"admin.update": {
+	routealias.AdminUpdate: {
 		RequestSign:   sensitiveProfileFields,
 		RequestCipher: sensitiveProfileCipherFields,
 	},
 	// admin.delete 表示删除管理员接口：仅校验二次确认票据，避免敏感删除请求绕过统一签名保护。
-	"admin.delete": {
+	routealias.AdminDelete: {
 		RequestSign: []string{"twoStepKey", "twoStepValue"},
 	},
 	// admin.status.update 表示修改管理员状态接口：只校验状态与二次确认票据。
-	"admin.status.update": {
+	routealias.AdminStatusUpdate: {
 		RequestSign: []string{"status", "twoStepKey", "twoStepValue"},
 	},
 	// admin.mfa_status.update 表示后台修改管理员 MFA 状态接口：只校验状态切换与二次确认票据。
-	"admin.mfa_status.update": {
+	routealias.AdminMFAStatus: {
 		RequestSign: []string{"mfaStatus", "twoStepKey", "twoStepValue"},
 	},
 	// admin.password.reset 表示管理员重置密码接口：密码相关字段必须参与签名。
-	"admin.password.reset": {
+	routealias.AdminPasswordReset: {
 		RequestSign:   []string{"password", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"password", "twoStepKey", "twoStepValue"},
 	},
 	// admin.reset.initial_state 表示管理员重置初始状态接口：密码类字段与二次确认票据统一保护。
-	"admin.reset.initial_state": {
+	routealias.AdminResetInitialState: {
 		RequestSign:   []string{"password", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"password", "twoStepKey", "twoStepValue"},
 	},
 	// admin.role.update 表示覆盖保存管理员角色接口：角色集合与二次确认票据统一参与签名。
-	"admin.role.update": {
+	routealias.AdminRoleUpdate: {
 		RequestSign: []string{"roleIDs", "twoStepKey", "twoStepValue"},
 	},
 	// profile.update_password 表示个人中心改密接口：旧密码、新密码与确认密码必须参与签名。
-	"profile.update_password": {
+	routealias.ProfileUpdatePassword: {
 		RequestSign:   []string{"passwordOld", "passwordNew", "confirmPassword", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"passwordOld", "passwordNew", "confirmPassword", "twoStepKey", "twoStepValue"},
 	},
 	// profile.update_mine 表示个人中心资料更新接口：个人资料与二次确认票据统一参与签名。
-	"profile.update_mine": {
+	routealias.ProfileUpdateMine: {
 		RequestSign:   []string{"realName", "email", "phone", "avatar", "description", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"email", "phone", "twoStepKey", "twoStepValue"},
 	},
 	// profile.update_mfa_status 表示个人中心启停 MFA 接口：状态、秘钥与二次确认票据统一参与签名。
-	"profile.update_mfa_status": {
+	routealias.ProfileUpdateMFAStatus: {
 		RequestSign:   []string{"mfaStatus", "mfaSecureKey", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"mfaSecureKey", "twoStepKey", "twoStepValue"},
 	},
 	// profile.update_mfa_secret 表示刷新个人 MFA 秘钥接口：只保护新秘钥和二次确认票据。
-	"profile.update_mfa_secret": {
+	routealias.ProfileUpdateMFASecret: {
 		RequestSign:   []string{"mfaSecureKey", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"mfaSecureKey", "twoStepKey", "twoStepValue"},
 	},
 	// profile.update_avatar 表示个人头像更新接口：仅校验头像字段签名。
-	"profile.update_avatar": {
+	routealias.ProfileUpdateAvatar: {
 		RequestSign: []string{"avatar"},
 	},
 	// secretKey.get 表示秘钥详情接口：仅对返回的真实秘钥材料字段做响应加密。
-	"secretKey.get": {
+	routealias.SecretKeyGet: {
 		ResponseCipher: sensitiveSecretKeyResponseFields,
 	},
 	// security.debug.sign 表示安全调试台签名接口：调试结果整体按字段回签并保护输出文本。
-	"security.debug.sign": {
+	routealias.SecurityDebugSign: {
 		RequestCipher:  []string{"payloadText"},
 		ResponseCipher: []string{"payloadText", "signText", "sign"},
 		ResponseSign:   securityDebugSignResponseFields,
 	},
 	// security.debug.verify 表示安全调试台验签接口：调试结果整体按字段回签并保护输出文本。
-	"security.debug.verify": {
+	routealias.SecurityDebugVerify: {
 		RequestCipher:  []string{"payloadText", "sign"},
 		ResponseCipher: []string{"payloadText", "signText", "sign"},
 		ResponseSign:   securityDebugVerifyResponseFields,
 	},
 	// security.debug.encrypt 表示安全调试台加密接口：保护输入和输出 JSON 文本，避免调试台泄漏敏感内容。
-	"security.debug.encrypt": {
+	routealias.SecurityDebugEncrypt: {
 		RequestCipher:  []string{"payloadText"},
 		ResponseCipher: []string{"payloadText", "resultPayloadText"},
 		ResponseSign:   securityDebugCipherResponseFields,
 	},
 	// security.debug.decrypt 表示安全调试台解密接口：保护输入和输出 JSON 文本，避免调试台泄漏敏感内容。
-	"security.debug.decrypt": {
+	routealias.SecurityDebugDecrypt: {
 		RequestCipher:  []string{"payloadText"},
 		ResponseCipher: []string{"payloadText", "resultPayloadText"},
 		ResponseSign:   securityDebugCipherResponseFields,
 	},
 	// secretKey.add 表示新增秘钥接口：秘钥材料写入前统一参与签名。
-	"secretKey.add": {
+	routealias.SecretKeyAdd: {
 		RequestSign:   sensitiveSecretKeyFields,
 		RequestCipher: sensitiveSecretKeyCipherFields,
 	},
 	// secretKey.edit 表示编辑秘钥接口：秘钥材料变更统一参与签名。
-	"secretKey.edit": {
+	routealias.SecretKeyUpdate: {
 		RequestSign:   sensitiveSecretKeyFields,
 		RequestCipher: sensitiveSecretKeyCipherFields,
 	},
 	// secretKey.editStatus 表示启停秘钥接口：只校验状态与二次确认票据。
-	"secretKey.editStatus": {
+	routealias.SecretKeyStatus: {
 		RequestSign: []string{"status", "twoStepKey", "twoStepValue"},
 	},
 	// secretKey.renew 表示刷新秘钥缓存接口：只校验二次确认票据。
-	"secretKey.renew": {
+	routealias.SecretKeyRenew: {
 		RequestSign: []string{"twoStepKey", "twoStepValue"},
 	},
 	// secretKey.validate 表示秘钥路径预检接口：返回结构化校验结果并对明细结果回签。
-	"secretKey.validate": {
+	routealias.SecretKeyValidate: {
 		RequestSign:   sensitiveSecretKeyFields,
 		RequestCipher: sensitiveSecretKeyCipherFields,
 		ResponseSign:  secretKeyCheckResponseFields,
 	},
 	// secretKey.self_check 表示秘钥运行态自检接口：校验版本和二次确认票据。
-	"secretKey.self_check": {
+	routealias.SecretKeySelfCheck: {
 		RequestSign:  []string{"keyVersion", "twoStepKey", "twoStepValue"},
 		ResponseSign: secretKeyCheckResponseFields,
 	},
 	// user_tag.workflow_lease.release 表示释放工作流互斥锁接口：保护参数和二次确认票据。
-	"user_tag.workflow_lease.release": {
+	routealias.UserTagWorkflowLeaseRelease: {
 		RequestSign: []string{"workflowId", "mode", "reason", "twoStepKey", "twoStepValue"},
 	},
 }
 
 // PolicyByRoute 根据路由别名读取统一安全策略。
 func PolicyByRoute(route string) RouteSecurityPolicy {
-	route = strings.TrimSpace(route)
-	if route == "" || strings.EqualFold(route, "ignore") {
+	alias := routealias.Alias(strings.TrimSpace(route))
+	if alias == "" || strings.EqualFold(string(alias), string(routealias.Ignore)) {
 		return RouteSecurityPolicy{}
 	}
-	if policy, ok := RouteSecurityPolicies[route]; ok {
+	if policy, ok := RouteSecurityPolicies[alias]; ok {
 		return policy
 	}
 	return RouteSecurityPolicy{}

@@ -17,14 +17,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// accessLogIgnorePathSet 定义无需输出访问日志的高频或低价值路由。
-var accessLogIgnorePathSet = map[string]struct{}{
-	"/api/live":                         {}, // 当前存活检查入口由探针高频访问，默认不打印访问日志，避免无效噪音淹没有效业务日志。
-	"/api/ready":                        {}, // 当前就绪检查入口由探针高频访问，默认不打印访问日志，异常时由 ready handler 单独打印错误链路。
-	"/api/metrics":                      {}, // 当前指标抓取入口默认跳过访问日志，保留指标能力但不污染业务日志。
-	"/api/admin-messages/notifications": {}, // 当前消息通知接口，默认不打印日志，避免无效噪音淹没有效业务日志。
-}
-
 // AccessLogMiddleware 在请求结束时统一输出访问日志并更新 span 状态。
 type AccessLogMiddleware struct{}
 
@@ -53,10 +45,9 @@ func (m *AccessLogMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 				requestctx.SetResponse(ctx, recorder.status, meta.BizCode, meta.BizMessage, meta.ErrorMessage)
 			}
 			success := meta.ErrorMessage == "" && recorder.status < http.StatusBadRequest
-			ignored := shouldIgnoreAccessLog(meta.Path)
 
 			// 访问日志统一复用请求元数据字段，保证日志、审计、trace 看到的链路信息一致。
-			if !ignored {
+			if !shouldSkipAccessLog(meta) {
 				fields := []logx.LogField{
 					logx.Field("http_status", recorder.status),
 					logx.Field("biz_code", meta.BizCode),
@@ -142,15 +133,17 @@ func appendAccessTextKV(parts []string, key string, value string) []string {
 	return append(parts, fmt.Sprintf("%s=%s", key, value))
 }
 
-// shouldIgnoreAccessLog 判断当前请求路径是否应跳过访问日志。
-// 这里维护低价值高频路径白名单，后续如需补充 `/metrics` 等路由可统一加在这里。
-func shouldIgnoreAccessLog(path string) bool {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return false
+// SkipAccessLog 标记当前 handler 不输出普通访问日志，适用于健康探针和高频轮询接口。
+func SkipAccessLog(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		requestctx.SetSkipAccessLog(r.Context(), true)
+		next(w, r)
 	}
-	_, ignored := accessLogIgnorePathSet[path]
-	return ignored
+}
+
+// shouldSkipAccessLog 判断当前请求是否按路由注册规则跳过普通访问日志。
+func shouldSkipAccessLog(meta *requestctx.Meta) bool {
+	return meta != nil && meta.SkipAccessLog
 }
 
 // statusRecorder 是对 http.ResponseWriter 的轻量包装，用于采集真实响应状态与字节数。

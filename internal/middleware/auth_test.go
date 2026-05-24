@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"admin/internal/requestctx"
+	"admin/internal/routealias"
 )
 
 // TestPublicHandleSetsRouteAliasBeforeDownstream 验证公开路由在进入下游处理前已经写入统一 route alias。
@@ -26,7 +27,7 @@ func TestPublicHandleSetsRouteAliasBeforeDownstream(t *testing.T) {
 			t.Fatalf("PublicHandle() path = %q, want %q", meta.Path, "/api/auth/login")
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}, RouteAlias("auth.login"))
+	}, routealias.AuthLogin)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
 	resp := httptest.NewRecorder()

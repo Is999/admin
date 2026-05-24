@@ -1,0 +1,4 @@
+interface:
+  display_name: "标准开发流程"
+  short_description: "团队共享的项目开发执行流程。"
+  default_prompt: "使用 $standard-development-flow 从意图确认、实现、验证到交付运行标准项目开发流程。"

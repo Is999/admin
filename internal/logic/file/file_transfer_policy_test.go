@@ -8,6 +8,24 @@ import (
 	"admin/pkg/storage"
 )
 
+// TestRuntimeRegistrySpecsValid 确保文件业务运行时注册入口规格完整且名称唯一。
+func TestRuntimeRegistrySpecsValid(t *testing.T) {
+	specs := RuntimeRegistrySpecs()
+	if len(specs) == 0 {
+		t.Fatal("RuntimeRegistrySpecs() 不能为空")
+	}
+	seen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		if spec.Name == "" || spec.File == "" || spec.Method == "" || spec.Description == "" {
+			t.Fatalf("运行时注册入口规格字段不完整: %+v", spec)
+		}
+		if _, ok := seen[spec.Name]; ok {
+			t.Fatalf("运行时注册入口名称重复: %s", spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
+	}
+}
+
 // TestRegisterFileUploadPolicy 确保文件上传策略支持通过注册表扩展。
 func TestRegisterFileUploadPolicy(t *testing.T) {
 	bizType := fmt.Sprintf("custom-upload-%d", time.Now().UnixNano())

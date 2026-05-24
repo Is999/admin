@@ -58,7 +58,7 @@ func collectorConfigWithAppID(c config.Config) config.CollectorConfig {
 
 // newTaskRuntimeComponent 创建任务队列与任务运行时启动组件。
 func newTaskRuntimeComponent() Component {
-	return NewComponentFunc("task_runtime", func(ctx context.Context, state *ComponentState) error {
+	return NewComponentFunc(componentNameTaskRuntime, func(ctx context.Context, state *ComponentState) error {
 		if state == nil || state.ServiceContext == nil {
 			return errors.Errorf("任务运行时组件缺少服务上下文")
 		}
@@ -91,9 +91,9 @@ func newTaskRuntimeComponent() Component {
 		state.ServiceContext.Task = manager
 		state.TaskManager = manager
 
-		// 任务插件统一走 bootstrap 注册清单收口，避免内置插件列表散落在不同启动文件。
+		// 任务插件统一走 bootstrap 注册规格收口，避免内置插件列表散落在不同启动文件。
 		plugins := resolveTaskPlugins(state.Options)
-		if err := validateNameListUnique(registrationKindTaskPlugin, pluginNames(plugins)); err != nil {
+		if err := validateRegistrationNamesUnique(registrationKindTaskPlugin, pluginNames(plugins)); err != nil {
 			return errors.Tag(err)
 		}
 		runtime, err := taskruntime.Register(state.ServiceContext, manager, plugins...)
@@ -223,7 +223,7 @@ func taskTypeOf(task *asynq.Task) string {
 
 // newHTTPServerComponent 创建 HTTP 服务与路由启动组件。
 func newHTTPServerComponent() Component {
-	return NewComponentFunc("http_server", func(ctx context.Context, state *ComponentState) error {
+	return NewComponentFunc(componentNameHTTPServer, func(ctx context.Context, state *ComponentState) error {
 		_ = ctx
 		if state == nil || state.ServiceContext == nil {
 			return errors.Errorf("HTTP 服务组件缺少服务上下文")
@@ -239,9 +239,9 @@ func newHTTPServerComponent() Component {
 		if err != nil {
 			return errors.Wrapf(err, "创建 HTTP 服务失败 host=%s port=%d", restConf.Host, restConf.Port)
 		}
-		// HTTP 路由模块从 bootstrap 统一清单解析，handler 只负责按给定模块完成注册。
+		// HTTP 路由模块从 bootstrap 统一规格解析，handler 只负责按给定模块完成注册。
 		routeModules := resolveRouteModules(state.Options)
-		if err := validateNameListUnique(registrationKindRoute, routeModuleNames(routeModules)); err != nil {
+		if err := validateRegistrationNamesUnique(registrationKindRoute, routeModuleNames(routeModules)); err != nil {
 			return errors.Tag(err)
 		}
 		handler.RegisterHandlersWithModules(server, state.ServiceContext, routeModules...)

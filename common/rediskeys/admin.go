@@ -6,17 +6,6 @@ import (
 	"strings"
 )
 
-const (
-	// adminInfoLogical 表示去掉 app_id 命名空间后的管理员登录态业务段模板。
-	adminInfoLogical = "admin:info:%d"
-	// adminInfoLogicalPattern 表示去掉 app_id 命名空间后的管理员登录态展示模板。
-	adminInfoLogicalPattern = "admin:info:{adminID}"
-	// adminLogoutTokenLogical 表示去掉 app_id 命名空间后的管理员登出标记业务段模板。
-	adminLogoutTokenLogical = "admin:logout_token:%d"
-	// adminMFATwoStepTicketLogical 表示去掉 app_id 命名空间后的 MFA 二次票据业务段模板。
-	adminMFATwoStepTicketLogical = "admin:mfa:two_step:%d:%s"
-)
-
 // AdminInfoRedisKey 返回管理员登录态缓存 Redis key。
 func AdminInfoRedisKey(adminID int) string {
 	return WithPrefix(fmt.Sprintf(AdminInfo, adminID))
@@ -49,27 +38,27 @@ func AdminMFATwoStepIndexRedisKey(adminID int) string {
 
 // AdminInfoLogicalKey 返回去掉 app_id 命名空间后的管理员登录态业务段。
 func AdminInfoLogicalKey(adminID int) string {
-	return fmt.Sprintf(adminInfoLogical, adminID)
+	return fmt.Sprintf(AdminInfo, adminID)
 }
 
 // AdminLogoutTokenLogicalKey 返回去掉 app_id 命名空间后的管理员登出标记业务段。
 func AdminLogoutTokenLogicalKey(adminID int) string {
-	return fmt.Sprintf(adminLogoutTokenLogical, adminID)
+	return fmt.Sprintf(AdminLogoutToken, adminID)
 }
 
 // AdminInfoLogicalPattern 返回去掉 app_id 命名空间后的管理员登录态展示模板。
 func AdminInfoLogicalPattern() string {
-	return adminInfoLogicalPattern
+	return AdminInfoPattern
 }
 
 // IsAdminInfoRedisKey 判断 key 是否为管理员登录态缓存，支持完整 Redis key 和业务段。
 func IsAdminInfoRedisKey(key string) bool {
-	return strings.HasPrefix(TrimPrefix(key), KeyTemplatePrefix(adminInfoLogical))
+	return strings.HasPrefix(TrimPrefix(key), KeyTemplatePrefix(AdminInfo))
 }
 
 // AdminInfoIDFromRedisKey 解析管理员登录态缓存 key 中的管理员 ID。
 func AdminInfoIDFromRedisKey(key string) (int, bool) {
-	prefix := KeyTemplatePrefix(adminInfoLogical)
+	prefix := KeyTemplatePrefix(AdminInfo)
 	adminIDText := strings.TrimPrefix(TrimPrefix(key), prefix)
 	if adminIDText == "" {
 		return 0, false
@@ -83,7 +72,7 @@ func AdminMFATwoStepTicketBelongsToAdmin(key string, adminID int) bool {
 	if adminID <= 0 {
 		return false
 	}
-	prefix := KeyTemplatePrefix(fmt.Sprintf(adminMFATwoStepTicketLogical, adminID, ""))
+	prefix := KeyTemplatePrefix(fmt.Sprintf(AdminMFATwoStepTicket, adminID, ""))
 	return strings.HasPrefix(TrimPrefix(key), prefix)
 }
 

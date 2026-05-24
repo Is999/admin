@@ -10,34 +10,6 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
-// 任务队列 Redis key 片段只在本包组合完整规则时使用。
-const (
-	// taskQueueRedisRoot 表示任务系统自管 key 的二级业务前缀。
-	taskQueueRedisRoot = "task"
-	// taskWorkflowSegment 表示工作流状态 key 的领域段。
-	taskWorkflowSegment = "workflow"
-	// taskRuntimeSegment 表示任务运行快照 key 的领域段。
-	taskRuntimeSegment = "runtime"
-	// taskAsynqRedisRoot 表示 Asynq 框架固定 Redis 根前缀。
-	taskAsynqRedisRoot = "asynq"
-	// taskAsynqStateRetry 表示 Asynq retry 状态 zset 段。
-	taskAsynqStateRetry = "retry"
-	// taskAsynqStateArchived 表示 Asynq archived 状态 zset 段。
-	taskAsynqStateArchived = "archived"
-	// taskAsynqStateCompleted 表示 Asynq completed 状态 zset 段。
-	taskAsynqStateCompleted = "completed"
-	// taskAsynqStateScheduled 表示 Asynq scheduled 状态 zset 段。
-	taskAsynqStateScheduled = "scheduled"
-	// taskAsynqTaskHashSegment 表示 Asynq 任务详情 hash 段。
-	taskAsynqTaskHashSegment = "t"
-	// taskAsynqUniqueSegment 表示 Asynq 唯一锁 key 段。
-	taskAsynqUniqueSegment = "unique"
-	// taskWorkflowNodeSegment 表示工作流节点状态 key 段。
-	taskWorkflowNodeSegment = "node"
-	// taskWorkflowUniqueSegment 表示工作流幂等占位 key 段。
-	taskWorkflowUniqueSegment = "unique"
-)
-
 // TaskQueueName 返回带当前 app_id 命名空间的任务队列或分组名。
 func TaskQueueName(name string) string {
 	name = strings.TrimSpace(name)
@@ -97,12 +69,12 @@ func TaskWorkflowPrefix() string {
 
 // TaskWorkflowMetaKey 返回工作流主记录 Redis key。
 func TaskWorkflowMetaKey(workflowID string) string {
-	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, "meta"))
+	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowMetaSegment))
 }
 
 // TaskWorkflowNodesKey 返回工作流节点集合 Redis key。
 func TaskWorkflowNodesKey(workflowID string) string {
-	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, "nodes"))
+	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowNodesSegment))
 }
 
 // TaskWorkflowNodeKey 返回单个工作流节点状态 Redis key。
@@ -112,27 +84,27 @@ func TaskWorkflowNodeKey(workflowID string, nodeName string) string {
 
 // TaskWorkflowNodeScheduledKey 返回节点调度去重 Redis key。
 func TaskWorkflowNodeScheduledKey(workflowID string, nodeName string) string {
-	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowNodeSegment, nodeName, "scheduled"))
+	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowNodeSegment, nodeName, taskWorkflowScheduledSegment))
 }
 
 // TaskWorkflowNodeFinalizedKey 返回节点终态收口 Redis key。
 func TaskWorkflowNodeFinalizedKey(workflowID string, nodeName string) string {
-	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowNodeSegment, nodeName, "finalized"))
+	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowNodeSegment, nodeName, taskWorkflowFinalizedSegment))
 }
 
 // TaskWorkflowNodeInstanceKey 返回单个分片实例终态巡检 Redis key。
 func TaskWorkflowNodeInstanceKey(workflowID string, nodeName string, shardIndex int) string {
-	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowNodeSegment, nodeName, "instance", strconv.Itoa(shardIndex)))
+	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowNodeSegment, nodeName, taskWorkflowInstanceSegment, strconv.Itoa(shardIndex)))
 }
 
 // TaskWorkflowCompletedKey 返回工作流完成标记 Redis key。
 func TaskWorkflowCompletedKey(workflowID string) string {
-	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, "completed"))
+	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowCompletedSegment))
 }
 
 // TaskWorkflowFailedKey 返回工作流失败标记 Redis key。
 func TaskWorkflowFailedKey(workflowID string) string {
-	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, "failed"))
+	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, workflowID, taskWorkflowFailedSegment))
 }
 
 // TaskWorkflowUniqueKey 返回工作流幂等占位 Redis key。
@@ -142,7 +114,7 @@ func TaskWorkflowUniqueKey(name string, key string) string {
 
 // TaskWorkflowUniqueLockKey 返回工作流幂等预占短锁 Redis key。
 func TaskWorkflowUniqueLockKey(name string, key string) string {
-	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, "unique-lock", name, key))
+	return TaskQueueRedisKey(joinKeyParts(taskWorkflowSegment, taskWorkflowUniqueLockSegment, name, key))
 }
 
 // TaskAsynqScheduledKey 返回 Asynq scheduled zset Redis key。

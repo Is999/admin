@@ -45,6 +45,28 @@ func TestBuiltinPluginsNoDefaultCacheTargets(t *testing.T) {
 	}
 }
 
+// TestBuiltinPluginSpecsValid 确保默认插件规格字段完整且名称唯一。
+func TestBuiltinPluginSpecsValid(t *testing.T) {
+	specs := BuiltinPluginSpecs()
+	if len(specs) == 0 {
+		t.Fatal("BuiltinPluginSpecs() 不能为空")
+	}
+
+	nameSeen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		if spec.Name == "" || spec.File == "" || spec.Method == "" || spec.Description == "" {
+			t.Fatalf("内置插件规格字段不完整: %+v", spec)
+		}
+		if _, ok := nameSeen[spec.Name]; ok {
+			t.Fatalf("内置插件名称重复: %s", spec.Name)
+		}
+		nameSeen[spec.Name] = struct{}{}
+		if spec.Build == nil {
+			t.Fatalf("内置插件构造函数为空: %+v", spec)
+		}
+	}
+}
+
 // TestComposePluginsPreservesOrder 确保插件组合函数按输入顺序拼接，避免基础插件和业务插件顺序漂移。
 func TestComposePluginsPreservesOrder(t *testing.T) {
 	plugins := ComposePlugins(

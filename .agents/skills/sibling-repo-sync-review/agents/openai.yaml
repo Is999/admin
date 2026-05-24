@@ -1,0 +1,4 @@
+interface:
+  display_name: "兄弟仓库同步复核"
+  short_description: "比较兄弟仓库并安全同步改动。"
+  default_prompt: "使用 $sibling-repo-sync-review 比较并同步这个跨仓库改动。"

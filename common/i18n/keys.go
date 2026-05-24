@@ -1,83 +1,85 @@
 package i18n
 
+import "admin/common/codes"
+
 const (
 	// MsgKeyUndefined 表示未知业务状态的通用文案 key。
-	MsgKeyUndefined = "common.undefined"
+	MsgKeyUndefined = codes.MsgKeyUndefined
 	// MsgKeySuccess 表示通用成功响应文案 key。
-	MsgKeySuccess = "common.success"
+	MsgKeySuccess = codes.MsgKeySuccess
 	// MsgKeyFail 表示通用失败响应文案 key。
-	MsgKeyFail = "common.fail"
+	MsgKeyFail = codes.MsgKeyFail
 	// MsgKeyCheckMFABind 表示账号需要先绑定并启用 MFA 的标准提示 key。
-	MsgKeyCheckMFABind = "common.check_mfa_bind"
+	MsgKeyCheckMFABind = codes.MsgKeyCheckMFABind
 	// MsgKeyCheckMFA 表示账号需要完成 MFA 动态验证码校验的标准提示 key。
-	MsgKeyCheckMFA = "common.check_mfa"
+	MsgKeyCheckMFA = codes.MsgKeyCheckMFA
 	// MsgKeyCheckPasswordReset 表示账号需要先修改登录密码的标准提示 key。
-	MsgKeyCheckPasswordReset = "common.check_password_reset"
+	MsgKeyCheckPasswordReset = codes.MsgKeyCheckPasswordReset
 	// MsgKeyContinue 表示 HTTP Continue 语义的文案 key。
-	MsgKeyContinue = "http.continue"
+	MsgKeyContinue = codes.MsgKeyContinue
 	// MsgKeyOK 表示 HTTP OK 语义的文案 key。
-	MsgKeyOK = "http.ok"
+	MsgKeyOK = codes.MsgKeyOK
 	// MsgKeyBadRequest 表示请求参数或格式错误的 HTTP 文案 key。
-	MsgKeyBadRequest = "http.bad_request"
+	MsgKeyBadRequest = codes.MsgKeyBadRequest
 	// MsgKeyUnauthorized 表示未授权访问的 HTTP 文案 key。
-	MsgKeyUnauthorized = "http.unauthorized"
+	MsgKeyUnauthorized = codes.MsgKeyUnauthorized
 	// MsgKeyForbidden 表示无权限访问的 HTTP 文案 key。
-	MsgKeyForbidden = "http.forbidden"
+	MsgKeyForbidden = codes.MsgKeyForbidden
 	// MsgKeyNotFound 表示资源未找到的 HTTP 文案 key。
-	MsgKeyNotFound = "http.not_found"
+	MsgKeyNotFound = codes.MsgKeyNotFound
 	// MsgKeyServerError 表示服务端异常的 HTTP 文案 key。
-	MsgKeyServerError = "http.server_error"
+	MsgKeyServerError = codes.MsgKeyServerError
 	// MsgKeyServiceBusy 表示服务繁忙或依赖不可用的 HTTP 文案 key。
-	MsgKeyServiceBusy = "http.service_busy"
+	MsgKeyServiceBusy = codes.MsgKeyServiceBusy
 	// MsgKeyTimeout 表示请求超时的 HTTP 文案 key。
-	MsgKeyTimeout = "http.timeout"
+	MsgKeyTimeout = codes.MsgKeyTimeout
 
 	// MsgKeyParamError 表示通用参数错误的业务文案 key。
-	MsgKeyParamError = "biz.param_error"
+	MsgKeyParamError = codes.MsgKeyParamError
 	// MsgKeyAuthFailed 表示认证或二次校验失败的业务文案 key。
-	MsgKeyAuthFailed = "biz.auth_failed"
+	MsgKeyAuthFailed = codes.MsgKeyAuthFailed
 	// MsgKeyRateLimit 表示触发限流保护的业务文案 key。
-	MsgKeyRateLimit = "biz.rate_limit"
+	MsgKeyRateLimit = codes.MsgKeyRateLimit
 	// MsgKeyInternalError 表示内部错误的业务文案 key。
-	MsgKeyInternalError = "biz.internal_error"
+	MsgKeyInternalError = codes.MsgKeyInternalError
 	// MsgKeyDBError 表示数据库错误的业务文案 key。
-	MsgKeyDBError = "biz.db_error"
+	MsgKeyDBError = codes.MsgKeyDBError
 
 	// MsgKeyCreateSuccess 表示创建成功的业务文案 key。
-	MsgKeyCreateSuccess = "biz.create_success"
+	MsgKeyCreateSuccess = codes.MsgKeyCreateSuccess
 	// MsgKeyCreateFail 表示创建失败的业务文案 key。
-	MsgKeyCreateFail = "biz.create_fail"
+	MsgKeyCreateFail = codes.MsgKeyCreateFail
 	// MsgKeyAddSuccess 表示新增成功的业务文案 key。
-	MsgKeyAddSuccess = "biz.add_success"
+	MsgKeyAddSuccess = codes.MsgKeyAddSuccess
 	// MsgKeyAddFail 表示新增失败的业务文案 key。
-	MsgKeyAddFail = "biz.add_fail"
+	MsgKeyAddFail = codes.MsgKeyAddFail
 	// MsgKeySaveSuccess 表示保存成功的业务文案 key。
-	MsgKeySaveSuccess = "biz.save_success"
+	MsgKeySaveSuccess = codes.MsgKeySaveSuccess
 	// MsgKeySaveFail 表示保存失败的业务文案 key。
-	MsgKeySaveFail = "biz.save_fail"
+	MsgKeySaveFail = codes.MsgKeySaveFail
 	// MsgKeyUpdateSuccess 表示更新成功的业务文案 key。
-	MsgKeyUpdateSuccess = "biz.update_success"
+	MsgKeyUpdateSuccess = codes.MsgKeyUpdateSuccess
 	// MsgKeyUpdateFail 表示更新失败的业务文案 key。
-	MsgKeyUpdateFail = "biz.update_fail"
+	MsgKeyUpdateFail = codes.MsgKeyUpdateFail
 	// MsgKeyDeleteSuccess 表示删除成功的业务文案 key。
-	MsgKeyDeleteSuccess = "biz.delete_success"
+	MsgKeyDeleteSuccess = codes.MsgKeyDeleteSuccess
 	// MsgKeyDeleteFail 表示删除失败的业务文案 key。
-	MsgKeyDeleteFail = "biz.delete_fail"
+	MsgKeyDeleteFail = codes.MsgKeyDeleteFail
 	// MsgKeyFetchSuccess 表示获取成功的业务文案 key。
-	MsgKeyFetchSuccess = "biz.fetch_success"
+	MsgKeyFetchSuccess = codes.MsgKeyFetchSuccess
 	// MsgKeyFetchFail 表示获取失败的业务文案 key。
-	MsgKeyFetchFail = "biz.fetch_fail"
+	MsgKeyFetchFail = codes.MsgKeyFetchFail
 
 	// MsgKeyUserNotFound 表示后台账号不存在的文案 key。
-	MsgKeyUserNotFound = "user.not_found"
+	MsgKeyUserNotFound = codes.MsgKeyUserNotFound
 	// MsgKeyInvalidPassword 表示后台账号密码错误的文案 key。
-	MsgKeyInvalidPassword = "user.invalid_password"
+	MsgKeyInvalidPassword = codes.MsgKeyInvalidPassword
 	// MsgKeyUserAlreadyExists 表示后台账号已存在的文案 key。
-	MsgKeyUserAlreadyExists = "user.already_exists"
+	MsgKeyUserAlreadyExists = codes.MsgKeyUserAlreadyExists
 	// MsgKeyUserDisabled 表示后台账号被禁用的文案 key。
-	MsgKeyUserDisabled = "user.disabled"
+	MsgKeyUserDisabled = codes.MsgKeyUserDisabled
 	// MsgKeyInvalidCaptcha 表示登录验证码错误或过期的文案 key。
-	MsgKeyInvalidCaptcha = "auth.invalid_captcha"
+	MsgKeyInvalidCaptcha = codes.MsgKeyInvalidCaptcha
 
 	// MsgKeyUnauthorizedText 表示需要登录或重新登录的认证文案 key。
 	MsgKeyUnauthorizedText = "auth.unauthorized_text"
@@ -92,9 +94,9 @@ const (
 	// MsgKeyMFARequired 表示 MFA 信息失效后需要重新验证的认证文案 key。
 	MsgKeyMFARequired = "auth.mfa_required"
 	// MsgKeyMFAExpired 表示 MFA 校验过期后需要重新验证的认证文案 key。
-	MsgKeyMFAExpired = "auth.mfa_expired"
+	MsgKeyMFAExpired = codes.MsgKeyMFAExpired
 	// MsgKeyMFACodeInvalid 表示 MFA 动态验证码错误的认证文案 key。
-	MsgKeyMFACodeInvalid = "auth.mfa_code_invalid"
+	MsgKeyMFACodeInvalid = codes.MsgKeyMFACodeInvalid
 	// MsgKeyMFAForceEnabledDisallowDisable 表示强制 MFA 策略下禁止停用的认证文案 key。
 	MsgKeyMFAForceEnabledDisallowDisable = "auth.mfa_force_enabled_disallow_disable"
 	// MsgKeyPasswordResetRequired 表示账号必须先修改密码的认证文案 key。
@@ -148,11 +150,11 @@ const (
 	// MsgKeyRolePermFetchFail 表示获取角色权限失败的文案 key。
 	MsgKeyRolePermFetchFail = "admin.role_perm_fetch_fail"
 	// MsgKeyRoleAlreadyExists 表示角色名称已存在的文案 key。
-	MsgKeyRoleAlreadyExists = "admin.role_already_exists"
+	MsgKeyRoleAlreadyExists = codes.MsgKeyRoleAlreadyExists
 	// MsgKeyRoleExistsFormat 表示角色名称已存在动态详情模板 key。
 	MsgKeyRoleExistsFormat = "fmt.role_exists"
 	// MsgKeyPermissionAlreadyExists 表示权限标识已存在的文案 key。
-	MsgKeyPermissionAlreadyExists = "admin.permission_already_exists"
+	MsgKeyPermissionAlreadyExists = codes.MsgKeyPermissionAlreadyExists
 	// MsgKeyPermissionExistsFormat 表示权限标识已存在动态详情模板 key。
 	MsgKeyPermissionExistsFormat = "fmt.permission_exists"
 	// MsgKeyPermCodeFetchFail 表示获取权限码失败的文案 key。
@@ -208,25 +210,25 @@ const (
 	// MsgKeyTaskDuplicate 表示任务重复触发的文案 key。
 	MsgKeyTaskDuplicate = "task.duplicate"
 	// MsgKeyDependencyUnavailable 表示核心依赖不可用的文案 key。
-	MsgKeyDependencyUnavailable = "dependency.unavailable"
+	MsgKeyDependencyUnavailable = codes.MsgKeyDependencyUnavailable
 	// MsgKeyMySQLUnavailable 表示 MySQL 不可用的文案 key。
-	MsgKeyMySQLUnavailable = "dependency.mysql_unavailable"
+	MsgKeyMySQLUnavailable = codes.MsgKeyMySQLUnavailable
 	// MsgKeyRedisUnavailable 表示 Redis 不可用的文案 key。
-	MsgKeyRedisUnavailable = "dependency.redis_unavailable"
+	MsgKeyRedisUnavailable = codes.MsgKeyRedisUnavailable
 	// MsgKeyClickHouseUnavailable 表示 ClickHouse 不可用的文案 key。
-	MsgKeyClickHouseUnavailable = "dependency.clickhouse_unavailable"
+	MsgKeyClickHouseUnavailable = codes.MsgKeyClickHouseUnavailable
 	// MsgKeyKafkaUnavailable 表示 Kafka 不可用的文案 key。
-	MsgKeyKafkaUnavailable = "dependency.kafka_unavailable"
+	MsgKeyKafkaUnavailable = codes.MsgKeyKafkaUnavailable
 	// MsgKeyTaskQueueUnavailable 表示任务队列不可用的文案 key。
-	MsgKeyTaskQueueUnavailable = "dependency.task_queue_unavailable"
+	MsgKeyTaskQueueUnavailable = codes.MsgKeyTaskQueueUnavailable
 	// MsgKeyCollectorUnavailable 表示 Collector 不可用的文案 key。
-	MsgKeyCollectorUnavailable = "dependency.collector_unavailable"
+	MsgKeyCollectorUnavailable = codes.MsgKeyCollectorUnavailable
 	// MsgKeyUserTagLeaseReleaseSuccess 表示用户标签工作流互斥租约释放成功的文案 key。
 	MsgKeyUserTagLeaseReleaseSuccess = "user_tag.lease_release_success"
 	// MsgKeyUserTagLeaseReleaseFail 表示用户标签工作流互斥租约释放失败的文案 key。
-	MsgKeyUserTagLeaseReleaseFail = "user_tag.lease_release_fail"
+	MsgKeyUserTagLeaseReleaseFail = codes.MsgKeyUserTagLeaseReleaseFail
 	// MsgKeyUserTagLeaseNotFound 表示用户标签工作流互斥租约不存在的文案 key。
-	MsgKeyUserTagLeaseNotFound = "user_tag.lease_not_found"
+	MsgKeyUserTagLeaseNotFound = codes.MsgKeyUserTagLeaseNotFound
 	// MsgKeyUserTagLeaseOwnerMismatch 表示用户标签工作流互斥租约 owner 不匹配的文案 key。
-	MsgKeyUserTagLeaseOwnerMismatch = "user_tag.lease_owner_mismatch"
+	MsgKeyUserTagLeaseOwnerMismatch = codes.MsgKeyUserTagLeaseOwnerMismatch
 )

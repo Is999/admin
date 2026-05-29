@@ -804,38 +804,6 @@ func (l *AdminRoleLogic) EnsureRolesWithinManageScope(roleIDs []int) error {
 	return l.ensureRolesWithinManageScope(roleIDs)
 }
 
-// ensureRolePermissionsInScope 校验当前登录管理员给目标角色分配的权限是否超出允许范围。
-func (l *AdminRoleLogic) ensureRolePermissionsInScope(roleID int, permissionIDs []int) error {
-	permissionIDs = types.UniquePositiveInts(permissionIDs)
-	if err := l.ensureRolesWithinManageScope([]int{roleID}); err != nil {
-		return errors.Tag(err)
-	}
-	if roleID == corelogic.AdminSuperRoleID {
-		return errors.Errorf("超级管理员角色权限不允许在此处修改")
-	}
-	if len(permissionIDs) == 0 {
-		return nil
-	}
-	allowedPermissionIDs, err := l.allowedPermissionIDsForRole(roleID)
-	if err != nil {
-		return errors.Tag(err)
-	}
-	allowedSet := make(map[int]struct{}, len(allowedPermissionIDs))
-	for _, permissionID := range allowedPermissionIDs {
-		allowedSet[permissionID] = struct{}{}
-	}
-	var invalidPermissionIDs []int
-	for _, permissionID := range permissionIDs {
-		if _, ok := allowedSet[permissionID]; !ok {
-			invalidPermissionIDs = append(invalidPermissionIDs, permissionID)
-		}
-	}
-	if len(invalidPermissionIDs) > 0 {
-		return errors.Errorf("存在超出当前角色可分配范围的权限: %v", invalidPermissionIDs)
-	}
-	return nil
-}
-
 // retainRolePermissionsInScope 过滤当前角色权限配置请求中的越权权限，仅保留允许继续写入的部分。
 func (l *AdminRoleLogic) retainRolePermissionsInScope(roleID int, permissionIDs []int) ([]int, error) {
 	permissionIDs = types.UniquePositiveInts(permissionIDs)
@@ -935,33 +903,6 @@ func (l *AdminRoleLogic) ensureRoleParentWithinManageScope(parentRoleID int) err
 		return nil
 	}
 	return l.ensureRolesWithinManageScope([]int{parentRoleID})
-}
-
-// ensureRolePermissionsWithinParentScope 校验提交的权限是否都在父级角色允许的分配范围内。
-func (l *AdminRoleLogic) ensureRolePermissionsWithinParentScope(parentRoleID int, permissionIDs []int) error {
-	permissionIDs = types.UniquePositiveInts(permissionIDs)
-	if len(permissionIDs) == 0 {
-		return nil
-	}
-	allowedPermissionIDs, err := l.allowedPermissionIDsForParentRole(parentRoleID)
-	if err != nil {
-		return errors.Tag(err)
-	}
-	allowedSet := make(map[int]struct{}, len(allowedPermissionIDs))
-	for _, permissionID := range allowedPermissionIDs {
-		allowedSet[permissionID] = struct{}{}
-	}
-	var invalidPermissionIDs []int
-	for _, permissionID := range permissionIDs {
-		if _, ok := allowedSet[permissionID]; ok {
-			continue
-		}
-		invalidPermissionIDs = append(invalidPermissionIDs, permissionID)
-	}
-	if len(invalidPermissionIDs) > 0 {
-		return errors.Errorf("存在超出父级角色可分配范围的权限: %v", invalidPermissionIDs)
-	}
-	return nil
 }
 
 // retainAssignablePermissionIDs 保留仍在允许范围内的权限 ID。
@@ -1120,18 +1061,6 @@ func (l *AdminRoleLogic) rolePermissionIDsTx(tx *gorm.DB, roleID int) ([]int, er
 		return nil, errors.Wrapf(err, "AdminRoleLogic.rolePermissionIDsTx 查询角色ID[%d]权限失败", roleID)
 	}
 	return types.UniquePositiveInts(permissionIDs), nil
-}
-
-// childRoleIDsTx 在事务内读取指定角色的全部直接子角色 ID。
-func (l *AdminRoleLogic) childRoleIDsTx(tx *gorm.DB, parentRoleID int) ([]int, error) {
-	var roleIDs []int
-	if err := tx.Model(&model.AdminRole{}).
-		Where("pid = ? AND is_delete = 0", parentRoleID).
-		Order("id ASC").
-		Pluck("id", &roleIDs).Error; err != nil {
-		return nil, errors.Wrapf(err, "AdminRoleLogic.childRoleIDsTx 查询父角色ID[%d]子角色失败", parentRoleID)
-	}
-	return types.UniquePositiveInts(roleIDs), nil
 }
 
 // allowedPermissionIDsForParentRoleTx 按角色继承关系计算父角色允许子角色保留的权限范围。
@@ -1471,29 +1400,6 @@ func (l *AdminRoleLogic) roleStatusMap(roleIDs []int) (map[int]int, error) {
 	return result, nil
 }
 
-// rebuildRoleStatusCache 重建全部未删除角色的状态缓存，统一给业务 miss 重建和缓存管理页复用语义。
-func (l *AdminRoleLogic) rebuildRoleStatusCache() error {
-	if l.Redis() == nil {
-		return nil
-	}
-	cacheKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RoleStatus)
-	var roles []model.AdminRole
-	if err := l.Svc.ReadDB(svc.DatabaseMain).Where("is_delete = 0").Find(&roles).Error; err != nil {
-		return errors.Tag(err)
-	}
-	cache := make(map[string]any, len(roles))
-	for _, role := range roles {
-		cache[strconv.Itoa(role.ID)] = role.Status
-	}
-	pipe := l.Redis().Pipeline()
-	pipe.Del(l.Ctx, cacheKey)
-	if len(cache) > 0 {
-		pipe.HSet(l.Ctx, cacheKey, cache)
-	}
-	_, err := pipe.Exec(l.Ctx)
-	return errors.Tag(err)
-}
-
 // rolePermissionIDsWithCache 优先读取单角色权限集合缓存，未命中时自动回源并重建。
 func (l *AdminRoleLogic) rolePermissionIDsWithCache(roleID int) ([]int, error) {
 	if roleID <= 0 {
@@ -1565,30 +1471,6 @@ func (l *AdminRoleLogic) ensureRoleExistsTx(tx *gorm.DB, roleID int) error {
 	}
 	if count == 0 {
 		return gorm.ErrRecordNotFound
-	}
-	return nil
-}
-
-// ensureRoleNoChildrenTx 确认角色没有未删除子角色。
-func (l *AdminRoleLogic) ensureRoleNoChildrenTx(tx *gorm.DB, roleID int) error {
-	var count int64
-	if err := tx.Model(&model.AdminRole{}).Where("pid = ? AND is_delete = 0", roleID).Count(&count).Error; err != nil {
-		return errors.Wrapf(err, "AdminRoleLogic.ensureRoleNoChildrenTx 检查角色ID[%d]子角色失败", roleID)
-	}
-	if count > 0 {
-		return errors.Errorf("AdminRoleLogic.ensureRoleNoChildrenTx 角色ID[%d]存在子角色，不能删除", roleID)
-	}
-	return nil
-}
-
-// ensureRoleNoUsersTx 确认角色没有绑定管理员。
-func (l *AdminRoleLogic) ensureRoleNoUsersTx(tx *gorm.DB, roleID int) error {
-	var count int64
-	if err := tx.Model(&model.AdminRoleRel{}).Where("role_id = ?", roleID).Count(&count).Error; err != nil {
-		return errors.Wrapf(err, "AdminRoleLogic.ensureRoleNoUsersTx 检查角色ID[%d]绑定管理员失败", roleID)
-	}
-	if count > 0 {
-		return errors.Errorf("AdminRoleLogic.ensureRoleNoUsersTx 角色ID[%d]已绑定管理员，不能删除", roleID)
 	}
 	return nil
 }

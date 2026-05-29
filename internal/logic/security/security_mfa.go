@@ -79,6 +79,12 @@ const (
 	MFAScenarioUserTagLeaseRelease = 10
 	// MFAScenarioSecretKeyManage 表示秘钥管理敏感操作场景。
 	MFAScenarioSecretKeyManage = 11
+	// MFAScenarioRuntimeConfigManage 表示运行配置发布、回滚和导入场景。
+	MFAScenarioRuntimeConfigManage = 12
+	// MFAScenarioAPIUserManage 表示前台用户管理敏感操作场景。
+	MFAScenarioAPIUserManage = 13
+	// MFAScenarioAPIRuntimeManage 表示 API 运行态热加载管理场景。
+	MFAScenarioAPIRuntimeManage = 14
 )
 
 // mfaBindingVerifyResult 表示绑定流程里实际校验通过的秘钥来源与摘要。
@@ -595,7 +601,7 @@ func mfaTwoStepScenarioMatches(expectScenario int, ticketScenario int, strictSce
 // isReusableMFATwoStepScenario 判断指定场景是否允许在频率窗口内复用最近一次 MFA 二次票据。
 func isReusableMFATwoStepScenario(scenario int) bool {
 	switch scenario {
-	case MFAScenarioLogin, MFAScenarioStatus, MFAScenarioSecret, MFAScenarioSecretKeyManage:
+	case MFAScenarioLogin, MFAScenarioStatus, MFAScenarioSecret, MFAScenarioSecretKeyManage, MFAScenarioRuntimeConfigManage:
 		return false
 	default:
 		return scenario > MFAScenarioLogin

@@ -19,7 +19,6 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // AdminManageLogic 承载管理员管理页面的查询、编辑、状态和角色分配逻辑。
@@ -432,74 +431,6 @@ func (l *AdminManageLogic) ReplaceRoles(req *types.AdminRoleAssignReq) *types.Bi
 	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
-}
-
-// AddRole 为管理员追加角色关系。
-func (l *AdminManageLogic) AddRole(req *types.AdminRoleAssignReq) *types.BizResult {
-	if err := l.requireOperateMFATwoStep(securitylogic.MFAScenarioEditUser, req.TwoStepKey, req.TwoStepValue); err != nil {
-		return l.mfaBizResult(err)
-	}
-	roleIDs, err := l.pruneInheritedAssignedRoleIDs(types.UniquePositiveInts(req.RoleIDs))
-	if err != nil {
-		return types.DBError(i18n.MsgKeyDBError, err,
-			"AdminManageLogic.AddRole 归一化管理员ID[%d]角色失败", req.ID).ToBizResult()
-	}
-	if err := l.ensureAdminRoleManageScope(req.ID, roleIDs); err != nil {
-		if errors.Is(err, rbaclogic.ErrRoleManageScopeExceeded) {
-			return types.Forbidden(i18n.MsgKeyForbidden).ToBizResult()
-		}
-		return types.DBError(i18n.MsgKeyDBError, err,
-			"AdminManageLogic.AddRole 校验管理员ID[%d]角色范围失败", req.ID).ToBizResult()
-	}
-	if err := l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
-		if err := l.ensureAdminExistsTx(tx, req.ID); err != nil {
-			return errors.Wrapf(err, "AdminManageLogic.AddRole 校验管理员ID[%d]存在失败", req.ID)
-		}
-		if err := l.ensureRolesUsableTx(tx, roleIDs); err != nil {
-			return errors.Wrapf(err, "AdminManageLogic.AddRole 校验管理员ID[%d]角色可用性失败", req.ID)
-		}
-		rows := make([]model.AdminRoleRel, 0, len(roleIDs))
-		now := time.Now()
-		for _, roleID := range roleIDs {
-			rows = append(rows, model.AdminRoleRel{UserID: req.ID, RoleID: roleID, CreatedAt: now})
-		}
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error; err != nil {
-			return errors.Tag(err)
-		}
-		return nil
-	}); err != nil {
-		return types.DBError(i18n.MsgKeyDBError, err,
-			"AdminManageLogic.AddRole 追加管理员ID[%d]角色失败", req.ID).ToBizResult()
-	}
-
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
-	return types.NewBizResult(codes.AddSuccess).
-		SetI18nMessage(i18n.MsgKeyAddSuccess)
-}
-
-// DeleteRole 解除管理员与指定角色的关系。
-func (l *AdminManageLogic) DeleteRole(req *types.AdminRoleDeleteReq) *types.BizResult {
-	roleID := req.RoleID
-	if err := l.ensureAdminRoleManageScope(req.ID, []int{roleID}); err != nil {
-		if errors.Is(err, rbaclogic.ErrRoleManageScopeExceeded) {
-			return types.Forbidden(i18n.MsgKeyForbidden).ToBizResult()
-		}
-		return types.DBError(i18n.MsgKeyDBError, err,
-			"AdminManageLogic.DeleteRole 校验管理员ID[%d]角色范围失败", req.ID).ToBizResult()
-	}
-	result := l.Svc.WriteDB(svc.DatabaseMain).Where("user_id = ? AND role_id = ?", req.ID, roleID).Delete(&model.AdminRoleRel{})
-	if result.Error != nil {
-		return types.DBError(i18n.MsgKeyDBError, result.Error,
-			"AdminManageLogic.DeleteRole 解除管理员ID[%d]角色ID[%d]失败", req.ID, roleID).ToBizResult()
-	}
-	if result.RowsAffected == 0 {
-		return types.NotFound(i18n.MsgKeyNotFound, gorm.ErrRecordNotFound,
-			"AdminManageLogic.DeleteRole 管理员ID[%d]角色ID[%d]关系不存在", req.ID, roleID).ToBizResult()
-	}
-
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
-	return types.NewBizResult(codes.DeleteSuccess).
-		SetI18nMessage(i18n.MsgKeyDeleteSuccess)
 }
 
 // pruneInheritedAssignedRoleIDs 过滤已被父角色覆盖的子角色，保证后台绑定关系始终收敛到最小角色集合。

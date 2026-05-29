@@ -262,6 +262,22 @@ type ConfigFilesConfig struct {
 	Runtime string `json:"runtime,optional"` // 运行期配置文件
 }
 
+// RuntimeConfigSourceConfig 定义运行期大列表配置来源。
+// 仅 task_periodic 和 archive_jobs 支持 DB 发布快照，基础设施配置仍来自启动 YAML。
+type RuntimeConfigSourceConfig struct {
+	Source              string `json:"source,optional"`                // 来源：file 或 database，默认 file
+	Env                 string `json:"env,optional"`                   // 运行配置环境，默认取 mode，仍为空时使用 default
+	PollIntervalSeconds int    `json:"poll_interval_seconds,optional"` // DB 模式版本轮询间隔秒数，默认 30
+}
+
+// APIServiceConfig 定义 admin 访问前台 API 数据库和内网运维接口的配置。
+type APIServiceConfig struct {
+	UserDatabase    string `json:"user_database,optional"`     // 前台用户表所在命名库，默认 api，对应 site_mysql.api
+	InternalBaseURL string `json:"internal_base_url,optional"` // API 内网地址，仅 admin 后端调用
+	OpsToken        string `json:"ops_token,optional"`         // API 内网运维令牌，只在后端请求头使用
+	TimeoutSeconds  int    `json:"timeout_seconds,optional"`   // API 内网调用超时秒数，默认 5
+}
+
 // FileStorageLocalConfig 定义本地文件存储根目录和访问域名。
 type FileStorageLocalConfig struct {
 	RootDir string `json:"root_dir,optional"` // 本地存储根目录；为空时回退到系统临时目录
@@ -337,25 +353,27 @@ type AlertConfig struct {
 
 // Config 是服务总配置，除 go-zero RestConf 外，补充数据库、Redis、JWT 与可观测性参数。
 type Config struct {
-	rest.RestConf                       // go-zero HTTP 基础配置
-	RunMode         int                 `json:"run_mode,optional"`                     // 进程启动模式位掩码；未显式传 `-mode` 时作为兜底值
-	AppID           string              `json:"app_id,optional"`                       // 站点/应用 ID（如 1）
-	AppKey          string              `json:"app_key,optional"`                      // 全局应用密钥，用于 MFA 秘钥等敏感数据的库内加解密
-	JwtSecret       string              `json:"jwt_secret"`                            // JWT 签名密钥
-	JwtExpiresIn    int64               `json:"jwt_expires_in,optional,default=86400"` // JWT 过期时间，单位秒，默认 24 小时
-	IsWhitePlatform bool                `json:"is_white_platform,optional"`            // 是否白名单平台（用于兼容站点差异化逻辑）
-	HotReload       HotReloadConfig     `json:"hot_reload,optional"`                   // config.yaml 热加载配置
-	ConfigFiles     ConfigFilesConfig   `json:"config_files,optional"`                 // 外部配置文件入口
-	FileStorage     FileStorageConfig   `json:"file_storage,optional"`                 // 统一文件存储配置，支持本地与 S3
-	Security        SecurityConfig      `json:"security,optional"`                     // 后台接口签名验签和加解密配置
-	Observability   ObservabilityConfig `json:"observability,optional"`                // 日志、审计、追踪等可观测性配置
-	Alert           AlertConfig         `json:"alert,optional"`                        // 外部告警通道配置
-	Collector       CollectorConfig     `json:"collector,optional"`                    // 通用收集器配置
-	MySQL           MySQLConfig         `json:"mysql,optional"`                        // 默认主库 MySQL 配置
-	SiteMySQL       SiteMySQLConfig     `json:"site_mysql,optional"`                   // 可选命名扩展库配置
-	Redis           RedisConfig         `json:"redis"`                                 // Redis 连接与连接池配置
-	Kafka           KafkaConfig         `json:"kafka,optional"`                        // Kafka 标签变更同步配置
-	Task            TaskQueueConfig     `json:"task,optional"`                         // 异步任务系统配置
-	Archive         ArchiveConfig       `json:"archive,optional"`                      // 通用归档配置
-	Workflows       WorkflowsConfig     `json:"workflows,optional"`                    // 工作流类配置聚合入口
+	rest.RestConf                             // go-zero HTTP 基础配置
+	RunMode         int                       `json:"run_mode,optional"`                     // 进程启动模式位掩码；未显式传 `-mode` 时作为兜底值
+	AppID           string                    `json:"app_id,optional"`                       // 站点/应用 ID（如 1）
+	AppKey          string                    `json:"app_key,optional"`                      // 全局应用密钥，用于 MFA 秘钥等敏感数据的库内加解密
+	JwtSecret       string                    `json:"jwt_secret"`                            // JWT 签名密钥
+	JwtExpiresIn    int64                     `json:"jwt_expires_in,optional,default=86400"` // JWT 过期时间，单位秒，默认 24 小时
+	IsWhitePlatform bool                      `json:"is_white_platform,optional"`            // 是否白名单平台（用于兼容站点差异化逻辑）
+	HotReload       HotReloadConfig           `json:"hot_reload,optional"`                   // config.yaml 热加载配置
+	ConfigFiles     ConfigFilesConfig         `json:"config_files,optional"`                 // 外部配置文件入口
+	RuntimeConfig   RuntimeConfigSourceConfig `json:"runtime_config,optional"`               // 运行期大列表配置来源
+	APIService      APIServiceConfig          `json:"api_service,optional"`                  // 前台 API 数据库与内网运维接口配置
+	FileStorage     FileStorageConfig         `json:"file_storage,optional"`                 // 统一文件存储配置，支持本地与 S3
+	Security        SecurityConfig            `json:"security,optional"`                     // 后台接口签名验签和加解密配置
+	Observability   ObservabilityConfig       `json:"observability,optional"`                // 日志、审计、追踪等可观测性配置
+	Alert           AlertConfig               `json:"alert,optional"`                        // 外部告警通道配置
+	Collector       CollectorConfig           `json:"collector,optional"`                    // 通用收集器配置
+	MySQL           MySQLConfig               `json:"mysql,optional"`                        // 默认主库 MySQL 配置
+	SiteMySQL       SiteMySQLConfig           `json:"site_mysql,optional"`                   // 可选命名扩展库配置
+	Redis           RedisConfig               `json:"redis"`                                 // Redis 连接与连接池配置
+	Kafka           KafkaConfig               `json:"kafka,optional"`                        // Kafka 标签变更同步配置
+	Task            TaskQueueConfig           `json:"task,optional"`                         // 异步任务系统配置
+	Archive         ArchiveConfig             `json:"archive,optional"`                      // 通用归档配置
+	Workflows       WorkflowsConfig           `json:"workflows,optional"`                    // 工作流类配置聚合入口
 }

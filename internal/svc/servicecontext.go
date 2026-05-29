@@ -49,6 +49,16 @@ type ServiceContext struct {
 // ConfigReloadExecutor 约束配置重载执行能力，避免 logic 层直接依赖 bootstrap 实现。
 type ConfigReloadExecutor interface {
 	ReloadConfig(ctx context.Context, source string) error
+	ReloadRuntimeConfig(ctx context.Context, source string) (RuntimeConfigReloadResult, error)
+}
+
+// RuntimeConfigReloadResult 描述一次 DB 运行配置快照重载结果。
+type RuntimeConfigReloadResult struct {
+	ReleaseID       uint64 // 生效发布 ID
+	VersionNo       uint64 // 生效版本号
+	Checksum        string // 生效快照 SHA256
+	RestartRequired bool   // 是否仍需重启进程才能完全生效
+	RestartReason   string // 需要重启的原因
 }
 
 // HotReloadStatus 描述 config.yaml 热加载的当前运行状态。

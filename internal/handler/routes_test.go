@@ -72,6 +72,9 @@ func TestBuiltinRouteModuleSpecsValid(t *testing.T) {
 		if strings.TrimSpace(spec.File) == "" || strings.TrimSpace(spec.Method) == "" || strings.TrimSpace(spec.Description) == "" {
 			t.Fatalf("内置路由模块规格说明不完整: %+v", spec)
 		}
+		if !strings.HasPrefix(spec.File, "internal/handler/") || !strings.HasSuffix(spec.File, "/routes.go") || strings.Contains(spec.File, " + ") {
+			t.Fatalf("内置路由模块规格文件说明不合法: %+v", spec)
+		}
 		if spec.Routes == nil {
 			t.Fatalf("内置路由模块规格缺少路由规格函数: %s", spec.Name)
 		}
@@ -202,18 +205,10 @@ func TestActionLogRegistryAliasesAreContracted(t *testing.T) {
 			continue
 		}
 		alias := string(meta.Alias)
-		if _, ok := contractlessActionLogAliases[alias]; ok {
-			continue
-		}
 		if _, ok := aliases[alias]; !ok {
 			t.Fatalf("审计方法 %s 的路由别名未进入契约清单: %s", name, alias)
 		}
 	}
-}
-
-var contractlessActionLogAliases = map[string]struct{}{
-	"admin.role.add":    {},
-	"admin.role.delete": {},
 }
 
 // routeIndex 返回路由在 go-zero 注册顺序中的下标，用于保护固定路由优先于参数路由。

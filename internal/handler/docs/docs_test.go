@@ -57,3 +57,27 @@ func TestDocsSessionHandlerSetsCookie(t *testing.T) {
 		t.Fatalf("unexpected docs cookie: %+v", cookies[0])
 	}
 }
+
+// TestAPIDocsProxyPath 校验后台文档站 API 前缀会转换为 API 内网文档路径。
+func TestAPIDocsProxyPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		wantPath string
+		wantOK   bool
+	}{
+		{name: "代理根路径", path: "/api/docs/api", wantPath: apiDocsProxyDefaultPath, wantOK: true},
+		{name: "接口规范", path: "/api/docs/api/接口文档/接口文档统一规范.md", wantPath: "/接口文档/接口文档统一规范.md", wantOK: true},
+		{name: "编码路径", path: "/api/docs/api/%E6%8E%A5%E5%8F%A3%E6%96%87%E6%A1%A3/%E5%89%8D%E5%8F%B0%E7%B3%BB%E7%BB%9F/%E8%AE%A4%E8%AF%81%E6%8E%A5%E5%8F%A3.md", wantPath: "/接口文档/前台系统/认证接口.md", wantOK: true},
+		{name: "非代理路径", path: "/api/docs/接口文档/后台系统/权限管理接口.md", wantOK: false},
+		{name: "路径穿越", path: "/api/docs/api/../角色文档/后端开发/AI开发规范.md", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPath, gotOK := apiDocsProxyPath(tt.path)
+			if gotOK != tt.wantOK || gotPath != tt.wantPath {
+				t.Fatalf("apiDocsProxyPath() = (%q, %v), want (%q, %v)", gotPath, gotOK, tt.wantPath, tt.wantOK)
+			}
+		})
+	}
+}

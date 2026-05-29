@@ -609,7 +609,6 @@ var permissionAllowlist = map[routealias.Alias]bool{
 	routealias.AuthProfile:            true, // 获取当前登录资料不要求后台权限码。
 	routealias.RoleTreeOptions:        true, // 查询角色树下拉不要求后台权限码。
 	routealias.ProfileMine:            true, // 获取当前管理员资料不要求后台权限码。
-	routealias.ProfilePermissions:     true, // 获取当前管理员角色权限不要求后台权限码。
 	routealias.ProfileCheckSecure:     true, // 校验当前管理员密码不要求后台权限码。
 	routealias.ProfileCheckMFA:        true, // 校验当前管理员MFA动态码不要求后台权限码。
 	routealias.ProfileUpdatePassword:  true, // 个人中心修改密码不要求后台权限码。
@@ -641,7 +640,6 @@ var passwordResetAllowlist = map[routealias.Alias]bool{
 	routealias.AuthCodes:                 true, // 获取当前用户权限码在强制改密阶段允许访问。
 	routealias.AuthProfile:               true, // 获取当前登录资料在强制改密阶段允许访问。
 	routealias.ProfileMine:               true, // 获取当前管理员资料在强制改密阶段允许访问。
-	routealias.ProfilePermissions:        true, // 获取当前管理员角色权限在强制改密阶段允许访问。
 	routealias.ProfileCheckSecure:        true, // 校验当前管理员密码在强制改密阶段允许访问。
 	routealias.ProfileCheckMFA:           true, // 校验当前管理员MFA动态码在强制改密阶段允许访问。
 	routealias.ProfileUpdatePassword:     true, // 个人中心修改密码在强制改密阶段允许访问。

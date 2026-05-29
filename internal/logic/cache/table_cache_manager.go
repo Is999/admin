@@ -178,7 +178,7 @@ func tableCacheCategory(index string, key string) string {
 		return "session"
 	case strings.HasPrefix(key, "secret_key_"):
 		return "secret"
-	case strings.HasPrefix(key, "config_uuid:"):
+	case strings.HasPrefix(key, "config_uuid:"), strings.HasPrefix(key, "runtime_config:"):
 		return "config"
 	case strings.HasPrefix(key, "admin_"), strings.HasPrefix(key, "route_permission_"), strings.Contains(index, "permission"), strings.Contains(index, "role"):
 		return "auth"
@@ -196,6 +196,8 @@ func tableCacheExampleKey(key string) string {
 		"{adminID}", "1",
 		"{roleID}", "1",
 		"{uuid}", "demo",
+		"{env}", "prod",
+		"{releaseID}", "1",
 		"{keyVersion}", "v1",
 		"{routeAlias}", "admin.list",
 	)

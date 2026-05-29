@@ -537,6 +537,7 @@ func TestDetectHotReloadRestartImpact(t *testing.T) {
 func TestHotReloadRestartSpecsValid(t *testing.T) {
 	specs := hotReloadRestartSpecs()
 	wantReasons := []string{
+		"app_id",
 		"run_mode",
 		componentNameHTTPServer,
 		"mode",
@@ -544,6 +545,7 @@ func TestHotReloadRestartSpecsValid(t *testing.T) {
 		"site_mysql",
 		"redis",
 		"task.runtime",
+		"runtime_config.source_env",
 		"kafka",
 		"observability",
 		"workflows.user_tag.enabled",

@@ -172,23 +172,3 @@ func UpdateAdminRolesHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		},
 	)(sCtx)
 }
-
-// AddAdminRoleHandler 添加管理员角色。
-func AddAdminRoleHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.AdminRoleAssignReq](shared.MethodAddAdminRole,
-		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminRoleAssignReq) (shared.LogicObj, *types.BizResult) {
-			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
-			return logicObj, logicObj.AddRole(req)
-		},
-	)(sCtx)
-}
-
-// DeleteAdminRoleHandler 解除管理员角色。
-func DeleteAdminRoleHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.AdminRoleDeleteReq](shared.MethodDeleteAdminRole,
-		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminRoleDeleteReq) (shared.LogicObj, *types.BizResult) {
-			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
-			return logicObj, logicObj.DeleteRole(req)
-		},
-	)(sCtx)
-}

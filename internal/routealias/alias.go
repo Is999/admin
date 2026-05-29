@@ -18,15 +18,35 @@ const (
 	AuthProfile Alias = "auth.profile"
 	// AuthVerifyAccount 表示登录预校验路由别名。
 	AuthVerifyAccount Alias = "auth.verify_account"
-	// DocsIndex 表示后台文档站统一页面权限路由别名。
+	// DocsIndex 表示后台文档站入口页面权限路由别名。
 	DocsIndex Alias = "docs.index"
+	// DocsRoleOps 表示运维角色文档目录路由别名。
+	DocsRoleOps Alias = "docs.role.ops"
+	// DocsRoleBackend 表示后端开发角色文档目录路由别名。
+	DocsRoleBackend Alias = "docs.role.backend"
+	// DocsRoleFrontend 表示前端与测试角色文档目录路由别名。
+	DocsRoleFrontend Alias = "docs.role.frontend"
+	// DocsFeatureTask 表示任务系统功能文档目录路由别名。
+	DocsFeatureTask Alias = "docs.feature.task"
+	// DocsFeatureUserTag 表示用户标签功能文档目录路由别名。
+	DocsFeatureUserTag Alias = "docs.feature.user_tag"
+	// DocsAPIIndex 表示接口文档首页和统一规范路由别名。
+	DocsAPIIndex Alias = "docs.api.index"
+	// DocsAPIAdmin 表示后台系统接口文档目录路由别名。
+	DocsAPIAdmin Alias = "docs.api.admin"
+	// DocsAPITask 表示任务系统接口文档目录路由别名。
+	DocsAPITask Alias = "docs.api.task"
+	// DocsAPIUserTag 表示用户标签接口文档目录路由别名。
+	DocsAPIUserTag Alias = "docs.api.user_tag"
+	// DocsAPIServiceIndex 表示前台 API 接口文档首页和规范路由别名。
+	DocsAPIServiceIndex Alias = "docs.api_service.index"
+	// DocsAPIServiceFront 表示前台 API 前台系统接口文档目录路由别名。
+	DocsAPIServiceFront Alias = "docs.api_service.front"
 )
 
 const (
 	// ProfileMine 表示当前管理员资料路由别名。
 	ProfileMine Alias = "profile.mine"
-	// ProfilePermissions 表示当前管理员角色权限路由别名。
-	ProfilePermissions Alias = "profile.permissions"
 	// ProfileCheckSecure 表示校验当前管理员密码路由别名。
 	ProfileCheckSecure Alias = "profile.check_secure"
 	// ProfileCheckMFA 表示校验当前管理员 MFA 动态码路由别名。
@@ -64,6 +84,27 @@ const (
 	AdminBuildMFAURL Alias = "admin.mfa_secret_url"
 	// AdminMFAStatus 表示修改管理员 MFA 状态路由别名。
 	AdminMFAStatus Alias = "admin.mfa_status.update"
+)
+
+const (
+	// APIUserList 表示查询前台用户列表路由别名。
+	APIUserList Alias = "api_user.list"
+	// APIUserInfo 表示查询前台用户详情路由别名。
+	APIUserInfo Alias = "api_user.info"
+	// APIUserAdd 表示新增前台用户路由别名。
+	APIUserAdd Alias = "api_user.add"
+	// APIUserUpdate 表示编辑前台用户资料路由别名。
+	APIUserUpdate Alias = "api_user.update"
+	// APIUserStatusUpdate 表示修改前台用户状态路由别名。
+	APIUserStatusUpdate Alias = "api_user.status.update"
+	// APIUserPasswordReset 表示重置前台用户密码路由别名。
+	APIUserPasswordReset Alias = "api_user.password.reset"
+	// APIUserRuntimeSync 表示同步前台用户 API 运行态路由别名。
+	APIUserRuntimeSync Alias = "api_user.runtime.sync"
+	// APIRuntimeConfigReloadStatus 表示查询 API 配置热加载状态路由别名。
+	APIRuntimeConfigReloadStatus Alias = "api_runtime.config_reload.status"
+	// APIRuntimeConfigReloadRun 表示触发 API 配置热加载路由别名。
+	APIRuntimeConfigReloadRun Alias = "api_runtime.config_reload.run"
 )
 
 const (

@@ -1,7 +1,6 @@
 package transfer
 
 import (
-	"admin/internal/handler/shared"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +8,7 @@ import (
 	"admin/common/codes"
 	i18n "admin/common/i18n"
 	"admin/helper"
+	"admin/internal/handler/shared"
 	filelogic "admin/internal/logic/file"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -201,14 +201,6 @@ func parseFileUploadCompleteReq(r *http.Request) (*types.FileUploadCompleteReq, 
 		return nil, errors.Tag(err)
 	}
 	return req, nil
-}
-
-// WriteDownloadFailure 按统一业务响应写出下载失败结果。
-func WriteDownloadFailure(w http.ResponseWriter, r *http.Request, logicObj shared.LogicObj, resp *types.BizResult) {
-	if resp == nil {
-		resp = types.NewBizResult(0).SetI18nMessage(i18n.MsgKeyFail)
-	}
-	shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
 }
 
 // buildFileTransferAccessResp 把上传文件访问场景的常见业务错误映射为稳定的对外响应码。

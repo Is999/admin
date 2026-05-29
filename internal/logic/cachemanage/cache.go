@@ -497,24 +497,6 @@ func (l *SystemCacheLogic) cacheItemUsesAppScope(item *types.CacheItem) bool {
 	return item != nil && strings.HasPrefix(item.Key, keys.ScopeRoot)
 }
 
-// isBuiltinCacheKey 判断当前 key 是否属于后台缓存管理内置目标，内置目标 miss 时允许自动回源重建后再查看。
-func (l *SystemCacheLogic) isBuiltinCacheKey(key string) bool {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return false
-	}
-	physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, key)
-	for _, item := range l.cacheItems() {
-		if cachelogic.IsTemplateCachePattern(item.Key) {
-			continue
-		}
-		if item.Key == key || item.Key == physicalKey {
-			return true
-		}
-	}
-	return false
-}
-
 // isBuiltinRefreshableKey 判断当前 key 是否属于支持自动回源/回填的内置缓存目标。
 // 固定 key 直接精确匹配；模板 key 按占位符前缀匹配，且必须显式标记 AutoRebuild=true 才允许刷新。
 func (l *SystemCacheLogic) isBuiltinRefreshableKey(key string) bool {

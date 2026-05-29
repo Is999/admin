@@ -2529,13 +2529,6 @@ func maskArchiveConditionQuotedText(value string) (string, bool) {
 	return builder.String(), !inQuote
 }
 
-// mustNormalizeArchiveSQLCondition 返回已经通过配置校验的自定义条件。
-// 调用方只在 validateArchiveJobConfig 成功后使用该函数，避免归一化阶段重复分支污染主流程。
-func mustNormalizeArchiveSQLCondition(value string) string {
-	condition, _ := normalizeArchiveSQLCondition(value)
-	return condition
-}
-
 // archiveConditionSQL 返回归档阶段使用的自定义条件。
 // 空字符串表示只按时间窗口和主键游标筛选，不附加业务谓词。
 func archiveConditionSQL(job jobConfig) string {
@@ -2588,15 +2581,6 @@ func batchSourcePredicateSQL(job jobConfig) string {
 // rangePredicateArgs 返回时间半开区间的查询参数，按时间列类型匹配数据库字段。
 func rangePredicateArgs(job jobConfig, start time.Time, end time.Time) []any {
 	return []any{archiveTimeArg(job, start), archiveTimeArg(job, end)}
-}
-
-// applyArchiveBatchSourceWhere 为归档/删除批次追加主键集合和时间半开窗口约束。
-// 主键集合来自前置游标扫描，时间窗口来自 archive_segment 或当前删除窗口，二者共同保护事务内校验不跨区间。
-func applyArchiveBatchSourceWhere(query *gorm.DB, job jobConfig, ids []int64, rangeStart time.Time, rangeEnd time.Time) *gorm.DB {
-	return query.
-		Where(clause.Eq{Column: clause.Column{Name: job.PrimaryKey}, Value: ids}).
-		Where(clause.Gte{Column: clause.Column{Name: job.TimeColumn}, Value: archiveTimeArg(job, rangeStart)}).
-		Where(clause.Lt{Column: clause.Column{Name: job.TimeColumn}, Value: archiveTimeArg(job, rangeEnd)})
 }
 
 // archiveBatchInsertSQL 渲染归档批次复制 SQL。

@@ -824,7 +824,7 @@ func TestWorkflowShardedSuccessDedupesDuplicateShardAck(t *testing.T) {
 	if nodeDone != "succeeded" {
 		t.Fatalf("期望分片终态标记记录成功结果，实际为 %s", nodeDone)
 	}
-	instanceDoneKeys, err := manager.redis.Exists(context.Background(), manager.workflowInstanceKey(workflowID, "root", 0)).Result()
+	instanceDoneKeys, err := manager.redis.Exists(context.Background(), keys.TaskWorkflowNodeInstanceKey(workflowID, "root", 0)).Result()
 	if err != nil {
 		t.Fatalf("读取分片实例散列 key 失败: %v", err)
 	}

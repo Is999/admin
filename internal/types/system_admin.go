@@ -206,23 +206,6 @@ func (r *AdminRoleAssignReq) Validate() error {
 	return nil
 }
 
-// AdminRoleDeleteReq 表示解除管理员单个角色请求。
-type AdminRoleDeleteReq struct {
-	ID     int `path:"id" json:"id,optional" form:"id,optional"` // 管理员 ID
-	RoleID int `json:"roleID,optional" form:"roleID,optional"`   // 角色 ID
-}
-
-// Validate 校验解除管理员角色请求。
-func (r *AdminRoleDeleteReq) Validate() error {
-	if r.ID <= 0 {
-		return errors.Errorf("管理员ID不能为空")
-	}
-	if r.RoleID <= 0 {
-		return errors.Errorf("角色ID不能为空")
-	}
-	return nil
-}
-
 // AdminItem 表示管理员列表项。
 type AdminItem struct {
 	ID                int             `json:"id"`                // 管理员 ID

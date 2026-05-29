@@ -70,6 +70,7 @@ type App struct {
 	taskRedis      redis.UniversalClient       // 任务系统实际使用的 Redis 客户端
 	taskRedisOwned bool                        // 当前 App 是否负责关闭 taskRedis
 	hotReload      configHotReloadState        // 配置热加载运行态资源
+	runtimeConfig  runtimeConfigWatchState     // DB 运行配置热加载运行态资源
 }
 
 // taskConfigWithAppID 把顶层 `app_id` 注入任务系统配置快照。
@@ -178,6 +179,13 @@ func New(ctx context.Context, c config.Config, mode int, options ...Option) (*Ap
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
+	if err = applyStartupRuntimeConfig(ctx, svcCtx, &c); err != nil {
+		_ = closeServiceContextResources(svcCtx, nil, false)
+		if shutdown != nil {
+			_ = shutdown(context.Background())
+		}
+		return nil, errors.Tag(err)
+	}
 
 	// 启动组件统一由注册中心按顺序装配，避免组件散落在入口文件和 New 内部。
 	state := newComponentState(c, mode, resolvedOptions, svcCtx, shutdown)
@@ -211,10 +219,12 @@ func New(ctx context.Context, c config.Config, mode int, options ...Option) (*Ap
 func (a *App) Start() error {
 	// 启动配置热重载协程
 	a.startConfigHotReload()
+	a.startRuntimeConfigWatcher()
 
 	// 统一启动组件注册的后台生命周期钩子，避免在入口层硬编码具体组件类型。
 	if err := a.runStartHooks(context.Background()); err != nil {
 		a.stopConfigHotReload()
+		a.stopRuntimeConfigWatcher()
 		return errors.Tag(err)
 	}
 
@@ -254,6 +264,7 @@ func (a *App) Stop(ctx context.Context) error {
 	}
 	// 再停止配置热加载协程，避免资源释放过程中仍有后台线程刷新配置快照。
 	a.stopConfigHotReload()
+	a.stopRuntimeConfigWatcher()
 	var firstErr error
 	recordErr := func(err error) {
 		if err != nil && firstErr == nil {

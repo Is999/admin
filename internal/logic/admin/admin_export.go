@@ -548,22 +548,6 @@ func (l *AdminExportLogic) countAdmins(req *types.AdminExportReq) (int64, error)
 	return total, nil
 }
 
-// listAdminBatch 按管理员 ID 游标顺序读取一批导出数据。
-func (l *AdminExportLogic) listAdminBatch(req *types.AdminExportReq, cursorID int, limit int) ([]model.Admin, error) {
-	if limit <= 0 {
-		limit = adminExportBatchSize
-	}
-	admins := make([]model.Admin, 0, limit)
-	dbq := l.adminQuery(l.Ctx, req).Order("admin.id ASC").Limit(limit)
-	if cursorID > 0 {
-		dbq = dbq.Where("admin.id > ?", cursorID)
-	}
-	if err := dbq.Find(&admins).Error; err != nil {
-		return nil, errors.Wrap(err, "AdminExportLogic.listAdminBatch 查询管理员批次失败")
-	}
-	return admins, nil
-}
-
 // listAdminShardBatch 按分片范围和 ID 游标顺序读取一批导出数据。
 func (l *AdminExportLogic) listAdminShardBatch(ctx context.Context, req *types.AdminExportReq, shard excel.OrderedIDShard, cursorID int, limit int) ([]model.Admin, error) {
 	if limit <= 0 {
@@ -995,11 +979,6 @@ func firstNonNilError(values ...error) error {
 		}
 	}
 	return nil
-}
-
-// intPointer 返回 int 指针，便于构造可选参数。
-func intPointer(value int) *int {
-	return &value
 }
 
 // adminStatusText 把管理员状态转换为导出文本。

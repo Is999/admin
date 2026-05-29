@@ -59,6 +59,26 @@ config_files:
   # 运行期配置文件路径。
   runtime: "config.d/runtime.sample.yaml"
 
+# 运行期大列表配置来源；默认 file。切到 database 前必须先在后台导入并发布 active release。
+runtime_config:
+  # file=继续读取 config_files.runtime；database=使用发布快照覆盖周期任务和归档任务。
+  source: "file"
+  # DB 模式运行环境；为空时取 Mode。
+  env: ""
+  # DB 模式只轮询版本状态，版本变化才读取发布快照。
+  poll_interval_seconds: 30
+
+# 前台 API 接入配置；用户表由 admin 直连 DB 管理，运行态缓存/会话同步才调用 API 内网接口。
+api_service:
+  # 前台用户表所在命名库，对应 site_mysql.api。
+  user_database: "api"
+  # API 内网地址，仅 admin 后端调用。
+  internal_base_url: "http://gozero-api:8888"
+  # API ops.config_reload_token 对应的运维令牌。
+  ops_token: ""
+  # API 内网调用超时秒数。
+  timeout_seconds: 5
+
 # 文件存储配置：local 或 s3。
 file_storage:
   # 存储类型：local | s3。
@@ -133,6 +153,9 @@ mysql:
 
 # 命名扩展库示例；默认不配置。
 # site_mysql:
+#   api:
+#     write_data_source: "root:password@tcp(mysql:3306)/api?charset=utf8mb4&parseTime=true&loc=Local"
+#     read_data_sources: []
 #   archive:
 #     write_data_source: "root:password@tcp(127.0.0.1:3307)/admin_archive"
 #     read_data_sources: []

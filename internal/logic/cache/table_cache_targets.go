@@ -183,6 +183,28 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 			Loader:           loadSysConfigTableCache(base),
 		},
 		{
+			Index:            "runtime_config_state",
+			Title:            "运行配置版本",
+			Key:              cacheTemplatePrefix(keys.RuntimeConfigStatePattern),
+			KeyTitle:         keys.RuntimeConfigStatePattern,
+			Type:             tablecache.TypeHash,
+			Remark:           "运行配置 active 版本状态缓存",
+			TTL:              time.Minute,
+			AllowEmptyMarker: true,
+			Loader:           loadRuntimeConfigStateTableCache(base),
+		},
+		{
+			Index:            "runtime_config_release",
+			Title:            "运行配置发布快照",
+			Key:              cacheTemplatePrefix(keys.RuntimeConfigReleasePattern),
+			KeyTitle:         keys.RuntimeConfigReleasePattern,
+			Type:             tablecache.TypeString,
+			Remark:           "运行配置不可变发布快照缓存",
+			TTL:              time.Hour,
+			AllowEmptyMarker: true,
+			Loader:           loadRuntimeConfigReleaseTableCache(base),
+		},
+		{
 			Index:    "secret_key_route",
 			Title:    "秘钥路由配置",
 			Key:      cacheTemplatePrefix(keys.SecretKeyRoutePattern),
@@ -788,6 +810,63 @@ func loadSysConfigTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 			Key:   params.Key,
 			Type:  tablecache.TypeHash,
 			Value: cache,
+		}}, nil
+	}
+}
+
+// loadRuntimeConfigStateTableCache 加载指定环境的运行配置 active 版本状态。
+func loadRuntimeConfigStateTableCache(base *corelogic.BaseLogic) tablecache.Loader {
+	return func(ctx context.Context, params tablecache.LoadParams) ([]tablecache.Entry, error) {
+		env, err := tableCacheFirstStringPart(params, "运行环境")
+		if err != nil {
+			return nil, errors.Tag(err)
+		}
+		writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
+		if err != nil {
+			return nil, errors.Tag(err)
+		}
+		var state model.RuntimeConfigState
+		if err = writeDB.Where("app_id = ? AND env = ?", base.AppID(), env).First(&state).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, nil
+			}
+			return nil, errors.Tag(err)
+		}
+		return []tablecache.Entry{{
+			Key:  params.Key,
+			Type: tablecache.TypeHash,
+			Value: map[string]any{
+				"active_release_id": state.ActiveReleaseID,
+				"active_version":    state.ActiveVersion,
+				"active_checksum":   state.ActiveChecksum,
+				"published_at_unix": state.PublishedAt.Unix(),
+			},
+		}}, nil
+	}
+}
+
+// loadRuntimeConfigReleaseTableCache 加载指定发布 ID 的运行配置快照。
+func loadRuntimeConfigReleaseTableCache(base *corelogic.BaseLogic) tablecache.Loader {
+	return func(ctx context.Context, params tablecache.LoadParams) ([]tablecache.Entry, error) {
+		releaseID, err := tableCacheFirstIntPart(params, "发布ID")
+		if err != nil {
+			return nil, errors.Tag(err)
+		}
+		writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
+		if err != nil {
+			return nil, errors.Tag(err)
+		}
+		var release model.RuntimeConfigRelease
+		if err = writeDB.Where("id = ? AND app_id = ?", releaseID, base.AppID()).First(&release).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, nil
+			}
+			return nil, errors.Tag(err)
+		}
+		return []tablecache.Entry{{
+			Key:   params.Key,
+			Type:  tablecache.TypeString,
+			Value: release.SnapshotJSON,
 		}}, nil
 	}
 }

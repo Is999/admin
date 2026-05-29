@@ -206,6 +206,14 @@ const (
 	// Redis 类型：Hash 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
 	SysConfigUUIDPattern = "config_uuid:{uuid}"
 
+	// RuntimeConfigStatePattern 是运行配置 active 版本状态缓存模板。
+	// Redis 类型：Hash 模板，TTL 过期规则：不直接写入 Redis，由 table-cache 目标配置控制。
+	RuntimeConfigStatePattern = "runtime_config:state:{env}"
+
+	// RuntimeConfigReleasePattern 是运行配置发布快照缓存模板。
+	// Redis 类型：String 模板，TTL 过期规则：不直接写入 Redis，由 table-cache 目标配置控制。
+	RuntimeConfigReleasePattern = "runtime_config:release:{releaseID}"
+
 	// SecretKeyRoute 表示秘钥版本路由缓存键模板。
 	// Redis 类型：Hash，TTL 过期规则：无固定 TTL，按业务更新或删除精确失效。
 	// `%s` 位置填充 secret_key.uuid。

@@ -86,7 +86,7 @@ func TestRunMigrationsRejectsUnmarkedDestructiveSQL(t *testing.T) {
 	}
 }
 
-// TestDefaultAdminBaselineMigrationsBlockedByDefault 确保后台基线默认只输出 blocked。
+// TestDefaultAdminBaselineMigrationsBlockedByDefault 确保后台基线默认 blocked，非破坏性增量迁移可进入 pending。
 func TestDefaultAdminBaselineMigrationsBlockedByDefault(t *testing.T) {
 	results, err := RunMigrations(context.Background(), newFakeMigrationStore(nil), DefaultMigrations(), MigrationRunOptions{DryRun: true})
 	if err != nil {
@@ -95,9 +95,23 @@ func TestDefaultAdminBaselineMigrationsBlockedByDefault(t *testing.T) {
 	if len(results) == 0 {
 		t.Fatal("期望默认迁移结果非空")
 	}
+	migrations := map[string]Migration{}
+	for _, migration := range DefaultMigrations() {
+		migrations[migration.Version] = migration
+	}
 	for _, item := range results {
-		if item.Status != MigrationStatusBlocked {
-			t.Fatalf("后台基线迁移默认应被拦截: %+v", item)
+		migration, ok := migrations[item.Version]
+		if !ok {
+			t.Fatalf("迁移结果版本未出现在默认清单: %+v", item)
+		}
+		if migration.BootstrapOnly || migration.Destructive {
+			if item.Status != MigrationStatusBlocked {
+				t.Fatalf("后台基线迁移默认应被拦截: %+v", item)
+			}
+			continue
+		}
+		if item.Status != MigrationStatusPending {
+			t.Fatalf("非破坏性增量迁移应进入 pending: %+v", item)
 		}
 	}
 }

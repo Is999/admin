@@ -37,23 +37,13 @@ type RegistrationManifestItem struct {
 	Description string // 注册项中文说明
 }
 
-// registrationSpec 描述默认注册项的稳定说明字段。
-type registrationSpec struct {
-	Name        string // 注册名称，必须在同类型内保持唯一
-	File        string // 注册实现所在文件
-	Method      string // 注册入口方法或构造方法
-	Description string // 注册项中文说明
-}
-
 // componentSpec 描述一个内置启动组件及其清单说明。
 type componentSpec struct {
-	registrationSpec                  // 组件在默认注册清单中的说明字段
-	Build            func() Component // 启动组件构造函数
-}
-
-// runtimeRegistrySpec 描述一个包级运行时扩展入口。
-type runtimeRegistrySpec struct {
-	registrationSpec // 运行时扩展在默认注册清单中的说明字段
+	Name        string           // 注册名称，必须在内置组件中唯一
+	File        string           // 组件实现所在文件
+	Method      string           // 组件构造入口
+	Description string           // 组件中文说明
+	Build       func() Component // 启动组件构造函数
 }
 
 // DefaultRegistrationManifest 返回项目默认注册清单。
@@ -66,23 +56,18 @@ func DefaultRegistrationManifest() []RegistrationManifestItem {
 	return items
 }
 
-// registrationManifestItem 将注册规格转换为统一清单项。
-func registrationManifestItem(kind string, spec registrationSpec) RegistrationManifestItem {
-	return RegistrationManifestItem{
-		Kind:        kind,
-		Name:        spec.Name,
-		File:        spec.File,
-		Method:      spec.Method,
-		Description: spec.Description,
-	}
-}
-
 // componentRegistrationManifestItems 从启动组件规格派生清单项。
 func componentRegistrationManifestItems() []RegistrationManifestItem {
 	specs := defaultComponentSpecs()
 	items := make([]RegistrationManifestItem, 0, len(specs))
 	for _, spec := range specs {
-		items = append(items, registrationManifestItem(registrationKindComponent, spec.registrationSpec))
+		items = append(items, RegistrationManifestItem{
+			Kind:        registrationKindComponent,
+			Name:        spec.Name,
+			File:        spec.File,
+			Method:      spec.Method,
+			Description: spec.Description,
+		})
 	}
 	return items
 }
@@ -108,22 +93,49 @@ func taskPluginRegistrationManifestItems() []RegistrationManifestItem {
 	specs := defaultTaskPluginSpecs()
 	items := make([]RegistrationManifestItem, 0, len(specs))
 	for _, spec := range specs {
-		items = append(items, registrationManifestItem(registrationKindTaskPlugin, registrationSpec{
+		items = append(items, RegistrationManifestItem{
+			Kind:        registrationKindTaskPlugin,
 			Name:        spec.Name,
 			File:        spec.File,
 			Method:      spec.Method,
 			Description: spec.Description,
-		}))
+		})
 	}
 	return items
 }
 
 // runtimeRegistrationManifestItems 从运行时扩展规格派生清单项。
 func runtimeRegistrationManifestItems() []RegistrationManifestItem {
-	specs := defaultRuntimeRegistrySpecs()
-	items := make([]RegistrationManifestItem, 0, len(specs))
-	for _, spec := range specs {
-		items = append(items, registrationManifestItem(registrationKindRuntimeRegistry, spec.registrationSpec))
+	storageSpecs := storage.RuntimeRegistrySpecs()
+	fileSpecs := filelogic.RuntimeRegistrySpecs()
+	collectorSpecs := collectorx.RuntimeRegistrySpecs()
+	items := make([]RegistrationManifestItem, 0, len(storageSpecs)+len(fileSpecs)+len(collectorSpecs))
+	for _, spec := range storageSpecs {
+		items = append(items, RegistrationManifestItem{
+			Kind:        registrationKindRuntimeRegistry,
+			Name:        spec.Name,
+			File:        spec.File,
+			Method:      spec.Method,
+			Description: spec.Description,
+		})
+	}
+	for _, spec := range fileSpecs {
+		items = append(items, RegistrationManifestItem{
+			Kind:        registrationKindRuntimeRegistry,
+			Name:        spec.Name,
+			File:        spec.File,
+			Method:      spec.Method,
+			Description: spec.Description,
+		})
+	}
+	for _, spec := range collectorSpecs {
+		items = append(items, RegistrationManifestItem{
+			Kind:        registrationKindRuntimeRegistry,
+			Name:        spec.Name,
+			File:        spec.File,
+			Method:      spec.Method,
+			Description: spec.Description,
+		})
 	}
 	return items
 }
@@ -132,31 +144,25 @@ func runtimeRegistrationManifestItems() []RegistrationManifestItem {
 func defaultComponentSpecs() []componentSpec {
 	return []componentSpec{
 		{
-			registrationSpec: registrationSpec{
-				Name:        componentNameCollector,
-				File:        "internal/bootstrap/component_builtin.go",
-				Method:      "newCollectorComponent",
-				Description: "注册通用收集器启动组件",
-			},
-			Build: newCollectorComponent,
+			Name:        componentNameCollector,
+			File:        "internal/bootstrap/component_builtin.go",
+			Method:      "newCollectorComponent",
+			Description: "注册通用收集器启动组件",
+			Build:       newCollectorComponent,
 		},
 		{
-			registrationSpec: registrationSpec{
-				Name:        componentNameTaskRuntime,
-				File:        "internal/bootstrap/component_builtin.go",
-				Method:      "newTaskRuntimeComponent",
-				Description: "注册任务队列管理器和任务插件运行时",
-			},
-			Build: newTaskRuntimeComponent,
+			Name:        componentNameTaskRuntime,
+			File:        "internal/bootstrap/component_builtin.go",
+			Method:      "newTaskRuntimeComponent",
+			Description: "注册任务队列管理器和任务插件运行时",
+			Build:       newTaskRuntimeComponent,
 		},
 		{
-			registrationSpec: registrationSpec{
-				Name:        componentNameHTTPServer,
-				File:        "internal/bootstrap/component_builtin.go",
-				Method:      "newHTTPServerComponent",
-				Description: "注册 HTTP 服务和路由模块",
-			},
-			Build: newHTTPServerComponent,
+			Name:        componentNameHTTPServer,
+			File:        "internal/bootstrap/component_builtin.go",
+			Method:      "newHTTPServerComponent",
+			Description: "注册 HTTP 服务和路由模块",
+			Build:       newHTTPServerComponent,
 		},
 	}
 }
@@ -197,60 +203,6 @@ func defaultTaskPlugins() []taskruntime.Plugin {
 // resolveTaskPlugins 合并内置任务插件与外部注入插件。
 func resolveTaskPlugins(options Options) []taskruntime.Plugin {
 	return taskruntime.ComposePlugins(defaultTaskPlugins(), options.TaskPlugins)
-}
-
-// defaultRuntimeRegistrySpecs 返回清单需要覆盖的包级运行时扩展入口规格。
-func defaultRuntimeRegistrySpecs() []runtimeRegistrySpec {
-	storageSpecs := storageRuntimeRegistrySpecs()
-	fileSpecs := fileRuntimeRegistrySpecs()
-	collectorSpecs := collectorRuntimeRegistrySpecs()
-	specs := make([]runtimeRegistrySpec, 0, len(storageSpecs)+len(fileSpecs)+len(collectorSpecs))
-	specs = append(specs, storageSpecs...)
-	specs = append(specs, fileSpecs...)
-	specs = append(specs, collectorSpecs...)
-	return specs
-}
-
-// runtimeRegistrySpecFromFields 构造 bootstrap 内部统一的运行时扩展规格。
-func runtimeRegistrySpecFromFields(name, file, method, description string) runtimeRegistrySpec {
-	return runtimeRegistrySpec{
-		registrationSpec: registrationSpec{
-			Name:        name,
-			File:        file,
-			Method:      method,
-			Description: description,
-		},
-	}
-}
-
-// storageRuntimeRegistrySpecs 从 storage 包注册规格派生运行时清单。
-func storageRuntimeRegistrySpecs() []runtimeRegistrySpec {
-	items := storage.RuntimeRegistrySpecs()
-	specs := make([]runtimeRegistrySpec, 0, len(items))
-	for _, item := range items {
-		specs = append(specs, runtimeRegistrySpecFromFields(item.Name, item.File, item.Method, item.Description))
-	}
-	return specs
-}
-
-// fileRuntimeRegistrySpecs 从文件业务注册规格派生运行时清单。
-func fileRuntimeRegistrySpecs() []runtimeRegistrySpec {
-	items := filelogic.RuntimeRegistrySpecs()
-	specs := make([]runtimeRegistrySpec, 0, len(items))
-	for _, item := range items {
-		specs = append(specs, runtimeRegistrySpecFromFields(item.Name, item.File, item.Method, item.Description))
-	}
-	return specs
-}
-
-// collectorRuntimeRegistrySpecs 从 Collector 注册规格派生运行时清单。
-func collectorRuntimeRegistrySpecs() []runtimeRegistrySpec {
-	items := collectorx.RuntimeRegistrySpecs()
-	specs := make([]runtimeRegistrySpec, 0, len(items))
-	for _, item := range items {
-		specs = append(specs, runtimeRegistrySpecFromFields(item.Name, item.File, item.Method, item.Description))
-	}
-	return specs
 }
 
 // validateRegistrationNamesUnique 校验注册列表内部名称唯一，避免同一能力被重复装配。

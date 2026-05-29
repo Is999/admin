@@ -5,10 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	stdErrors "errors"
-	"fmt"
 	"io"
 	"mime"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -638,14 +636,6 @@ func copyAcrossDevices(srcPath string, dstPath string) error {
 	}
 	_ = os.Remove(srcPath)
 	return nil
-}
-
-// buildInlineHeaders 构造直传兼容响应头。
-func buildInlineHeaders(contentType string, fileName string, disposition string) http.Header {
-	headers := http.Header{}
-	headers.Set("Content-Type", DetectContentType(fileName, contentType))
-	headers.Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, sanitizeFileName(fileName)))
-	return headers
 }
 
 // noopVirusScanner 表示不执行实际扫描的默认病毒扫描器。

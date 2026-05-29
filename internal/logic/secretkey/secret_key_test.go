@@ -155,8 +155,8 @@ func TestSecretKeyLogicFallsBackWhenAppIDDiffers(t *testing.T) {
 	}
 }
 
-// TestDeleteSecretKeyCacheDeletesRouteAndVersionCaches 验证当前秘钥 UUID 变更时会同时清理路由与版本材料缓存。
-func TestDeleteSecretKeyCacheDeletesRouteAndVersionCaches(t *testing.T) {
+// TestDeleteSecretKeyVersionCachesDeletesIndexedVersions 验证版本材料缓存按索引精确清理。
+func TestDeleteSecretKeyVersionCachesDeletesIndexedVersions(t *testing.T) {
 	prev := runtimecfg.Get()
 	runtimecfg.Set(config.Config{AppID: "site-a"})
 	t.Cleanup(func() {
@@ -170,7 +170,6 @@ func TestDeleteSecretKeyCacheDeletesRouteAndVersionCaches(t *testing.T) {
 	appID := "demo-app"
 
 	cacheKeys := []string{
-		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.SecretKeyRoute, appID)),
 		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.SecretKeyAESVersion, appID, "v1")),
 		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.SecretKeyRSAVersion, appID, "v1")),
 	}
@@ -180,20 +179,20 @@ func TestDeleteSecretKeyCacheDeletesRouteAndVersionCaches(t *testing.T) {
 		}
 	}
 	versionIndexKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.SecretKeyVersionIndex, appID))
-	if err := client.SAdd(ctx, versionIndexKey, cacheKeys[1], cacheKeys[2]).Err(); err != nil {
+	if err := client.SAdd(ctx, versionIndexKey, cacheKeys[0], cacheKeys[1]).Err(); err != nil {
 		t.Fatalf("SAdd(secret key version index) error = %v", err)
 	}
 
-	if err := logicObj.deleteSecretKeyCache(appID); err != nil {
-		t.Fatalf("deleteSecretKeyCache(%s) error = %v", appID, err)
+	if err := logicObj.deleteSecretKeyVersionCaches(appID); err != nil {
+		t.Fatalf("deleteSecretKeyVersionCaches(%s) error = %v", appID, err)
 	}
 
 	for _, key := range cacheKeys {
 		if server.Exists(key) {
-			t.Fatalf("deleteSecretKeyCache() key %s still exists", key)
+			t.Fatalf("deleteSecretKeyVersionCaches() key %s still exists", key)
 		}
 	}
 	if server.Exists(versionIndexKey) {
-		t.Fatalf("deleteSecretKeyCache() version index still exists")
+		t.Fatalf("deleteSecretKeyVersionCaches() version index still exists")
 	}
 }

@@ -71,16 +71,32 @@ const (
 	ActionAdminRoleList AdminLogAction = "查询管理员角色"
 	// ActionAdminRoleUpdate 编辑管理员角色。
 	ActionAdminRoleUpdate AdminLogAction = "编辑管理员角色"
-	// ActionAdminRoleAdd 添加管理员角色。
-	ActionAdminRoleAdd AdminLogAction = "添加管理员角色"
-	// ActionAdminRoleDelete 解除管理员角色。
-	ActionAdminRoleDelete AdminLogAction = "解除管理员角色"
 	// ActionAdminExport 导出管理员列表。
 	ActionAdminExport AdminLogAction = "导出管理员列表"
 	// ActionAdminExportStatus 查询管理员导出进度。
 	ActionAdminExportStatus AdminLogAction = "查询管理员导出进度"
 	// ActionAdminExportDownload 下载管理员导出文件。
 	ActionAdminExportDownload AdminLogAction = "下载管理员导出文件"
+
+	// 前台用户管理相关。
+	// ActionAPIUserList 查询前台用户列表。
+	ActionAPIUserList AdminLogAction = "查询前台用户列表"
+	// ActionAPIUserInfo 查询前台用户详情。
+	ActionAPIUserInfo AdminLogAction = "查询前台用户详情"
+	// ActionAPIUserAdd 新增前台用户。
+	ActionAPIUserAdd AdminLogAction = "新增前台用户"
+	// ActionAPIUserUpdate 编辑前台用户。
+	ActionAPIUserUpdate AdminLogAction = "编辑前台用户"
+	// ActionAPIUserStatusUpdate 修改前台用户状态。
+	ActionAPIUserStatusUpdate AdminLogAction = "修改前台用户状态"
+	// ActionAPIUserPasswordReset 重置前台用户密码。
+	ActionAPIUserPasswordReset AdminLogAction = "重置前台用户密码"
+	// ActionAPIUserRuntimeSync 同步前台用户运行态。
+	ActionAPIUserRuntimeSync AdminLogAction = "同步前台用户运行态"
+	// ActionAPIRuntimeConfigReloadStatus 查询 API 配置热加载状态。
+	ActionAPIRuntimeConfigReloadStatus AdminLogAction = "查询API配置热加载状态"
+	// ActionAPIRuntimeConfigReloadRun 触发 API 配置热加载。
+	ActionAPIRuntimeConfigReloadRun AdminLogAction = "触发API配置热加载"
 
 	// 消息中心相关。
 	// ActionAdminMessageList 查询消息列表。
@@ -203,6 +219,20 @@ const (
 	ActionTaskConfigReloadStatus AdminLogAction = "查询配置热加载状态"
 	// ActionTaskConfigReloadRun 手动触发配置热加载。
 	ActionTaskConfigReloadRun AdminLogAction = "手动触发配置热加载"
+	// ActionRuntimeConfigOverview 查询运行配置概览。
+	ActionRuntimeConfigOverview AdminLogAction = "查询运行配置概览"
+	// ActionRuntimeConfigList 查询运行配置。
+	ActionRuntimeConfigList AdminLogAction = "查询运行配置"
+	// ActionRuntimeConfigSave 保存运行配置草稿。
+	ActionRuntimeConfigSave AdminLogAction = "保存运行配置草稿"
+	// ActionRuntimeConfigValidate 预检运行配置。
+	ActionRuntimeConfigValidate AdminLogAction = "预检运行配置"
+	// ActionRuntimeConfigPublish 发布运行配置。
+	ActionRuntimeConfigPublish AdminLogAction = "发布运行配置"
+	// ActionRuntimeConfigRollback 回滚运行配置。
+	ActionRuntimeConfigRollback AdminLogAction = "回滚运行配置"
+	// ActionRuntimeConfigImport 导入运行配置。
+	ActionRuntimeConfigImport AdminLogAction = "导入运行配置"
 	// ActionTaskQueuePause 暂停任务队列。
 	ActionTaskQueuePause AdminLogAction = "暂停任务队列"
 	// ActionTaskQueueResume 恢复任务队列。

@@ -163,7 +163,7 @@ CREATE TABLE `admin_permission` (
   PRIMARY KEY (`id`) USING BTREE,
   UNIQUE KEY `uk_uuid` (`uuid`) USING BTREE,
   KEY `idx_title` (`title`)
-) ENGINE=InnoDB AUTO_INCREMENT=138 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='权限';
+) ENGINE=InnoDB AUTO_INCREMENT=155 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='权限';
 
 -- ----------------------------
 -- Records of admin_permission
@@ -284,6 +284,33 @@ INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, 
 INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (136, '200047', '释放互斥锁', '7', 94, '71,94', 7, '释放用户标签工作流互斥锁(按钮,页面)', 1, '2026-05-14 00:00:00', '2026-05-14 00:00:00');
 INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (137, '200048', '执行', 'user_tag.workflow_lease.release', 136, '71,94,136', 2, '释放用户标签工作流互斥锁(修改)', 1, '2026-05-14 00:00:00', '2026-05-14 00:00:00');
 INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (138, '200049', '查询配置项', 'task.config.reload.items', 135, '71,135', 0, '查询配置热加载配置项(查看)', 1, '2026-06-01 00:00:00', '2026-06-01 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (139, '200050', '运行配置', 'runtime.config.index', 71, '71', 5, '运行配置(菜单,页面)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (140, '200051', '查询', 'runtime.config.list', 139, '71,139', 0, '查询运行配置(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (141, '200052', '保存', 'runtime.config.save', 139, '71,139', 2, '保存运行配置草稿(修改)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (142, '200053', '预检', 'runtime.config.validate', 139, '71,139', 0, '预检运行配置(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (143, '200054', '发布', 'runtime.config.publish', 139, '71,139', 2, '发布运行配置(修改)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (144, '200055', '回滚', 'runtime.config.rollback', 139, '71,139', 2, '回滚运行配置(修改)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (145, '200056', '导入', 'runtime.config.import', 139, '71,139', 1, '导入运行配置(新增)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (146, '100092', '前台用户', 'api_user.list', 1, '1', 5, '前台用户管理(菜单,页面)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (147, '100093', '查询', 'api_user.info', 146, '1,146', 0, '查询前台用户详情(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (148, '100094', '新增', 'api_user.add', 146, '1,146', 1, '新增前台用户(新增)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (149, '100095', '编辑', 'api_user.update', 146, '1,146', 2, '编辑前台用户资料(修改)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (150, '100096', '启用/禁用', 'api_user.status.update', 146, '1,146', 2, '启用或禁用前台用户(修改)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (151, '100097', '重置密码', 'api_user.password.reset', 146, '1,146', 2, '重置前台用户密码(修改)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (152, '100098', '同步运行态', 'api_user.runtime.sync', 146, '1,146', 2, '同步前台用户API运行态(修改)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (153, '200057', '查询API热加载', 'api_runtime.config_reload.status', 135, '71,135', 0, '查询API配置热加载状态(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (154, '200058', '触发API热加载', 'api_runtime.config_reload.run', 135, '71,135', 2, '手动触发API配置热加载(修改)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (155, '200059', '运维文档', 'docs.role.ops', 99, '65,99', 0, '访问运维角色文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (156, '200060', '后端开发文档', 'docs.role.backend', 99, '65,99', 0, '访问后端开发角色文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (157, '200061', '前端与测试文档', 'docs.role.frontend', 99, '65,99', 0, '访问前端与测试角色文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (158, '200062', '任务系统文档', 'docs.feature.task', 99, '65,99', 0, '访问任务系统功能文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (159, '200063', '用户标签文档', 'docs.feature.user_tag', 99, '65,99', 0, '访问用户标签功能文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (160, '200064', '接口文档规范', 'docs.api.index', 99, '65,99', 0, '访问接口文档首页和统一规范(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (161, '200065', '后台系统接口文档', 'docs.api.admin', 99, '65,99', 0, '访问后台系统接口文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (162, '200066', '任务系统接口文档', 'docs.api.task', 99, '65,99', 0, '访问任务系统接口文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (163, '200067', '用户标签接口文档', 'docs.api.user_tag', 99, '65,99', 0, '访问用户标签接口文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (164, '200068', '前台API接口规范', 'docs.api_service.index', 99, '65,99', 0, '访问前台API接口文档首页和规范(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
+INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (165, '200069', '前台API接口文档', 'docs.api_service.front', 99, '65,99', 0, '访问前台API前台系统接口文档目录(查看)', 1, '2026-06-16 00:00:00', '2026-06-16 00:00:00');
 COMMIT;
 
 -- ----------------------------
@@ -328,6 +355,33 @@ CREATE TABLE `admin_role_permission_rel` (
 -- Records of admin_role_permission_rel
 -- ----------------------------
 BEGIN;
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 139, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 140, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 141, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 142, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 143, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 144, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 145, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 146, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 147, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 148, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 149, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 150, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 151, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 152, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 153, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 154, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 155, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 156, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 157, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 158, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 159, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 160, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 161, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 162, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 163, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 164, '2026-06-16 00:00:00');
+INSERT INTO `admin_role_permission_rel` (`role_id`, `permission_id`, `created_at`) VALUES (1, 165, '2026-06-16 00:00:00');
 COMMIT;
 
 -- ----------------------------
@@ -529,7 +583,7 @@ INSERT INTO `sys_config` (`id`, `uuid`, `title`, `type`, `value`, `example`, `re
 INSERT INTO `sys_config` (`id`, `uuid`, `title`, `type`, `value`, `example`, `remark`, `page`, `pid`, `pids`, `version`, `created_at`, `updated_at`) VALUES (5, 'adminVerifyMFAConfig', 'Admin验证MFA配置', 0, '0', '0', 'Admin验证MFA配置', '', 0, '', 0, '2025-11-26 11:19:16', '2025-11-29 12:18:09');
 INSERT INTO `sys_config` (`id`, `uuid`, `title`, `type`, `value`, `example`, `remark`, `page`, `pid`, `pids`, `version`, `created_at`, `updated_at`) VALUES (6, 'adminMFACheckEnable', 'Admin校验MFA设备验证码', 6, '0', '1', '[生产建议配置：1 强启用] 强启用MFA设备（身份验证器）登录校验：1 强启用校验（用户设置MFA状态失效）；0 非强启用（默认使用用户设置的MFA状态）', '', 5, '5', 5, '2025-11-26 11:24:42', '2026-05-05 20:11:38');
 INSERT INTO `sys_config` (`id`, `uuid`, `title`, `type`, `value`, `example`, `remark`, `page`, `pid`, `pids`, `version`, `created_at`, `updated_at`) VALUES (7, 'adminMFACheckFrequency', 'Admin校验MFA设备频率', 4, '1800', '300', 'MFA设备校验频率（单位秒），建议配置5分钟(300秒)以上: 0 需要校验的地方每次都校验，大于0 秒在该时间内只不再重复校验（x秒时间内只校验一次）', '', 5, '5', 0, '2025-11-26 11:28:58', '2026-05-05 01:17:21');
-INSERT INTO `sys_config` (`id`, `uuid`, `title`, `type`, `value`, `example`, `remark`, `page`, `pid`, `pids`, `version`, `created_at`, `updated_at`) VALUES (8, 'adminDisableMFACheckScenario', 'Admin禁用MFA设备校验应用场景', 1, '{}', '{\"1\": \"修改密码\", \"2\": \"修改MFA状态\", \"3\": \"修改MFA秘钥\", \"4\": \"修改管理员状态\", \"5\": \"新增管理员\", \"6\": \"编辑管理员资料/角色\", \"7\": \"后台重置管理员密码\", \"8\": \"后台重置管理员首次状态\", \"9\": \"后台删除管理员\", \"10\": \"释放用户标签工作流互斥锁\", \"11\": \"秘钥管理敏感操作\"}', '配置需要跳过 MFA 二次校验的敏感操作场景；默认空对象，不跳过。', '', 5, '5', 0, '2025-11-26 11:36:14', '2026-05-05 01:17:23');
+INSERT INTO `sys_config` (`id`, `uuid`, `title`, `type`, `value`, `example`, `remark`, `page`, `pid`, `pids`, `version`, `created_at`, `updated_at`) VALUES (8, 'adminDisableMFACheckScenario', 'Admin禁用MFA设备校验应用场景', 1, '{}', '{\"1\": \"修改密码\", \"2\": \"修改MFA状态\", \"3\": \"修改MFA秘钥\", \"4\": \"修改管理员状态\", \"5\": \"新增管理员\", \"6\": \"编辑管理员资料/角色\", \"7\": \"后台重置管理员密码\", \"8\": \"后台重置管理员首次状态\", \"9\": \"后台删除管理员\", \"10\": \"释放用户标签工作流互斥锁\", \"11\": \"秘钥管理敏感操作\", \"12\": \"运行配置发布/回滚/导入\", \"13\": \"前台用户管理\", \"14\": \"API运行态热加载\"}', '配置需要跳过 MFA 二次校验的敏感操作场景；默认空对象，不跳过。', '', 5, '5', 0, '2025-11-26 11:36:14', '2026-06-16 00:00:00');
 COMMIT;
 
 SET FOREIGN_KEY_CHECKS = 1;

@@ -287,6 +287,14 @@ func (r *testConfigReloader) ReloadConfig(ctx context.Context, source string) er
 	return r.err
 }
 
+// ReloadRuntimeConfig 模拟 DB 运行配置热加载执行器。
+func (r *testConfigReloader) ReloadRuntimeConfig(ctx context.Context, source string) (svc.RuntimeConfigReloadResult, error) {
+	_ = ctx
+	r.triggered = true
+	r.source = source
+	return svc.RuntimeConfigReloadResult{}, r.err
+}
+
 // TestGetConfigReloadStatus 确保热加载状态接口会返回当前服务上下文中的状态快照。
 func TestGetConfigReloadStatus(t *testing.T) {
 	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})

@@ -1,26 +1,45 @@
 package collector
 
 import (
-	"admin/internal/handler/shared"
 	"net/http"
 
-	"admin/internal/middleware"
-	"admin/internal/svc"
-
-	"github.com/zeromicro/go-zero/rest"
+	"admin/internal/handler/shared"
 )
-
-// RegisterRoutes 注册通用收集器管理接口。
-func RegisterRoutes(server *rest.Server, serverCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware) {
-	shared.AddRouteSpecs(server, serverCtx, authMw, nil, RouteSpecs())
-}
 
 // RouteSpecs 返回通用收集器管理路由规格。
 func RouteSpecs() []shared.RouteSpec {
 	return []shared.RouteSpec{
-		shared.AuthRoute(http.MethodGet, "/api/collector/overview", shared.CollectorOverview, GetCollectorOverviewHandler),
-		shared.AuthRoute(http.MethodGet, "/api/collector/tasks", shared.CollectorTaskList, ListCollectorTasksHandler),
-		shared.AuthRoute(http.MethodPost, "/api/collector/run", shared.CollectorRun, RunCollectorHandler),
-		shared.AuthRoute(http.MethodPost, "/api/collector/tasks/retry", shared.CollectorRetry, RetryCollectorTasksHandler),
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/collector/overview", // 查询Collector概览。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.CollectorOverview,
+			Description: shared.CollectorOverview.Describe,
+			Handler:     GetCollectorOverviewHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/collector/tasks", // 查询Collector任务。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.CollectorTaskList,
+			Description: shared.CollectorTaskList.Describe,
+			Handler:     ListCollectorTasksHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/collector/run", // 手动执行Collector。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.CollectorRun,
+			Description: shared.CollectorRun.Describe,
+			Handler:     RunCollectorHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/collector/tasks/retry", // 手动重试Collector任务。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.CollectorRetry,
+			Description: shared.CollectorRetry.Describe,
+			Handler:     RetryCollectorTasksHandler,
+		},
 	}
 }

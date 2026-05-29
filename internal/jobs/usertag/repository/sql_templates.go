@@ -6,13 +6,6 @@ import (
 	"strings"
 
 	"admin/common/embedasset"
-
-	"github.com/Is999/go-utils/errors"
-)
-
-const (
-	// sqlTemplatePreviewRuneLimit 限制模板错误中携带的 SQL 片段长度，避免日志打出整段高基数 UID 列表。
-	sqlTemplatePreviewRuneLimit = 512
 )
 
 // sqlTemplatePlaceholderRegexp 匹配受控 SQL 模板占位符，并兼容 SQL formatter 插入的空格或换行。
@@ -53,25 +46,6 @@ func renderSQLTemplate(template string, replacements ...string) string {
 // 替换前先规整模板占位符，避免 ClickHouse 收到未渲染语法。
 func normalizeSQLTemplatePlaceholders(template string) string {
 	return sqlTemplatePlaceholderRegexp.ReplaceAllString(template, "{{$1}}")
-}
-
-// ensureSQLTemplateRendered 校验渲染后的 SQL 不再残留模板占位符。
-// Go 侧提前拦截未渲染模板，避免任务运行后才暴露语法错误。
-func ensureSQLTemplateRendered(sqlText string) error {
-	if !strings.Contains(sqlText, "{{") && !strings.Contains(sqlText, "}}") {
-		return nil
-	}
-	return errors.Errorf("SQL 模板占位符未完全渲染 preview=%s", previewSQLTemplate(sqlText))
-}
-
-// previewSQLTemplate 返回用于错误日志的 SQL 片段。
-// SQL 中可能包含大批 UID 白名单，日志只保留前缀，既能定位未替换占位符，又避免刷屏。
-func previewSQLTemplate(sqlText string) string {
-	runes := []rune(sqlText)
-	if len(runes) <= sqlTemplatePreviewRuneLimit {
-		return sqlText
-	}
-	return string(runes[:sqlTemplatePreviewRuneLimit]) + "..."
 }
 
 // userTagTruncateTableSQL 渲染用户标签分片表清理 DDL。

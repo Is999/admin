@@ -4,23 +4,42 @@ import (
 	"net/http"
 
 	"admin/internal/handler/shared"
-	"admin/internal/middleware"
-	"admin/internal/svc"
-
-	"github.com/zeromicro/go-zero/rest"
 )
-
-// RegisterRoutes 注册安全调试接口。
-func RegisterRoutes(server *rest.Server, serverCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware) {
-	shared.AddRouteSpecs(server, serverCtx, authMw, nil, RouteSpecs())
-}
 
 // RouteSpecs 返回安全调试路由规格。
 func RouteSpecs() []shared.RouteSpec {
 	return []shared.RouteSpec{
-		shared.AuthRoute(http.MethodPost, "/api/security/debug/sign", shared.SecurityDebugSign, SecurityDebugSignHandler),
-		shared.AuthRoute(http.MethodPost, "/api/security/debug/verify", shared.SecurityDebugVerify, SecurityDebugVerifyHandler),
-		shared.AuthRoute(http.MethodPost, "/api/security/debug/encrypt", shared.SecurityDebugEncrypt, SecurityDebugEncryptHandler),
-		shared.AuthRoute(http.MethodPost, "/api/security/debug/decrypt", shared.SecurityDebugDecrypt, SecurityDebugDecryptHandler),
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/security/debug/sign", // 安全调试签名。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.SecurityDebugSign,
+			Description: shared.SecurityDebugSign.Describe,
+			Handler:     SecurityDebugSignHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/security/debug/verify", // 安全调试验签。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.SecurityDebugVerify,
+			Description: shared.SecurityDebugVerify.Describe,
+			Handler:     SecurityDebugVerifyHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/security/debug/encrypt", // 安全调试加密。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.SecurityDebugEncrypt,
+			Description: shared.SecurityDebugEncrypt.Describe,
+			Handler:     SecurityDebugEncryptHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/security/debug/decrypt", // 安全调试解密。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.SecurityDebugDecrypt,
+			Description: shared.SecurityDebugDecrypt.Describe,
+			Handler:     SecurityDebugDecryptHandler,
+		},
 	}
 }

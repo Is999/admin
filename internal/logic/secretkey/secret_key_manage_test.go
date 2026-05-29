@@ -156,22 +156,6 @@ func TestResolvePEMTextRejectInlinePEM(t *testing.T) {
 	}
 }
 
-// TestRunSecretKeyRSASignVerifySelfCheckUsesServerKeyPair 验证运行态验签自检使用的是服务端公私钥，而不是误用用户公钥。
-func TestRunSecretKeyRSASignVerifySelfCheckUsesServerKeyPair(t *testing.T) {
-	serverPrivatePEM, serverPublicPEM := generateTestRSAPEMPair(t)
-	userPrivatePEM, userPublicPEM := generateTestRSAPEMPair(t)
-	if serverPrivatePEM == userPrivatePEM || serverPublicPEM == userPublicPEM {
-		t.Fatal("test RSA pairs should be different")
-	}
-	passed, err := runSecretKeyRSASignVerifySelfCheck(serverPrivatePEM, serverPublicPEM)
-	if err != nil {
-		t.Fatalf("runSecretKeyRSASignVerifySelfCheck() error = %v", err)
-	}
-	if !passed {
-		t.Fatal("runSecretKeyRSASignVerifySelfCheck() should pass with server key pair")
-	}
-}
-
 // TestRunSecretKeyRSARequestDecryptSelfCheckUsesDerivedServerPublic 验证解密自检使用服务端密钥。
 func TestRunSecretKeyRSARequestDecryptSelfCheckUsesDerivedServerPublic(t *testing.T) {
 	serverPrivatePEM, _ := generateTestRSAPEMPair(t)

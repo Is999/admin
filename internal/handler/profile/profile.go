@@ -27,14 +27,6 @@ func ProfileMineHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	})
 }
 
-// ProfilePermissionsHandler 返回当前登录管理员角色权限。
-func ProfilePermissionsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionLogHandler(shared.MethodProfilePermissions, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
-		logicObj := profilelogic.NewProfileLogic(r, sCtx)
-		return logicObj, logicObj.Permissions().WithReq(map[string]any{"action": "profile_permissions"})
-	})
-}
-
 // ProfileCheckSecureHandler 校验当前登录管理员密码。
 func ProfileCheckSecureHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.RespHandler[types.ProfileCheckSecureReq](

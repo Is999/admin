@@ -273,14 +273,6 @@ func (m *Manager) displayQueueName(queue string) string {
 	return keys.TrimTaskQueueName(queue)
 }
 
-// workflowKeyPrefix 返回当前站点在 Redis 中的工作流 key 前缀。
-func (m *Manager) workflowKeyPrefix() string {
-	if !m.useRedisNamespace() {
-		return ""
-	}
-	return keys.TaskWorkflowPrefix()
-}
-
 // namespacedGroup 返回当前站点下聚合任务使用的分组名。
 func (m *Manager) namespacedGroup(group string) string {
 	group = strings.TrimSpace(group)
@@ -300,18 +292,6 @@ func (m *Manager) displayGroupName(group string) string {
 		return ""
 	}
 	return keys.TrimTaskQueueName(group)
-}
-
-// namespacedUniqueKey 返回当前站点下的任务去重键。
-func (m *Manager) namespacedUniqueKey(key string) string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return ""
-	}
-	if !m.useRedisNamespace() {
-		return ""
-	}
-	return keys.TaskQueueName(key)
 }
 
 // CurrentConfig 返回当前生效的任务系统配置快照。
@@ -3186,15 +3166,6 @@ func (m *Manager) workflowNodeFinalizedKey(workflowID, nodeName string) string {
 	return keys.TaskWorkflowNodeFinalizedKey(workflowID, nodeName)
 }
 
-// workflowInstanceKey 返回单个分片任务实例终态巡检 Redis key。
-// 终态去重标记已收敛到 workflowNodeKey 对应 hash 内，此方法用于回归确认不再写入实例散列 key。
-func (m *Manager) workflowInstanceKey(workflowID, nodeName string, shardIndex int) string {
-	if !m.useRedisNamespace() {
-		return ""
-	}
-	return keys.TaskWorkflowNodeInstanceKey(workflowID, nodeName, shardIndex)
-}
-
 // workflowCompletedKey 返回工作流完成标记的 Redis key。
 func (m *Manager) workflowCompletedKey(workflowID string) string {
 	if !m.useRedisNamespace() {
@@ -3700,17 +3671,6 @@ func (m *Manager) hasHandler(taskType string) bool {
 	defer m.mu.RUnlock()
 	_, ok := m.handlers[strings.TrimSpace(taskType)]
 	return ok
-}
-
-// clampPercent 把灰度百分比收敛到 1~100 的有效区间。
-func clampPercent(percent int) int {
-	if percent <= 0 {
-		return 100
-	}
-	if percent > 100 {
-		return 100
-	}
-	return percent
 }
 
 // toTaskItem 把 Asynq 任务详情转换成对外返回结构。

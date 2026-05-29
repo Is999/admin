@@ -11,6 +11,7 @@ import (
 
 	"admin/internal/config"
 	"admin/internal/infra/loggerx"
+	runtimeconfig "admin/internal/logic/runtimeconfig"
 	"admin/internal/svc"
 
 	utils "github.com/Is999/go-utils"
@@ -312,6 +313,14 @@ func (a *App) reloadConfigFile(ctx context.Context, source string, configFile st
 		a.markHotReloadFailure("配置热加载失败", err, currentFingerprint, source, "load", configFile)
 		return "", errors.Tag(err)
 	}
+	if runtimeconfig.IsDatabaseSource(beforeCfg) && runtimeconfig.IsDatabaseSource(cfg) {
+		active, loadErr := runtimeconfig.LoadActiveSnapshotCached(ctx, a.ServiceContext)
+		if loadErr != nil {
+			a.markHotReloadFailure("加载数据库运行配置失败", loadErr, currentFingerprint, source, "load_runtime_config", configFile)
+			return "", errors.Tag(loadErr)
+		}
+		runtimeconfig.ApplySnapshot(&cfg, active.Snapshot)
+	}
 
 	restartRequired, restartReason := detectHotReloadRestartImpact(beforeCfg, cfg)
 	effectiveCfg := cfg
@@ -430,6 +439,15 @@ type hotReloadRestartSpec struct {
 func hotReloadRestartSpecs() []hotReloadRestartSpec {
 	return []hotReloadRestartSpec{
 		{
+			Reason: "app_id",
+			Changed: func(before, after config.Config) bool {
+				return strings.TrimSpace(before.AppID) != strings.TrimSpace(after.AppID)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.AppID = before.AppID
+			},
+		},
+		{
 			Reason: "run_mode",
 			Changed: func(before, after config.Config) bool {
 				return before.RunMode != after.RunMode
@@ -492,6 +510,18 @@ func hotReloadRestartSpecs() []hotReloadRestartSpec {
 				periodic := append([]config.TaskPeriodicConfig(nil), after.Task.Periodic...)
 				effective.Task = before.Task
 				effective.Task.Periodic = periodic
+			},
+		},
+		{
+			Reason: "runtime_config.source_env",
+			Changed: func(before, after config.Config) bool {
+				return runtimeconfig.NormalizeSource(before.RuntimeConfig.Source) != runtimeconfig.NormalizeSource(after.RuntimeConfig.Source) ||
+					runtimeconfig.RuntimeEnv(before) != runtimeconfig.RuntimeEnv(after)
+			},
+			Preserve: func(effective *config.Config, before config.Config, after config.Config) {
+				pollInterval := after.RuntimeConfig.PollIntervalSeconds
+				effective.RuntimeConfig = before.RuntimeConfig
+				effective.RuntimeConfig.PollIntervalSeconds = pollInterval
 			},
 		},
 		{

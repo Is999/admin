@@ -21,8 +21,11 @@ func TestDefaultMigrationsCoverDatabaseSQLAssets(t *testing.T) {
 	covered := make(map[string]struct{}, len(DefaultMigrations()))
 	for _, item := range DefaultMigrations() {
 		covered[item.Asset] = struct{}{}
-		if !item.BootstrapOnly || !item.Destructive {
+		if item.Version < "202606050017" && (!item.BootstrapOnly || !item.Destructive) {
 			t.Fatalf("admin baseline migration must be bootstrap-only and destructive: %+v", item)
+		}
+		if item.Version >= "202606050017" && (item.BootstrapOnly || item.Destructive) {
+			t.Fatalf("online migration must be non-destructive: %+v", item)
 		}
 		if len(item.Checksum) != 64 {
 			t.Fatalf("migration checksum length = %d, want 64: %+v", len(item.Checksum), item)

@@ -437,56 +437,6 @@ func (l *AdminPermissionLogic) permissionFieldMap(cacheKey string) (map[string]s
 	return cache, nil
 }
 
-// permissionCandidateIDsWithCache 使用权限 module 缓存解析候选权限 ID，供鉴权链路优先走缓存。
-func (l *AdminPermissionLogic) permissionCandidateIDsWithCache(candidates []string) ([]int, error) {
-	candidateSet := make(map[string]struct{}, len(candidates))
-	for _, candidate := range helper.UniqueNonEmptyStrings(candidates) {
-		candidateSet[candidate] = struct{}{}
-	}
-	if len(candidateSet) == 0 {
-		return []int{}, nil
-	}
-	moduleMap, err := l.permissionFieldMapWithCache(keys.PermissionModule)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	permissionIDs := make([]int, 0)
-	for permissionIDText, module := range moduleMap {
-		if _, ok := candidateSet[strings.TrimSpace(module)]; !ok {
-			continue
-		}
-		permissionID, convErr := strconv.Atoi(permissionIDText)
-		if convErr != nil || permissionID <= 0 {
-			return nil, errors.Wrap(convErr, "解析权限模块缓存ID失败")
-		}
-		permissionIDs = append(permissionIDs, permissionID)
-	}
-	return types.UniquePositiveInts(permissionIDs), nil
-}
-
-// rebuildPermissionUUIDCache 把全部启用权限 UUID 重建到 Redis Hash，保持后台权限语义一致。
-func (l *AdminPermissionLogic) rebuildPermissionUUIDCache() error {
-	if l.Redis() == nil {
-		return nil
-	}
-	cacheKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.PermissionUUID)
-	var permissions []model.AdminPermission
-	if err := l.Svc.ReadDB(svc.DatabaseMain).Where("status = 1").Find(&permissions).Error; err != nil {
-		return errors.Tag(err)
-	}
-	cache := make(map[string]any, len(permissions))
-	for _, permission := range permissions {
-		cache[strconv.Itoa(permission.ID)] = permission.UUID
-	}
-	pipe := l.Redis().Pipeline()
-	pipe.Del(l.Ctx, cacheKey)
-	if len(cache) > 0 {
-		pipe.HSet(l.Ctx, cacheKey, cache)
-	}
-	_, err := pipe.Exec(l.Ctx)
-	return errors.Tag(err)
-}
-
 // permissionModelToItem 把权限模型转换成接口响应项。
 func permissionModelToItem(permission model.AdminPermission, checked bool, disabled bool, children []types.AdminPermissionItem) types.AdminPermissionItem {
 	return types.AdminPermissionItem{
@@ -696,30 +646,6 @@ func (l *AdminPermissionLogic) ensurePermissionUUIDUniqueTx(tx *gorm.DB, uuid st
 	}
 	if count > 0 {
 		return errors.Wrapf(ErrPermissionUUIDAlreadyExists, "AdminPermissionLogic.ensurePermissionUUIDUniqueTx 权限UUID[%s]已存在", strings.TrimSpace(uuid))
-	}
-	return nil
-}
-
-// ensurePermissionNoChildrenTx 确认权限节点没有子节点。
-func (l *AdminPermissionLogic) ensurePermissionNoChildrenTx(tx *gorm.DB, permissionID int) error {
-	var count int64
-	if err := tx.Model(&model.AdminPermission{}).Where("pid = ?", permissionID).Count(&count).Error; err != nil {
-		return errors.Wrapf(err, "AdminPermissionLogic.ensurePermissionNoChildrenTx 检查权限ID[%d]子权限失败", permissionID)
-	}
-	if count > 0 {
-		return errors.Errorf("AdminPermissionLogic.ensurePermissionNoChildrenTx 权限ID[%d]存在子权限，不能删除", permissionID)
-	}
-	return nil
-}
-
-// ensurePermissionNoRolesTx 确认权限没有被角色绑定。
-func (l *AdminPermissionLogic) ensurePermissionNoRolesTx(tx *gorm.DB, permissionID int) error {
-	var count int64
-	if err := tx.Model(&model.AdminRolePermissionRel{}).Where("permission_id = ?", permissionID).Count(&count).Error; err != nil {
-		return errors.Wrapf(err, "AdminPermissionLogic.ensurePermissionNoRolesTx 检查权限ID[%d]绑定角色失败", permissionID)
-	}
-	if count > 0 {
-		return errors.Errorf("AdminPermissionLogic.ensurePermissionNoRolesTx 权限ID[%d]已被角色绑定，不能删除", permissionID)
 	}
 	return nil
 }

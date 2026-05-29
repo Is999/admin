@@ -6,41 +6,104 @@ import (
 	adminhandler "admin/internal/handler/admin"
 	profilehandler "admin/internal/handler/profile"
 	"admin/internal/handler/shared"
-	"admin/internal/middleware"
-	"admin/internal/svc"
-
-	"github.com/zeromicro/go-zero/rest"
 )
-
-// RegisterRoutes 注册认证、会话和个人中心安全接口。
-func RegisterRoutes(server *rest.Server, serverCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware) {
-	shared.AddRouteSpecs(server, serverCtx, authMw, nil, RouteSpecs())
-}
 
 // RouteSpecs 返回认证、会话和个人中心安全路由规格。
 func RouteSpecs() []shared.RouteSpec {
 	return []shared.RouteSpec{
-		shared.PublicRoute(http.MethodGet, "/api/auth/captcha", shared.AuthCaptcha, LoginCaptchaHandler),
-		shared.PublicRoute(http.MethodPost, "/api/auth/login", shared.AuthLogin, LoginHandler),
-		shared.AuthRoute(http.MethodPost, "/api/auth/refresh", shared.AuthRefresh, adminhandler.RefreshAccessTokenHandler),
-		shared.AuthRoute(http.MethodPost, "/api/auth/logout", shared.AuthLogout, LogoutHandler),
-		shared.AuthRoute(http.MethodGet, "/api/auth/codes", shared.AuthCodes, adminhandler.GetUserPermissionCodesHandler),
-		shared.AuthRoute(http.MethodGet, "/api/auth/profile", shared.AuthProfile, adminhandler.AuthProfileHandler),
-		shared.PublicRoute(http.MethodPost, "/api/auth/verify-account", shared.AuthVerifyAccount, profilehandler.AuthVerifyAccountHandler),
-		shared.AuthRoute(http.MethodGet, "/api/profile", shared.ProfileMine, profilehandler.ProfileMineHandler),
-		shared.AuthRoute(http.MethodPost, "/api/profile/check-secure", shared.ProfileCheckSecure, profilehandler.ProfileCheckSecureHandler),
-		shared.AuthRoute(http.MethodPost, "/api/profile/check-mfa", shared.ProfileCheckMFA, profilehandler.ProfileCheckMFAHandler),
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/auth/captcha", // 获取登录图形验证码。
+			Access:      shared.RouteAccessPublic,
+			Meta:        shared.AuthCaptcha,
+			Description: shared.AuthCaptcha.Describe,
+			Handler:     LoginCaptchaHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/auth/login", // 管理员登录。
+			Access:      shared.RouteAccessPublic,
+			Meta:        shared.AuthLogin,
+			Description: shared.AuthLogin.Describe,
+			Handler:     LoginHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/auth/refresh", // 刷新访问令牌。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.AuthRefresh,
+			Description: shared.AuthRefresh.Describe,
+			Handler:     adminhandler.RefreshAccessTokenHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/auth/logout", // 管理员退出登录。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.AuthLogout,
+			Description: shared.AuthLogout.Describe,
+			Handler:     LogoutHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/auth/codes", // 获取当前用户权限码。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.AuthCodes,
+			Description: shared.AuthCodes.Describe,
+			Handler:     adminhandler.GetUserPermissionCodesHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/auth/profile", // 获取当前登录资料。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.AuthProfile,
+			Description: shared.AuthProfile.Describe,
+			Handler:     adminhandler.AuthProfileHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/auth/verify-account", // 验证账号并生成MFA绑定信息。
+			Access:      shared.RouteAccessPublic,
+			Meta:        shared.AuthVerifyAccount,
+			Description: shared.AuthVerifyAccount.Describe,
+			Handler:     profilehandler.AuthVerifyAccountHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/profile", // 获取当前管理员资料。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.ProfileMine,
+			Description: shared.ProfileMine.Describe,
+			Handler:     profilehandler.ProfileMineHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/profile/check-secure", // 校验当前管理员密码。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.ProfileCheckSecure,
+			Description: shared.ProfileCheckSecure.Describe,
+			Handler:     profilehandler.ProfileCheckSecureHandler,
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/api/profile/check-mfa", // 校验当前管理员MFA动态码。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.ProfileCheckMFA,
+			Description: shared.ProfileCheckMFA.Describe,
+			Handler:     profilehandler.ProfileCheckMFAHandler,
+		},
 	}
-}
-
-// RegisterInternalRoutes 注册仅供内网自举调用的认证相关接口。
-func RegisterInternalRoutes(server *rest.Server, serverCtx *svc.ServiceContext, internalMw *middleware.InternalOnlyMiddleware) {
-	shared.AddRouteSpecs(server, serverCtx, nil, internalMw, InternalRouteSpecs())
 }
 
 // InternalRouteSpecs 返回内网认证自举路由规格。
 func InternalRouteSpecs() []shared.RouteSpec {
 	return []shared.RouteSpec{
-		shared.InternalRoute(http.MethodPost, "/internal/auth/init-admin-bootstrap", shared.InternalInitAdminBootstrap, InitAdminBootstrapHandler),
+		{
+			Method:      http.MethodPost,
+			Path:        "/internal/auth/init-admin-bootstrap", // 内网初始化管理员账号。
+			Access:      shared.RouteAccessInternal,
+			Meta:        shared.InternalInitAdminBootstrap,
+			Description: shared.InternalInitAdminBootstrap.Describe,
+			Handler:     InitAdminBootstrapHandler,
+		},
 	}
 }

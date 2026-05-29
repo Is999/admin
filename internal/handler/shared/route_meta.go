@@ -54,8 +54,6 @@ var (
 	InternalInitAdminBootstrap = newRouteMeta("internal.auth.init_admin_bootstrap", "内网初始化管理员账号")
 	// ProfileMine 获取当前管理员资料。
 	ProfileMine = newRouteMeta(routealias.ProfileMine, "获取当前管理员资料")
-	// ProfilePermissions 获取当前管理员角色权限。
-	ProfilePermissions = newRouteMeta(routealias.ProfilePermissions, "获取当前管理员角色权限")
 	// ProfileCheckSecure 校验当前管理员密码。
 	ProfileCheckSecure = newRouteMeta(routealias.ProfileCheckSecure, "校验当前管理员密码")
 	// ProfileCheckMFA 校验当前管理员MFA动态码。
@@ -100,16 +98,32 @@ var (
 	AdminRoleList = newAuditRouteMeta("admin.role.list", model.ActionAdminRoleList, "查询管理员角色")
 	// AdminRoleUpdate 编辑管理员角色。
 	AdminRoleUpdate = newAuditRouteMeta(routealias.AdminRoleUpdate, model.ActionAdminRoleUpdate, "编辑管理员角色")
-	// AdminRoleAdd 添加管理员角色。
-	AdminRoleAdd = newAuditRouteMeta("admin.role.add", model.ActionAdminRoleAdd, "添加管理员角色")
-	// AdminRoleDelete 解除管理员角色。
-	AdminRoleDelete = newAuditRouteMeta("admin.role.delete", model.ActionAdminRoleDelete, "解除管理员角色")
 	// AdminExportTrigger 异步导出管理员列表。
 	AdminExportTrigger = newAuditRouteMeta("admin.export", model.ActionAdminExport, "异步导出管理员列表")
 	// AdminExportStatus 查询管理员导出进度。
 	AdminExportStatus = newAuditRouteMeta("admin.export.status", model.ActionAdminExportStatus, "查询管理员导出进度")
 	// AdminExportDownload 下载管理员导出文件。
 	AdminExportDownload = newAuditRouteMeta("admin.export.download", model.ActionAdminExportDownload, "下载管理员导出文件")
+
+	// 前台用户模块
+	// APIUserList 查询前台用户列表。
+	APIUserList = newAuditRouteMeta(routealias.APIUserList, model.ActionAPIUserList, "查询前台用户列表")
+	// APIUserInfo 查询前台用户详情。
+	APIUserInfo = newAuditRouteMeta(routealias.APIUserInfo, model.ActionAPIUserInfo, "查询前台用户详情")
+	// APIUserAdd 新增前台用户。
+	APIUserAdd = newAuditRouteMeta(routealias.APIUserAdd, model.ActionAPIUserAdd, "新增前台用户")
+	// APIUserUpdate 编辑前台用户资料。
+	APIUserUpdate = newAuditRouteMeta(routealias.APIUserUpdate, model.ActionAPIUserUpdate, "编辑前台用户资料")
+	// APIUserStatusUpdate 修改前台用户状态。
+	APIUserStatusUpdate = newAuditRouteMeta(routealias.APIUserStatusUpdate, model.ActionAPIUserStatusUpdate, "修改前台用户状态")
+	// APIUserPasswordReset 重置前台用户密码。
+	APIUserPasswordReset = newAuditRouteMeta(routealias.APIUserPasswordReset, model.ActionAPIUserPasswordReset, "重置前台用户密码")
+	// APIUserRuntimeSync 同步前台用户 API 运行态。
+	APIUserRuntimeSync = newAuditRouteMeta(routealias.APIUserRuntimeSync, model.ActionAPIUserRuntimeSync, "同步前台用户API运行态")
+	// APIRuntimeConfigReloadStatus 查询 API 配置热加载状态。
+	APIRuntimeConfigReloadStatus = newAuditRouteMeta(routealias.APIRuntimeConfigReloadStatus, model.ActionAPIRuntimeConfigReloadStatus, "查询API配置热加载状态")
+	// APIRuntimeConfigReloadRun 手动触发 API 配置热加载。
+	APIRuntimeConfigReloadRun = newAuditRouteMeta(routealias.APIRuntimeConfigReloadRun, model.ActionAPIRuntimeConfigReloadRun, "手动触发API配置热加载")
 
 	// 消息中心模块
 	// AdminMessageList 查询管理员消息收件箱。
@@ -238,6 +252,20 @@ var (
 	TaskConfigReload = newAuditRouteMeta("task.config.reload.status", model.ActionTaskConfigReloadStatus, "查询配置热加载状态")
 	// TaskConfigReloadRun 手动触发配置热加载。
 	TaskConfigReloadRun = newAuditRouteMeta("task.config.reload.run", model.ActionTaskConfigReloadRun, "手动触发配置热加载")
+	// RuntimeConfigOverview 查询运行配置概览。
+	RuntimeConfigOverview = newAuditRouteMeta("runtime.config.list", model.ActionRuntimeConfigOverview, "查询运行配置概览")
+	// RuntimeConfigList 查询运行配置列表。
+	RuntimeConfigList = newAuditRouteMeta("runtime.config.list", model.ActionRuntimeConfigList, "查询运行配置")
+	// RuntimeConfigSave 保存运行配置草稿。
+	RuntimeConfigSave = newAuditRouteMeta("runtime.config.save", model.ActionRuntimeConfigSave, "保存运行配置草稿")
+	// RuntimeConfigValidate 预检运行配置草稿。
+	RuntimeConfigValidate = newAuditRouteMeta("runtime.config.validate", model.ActionRuntimeConfigValidate, "预检运行配置")
+	// RuntimeConfigPublish 发布运行配置。
+	RuntimeConfigPublish = newAuditRouteMeta("runtime.config.publish", model.ActionRuntimeConfigPublish, "发布运行配置")
+	// RuntimeConfigRollback 回滚运行配置。
+	RuntimeConfigRollback = newAuditRouteMeta("runtime.config.rollback", model.ActionRuntimeConfigRollback, "回滚运行配置")
+	// RuntimeConfigImport 导入运行配置。
+	RuntimeConfigImport = newAuditRouteMeta("runtime.config.import", model.ActionRuntimeConfigImport, "导入运行配置")
 	// TaskQueuePause 暂停任务队列。
 	TaskQueuePause = newAuditRouteMeta("task.queue.pause", model.ActionTaskQueuePause, "暂停任务队列")
 	// TaskQueueResume 恢复任务队列。

@@ -41,47 +41,6 @@ type RouteSpec struct {
 	Handler       RouteHandler          // 真实 Handler 构造函数
 }
 
-// AuthRoute 声明后台登录态路由规格。
-func AuthRoute(method, path string, meta RouteMeta, handler RouteHandler) RouteSpec {
-	return RouteSpec{Method: method, Path: path, Access: RouteAccessAuth, Meta: meta, Description: meta.Describe, Handler: handler}
-}
-
-// PublicRoute 声明公开路由规格；存在 RouteMeta 时仍会经过公开签名/加密链路。
-func PublicRoute(method, path string, meta RouteMeta, handler RouteHandler) RouteSpec {
-	return RouteSpec{Method: method, Path: path, Access: RouteAccessPublic, Meta: meta, Description: meta.Describe, Handler: handler}
-}
-
-// InternalRoute 声明内网白名单路由规格。
-func InternalRoute(method, path string, meta RouteMeta, handler RouteHandler) RouteSpec {
-	return RouteSpec{Method: method, Path: path, Access: RouteAccessInternal, Meta: meta, Description: meta.Describe, Handler: handler}
-}
-
-// HealthRoute 声明健康检查或指标路由规格。
-func HealthRoute(method, path, description string, handler RouteHandler) RouteSpec {
-	return RouteSpec{Method: method, Path: path, Access: RouteAccessHealth, Description: description, SkipAccessLog: true, Handler: handler}
-}
-
-// PlainAuthRoute 声明不进入业务权限码的登录态路由规格。
-func PlainAuthRoute(method, path string, alias middleware.RouteAlias, description string, handler RouteHandler) RouteSpec {
-	return RouteSpec{Method: method, Path: path, Access: RouteAccessAuth, Alias: alias, Description: description, Handler: handler}
-}
-
-// PlainPublicRoute 声明不经过后台登录态的公开路由规格。
-func PlainPublicRoute(method, path, description string, handler RouteHandler) RouteSpec {
-	return RouteSpec{Method: method, Path: path, Access: RouteAccessPublic, Description: description, Handler: handler}
-}
-
-// DocsRoute 声明文档站静态资源路由规格。
-func DocsRoute(method, path, description string, handler RouteHandler) RouteSpec {
-	return RouteSpec{Method: method, Path: path, Access: RouteAccessDocs, Description: description, Handler: handler}
-}
-
-// WithSkipAccessLog 返回跳过普通访问日志的路由规格。
-func (s RouteSpec) WithSkipAccessLog() RouteSpec {
-	s.SkipAccessLog = true
-	return s
-}
-
 // RouteAlias 返回路由鉴权和审计使用的稳定别名。
 func (s RouteSpec) RouteAlias() middleware.RouteAlias {
 	if s.Meta.Alias != "" {

@@ -2,7 +2,6 @@ package secretkey
 
 import (
 	corelogic "admin/internal/logic"
-	cachelogic "admin/internal/logic/cache"
 	securitylogic "admin/internal/logic/security"
 	"crypto/rand"
 	"crypto/rsa"
@@ -805,24 +804,6 @@ func deriveRSAPublicPEMFromPrivateKey(privateKey *rsa.PrivateKey) (string, error
 	return string(publicPEM), nil
 }
 
-// runSecretKeyRSASignVerifySelfCheck 执行服务端签名与服务端公钥验签自检。
-func runSecretKeyRSASignVerifySelfCheck(serverPrivatePEM string, serverPublicPEM string) (bool, error) {
-	const signPayload = "admin-sign-check"
-	signer, err := security.NewRSASigner(serverPrivatePEM, "")
-	if err != nil {
-		return false, errors.Tag(err)
-	}
-	signValue, err := signer.Sign(signPayload)
-	if err != nil {
-		return false, errors.Tag(err)
-	}
-	verifySigner, err := security.NewRSASigner("", serverPublicPEM)
-	if err != nil {
-		return false, errors.Tag(err)
-	}
-	return verifySigner.Verify(signPayload, signValue)
-}
-
 // runSecretKeyRSARequestDecryptSelfCheck 执行“服务端公钥加密 -> 服务端私钥解密”的请求解密链路自检。
 func runSecretKeyRSARequestDecryptSelfCheck(serverPrivatePEM string) (bool, error) {
 	const rsaPlaintext = "admin-rsa-check"
@@ -1020,20 +1001,6 @@ func buildSaveSecretKeyReq(row model.SecretKey, version model.SecretKeyVersion) 
 		GrayPercent:            row.GrayPercent,
 		Remark:                 row.Remark,
 	}
-}
-
-// deleteSecretKeyCache 删除指定 AppID 的路由缓存和全部版本材料缓存。
-func (l *SecretKeyLogic) deleteSecretKeyCache(appID string) error {
-	if l.Redis() == nil || strings.TrimSpace(appID) == "" {
-		return nil
-	}
-	if err := l.deleteSecretKeyVersionCaches(appID); err != nil {
-		return errors.Tag(err)
-	}
-	if err := l.RdsDelKeys(cachelogic.TableCachePhysicalKeys(l.BaseLogic, l.secretKeyRoutePhysicalCacheKey(appID))...); err != nil {
-		return errors.Tag(err)
-	}
-	return nil
 }
 
 // secretKeyModelToItem 把主配置和版本列表转换成接口响应项。

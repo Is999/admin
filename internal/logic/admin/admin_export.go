@@ -844,7 +844,7 @@ func buildAdminExportRequestFingerprint(req *types.AdminExportReq) string {
 		statusText,
 		strconv.Itoa(roleID),
 	}, "|")
-	return utils.Sha256(raw)
+	return utils.SHA256(raw)
 }
 
 // buildTriggerResp 从任务状态构造提交导出后的统一回执。

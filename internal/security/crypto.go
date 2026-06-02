@@ -42,7 +42,7 @@ type MD5Signer struct{}
 
 // Sign 对待签名字符串做 MD5 摘要。
 func (MD5Signer) Sign(data string) (string, error) {
-	return utils.Md5(data), nil
+	return utils.MD5(data), nil
 }
 
 // Verify 使用常量时间比较校验 MD5 签名。
@@ -70,7 +70,7 @@ func NewAESCipher(key, iv string) (*AESCipher, error) {
 
 // Sign 先计算 SHA256 摘要，再用 AES 加密摘要字符串，保持与 laravel-admin AesService 一致。
 func (c *AESCipher) Sign(data string) (string, error) {
-	return c.Encrypt(utils.Sha256(data))
+	return c.Encrypt(utils.SHA256(data))
 }
 
 // Verify 解密签名后与 SHA256 摘要字符串比较。
@@ -79,17 +79,17 @@ func (c *AESCipher) Verify(data, sign string) (bool, error) {
 	if err != nil {
 		return false, errors.Tag(err)
 	}
-	return decrypted == utils.Sha256(data), nil
+	return decrypted == utils.SHA256(data), nil
 }
 
 // Encrypt 使用 AES-CBC 与 PKCS7 填充加密明文，输出 base64 密文。
 func (c *AESCipher) Encrypt(data string) (string, error) {
-	return c.cipher.Encrypt(data, utils.CBC, base64.StdEncoding.EncodeToString, utils.Pkcs7Padding)
+	return c.cipher.Encrypt(data, utils.CBC, base64.StdEncoding.EncodeToString, utils.PKCS7Pad)
 }
 
 // Decrypt 解密 base64 AES-CBC 密文并移除 PKCS7 填充。
 func (c *AESCipher) Decrypt(data string) (string, error) {
-	return c.cipher.Decrypt(data, utils.CBC, base64.StdEncoding.DecodeString, utils.Pkcs7UnPadding)
+	return c.cipher.Decrypt(data, utils.CBC, base64.StdEncoding.DecodeString, utils.PKCS7Unpad)
 }
 
 // RSASigner 实现 RSA SHA256 签名与验签能力。

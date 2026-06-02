@@ -145,9 +145,6 @@ func validateMigrationList(migrations []Migration) error {
 		if previousVersion != "" && item.Version <= previousVersion {
 			return errors.Errorf("数据库迁移版本必须递增: %s <= %s", item.Version, previousVersion)
 		}
-		if item.BootstrapOnly && !item.Destructive {
-			return errors.Errorf("bootstrap-only 迁移必须同时标记 destructive: %s", item.Name)
-		}
 		if containsDestructiveSQL(item.SQL) && !item.Destructive {
 			return errors.Errorf("检测到破坏性 SQL 但迁移未标记 destructive: %s", item.Name)
 		}

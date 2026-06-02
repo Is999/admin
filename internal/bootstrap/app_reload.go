@@ -187,7 +187,7 @@ func configFileFingerprint(file string) (string, error) {
 	if err != nil {
 		realPath = cleanFile
 	}
-	return fmt.Sprintf("%s|%d|%d|%s", realPath, info.Size(), info.ModTime().UnixNano(), utils.Sha256(string(data))), nil
+	return fmt.Sprintf("%s|%d|%d|%s", realPath, info.Size(), info.ModTime().UnixNano(), utils.SHA256(string(data))), nil
 }
 
 // configBundleFingerprint 返回主配置及其外部配置文件组成的配置包指纹。

@@ -141,7 +141,7 @@ func uploadManagerFingerprint(cfg config.FileStorageUploadSessionConfig, appID s
 	if err != nil {
 		return ""
 	}
-	return utils.Sha256(string(body))
+	return utils.SHA256(string(body))
 }
 
 // fileTransferRootDir 返回文件传输组件的本地临时目录根路径。

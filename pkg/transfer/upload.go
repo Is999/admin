@@ -739,7 +739,7 @@ func (m *LocalUploadManager) fingerprintKey(fingerprint string) string {
 // objectIndexKey 返回对象 key 反查上传会话的 Redis key。
 func (m *LocalUploadManager) objectIndexKey(objectKey string) string {
 	// objectKey 先做 SHA-256 摘要，避免完整对象路径直接进入 Redis key。
-	return strings.TrimSpace(strings.ReplaceAll(m.objectIndexKeyFormat, "%s", utils.Sha256(strings.TrimSpace(objectKey))))
+	return strings.TrimSpace(strings.ReplaceAll(m.objectIndexKeyFormat, "%s", utils.SHA256(strings.TrimSpace(objectKey))))
 }
 
 // lockKey 返回单个上传会话写操作锁 Redis key。
@@ -772,7 +772,7 @@ func buildUploadFingerprint(operatorID int, bizType string, fileName string, fil
 	if fileHash == "" {
 		return ""
 	}
-	return utils.Sha256(strings.Join([]string{
+	return utils.SHA256(strings.Join([]string{
 		strconv.Itoa(operatorID),
 		strings.TrimSpace(bizType),
 		strings.TrimSpace(fileName),

@@ -50,7 +50,7 @@ func NewLock(redisClient redis.UniversalClient, key string) *Lock {
 	// lock 保存一次分布式锁生命周期所需的固定配置和内部状态。
 	lock := &Lock{
 		key:   strings.TrimSpace(key),
-		token: utils.RandStr(16, utils.RandSource),
+		token: utils.RandomLetters(16, utils.RandSource),
 		done:  make(chan struct{}),
 		lost:  make(chan error, 1),
 	}

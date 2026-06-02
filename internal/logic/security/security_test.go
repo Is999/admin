@@ -1,6 +1,7 @@
 package security
 
 import (
+	"admin/internal/database"
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
 	rbaclogic "admin/internal/logic/rbac"
@@ -51,7 +52,7 @@ func TestPermissionSQLContainsAllFrontendCodes(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("bootstrap.sql missing frontend permission codes: %v", missing)
+		t.Fatalf("database permission SQL missing frontend permission codes: %v", missing)
 	}
 }
 
@@ -159,7 +160,7 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("bootstrap.sql missing required modules: %v", missing)
+		t.Fatalf("database permission SQL missing required modules: %v", missing)
 	}
 }
 
@@ -614,24 +615,30 @@ func TestGetUserPermissionCodesRebuildsPermissionUUIDCache(t *testing.T) {
 	}
 }
 
-// loadPermissionSQLSnapshot 读取初始化 SQL 中的权限 UUID 与 module 集合，供权限清单回归测试复用。
+// loadPermissionSQLSnapshot 读取数据库迁移 SQL 中的权限 UUID 与 module 集合，供权限清单回归测试复用。
 func loadPermissionSQLSnapshot() (map[string]struct{}, map[string]struct{}, error) {
-	content, err := os.ReadFile(testFilePath("../../../internal/database/assets/bootstrap.sql"))
-	if err != nil {
-		return nil, nil, errors.Tag(err)
-	}
-	statementPattern := regexp.MustCompile("(?s)INSERT INTO `admin_permission`.*?VALUES \\((\\d+),\\s*'([^']+)',\\s*'([^']*)',\\s*'([^']*)'")
-	matches := statementPattern.FindAllStringSubmatch(string(content), -1)
-	uuidSet := make(map[string]struct{}, len(matches))
-	moduleSet := make(map[string]struct{}, len(matches))
-	for _, match := range matches {
-		if len(match) < 5 {
-			continue
-		}
-		uuidSet[match[2]] = struct{}{}
-		module := match[4]
-		if module != "" {
-			moduleSet[module] = struct{}{}
+	statementPattern := regexp.MustCompile("^\\s*(?:INSERT(?: IGNORE)? INTO `admin_permission` .* VALUES\\s*)?\\((\\d+),\\s*'([^']+)',\\s*'[^']*',\\s*'([^']*)'")
+	uuidSet := make(map[string]struct{})
+	moduleSet := make(map[string]struct{})
+	for _, migration := range database.DefaultMigrations() {
+		inPermissionInsert := false
+		for _, line := range strings.Split(migration.SQL, "\n") {
+			if strings.Contains(line, "INSERT") && strings.Contains(line, "`admin_permission`") {
+				inPermissionInsert = true
+			}
+			if !inPermissionInsert {
+				continue
+			}
+			match := statementPattern.FindStringSubmatch(line)
+			if len(match) >= 4 {
+				uuidSet[match[2]] = struct{}{}
+				if match[3] != "" {
+					moduleSet[match[3]] = struct{}{}
+				}
+			}
+			if strings.Contains(line, ";") {
+				inPermissionInsert = false
+			}
 		}
 	}
 	return uuidSet, moduleSet, nil

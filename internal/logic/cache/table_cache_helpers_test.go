@@ -11,6 +11,8 @@ import (
 	"admin/internal/svc"
 	"admin/internal/types"
 
+	"github.com/Is999/go-utils/errors"
+	tablecache "github.com/Is999/table-cache"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
@@ -100,6 +102,14 @@ func TestTableCacheLogicalKey(t *testing.T) {
 				t.Fatalf("tableCacheLogicalKey() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestIsTableCacheTargetNotFoundWithWrappedError 验证 table-cache 新版包装错误后仍能识别目标缺失。
+func TestIsTableCacheTargetNotFoundWithWrappedError(t *testing.T) {
+	err := errors.Wrapf(tablecache.ErrTargetNotFound, "删除缓存失败")
+	if !IsTableCacheTargetNotFound(err) {
+		t.Fatalf("IsTableCacheTargetNotFound() = false, want true")
 	}
 }
 

@@ -41,7 +41,7 @@ func (*Admin) TableName() string {
 
 // PasswordWithSalt 基于管理员 ID 与用户名派生盐值，生成当前密码摘要。
 func (m *Admin) PasswordWithSalt(password string) string {
-	return utils.Md5(fmt.Sprintf("%d%s%s", m.ID, utils.Substr(utils.Md5(m.Name), 10, 20), password))
+	return utils.MD5(fmt.Sprintf("%d%s%s", m.ID, utils.Substr(utils.MD5(m.Name), 10, 20), password))
 }
 
 // FindUserByName 根据用户名查询管理员；未命中时返回 `nil, nil`。

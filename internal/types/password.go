@@ -34,7 +34,7 @@ func validateAdminPasswordOptional(password string, fieldName string) error {
 
 // validateAdminPasswordStrength 使用 go-utils 的 PassWord3 规则统一校验密码强度。
 func validateAdminPasswordStrength(password string, fieldName string) error {
-	if err := utils.PassWord3(password, adminPasswordMinLength, adminPasswordMaxLength); err != nil {
+	if err := utils.StrongPasswordWithSymbols(password, adminPasswordMinLength, adminPasswordMaxLength); err != nil {
 		return errors.Errorf("%s必须为8-12位，且包含大小写字母和数字，可使用特殊字符", fieldName)
 	}
 	return nil

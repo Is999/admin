@@ -151,7 +151,7 @@ func objectStorageFingerprint(cfg config.FileStorageConfig) string {
 	if err != nil {
 		return ""
 	}
-	return utils.Sha256(string(body))
+	return utils.SHA256(string(body))
 }
 
 // normalizeVirusScannerName 归一化病毒扫描器名称，空值交给 pkg/storage 回退到 noop。

@@ -298,7 +298,7 @@ func BuildSignString(data map[string]any, signParams []string, traceID, timestam
 		builder.WriteString("&")
 	}
 	builder.WriteString("key=")
-	builder.WriteString(utils.Md5(appID + "-" + traceID + "-" + timestamp))
+	builder.WriteString(utils.MD5(appID + "-" + traceID + "-" + timestamp))
 	return builder.String()
 }
 

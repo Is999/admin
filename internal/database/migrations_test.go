@@ -21,8 +21,8 @@ func TestDefaultMigrationsCoverDatabaseSQLAssets(t *testing.T) {
 	covered := make(map[string]struct{}, len(DefaultMigrations()))
 	for _, item := range DefaultMigrations() {
 		covered[item.Asset] = struct{}{}
-		if item.Version < "202606050017" && (!item.BootstrapOnly || !item.Destructive) {
-			t.Fatalf("admin baseline migration must be bootstrap-only and destructive: %+v", item)
+		if item.Version < "202606050017" && (!item.BootstrapOnly || item.Destructive) {
+			t.Fatalf("admin baseline migration must be bootstrap-only and non-destructive: %+v", item)
 		}
 		if item.Version >= "202606050017" && (item.BootstrapOnly || item.Destructive) {
 			t.Fatalf("online migration must be non-destructive: %+v", item)
@@ -32,6 +32,11 @@ func TestDefaultMigrationsCoverDatabaseSQLAssets(t *testing.T) {
 		}
 		if strings.Contains(item.SQL, "Navicat Premium Dump SQL") || strings.Contains(item.SQL, "用户标签工作流骨架运行时表结构") {
 			t.Fatalf("migration SQL header should be stripped: %s", item.Asset)
+		}
+		for _, forbidden := range []string{"DROP TABLE", "SET FOREIGN_KEY_CHECKS", "SET NAMES", "BEGIN;", "COMMIT;"} {
+			if strings.Contains(strings.ToUpper(item.SQL), forbidden) {
+				t.Fatalf("migration SQL contains dump-only statement %q: %s", forbidden, item.Asset)
+			}
 		}
 	}
 	for _, asset := range assets {

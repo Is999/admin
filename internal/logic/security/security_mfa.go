@@ -237,7 +237,7 @@ func (l *SecurityLogic) issueMFATwoStepTicket(adminID int, scenario int, verifyR
 		return nil, errors.Errorf("Redis未初始化")
 	}
 	key := uuid.NewString()
-	value := utils.RandStr(32, utils.RandSource)
+	value := utils.RandomLetters(32, utils.RandSource)
 	ttl := l.mfaFrequencyTTL()
 	cacheKey := l.mfaTwoStepTicketKey(adminID, key)
 	cacheValue := encodeMFATwoStepTicketPayload(&mfaTwoStepTicketPayload{
@@ -734,7 +734,7 @@ func hashMFASecret(secret string) string {
 	if secret == "" {
 		return ""
 	}
-	return utils.Sha256(secret)
+	return utils.SHA256(secret)
 }
 
 // HashMFASecret 返回归一化 MFA 秘钥的稳定摘要。

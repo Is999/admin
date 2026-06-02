@@ -231,7 +231,7 @@ func invalidateAllAdminPermissionCache(base *corelogic.BaseLogic) {
 
 // isTableCacheTargetNotFound 判断当前错误是否为表缓存目标未注册。
 func isTableCacheTargetNotFound(err error) bool {
-	return err != nil && err == tablecache.ErrTargetNotFound
+	return errors.Is(err, tablecache.ErrTargetNotFound)
 }
 
 // ParsePositiveIntStrings 把 Redis 字符串集合解析为正整数集合。

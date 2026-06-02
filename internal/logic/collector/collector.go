@@ -154,8 +154,8 @@ func (l *CollectorLogic) buildOverview(db *gorm.DB) (*types.CollectorOverviewRes
 	}
 
 	stateCounts := make([]struct {
-		State int   `gorm:"column:state"`
-		Total int64 `gorm:"column:total"`
+		State int   `gorm:"column:state"` // Collector 任务状态
+		Total int64 `gorm:"column:total"` // 状态对应任务数
 	}, 0)
 	if err := db.Model(&model.CollectorOutbox{}).
 		Select("state, COUNT(*) AS total").
@@ -192,7 +192,7 @@ func (l *CollectorLogic) buildOverview(db *gorm.DB) (*types.CollectorOverviewRes
 	}
 
 	oldestReady := struct {
-		NextRunAt *time.Time `gorm:"column:next_run_at"`
+		NextRunAt *time.Time `gorm:"column:next_run_at"` // 最早可执行时间
 	}{}
 	if err := db.Model(&model.CollectorOutbox{}).
 		Select("MIN(next_run_at) AS next_run_at").
@@ -225,9 +225,9 @@ func (l *CollectorLogic) fillOverviewWindow(db *gorm.DB, now time.Time, window *
 	}
 	since := now.Add(-time.Duration(window.WindowMinutes) * time.Minute)
 	successRow := struct {
-		SuccessCount int64   `gorm:"column:success_count"`
-		AvgCostMs    float64 `gorm:"column:avg_cost_ms"`
-		MaxCostMs    float64 `gorm:"column:max_cost_ms"`
+		SuccessCount int64   `gorm:"column:success_count"` // 成功任务数
+		AvgCostMs    float64 `gorm:"column:avg_cost_ms"`   // 平均耗时毫秒
+		MaxCostMs    float64 `gorm:"column:max_cost_ms"`   // 最大耗时毫秒
 	}{}
 	if err := db.Model(&model.CollectorOutbox{}).
 		Select(

@@ -122,6 +122,7 @@ func CurrentSnapshotFromConfig(cfg config.Config) ReleaseSnapshot {
 	}
 }
 
+// runtimeConfigSnapshotEmpty 判断发布快照是否未包含任何运行期大列表配置。
 func runtimeConfigSnapshotEmpty(snapshot ReleaseSnapshot) bool {
 	return len(snapshot.ArchiveJobs) == 0 && len(snapshot.TaskPeriodic) == 0
 }
@@ -508,6 +509,7 @@ func (l *RuntimeConfigLogic) GetRelease(req *types.RuntimeConfigReleaseIDReq) *t
 	})
 }
 
+// publishDraft 从草稿表构造快照并发布为 active 版本。
 func (l *RuntimeConfigLogic) publishDraft(remark string, baseReleaseID uint64) (*types.RuntimeConfigPublishResp, error) {
 	snapshot, err := l.buildDraftSnapshot()
 	if err != nil {
@@ -516,6 +518,7 @@ func (l *RuntimeConfigLogic) publishDraft(remark string, baseReleaseID uint64) (
 	return l.publishSnapshot(snapshot, remark, baseReleaseID)
 }
 
+// publishSnapshot 校验并持久化发布快照，同时触发运行态热加载。
 func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark string, baseReleaseID uint64) (*types.RuntimeConfigPublishResp, error) {
 	if _, err := ValidateSnapshot(snapshot); err != nil {
 		return nil, errors.Tag(err)
@@ -602,6 +605,7 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 	}, nil
 }
 
+// buildDraftSnapshot 从当前环境草稿表组装可发布快照。
 func (l *RuntimeConfigLogic) buildDraftSnapshot() (ReleaseSnapshot, error) {
 	db, err := l.writeDB()
 	if err != nil {
@@ -631,6 +635,7 @@ func (l *RuntimeConfigLogic) buildDraftSnapshot() (ReleaseSnapshot, error) {
 	return snapshot, nil
 }
 
+// replaceDraft 用快照内容覆盖当前环境草稿表。
 func (l *RuntimeConfigLogic) replaceDraft(snapshot ReleaseSnapshot) error {
 	db, err := l.writeDB()
 	if err != nil {
@@ -661,6 +666,7 @@ func (l *RuntimeConfigLogic) replaceDraft(snapshot ReleaseSnapshot) error {
 	})
 }
 
+// loadActiveSnapshotCached 从缓存回源读取当前 active 发布快照。
 func (l *RuntimeConfigLogic) loadActiveSnapshotCached() (*ActiveRelease, error) {
 	state, err := l.loadActiveStateCached()
 	if err != nil {
@@ -694,6 +700,7 @@ func (l *RuntimeConfigLogic) loadActiveSnapshotCached() (*ActiveRelease, error) 
 	return &ActiveRelease{State: state, Release: release, Snapshot: snapshot}, nil
 }
 
+// loadActiveStateCached 从缓存回源读取当前 active 状态。
 func (l *RuntimeConfigLogic) loadActiveStateCached() (StateCache, error) {
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
@@ -712,6 +719,7 @@ func (l *RuntimeConfigLogic) loadActiveStateCached() (StateCache, error) {
 	return state, nil
 }
 
+// loadStateForUpdate 在事务内锁定运行配置状态行。
 func (l *RuntimeConfigLogic) loadStateForUpdate(tx *gorm.DB, appID string, env string) (model.RuntimeConfigState, error) {
 	var state model.RuntimeConfigState
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -725,6 +733,7 @@ func (l *RuntimeConfigLogic) loadStateForUpdate(tx *gorm.DB, appID string, env s
 	return model.RuntimeConfigState{}, errors.Tag(err)
 }
 
+// loadReleaseByID 按发布 ID 读取当前环境的发布记录和快照。
 func (l *RuntimeConfigLogic) loadReleaseByID(releaseID uint64) (model.RuntimeConfigRelease, ReleaseSnapshot, error) {
 	db, err := l.writeDB()
 	if err != nil {
@@ -742,6 +751,7 @@ func (l *RuntimeConfigLogic) loadReleaseByID(releaseID uint64) (model.RuntimeCon
 	return row, snapshot, errors.Tag(err)
 }
 
+// deleteByID 按 ID 删除当前环境草稿记录，并校验记录真实存在。
 func (l *RuntimeConfigLogic) deleteByID(modelPtr any, id uint64) error {
 	db, err := l.writeDB()
 	if err != nil {
@@ -772,6 +782,7 @@ func checkRuntimeConfigUpdated(result *gorm.DB, id uint64, subject string) error
 	return nil
 }
 
+// invalidateRuntimeConfigCache 删除运行配置状态和指定发布快照缓存。
 func (l *RuntimeConfigLogic) invalidateRuntimeConfigCache(env string, releaseIDs ...uint64) error {
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
@@ -799,10 +810,12 @@ func (l *RuntimeConfigLogic) invalidateRuntimeConfigCache(env string, releaseIDs
 	return nil
 }
 
+// requireMFA 校验运行配置敏感操作的二次认证。
 func (l *RuntimeConfigLogic) requireMFA(twoStepKey string, twoStepValue string) error {
 	return (&adminlogic.AdminLogic{BaseLogic: l.BaseLogic}).RequireOperateMFATwoStep(securitylogic.MFAScenarioRuntimeConfigManage, twoStepKey, twoStepValue)
 }
 
+// draftCounts 统计当前环境周期任务和归档任务草稿数量。
 func (l *RuntimeConfigLogic) draftCounts() (int64, int64, error) {
 	db, err := l.writeDB()
 	if err != nil {
@@ -820,6 +833,7 @@ func (l *RuntimeConfigLogic) draftCounts() (int64, int64, error) {
 	return periodicCount, archiveCount, nil
 }
 
+// writeDB 返回运行配置写库连接。
 func (l *RuntimeConfigLogic) writeDB() (*gorm.DB, error) {
 	if l == nil || l.Svc == nil {
 		return nil, errors.Errorf("服务上下文未初始化")
@@ -831,6 +845,7 @@ func (l *RuntimeConfigLogic) writeDB() (*gorm.DB, error) {
 	return db, nil
 }
 
+// currentConfig 返回当前服务配置快照。
 func (l *RuntimeConfigLogic) currentConfig() config.Config {
 	if l == nil || l.Svc == nil {
 		return config.Config{}
@@ -838,11 +853,13 @@ func (l *RuntimeConfigLogic) currentConfig() config.Config {
 	return l.Svc.CurrentConfig()
 }
 
+// scope 返回运行配置的 appID 和环境边界。
 func (l *RuntimeConfigLogic) scope() (string, string) {
 	cfg := l.currentConfig()
 	return strings.TrimSpace(cfg.AppID), RuntimeEnv(cfg)
 }
 
+// adminID 返回当前操作管理员 ID，缺失时返回 0。
 func (l *RuntimeConfigLogic) adminID() int {
 	admin := l.GetCtxAdmin()
 	if admin == nil {

@@ -72,18 +72,14 @@ func (r *JsonResp) SetError(err error) *JsonResp {
 // Success 构造成功响应，并把请求结果同步写入 request meta 供 access log 和审计复用。
 func (r *JsonResp) Success(data any) {
 	locale := responseLocale(r.ctx)
-	code := func() int {
-		if r.code != nil {
-			return *r.code
-		}
-		return RespCodeSuccess
-	}()
-	message := func() string {
-		if r.message != nil {
-			return i18n.MessageByKey(*r.message, locale)
-		}
-		return i18n.MessageByCode(code, locale)
-	}()
+	code := RespCodeSuccess
+	if r.code != nil {
+		code = *r.code
+	}
+	message := i18n.MessageByCode(code, locale)
+	if r.message != nil {
+		message = i18n.MessageByKey(*r.message, locale)
+	}
 	requestctx.SetErrorResponse(r.ctx, http.StatusOK, code, message, nil, "")
 
 	response := ResponseJSON{
@@ -99,12 +95,10 @@ func (r *JsonResp) Success(data any) {
 // Fail 构造失败响应，并同步 request meta 供日志与 trace 使用。
 func (r *JsonResp) Fail(message string, data ...any) {
 	locale := responseLocale(r.ctx)
-	code := func() int {
-		if r.code != nil {
-			return *r.code
-		}
-		return RespCodeFail
-	}()
+	code := RespCodeFail
+	if r.code != nil {
+		code = *r.code
+	}
 	if message == "" {
 		message = i18n.MessageByCode(code, locale)
 	} else {
@@ -118,17 +112,14 @@ func (r *JsonResp) Fail(message string, data ...any) {
 			if len(data) > 0 {
 				return data[0]
 			}
-			var zero any
-			return zero
+			return nil
 		}(),
 	}
 	attachTraceToResponse(r.ctx, &response)
-	httpStatus := func() int {
-		if r.httpStatus != nil {
-			return *r.httpStatus
-		}
-		return codes.HTTPStatus(code)
-	}()
+	httpStatus := codes.HTTPStatus(code)
+	if r.httpStatus != nil {
+		httpStatus = *r.httpStatus
+	}
 	requestctx.SetErrorResponse(r.ctx, httpStatus, code, message, r.err, internalErrorSummary(r.err))
 	httpx.WriteJsonCtx(r.ctx, r.write, httpStatus, response)
 }
@@ -136,18 +127,14 @@ func (r *JsonResp) Fail(message string, data ...any) {
 // Write 允许业务显式指定成功/失败标志，用于少量非标准分支复用统一响应格式。
 func (r *JsonResp) Write(success bool, data ...any) {
 	locale := responseLocale(r.ctx)
-	code := func() int {
-		if r.code != nil {
-			return *r.code
-		}
-		return RespCodeUndefined
-	}()
-	message := func() string {
-		if r.message != nil {
-			return i18n.MessageByKey(*r.message, locale)
-		}
-		return i18n.MessageByCode(code, locale)
-	}()
+	code := RespCodeUndefined
+	if r.code != nil {
+		code = *r.code
+	}
+	message := i18n.MessageByCode(code, locale)
+	if r.message != nil {
+		message = i18n.MessageByKey(*r.message, locale)
+	}
 	response := ResponseJSON{
 		Status:  success,
 		Code:    code,
@@ -156,17 +143,14 @@ func (r *JsonResp) Write(success bool, data ...any) {
 			if len(data) > 0 {
 				return data[0]
 			}
-			var zero any
-			return zero
+			return nil
 		}(),
 	}
 	attachTraceToResponse(r.ctx, &response)
-	httpStatus := func() int {
-		if r.httpStatus != nil {
-			return *r.httpStatus
-		}
-		return codes.HTTPStatus(code)
-	}()
+	httpStatus := codes.HTTPStatus(code)
+	if r.httpStatus != nil {
+		httpStatus = *r.httpStatus
+	}
 	if success {
 		requestctx.SetErrorResponse(r.ctx, httpStatus, code, message, nil, "")
 	} else {

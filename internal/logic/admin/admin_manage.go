@@ -440,8 +440,8 @@ func (l *AdminManageLogic) pruneInheritedAssignedRoleIDs(roleIDs []int) ([]int, 
 		return roleIDs, nil
 	}
 	type roleRow struct {
-		ID   int
-		Pids string
+		ID   int    // 角色 ID
+		Pids string // 角色祖先 ID 串
 	}
 	rows := make([]roleRow, 0, len(roleIDs))
 	if err := l.Svc.ReadDB(svc.DatabaseMain).Model(&model.AdminRole{}).
@@ -546,11 +546,11 @@ func (l *AdminManageLogic) adminRoleMap(admins []model.Admin) (map[int][]types.A
 	}
 
 	type row struct {
-		UserID      int
-		RoleID      int
-		Title       string
-		Status      int
-		Description string
+		UserID      int    // 管理员 ID
+		RoleID      int    // 角色 ID
+		Title       string // 角色名称
+		Status      int    // 角色状态
+		Description string // 角色说明
 	}
 	rows := make([]row, 0)
 	err := l.Svc.ReadDB(svc.DatabaseMain).Table(model.TableNameAdminRoleRel+" arr").
@@ -585,11 +585,11 @@ func (l *AdminManageLogic) adminRoles(adminID int) ([]types.AdminRoleItem, error
 // adminRoleListItems 查询管理员角色列表，包含关系创建时间。
 func (l *AdminManageLogic) adminRoleListItems(adminID int) ([]types.AdminRoleListItem, error) {
 	type row struct {
-		RoleID      int
-		Title       string
-		Status      int
-		Description string
-		CreatedAt   time.Time
+		RoleID      int       // 角色 ID
+		Title       string    // 角色名称
+		Status      int       // 角色状态
+		Description string    // 角色说明
+		CreatedAt   time.Time // 绑定时间
 	}
 	rows := make([]row, 0)
 	err := l.Svc.ReadDB(svc.DatabaseMain).Table(model.TableNameAdminRoleRel+" arr").

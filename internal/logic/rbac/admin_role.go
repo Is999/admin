@@ -96,7 +96,7 @@ func (l *AdminRoleLogic) List(req *types.RoleListReq) *types.BizResult {
 
 	items := make([]types.AdminRoleItem, 0, len(list))
 	for _, role := range list {
-		items = append(items, roleModelToItem(role, permissionMap[role.ID], nil))
+		items = append(items, corelogic.AdminRoleModelToItem(role, permissionMap[role.ID], nil))
 	}
 
 	return types.NewBizResult(codes.Success).
@@ -444,7 +444,7 @@ func (l *AdminRoleLogic) loadPermissionTreeWithCache() ([]types.AdminPermissionI
 		if err := l.Svc.ReadDB(svc.DatabaseMain).Order("id ASC").Find(&permissions).Error; err != nil {
 			return nil, errors.Tag(err)
 		}
-		return buildRolePermissionTree(permissions, nil, nil), nil
+		return corelogic.BuildAdminPermissionTree(permissions, nil, nil), nil
 	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
@@ -453,48 +453,6 @@ func (l *AdminRoleLogic) loadPermissionTreeWithCache() ([]types.AdminPermissionI
 	var items []types.AdminPermissionItem
 	_, err = manager.LoadThrough(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.PermissionTree), &items, nil)
 	return items, errors.Tag(err)
-}
-
-// buildRolePermissionTree 把平铺权限列表转换成角色授权用权限树。
-func buildRolePermissionTree(permissions []model.AdminPermission, checked map[int]struct{}, disabled map[int]struct{}) []types.AdminPermissionItem {
-	children := make(map[int][]model.AdminPermission, len(permissions))
-	for _, permission := range permissions {
-		children[permission.Pid] = append(children[permission.Pid], permission)
-	}
-	var walk func(pid int) []types.AdminPermissionItem
-	walk = func(pid int) []types.AdminPermissionItem {
-		nodes := children[pid]
-		result := make([]types.AdminPermissionItem, 0, len(nodes))
-		for _, permission := range nodes {
-			_, isChecked := checked[permission.ID]
-			_, isDisabled := disabled[permission.ID]
-			result = append(result, rolePermissionModelToItem(permission, isChecked, isDisabled, walk(permission.ID)))
-		}
-		return result
-	}
-	return walk(0)
-}
-
-// rolePermissionModelToItem 把权限模型转换成角色授权树节点。
-func rolePermissionModelToItem(permission model.AdminPermission, checked bool, disabled bool, children []types.AdminPermissionItem) types.AdminPermissionItem {
-	return types.AdminPermissionItem{
-		ID:              permission.ID,
-		UUID:            permission.UUID,
-		Title:           permission.Title,
-		Module:          permission.Module,
-		Pid:             permission.Pid,
-		Pids:            permission.Pids,
-		Type:            permission.Type,
-		Description:     permission.Description,
-		Status:          permission.Status,
-		Checked:         checked,
-		Disabled:        disabled,
-		DisableCheckbox: disabled,
-		Selectable:      !disabled,
-		Children:        children,
-		CreatedAt:       corelogic.FormatDateTime(permission.CreatedAt),
-		UpdatedAt:       corelogic.FormatDateTime(permission.UpdatedAt),
-	}
 }
 
 // SavePermissions 覆盖保存角色权限关系。
@@ -655,7 +613,7 @@ func (l *AdminRoleLogic) loadRoleTreeWithCache() ([]types.AdminRoleItem, error) 
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
-		return buildRoleTree(roles, nil), nil
+		return corelogic.BuildAdminRoleTree(roles, nil), nil
 	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
@@ -947,44 +905,6 @@ func roleIDSetToSlice(roleIDSet map[int]struct{}) []int {
 	return types.UniquePositiveInts(roleIDs)
 }
 
-// roleModelToItem 把角色模型转换成接口响应项。
-func roleModelToItem(role model.AdminRole, permissionIDs []int, children []types.AdminRoleItem) types.AdminRoleItem {
-	return types.AdminRoleItem{
-		ID:              role.ID,
-		Title:           role.Title,
-		Pid:             role.Pid,
-		Pids:            role.Pids,
-		Status:          role.Status,
-		Description:     role.Describe,
-		IsDelete:        role.IsDelete,
-		Disabled:        role.Status != 1 || role.IsDelete != 0,
-		DisableCheckbox: role.Status != 1 || role.IsDelete != 0,
-		Selectable:      role.Status == 1 && role.IsDelete == 0,
-		Permissions:     permissionIDs,
-		Children:        children,
-		CreatedAt:       corelogic.FormatDateTime(role.CreatedAt),
-		UpdatedAt:       corelogic.FormatDateTime(role.UpdatedAt),
-	}
-}
-
-// buildRoleTree 把平铺角色列表转换成树结构。
-func buildRoleTree(roles []model.AdminRole, permissionMap map[int][]int) []types.AdminRoleItem {
-	children := make(map[int][]model.AdminRole, len(roles))
-	for _, role := range roles {
-		children[role.Pid] = append(children[role.Pid], role)
-	}
-	var walk func(pid int) []types.AdminRoleItem
-	walk = func(pid int) []types.AdminRoleItem {
-		nodes := children[pid]
-		result := make([]types.AdminRoleItem, 0, len(nodes))
-		for _, role := range nodes {
-			result = append(result, roleModelToItem(role, permissionMap[role.ID], walk(role.ID)))
-		}
-		return result
-	}
-	return walk(0)
-}
-
 // decorateRoleTreeScope 在角色树上补充当前登录管理员可操作范围，便于前端直接按后端裁剪后的语义展示。
 func (l *AdminRoleLogic) decorateRoleTreeScope(items []types.AdminRoleItem) ([]types.AdminRoleItem, error) {
 	manageableRoleSet, err := l.manageableRoleIDSet()
@@ -1018,8 +938,8 @@ func (l *AdminRoleLogic) rolePermissionMap(roleIDs []int) (map[int][]int, error)
 		return result, nil
 	}
 	type rolePermissionRow struct {
-		RoleID       int `gorm:"column:role_id"`
-		PermissionID int `gorm:"column:permission_id"`
+		RoleID       int `gorm:"column:role_id"`       // 角色 ID
+		PermissionID int `gorm:"column:permission_id"` // 权限 ID
 	}
 	var rows []rolePermissionRow
 	if err := l.Svc.ReadDB(svc.DatabaseMain).

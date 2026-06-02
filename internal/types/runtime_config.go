@@ -3,6 +3,7 @@
 package types
 
 import (
+	"admin/helper"
 	"strings"
 
 	"github.com/Is999/go-utils/errors"
@@ -101,7 +102,10 @@ func (r *SaveRuntimeTaskPeriodicReq) Validate() error {
 	if r.Retry < 0 || r.TimeoutSeconds < 0 || r.UniqueTTLSeconds < 0 || r.ShardTotal < 0 {
 		return errors.Errorf("retry、timeoutSeconds、uniqueTtlSeconds、shardTotal 不能小于 0")
 	}
-	r.Targets = runtimeUniqueNonEmptyStrings(r.Targets)
+	r.Targets = helper.UniqueNonEmptyStrings(r.Targets)
+	if len(r.Targets) == 0 {
+		r.Targets = nil
+	}
 	return nil
 }
 
@@ -384,25 +388,4 @@ func runtimeArchiveNegative(r *SaveRuntimeArchiveJobReq) bool {
 		r.ArchiveAutoLightMs < 0 || r.DeleteDelayDays < 0 ||
 		r.DeleteWindowSeconds < 0 || r.DeleteMaxWindowsPerRun < 0 ||
 		r.BatchSize < 0 || r.DeleteBatchSize < 0 || r.MaxHistoryTables < 0
-}
-
-// runtimeUniqueNonEmptyStrings 清洗字符串列表并按首次出现顺序去重。
-func runtimeUniqueNonEmptyStrings(items []string) []string {
-	if len(items) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(items))
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if _, ok := seen[item]; ok {
-			continue
-		}
-		seen[item] = struct{}{}
-		result = append(result, item)
-	}
-	return result
 }

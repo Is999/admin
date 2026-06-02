@@ -362,7 +362,7 @@ func loadRoleTreeTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 		return []tablecache.Entry{{
 			Key:   params.Key,
 			Type:  tablecache.TypeString,
-			Value: buildTableCacheRoleTree(roles, nil),
+			Value: corelogic.BuildAdminRoleTree(roles, nil),
 		}}, nil
 	}
 }
@@ -491,7 +491,7 @@ func loadPermissionTreeTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 		return []tablecache.Entry{{
 			Key:   params.Key,
 			Type:  tablecache.TypeString,
-			Value: buildTableCachePermissionTree(permissions, nil, nil),
+			Value: corelogic.BuildAdminPermissionTree(permissions, nil, nil),
 		}}, nil
 	}
 }
@@ -691,86 +691,6 @@ func loadPermissionUUIDsByIDsForCache(base *corelogic.BaseLogic, permissionIDs [
 		result = append(result, uuid)
 	}
 	return result, nil
-}
-
-// buildTableCacheRoleTree 把平铺角色列表转换成缓存用角色树。
-func buildTableCacheRoleTree(roles []model.AdminRole, permissionMap map[int][]int) []types.AdminRoleItem {
-	children := make(map[int][]model.AdminRole, len(roles))
-	for _, role := range roles {
-		children[role.Pid] = append(children[role.Pid], role)
-	}
-	var walk func(pid int) []types.AdminRoleItem
-	walk = func(pid int) []types.AdminRoleItem {
-		nodes := children[pid]
-		result := make([]types.AdminRoleItem, 0, len(nodes))
-		for _, role := range nodes {
-			result = append(result, tableCacheRoleModelToItem(role, permissionMap[role.ID], walk(role.ID)))
-		}
-		return result
-	}
-	return walk(0)
-}
-
-// tableCacheRoleModelToItem 把角色模型转换成缓存树节点。
-func tableCacheRoleModelToItem(role model.AdminRole, permissionIDs []int, children []types.AdminRoleItem) types.AdminRoleItem {
-	return types.AdminRoleItem{
-		ID:              role.ID,
-		Title:           role.Title,
-		Pid:             role.Pid,
-		Pids:            role.Pids,
-		Status:          role.Status,
-		Description:     role.Describe,
-		IsDelete:        role.IsDelete,
-		Disabled:        role.Status != 1 || role.IsDelete != 0,
-		DisableCheckbox: role.Status != 1 || role.IsDelete != 0,
-		Selectable:      role.Status == 1 && role.IsDelete == 0,
-		Permissions:     permissionIDs,
-		Children:        children,
-		CreatedAt:       corelogic.FormatDateTime(role.CreatedAt),
-		UpdatedAt:       corelogic.FormatDateTime(role.UpdatedAt),
-	}
-}
-
-// buildTableCachePermissionTree 把平铺权限列表转换成缓存用权限树。
-func buildTableCachePermissionTree(permissions []model.AdminPermission, checked map[int]struct{}, disabled map[int]struct{}) []types.AdminPermissionItem {
-	children := make(map[int][]model.AdminPermission, len(permissions))
-	for _, permission := range permissions {
-		children[permission.Pid] = append(children[permission.Pid], permission)
-	}
-	var walk func(pid int) []types.AdminPermissionItem
-	walk = func(pid int) []types.AdminPermissionItem {
-		nodes := children[pid]
-		result := make([]types.AdminPermissionItem, 0, len(nodes))
-		for _, permission := range nodes {
-			_, isChecked := checked[permission.ID]
-			_, isDisabled := disabled[permission.ID]
-			result = append(result, tableCachePermissionModelToItem(permission, isChecked, isDisabled, walk(permission.ID)))
-		}
-		return result
-	}
-	return walk(0)
-}
-
-// tableCachePermissionModelToItem 把权限模型转换成缓存树节点。
-func tableCachePermissionModelToItem(permission model.AdminPermission, checked bool, disabled bool, children []types.AdminPermissionItem) types.AdminPermissionItem {
-	return types.AdminPermissionItem{
-		ID:              permission.ID,
-		UUID:            permission.UUID,
-		Title:           permission.Title,
-		Module:          permission.Module,
-		Pid:             permission.Pid,
-		Pids:            permission.Pids,
-		Type:            permission.Type,
-		Description:     permission.Description,
-		Status:          permission.Status,
-		Checked:         checked,
-		Disabled:        disabled,
-		DisableCheckbox: disabled,
-		Selectable:      !disabled,
-		Children:        children,
-		CreatedAt:       corelogic.FormatDateTime(permission.CreatedAt),
-		UpdatedAt:       corelogic.FormatDateTime(permission.UpdatedAt),
-	}
 }
 
 // loadSysConfigTableCache 加载单个系统常量配置 Hash 缓存数据。

@@ -223,8 +223,8 @@ func (l *AdminRoleLogic) roleStatusMap(roleIDs []int) (map[int]int, error) {
 		return result, nil
 	}
 	type row struct {
-		ID     int
-		Status int
+		ID     int // 角色 ID
+		Status int // 角色状态
 	}
 	rows := make([]row, 0, len(roleIDs))
 	err := l.Svc.ReadDB(svc.DatabaseMain).Model(&model.AdminRole{}).
@@ -349,7 +349,7 @@ func (l *AdminRoleLogic) ensurePermissionsUsableTx(tx *gorm.DB, permissionIDs []
 		return nil
 	}
 	type permissionRow struct {
-		ID int `gorm:"column:id"`
+		ID int `gorm:"column:id"` // 权限 ID
 	}
 	rows := make([]permissionRow, 0, len(permissionIDs))
 	if err := freshTxStatement(tx).Table(model.TableNameAdminPermission).

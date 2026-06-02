@@ -123,14 +123,15 @@ func DownloadAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		logicObj := adminlogic.NewAdminExportLogic(r, sCtx)
+		logMeta := shared.ActionLogParamFromMeta(shared.AdminExportDownload)
 		status, resp := logicObj.PrepareDownload(&req)
 		if resp != nil {
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, shared.ActionLogMap(shared.MethodDownloadAdminExport), shared.MethodDownloadAdminExport)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodDownloadAdminExport)
 			return
 		}
 
-		if logMeta := shared.ActionLogMap(shared.MethodDownloadAdminExport); logMeta != nil {
+		if logMeta != nil {
 			logicObj.AddAdminLog(logMeta.Action, logMeta.Route, string(shared.MethodDownloadAdminExport), logMeta.Describe, &req)
 		}
 
@@ -139,7 +140,7 @@ func DownloadAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"DownloadAdminExportHandler 打开管理员导出对象失败").ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, shared.ActionLogMap(shared.MethodDownloadAdminExport), shared.MethodDownloadAdminExport)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodDownloadAdminExport)
 			return
 		}
 		defer objectStream.Reader.Close()
@@ -158,7 +159,7 @@ func DownloadAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"DownloadAdminExportHandler 输出管理员导出文件[%s]失败", status.FileName).ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, shared.ActionLogMap(shared.MethodDownloadAdminExport), shared.MethodDownloadAdminExport)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodDownloadAdminExport)
 		}
 	}
 }

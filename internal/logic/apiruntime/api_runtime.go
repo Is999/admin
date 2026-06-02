@@ -29,16 +29,6 @@ const (
 	apiRuntimeMaxTimeoutSeconds = 30
 	// apiRuntimeOpsTokenHeader 表示 API 运维接口令牌请求头。
 	apiRuntimeOpsTokenHeader = "X-Ops-Token"
-	// apiRuntimeConfigReloadStatusPath 表示 API 配置热加载状态内网路径。
-	apiRuntimeConfigReloadStatusPath = "/internal/system/config-reload/status"
-	// apiRuntimeConfigReloadItemsPath 表示 API 运行态配置项内网路径。
-	apiRuntimeConfigReloadItemsPath = "/internal/system/config-reload/items"
-	// apiRuntimeConfigReloadRunPath 表示 API 配置热加载触发内网路径。
-	apiRuntimeConfigReloadRunPath = "/internal/system/config-reload/run"
-	// userRuntimeSyncPathPrefix 表示前台用户 API 运行态同步内网路径前缀。
-	userRuntimeSyncPathPrefix = "/internal/users/"
-	// apiDocsInternalPathPrefix 表示 API 内网文档资源路径前缀。
-	apiDocsInternalPathPrefix = "/internal/docs"
 	// apiDocsMaxResponseBytes 限制单个 API 文档资源最大响应，避免代理异常大文件。
 	apiDocsMaxResponseBytes = 4 << 20
 	// apiRuntimeMaxResponseBytes 限制 API 运维接口 JSON 响应，配置快照允许超过 1MiB。
@@ -192,7 +182,7 @@ func (l *Logic) Reload(req *types.APIRuntimeConfigReloadReq) *types.BizResult {
 
 // ConfigReloadStatus 查询 API 配置热加载状态。
 func (c *Client) ConfigReloadStatus(ctx context.Context) (*types.TaskConfigReloadStatusResp, error) {
-	return requestAPI[types.TaskConfigReloadStatusResp](ctx, c, http.MethodGet, apiRuntimeConfigReloadStatusPath, nil)
+	return requestAPI[types.TaskConfigReloadStatusResp](ctx, c, http.MethodGet, "/internal/system/config-reload/status", nil)
 }
 
 // ConfigReloadItems 查询 API 运行态配置项。
@@ -212,7 +202,7 @@ func (c *Client) ConfigReloadItems(ctx context.Context, req *types.TaskConfigIte
 			query.Set("pageSize", strconv.Itoa(req.PageSize))
 		}
 	}
-	path := apiRuntimeConfigReloadItemsPath
+	path := "/internal/system/config-reload/items"
 	if encoded := query.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
@@ -221,18 +211,18 @@ func (c *Client) ConfigReloadItems(ctx context.Context, req *types.TaskConfigIte
 
 // RunConfigReload 手动触发 API 配置热加载。
 func (c *Client) RunConfigReload(ctx context.Context) (*types.TaskConfigReloadStatusResp, error) {
-	return requestAPI[types.TaskConfigReloadStatusResp](ctx, c, http.MethodPost, apiRuntimeConfigReloadRunPath, nil)
+	return requestAPI[types.TaskConfigReloadStatusResp](ctx, c, http.MethodPost, "/internal/system/config-reload/run", nil)
 }
 
 // SyncUserRuntime 同步前台用户在 API 进程内的资料缓存或登录态。
 func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool, sessions bool, reason string) (*types.UserRuntimeSyncResp, error) {
 	if userID <= 0 {
-		return nil, errors.New("用户ID不能为空")
+		return nil, errors.New("用户 ID 不能为空")
 	}
 	if !profile && !sessions {
 		profile = true
 	}
-	path := userRuntimeSyncPathPrefix + strconv.FormatInt(userID, 10) + "/runtime-sync"
+	path := "/internal/users/" + strconv.FormatInt(userID, 10) + "/runtime-sync"
 	data, err := requestAPI[types.UserRuntimeSyncResp](ctx, c, http.MethodPost, path, userRuntimeSyncPayload{
 		Profile:  profile,
 		Sessions: sessions,
@@ -255,7 +245,7 @@ func (c *Client) DocsAsset(ctx context.Context, docsPath string) (*DocsAsset, er
 		return nil, errors.New("API 内网客户端未初始化")
 	}
 	docsPath = "/" + strings.TrimLeft(strings.TrimSpace(docsPath), "/")
-	req, err := buildAPIRequest(ctx, c, http.MethodGet, apiDocsInternalPathPrefix+docsPath, nil)
+	req, err := buildAPIRequest(ctx, c, http.MethodGet, "/internal/docs"+docsPath, nil)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}

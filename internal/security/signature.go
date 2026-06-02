@@ -18,17 +18,11 @@ import (
 const (
 	// SignFieldAll 表示签名时对当前请求或响应中的所有首层字段参与排序签名。
 	SignFieldAll = "*"
-	// CipherWholeBody 表示已废弃的整包加密标记，仅用于识别并拒绝非法输入。
+	// CipherWholeBody 表示禁用的整包加密标记，仅用于识别并拒绝非法输入。
 	CipherWholeBody = "cipher"
 	// CipherJSONPrefix 表示字段值在加解密前需要按 JSON 编解码。
 	CipherJSONPrefix = "json:"
 )
-
-// SignRule 描述单个路由请求与响应参与签名的首层字段。
-type SignRule struct {
-	Request  []string // Request 表示请求验签字段列表
-	Response []string // Response 表示响应回签字段列表
-}
 
 // RouteSecurityPolicy 定义单个路由的请求验签、请求解密、响应回签与响应加密策略。
 type RouteSecurityPolicy struct {

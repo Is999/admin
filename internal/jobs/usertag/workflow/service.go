@@ -79,7 +79,7 @@ func NewService(ctx context.Context, svcCtx *svc.ServiceContext) *Service {
 	_ = service.RegisterStage(stage.NewResolveChangesStage())
 	// persist_results：保留标签结果和事件 outbox 写入入口。
 	_ = service.RegisterStage(stage.NewPersistResultsStage())
-	// finalize：完成 full 模式结果表原子切换和只读快照刷新。
+	// finalize：完成 full 模式结果表原子切换。
 	_ = service.RegisterStage(stage.NewFinalizeStage(tagRepo))
 	// dispatch_hooks：派发标签得到和失去事件 hook。
 	_ = service.RegisterStage(stage.NewDispatchHooksStage(tagRepo))

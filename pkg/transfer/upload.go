@@ -53,7 +53,7 @@ type UploadSession struct {
 	TotalChunks    int                       `json:"totalChunks"`            // 总分片数
 	FileHash       string                    `json:"fileHash"`               // 文件摘要
 	ContentType    string                    `json:"contentType"`            // 文件类型
-	StoragePath    string                    `json:"storagePath"`            // 兼容字段：完成后存储对象 key；上传中为临时本地路径
+	StoragePath    string                    `json:"storagePath"`            // 存储位置；本地上传为文件路径，直传为对象 key
 	StorageType    string                    `json:"storageType"`            // 存储类型：local | s3
 	ObjectKey      string                    `json:"objectKey"`              // 存储对象 key
 	UploadMode     string                    `json:"uploadMode"`             // 上传模式：server | direct

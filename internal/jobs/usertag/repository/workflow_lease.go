@@ -24,8 +24,8 @@ const (
 const (
 	userTagWorkflowTerminalSuccess   = "success"   // 工作流成功终态，可安全清理遗留非 full 租约
 	userTagWorkflowTerminalFailed    = "failed"    // 工作流失败终态，可安全清理遗留非 full 租约
-	userTagWorkflowTerminalCompleted = "completed" // 兼容任务中心已完成展示状态，避免 UI 状态映射差异导致锁无法自愈
-	userTagWorkflowTerminalArchived  = "archived"  // 兼容任务中心已归档展示状态，避免旧任务归档后仍残留非 full 租约
+	userTagWorkflowTerminalCompleted = "completed" // 任务中心已完成展示状态，避免 UI 状态映射差异导致锁无法自愈
+	userTagWorkflowTerminalArchived  = "archived"  // 任务中心已归档展示状态，避免归档后仍残留非 full 租约
 )
 
 var (
@@ -427,7 +427,7 @@ func workflowLeaseOwner(opts types.RuntimeOptions) (string, error) {
 }
 
 // workflowRequiresExclusiveLease 判断当前模式是否需要持有全局写租约。
-// 只有 full 会切表并刷新只读快照；非 full 保持可并发补算，避免手动任务失败后阻塞所有用户标签入口。
+// 只有 full 会切换结果表；非 full 保持可并发补算，避免手动任务失败后阻塞所有用户标签入口。
 func workflowRequiresExclusiveLease(opts types.RuntimeOptions) bool {
 	return strings.TrimSpace(opts.Mode) == types.ModeFull
 }

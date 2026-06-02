@@ -17,9 +17,9 @@ import (
 // TestMaskSecretKeyValue 验证秘钥列表脱敏规则，避免敏感字段明文暴露。
 func TestMaskSecretKeyValue(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
-		want  string
+		name  string // name 表示测试场景名称。
+		input string // input 表示输入值。
+		want  string // want 表示期望结果。
 	}{
 		{
 			name:  "短文本保留前缀",

@@ -8,6 +8,7 @@ import (
 	"admin/internal/svc"
 )
 
+// TestCacheLockKeyUsesAppNamespace 验证对应场景符合预期。
 func TestCacheLockKeyUsesAppNamespace(t *testing.T) {
 	useRuntimeAppID(t, "site-a")
 	base := NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
@@ -18,6 +19,7 @@ func TestCacheLockKeyUsesAppNamespace(t *testing.T) {
 	}
 }
 
+// TestCacheLockKeyTrimsTableCacheNamespace 验证对应场景符合预期。
 func TestCacheLockKeyTrimsTableCacheNamespace(t *testing.T) {
 	useRuntimeAppID(t, "site-a")
 	base := NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))

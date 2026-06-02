@@ -47,7 +47,7 @@ func (l *SecurityLogic) BuildProfileInfo(admin *model.Admin, token string) (*typ
 		Description:       admin.Description,
 		LastLoginTime:     corelogic.FormatDateTime(admin.LastLoginTime),
 		LastLoginIP:       admin.LastLoginIP,
-		LastLoginAddr:     admin.LastLoginIpaddr,
+		LastLoginAddr:     admin.LastLoginIPAddr,
 		CreatedAt:         corelogic.FormatDateTime(admin.CreatedAt),
 		UpdatedAt:         corelogic.FormatDateTime(admin.UpdatedAt),
 		MFACheck:          mfaCheck,

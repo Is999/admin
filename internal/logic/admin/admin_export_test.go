@@ -6,6 +6,7 @@ import (
 	"admin/internal/types"
 )
 
+// TestBuildAdminExportRequestFingerprintStable 验证对应场景符合预期。
 func TestBuildAdminExportRequestFingerprintStable(t *testing.T) {
 	roleID := 3
 	left := buildAdminExportRequestFingerprint(&types.AdminExportReq{
@@ -25,6 +26,7 @@ func TestBuildAdminExportRequestFingerprintStable(t *testing.T) {
 	}
 }
 
+// TestAddAuthorizedAdmin 验证对应场景符合预期。
 func TestAddAuthorizedAdmin(t *testing.T) {
 	status := &types.AdminExportStatusResp{
 		AuthorizedAdminIDs: []int{1},
@@ -40,6 +42,7 @@ func TestAddAuthorizedAdmin(t *testing.T) {
 	}
 }
 
+// TestAdminExportStatusSnapshotRoundTrip 验证对应场景符合预期。
 func TestAdminExportStatusSnapshotRoundTrip(t *testing.T) {
 	status := &types.AdminExportStatusResp{
 		JobID:              "job-1",

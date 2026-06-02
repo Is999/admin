@@ -405,8 +405,9 @@ func (a *App) CurrentConfigVersion() string {
 // buildHotReloadConfigSummary 生成关键配置摘要，便于管理接口和日志快速确认核心开关。
 func buildHotReloadConfigSummary(cfg config.Config) string {
 	return fmt.Sprintf(
-		"mode=%s task=%t periodic=%d hot_reload=%t kafka=%t",
+		"mode=%s user_route=%d task=%t periodic=%d hot_reload=%t kafka=%t",
 		strings.TrimSpace(cfg.Mode),
+		cfg.User.RouteShardCount,
 		cfg.Task.Enabled,
 		len(cfg.Task.Periodic),
 		cfg.HotReload.Enabled,
@@ -445,6 +446,24 @@ func hotReloadRestartSpecs() []hotReloadRestartSpec {
 			},
 			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
 				effective.AppID = before.AppID
+			},
+		},
+		{
+			Reason: "snowflake",
+			Changed: func(before, after config.Config) bool {
+				return !reflect.DeepEqual(before.Snowflake, after.Snowflake)
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.Snowflake = before.Snowflake
+			},
+		},
+		{
+			Reason: "user.route_shard_count",
+			Changed: func(before, after config.Config) bool {
+				return before.User.RouteShardCount != after.User.RouteShardCount
+			},
+			Preserve: func(effective *config.Config, before config.Config, _ config.Config) {
+				effective.User = before.User
 			},
 		},
 		{

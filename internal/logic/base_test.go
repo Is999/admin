@@ -55,7 +55,7 @@ func TestBaseLogicRedisHelpersScopeLogicalKeys(t *testing.T) {
 	}
 
 	var profile struct {
-		ID int `json:"id"`
+		ID int `json:"id"` // ID 表示测试记录 ID。
 	}
 	if err := logic.RdsGetJsonObj("demo:profile:1", &profile); err != nil {
 		t.Fatalf("RdsGetJsonObj() error = %v", err)

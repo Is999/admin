@@ -5,9 +5,9 @@ import "testing"
 // TestIsPrivateClientIP 验证对应场景。
 func TestIsPrivateClientIP(t *testing.T) {
 	cases := []struct {
-		name string
-		ip   string
-		want bool
+		name string // name 表示测试场景名称。
+		ip   string // ip 表示测试字段。
+		want bool   // want 表示期望结果。
 	}{
 		{name: "loopback", ip: "127.0.0.1", want: true},
 		{name: "private-10", ip: "10.10.1.2", want: true},

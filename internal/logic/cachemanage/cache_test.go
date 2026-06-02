@@ -20,6 +20,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// TestMain 初始化缓存管理测试所需的运行时 app_id 命名空间。
 func TestMain(m *testing.M) {
 	runtimecfg.Set(config.Config{AppID: "site-a"})
 	os.Exit(m.Run())
@@ -39,7 +40,7 @@ func useCacheManageTestAppID(t *testing.T, appID string) {
 // 仅遮罩 token 等通用敏感字段，保留资料字段与备注原样展示。
 func TestMaskCacheValueForAdminInfo(t *testing.T) {
 	value := map[string]string{
-		"LastLoginIpaddr":   "中国香港",
+		"lastLoginIpaddr":   "中国香港",
 		"avatar":            "https://cdn.example.com/avatar.png",
 		"description":       "超级管理员",
 		"email":             "admin@example.com",
@@ -76,8 +77,8 @@ func TestMaskCacheValueForAdminInfo(t *testing.T) {
 	if masked["email"] != "admin@example.com" {
 		t.Fatalf("email = %q, want admin@example.com", masked["email"])
 	}
-	if masked["LastLoginIpaddr"] != "中国香港" {
-		t.Fatalf("LastLoginIpaddr = %q, want 中国香港", masked["LastLoginIpaddr"])
+	if masked["lastLoginIpaddr"] != "中国香港" {
+		t.Fatalf("lastLoginIpaddr = %q, want 中国香港", masked["lastLoginIpaddr"])
 	}
 }
 
@@ -356,9 +357,9 @@ func TestKeyInfoPreviewsLargeSet(t *testing.T) {
 // TestCacheSearchPatternMatch 验证模板快路径使用的 glob 匹配规则支持 `*` 与 `?`。
 func TestCacheSearchPatternMatch(t *testing.T) {
 	tests := []struct {
-		pattern string
-		value   string
-		want    bool
+		pattern string // pattern 表示待匹配的 glob 模板。
+		value   string // value 表示待检测的 Redis key。
+		want    bool   // want 表示期望匹配结果。
 	}{
 		{pattern: "config_uuid:*", value: "config_uuid:abc", want: true},
 		{pattern: "role_permission:1?", value: "role_permission:12", want: true},

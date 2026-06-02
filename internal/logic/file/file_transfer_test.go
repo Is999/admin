@@ -25,6 +25,7 @@ func TestValidateStoredObjectSHA256(t *testing.T) {
 	}
 }
 
+// TestPersistedServerUploadSessionDetection 验证对应场景符合预期。
 func TestPersistedServerUploadSessionDetection(t *testing.T) {
 	session := &transfer.UploadSession{
 		Status:      "completed",
@@ -40,6 +41,7 @@ func TestPersistedServerUploadSessionDetection(t *testing.T) {
 	}
 }
 
+// TestValidateRequiredUploadSHA256 验证对应场景符合预期。
 func TestValidateRequiredUploadSHA256(t *testing.T) {
 	sum := sha256.Sum256([]byte("hello"))
 	if err := validateRequiredUploadSHA256(strings.ToUpper(hex.EncodeToString(sum[:]))); err != nil {

@@ -118,12 +118,12 @@ func nextSegmentBoundary(start time.Time, splitUnit string, customDays int) time
 }
 
 // nextArchiveSegmentBoundary 返回当前归档区间起点的下一个排他边界。
-// 配置 archive_window_seconds 时，区间粒度由调度窗口决定；否则沿用历史表拆分粒度作为区间粒度。
+// 配置 archive_window_seconds 时，区间粒度由调度窗口决定；否则按表拆分粒度计算。
 func nextArchiveSegmentBoundary(start time.Time, job jobConfig) time.Time {
 	if job.hasArchiveSecondWindow() {
 		next := start.Add(time.Duration(job.ArchiveWindowSeconds) * time.Second)
 		if job.SplitUnit != SplitUnitNone {
-			// 窗口化归档必须受历史表拆分边界约束。
+			// 窗口化归档必须受表拆分边界约束。
 			splitStart := alignSegmentStart(start, job.SplitUnit, job.CustomDays)
 			splitEnd := nextSegmentBoundary(splitStart, job.SplitUnit, job.CustomDays)
 			if splitEnd.After(start) && next.After(splitEnd) {

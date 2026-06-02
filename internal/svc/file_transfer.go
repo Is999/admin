@@ -130,9 +130,9 @@ func (s *ServiceContext) fileTransferRuntime() *FileTransferRuntime {
 // uploadManagerFingerprint 计算上传会话管理器配置指纹；指纹只用于比较，不输出配置明文。
 func uploadManagerFingerprint(cfg config.FileStorageUploadSessionConfig, appID string) string {
 	body, err := json.Marshal(struct {
-		RootDir    string `json:"root_dir"`
-		TTLSeconds int    `json:"ttl_seconds"`
-		AppID      string `json:"app_id"`
+		RootDir    string `json:"root_dir"`    // RootDir 表示上传分片临时目录。
+		TTLSeconds int    `json:"ttl_seconds"` // TTLSeconds 表示上传会话保留秒数。
+		AppID      string `json:"app_id"`      // AppID 表示 Redis key 命名空间来源。
 	}{
 		RootDir:    fileTransferRootDir(cfg),
 		TTLSeconds: int(fileTransferUploadSessionTTL(config.FileStorageConfig{UploadSession: cfg}) / time.Second),

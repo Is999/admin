@@ -21,10 +21,10 @@ func TestValidateClickHouseCollectionName(t *testing.T) {
 // TestIndexHasPrefix 验证索引左前缀判断兼容大小写和空白字符。
 func TestIndexHasPrefix(t *testing.T) {
 	tests := []struct {
-		name       string
-		columns    []string
-		leadColumn string
-		want       bool
+		name       string   // name 表示测试场景名称。
+		columns    []string // columns 表示列定义集合。
+		leadColumn string   // leadColumn 表示期望首列。
+		want       bool     // want 表示期望结果。
 	}{
 		{name: "match", columns: []string{"created_time", "id"}, leadColumn: "created_time", want: true},
 		{name: "case_insensitive", columns: []string{"DATE", "id"}, leadColumn: "date", want: true},

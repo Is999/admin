@@ -61,10 +61,10 @@ func TestDocsSessionHandlerSetsCookie(t *testing.T) {
 // TestAPIDocsProxyPath 校验后台文档站 API 前缀会转换为 API 内网文档路径。
 func TestAPIDocsProxyPath(t *testing.T) {
 	tests := []struct {
-		name     string
-		path     string
-		wantPath string
-		wantOK   bool
+		name     string // name 表示测试场景名称。
+		path     string // path 表示请求路径。
+		wantPath string // wantPath 表示期望重定向路径。
+		wantOK   bool   // wantOK 表示期望是否成功。
 	}{
 		{name: "代理根路径", path: "/api/docs/api", wantPath: apiDocsProxyDefaultPath, wantOK: true},
 		{name: "接口规范", path: "/api/docs/api/接口文档/接口文档统一规范.md", wantPath: "/接口文档/接口文档统一规范.md", wantOK: true},

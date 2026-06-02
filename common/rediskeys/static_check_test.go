@@ -11,6 +11,7 @@ import (
 	"testing"
 )
 
+// TestRedisKeysFileOnlyDefinesConstants 验证对应场景符合预期。
 func TestRedisKeysFileOnlyDefinesConstants(t *testing.T) {
 	fset := token.NewFileSet()
 	file := parseRedisKeysFile(t, fset)
@@ -27,6 +28,7 @@ func TestRedisKeysFileOnlyDefinesConstants(t *testing.T) {
 	}
 }
 
+// TestRedisKeyCommentsIncludeTypeAndTTL 验证对应场景符合预期。
 func TestRedisKeyCommentsIncludeTypeAndTTL(t *testing.T) {
 	fset := token.NewFileSet()
 	file := parseRedisKeysFile(t, fset)
@@ -51,6 +53,7 @@ func TestRedisKeyCommentsIncludeTypeAndTTL(t *testing.T) {
 	}
 }
 
+// TestRedisKeyConstantsStayInRedisKeysFile 验证对应场景符合预期。
 func TestRedisKeyConstantsStayInRedisKeysFile(t *testing.T) {
 	dir := redisKeysPackageDir(t)
 	entries, err := os.ReadDir(dir)
@@ -82,6 +85,7 @@ func TestRedisKeyConstantsStayInRedisKeysFile(t *testing.T) {
 	}
 }
 
+// TestNoReferenceOnlyMoneyBalanceTemplateName 验证对应场景符合预期。
 func TestNoReferenceOnlyMoneyBalanceTemplateName(t *testing.T) {
 	dir := redisKeysPackageDir(t)
 	entries, err := os.ReadDir(dir)
@@ -103,6 +107,7 @@ func TestNoReferenceOnlyMoneyBalanceTemplateName(t *testing.T) {
 	}
 }
 
+// parseRedisKeysFile 解析测试所需数据。
 func parseRedisKeysFile(t *testing.T, fset *token.FileSet) *ast.File {
 	t.Helper()
 	path := filepath.Join(redisKeysPackageDir(t), "redis_keys.go")
@@ -113,6 +118,7 @@ func parseRedisKeysFile(t *testing.T, fset *token.FileSet) *ast.File {
 	return file
 }
 
+// redisKeysPackageDir 表示测试辅助逻辑。
 func redisKeysPackageDir(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

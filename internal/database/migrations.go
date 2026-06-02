@@ -57,12 +57,16 @@ var defaultMigrationSpecs = []migrationSpec{
 	{version: "202606050012", name: "bootstrap_secret_key", asset: "secret_key.sql", bootstrapOnly: true},
 	{version: "202606050013", name: "bootstrap_secret_key_version", asset: "secret_key_version.sql", bootstrapOnly: true},
 	{version: "202606050014", name: "bootstrap_sys_config", asset: "sys_config.sql", bootstrapOnly: true},
-	{version: "202606050015", name: "bootstrap_user_tag_runtime", asset: "user_tag_runtime.sql", bootstrapOnly: true},
-	{version: "202606050017", name: "runtime_config", asset: "runtime_config.sql", bootstrapOnly: false, destructive: false},
-	{version: "202606050018", name: "user_manage", asset: "user_manage.sql", bootstrapOnly: false, destructive: false},
-	{version: "202606050019", name: "docs_permissions", asset: "docs_permissions.sql", bootstrapOnly: false, destructive: false},
-	{version: "202606050020", name: "user_permission_menu", asset: "user_permission_menu.sql", bootstrapOnly: false, destructive: false},
-	{version: "202606050021", name: "user_tag_shard_no", asset: "user_tag_shard_no.sql", bootstrapOnly: false, destructive: false},
+	{version: "202606050015", name: "bootstrap_user_tag_0", asset: "user_tag_0.sql", bootstrapOnly: true},
+	{version: "202606050016", name: "bootstrap_user_tag_0_tmp", asset: "user_tag_0_tmp.sql", bootstrapOnly: true},
+	{version: "202606050017", name: "bootstrap_user_tag_runtime_uid", asset: "user_tag_runtime_uid.sql", bootstrapOnly: true},
+	{version: "202606050018", name: "bootstrap_user_tag_runtime_checkpoint", asset: "user_tag_runtime_checkpoint.sql", bootstrapOnly: true},
+	{version: "202606050019", name: "bootstrap_user_tag_event_outbox", asset: "user_tag_event_outbox.sql", bootstrapOnly: true},
+	{version: "202606050020", name: "bootstrap_runtime_config_release", asset: "runtime_config_release.sql", bootstrapOnly: true},
+	{version: "202606050021", name: "bootstrap_runtime_config_state", asset: "runtime_config_state.sql", bootstrapOnly: true},
+	{version: "202606050022", name: "bootstrap_runtime_task_periodic", asset: "runtime_task_periodic.sql", bootstrapOnly: true},
+	{version: "202606050023", name: "bootstrap_runtime_archive_job", asset: "runtime_archive_job.sql", bootstrapOnly: true},
+	{version: "202606240001", name: "repair_runtime_archive_job_seed", asset: "runtime_archive_job_repair.sql"},
 }
 
 // SchemaMigrationsSQL 返回剥离文件头说明后的迁移版本表 DDL。

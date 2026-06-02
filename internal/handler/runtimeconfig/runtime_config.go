@@ -13,7 +13,7 @@ import (
 func GetOverviewHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodRuntimeConfigOverview, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := runtimeconfiglogic.NewRuntimeConfigLogic(r, sCtx)
-		return logicObj, logicObj.Overview().WithReq(map[string]any{"action": "runtime_config_overview"})
+		return logicObj, logicObj.Overview().WithReq(shared.ActionReq("runtime_config_overview"))
 	})
 }
 
@@ -69,7 +69,7 @@ func DeleteArchiveJobHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func ValidateDraftHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodRuntimeConfigValidate, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := runtimeconfiglogic.NewRuntimeConfigLogic(r, sCtx)
-		return logicObj, logicObj.ValidateDraft().WithReq(map[string]any{"action": "runtime_config_validate"})
+		return logicObj, logicObj.ValidateDraft().WithReq(shared.ActionReq("runtime_config_validate"))
 	})
 }
 

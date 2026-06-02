@@ -27,7 +27,6 @@ func ParseOptions(payload types.WorkflowPayload, defaults Defaults) (types.Runti
 		BatchSize:        positiveOr(payload.BatchSize, defaults.BatchSize),
 		WorkerCount:      positiveOr(payload.WorkerCount, defaults.WorkerCount),
 		DryRun:           payload.DryRun,
-		SyncSnapshotOnly: payload.SyncSnapshotOnly,
 		EventHookEnabled: defaults.EventHookEnabled,
 	}
 	for _, target := range payload.Targets {
@@ -72,8 +71,6 @@ func ParseOptions(payload types.WorkflowPayload, defaults Defaults) (types.Runti
 			opts.WorkerCount = positiveOr(workerCount, defaults.WorkerCount)
 		case "dry_run", "dryrun":
 			opts.DryRun = val == "1" || strings.EqualFold(val, "true")
-		case "sync_snapshot_only", "syncsnapshotonly":
-			opts.SyncSnapshotOnly = val == "1" || strings.EqualFold(val, "true")
 		}
 	}
 	opts.TagTypes = normalizeInts(opts.TagTypes)
@@ -89,12 +86,6 @@ func ParseOptions(payload types.WorkflowPayload, defaults Defaults) (types.Runti
 	}
 	if opts.Mode == types.ModeRecalculate && len(opts.TagTypes) == 0 {
 		return opts, errors.Errorf("recalculate 模式必须提供 tag_types")
-	}
-	if opts.SyncSnapshotOnly && opts.Mode != types.ModeFull {
-		return opts, errors.Errorf("sync_snapshot_only 仅支持 full 模式")
-	}
-	if opts.SyncSnapshotOnly && opts.DryRun {
-		return opts, errors.Errorf("sync_snapshot_only 与 dry_run 不能同时启用")
 	}
 	if err := ValidateRuntimeOptions(opts); err != nil {
 		return opts, errors.Tag(err)

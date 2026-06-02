@@ -168,15 +168,14 @@ func buildPayload(mode string, defaults Defaults) func(taskqueue.WorkflowStartSp
 			return nil, errors.Errorf("用户标签工作流模式不匹配 workflow_mode=%s targets_mode=%s", mode, opts.Mode)
 		}
 		payload := types.WorkflowPayload{
-			WorkflowID:       spec.WorkflowID,
-			Mode:             opts.Mode,
-			Node:             node.Name,
-			TagTypes:         opts.TagTypes,
-			UIDs:             opts.UIDs,
-			ShardIndex:       shardIndex,
-			ShardTotal:       shardTotal,
-			DryRun:           opts.DryRun,
-			SyncSnapshotOnly: opts.SyncSnapshotOnly,
+			WorkflowID: spec.WorkflowID,
+			Mode:       opts.Mode,
+			Node:       node.Name,
+			TagTypes:   opts.TagTypes,
+			UIDs:       opts.UIDs,
+			ShardIndex: shardIndex,
+			ShardTotal: shardTotal,
+			DryRun:     opts.DryRun,
 		}
 		flags := userTagTargetFlags(spec.Targets)
 		if node.Name == types.NodeDispatchHooks || node.Name == types.NodeEventOutboxRetryScan || flags.BatchSize {

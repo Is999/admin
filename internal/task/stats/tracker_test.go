@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// TestTrackerAggregatesCountsAndDetails 验证对应场景符合预期。
 func TestTrackerAggregatesCountsAndDetails(t *testing.T) {
 	ctx, _ := WithTracker(context.Background(), "demo.task")
 	RecordRead(ctx, "source_rows", 3)
@@ -51,6 +52,7 @@ func TestTrackerAggregatesCountsAndDetails(t *testing.T) {
 	}
 }
 
+// TestJoinDetailName 验证对应场景符合预期。
 func TestJoinDetailName(t *testing.T) {
 	if got := JoinDetailName(" user_tag ", ".clean_profile.", DetailPartRows); got != "user_tag.clean_profile.rows" {
 		t.Fatalf("明细名拼接结果错误: %s", got)
@@ -60,6 +62,7 @@ func TestJoinDetailName(t *testing.T) {
 	}
 }
 
+// TestTrackerIsConcurrentSafe 验证对应场景符合预期。
 func TestTrackerIsConcurrentSafe(t *testing.T) {
 	ctx, _ := WithTracker(context.Background(), "concurrent.task")
 	wg := sync.WaitGroup{}
@@ -83,6 +86,7 @@ func TestTrackerIsConcurrentSafe(t *testing.T) {
 	}
 }
 
+// TestMergeSnapshotsAggregatesWorkflowCounts 验证对应场景符合预期。
 func TestMergeSnapshotsAggregatesWorkflowCounts(t *testing.T) {
 	first := &Snapshot{
 		Name:        "node/shard-0",
@@ -138,6 +142,7 @@ func TestMergeSnapshotsAggregatesWorkflowCounts(t *testing.T) {
 	}
 }
 
+// TestSnapshotFromContextReturnsNilWithoutBusinessDetails 验证对应场景符合预期。
 func TestSnapshotFromContextReturnsNilWithoutBusinessDetails(t *testing.T) {
 	if snapshot := SnapshotFromContext(context.Background()); snapshot != nil {
 		t.Fatalf("未挂统计器时应返回 nil，实际=%+v", snapshot)
@@ -148,6 +153,7 @@ func TestSnapshotFromContextReturnsNilWithoutBusinessDetails(t *testing.T) {
 	}
 }
 
+// TestProgressCalculatesPercentAndRemaining 验证对应场景符合预期。
 func TestProgressCalculatesPercentAndRemaining(t *testing.T) {
 	progress := NewProgress(ProgressUnitShard, ProgressStatusRunning, 10, 3, 1, 2)
 	if progress == nil {
@@ -161,6 +167,7 @@ func TestProgressCalculatesPercentAndRemaining(t *testing.T) {
 	}
 }
 
+// TestMergeProgressAggregatesItems 验证对应场景符合预期。
 func TestMergeProgressAggregatesItems(t *testing.T) {
 	first := NewProgress(ProgressUnitShard, ProgressStatusSuccess, 2, 2, 0, 0)
 	second := NewProgress(ProgressUnitShard, ProgressStatusRunning, 3, 1, 0, 0)

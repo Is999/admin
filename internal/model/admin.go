@@ -29,7 +29,7 @@ type Admin struct {
 	Description       string    `gorm:"column:description;type:varchar(255);not null;comment:简介描述" json:"description"`                                             // 简介描述
 	LastLoginTime     time.Time `gorm:"column:last_login_time;type:timestamp;not null;comment:最后登录时间" json:"last_login_time"`                                      // 最后登录时间
 	LastLoginIP       string    `gorm:"column:last_login_ip;type:varchar(32);not null;comment:最后登录 IP" json:"last_login_ip"`                                       // 最后登录 IP
-	LastLoginIpaddr   string    `gorm:"column:last_login_ipaddr;type:varchar(255);not null;comment:最后登录 IP 归属地" json:"last_login_ipaddr"`                          // 最后登录 IP 归属地
+	LastLoginIPAddr   string    `gorm:"column:last_login_ipaddr;type:varchar(255);not null;comment:最后登录 IP 归属地" json:"last_login_ipaddr"`                          // 最后登录 IP 归属地
 	CreatedAt         time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:添加时间" json:"created_at"`                        // 添加时间
 	UpdatedAt         time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`                        // 修改时间
 }

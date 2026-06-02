@@ -37,11 +37,10 @@ func (r *UUIDPathReq) Validate() error {
 
 // AdminListReq 表示管理员列表查询请求。
 type AdminListReq struct {
-	Username    string `json:"username,optional" form:"username,optional"`   // 登录用户名筛选
-	RealName    string `json:"realName,optional" form:"realName,optional"`   // 真实姓名筛选
-	Status      *int   `json:"status,optional" form:"status,optional"`       // 账号状态筛选：1 正常，0 禁用
-	RoleID      *int   `json:"roleID,optional" form:"roleID,optional"`       // 角色 ID 筛选
-	CreatedAt   string `json:"createdAt,optional" form:"createdAt,optional"` // 创建时间筛选预留字段
+	Username    string `json:"username,optional" form:"username,optional"` // 登录用户名筛选
+	RealName    string `json:"realName,optional" form:"realName,optional"` // 真实姓名筛选
+	Status      *int   `json:"status,optional" form:"status,optional"`     // 账号状态筛选：1 正常，0 禁用
+	RoleID      *int   `json:"roleID,optional" form:"roleID,optional"`     // 角色 ID 筛选
 	GetOrderReq        // 复用排序参数
 	GetPageReq         // 复用分页参数
 }
@@ -50,7 +49,6 @@ type AdminListReq struct {
 func (r *AdminListReq) Validate() error {
 	r.Username = strings.TrimSpace(r.Username)
 	r.RealName = strings.TrimSpace(r.RealName)
-	r.CreatedAt = strings.TrimSpace(r.CreatedAt)
 	if err := r.GetOrderReq.Validate(); err != nil {
 		return errors.Tag(err)
 	}
@@ -201,7 +199,7 @@ func (r *AdminRoleAssignReq) Validate() error {
 		return errors.Errorf("管理员ID不能为空")
 	}
 	if len(UniquePositiveInts(r.RoleIDs)) == 0 {
-		return errors.Errorf("角色ID不能为空")
+		return errors.Errorf("角色 ID不能为空")
 	}
 	return nil
 }
@@ -220,7 +218,7 @@ type AdminItem struct {
 	Description       string          `json:"description"`       // 备注说明
 	LastLoginTime     string          `json:"lastLoginTime"`     // 最近登录时间
 	LastLoginIP       string          `json:"lastLoginIP"`       // 最近登录 IP
-	LastLoginIpaddr   string          `json:"lastLoginIpaddr"`   // 最近登录 IP 归属地
+	LastLoginIPAddr   string          `json:"lastLoginIpaddr"`   // 最近登录 IP 归属地
 	RoleIDs           []int           `json:"roleIDs"`           // 已绑定角色 ID 列表
 	Roles             []AdminRoleItem `json:"roles"`             // 已绑定角色列表
 	CreatedAt         string          `json:"createdAt"`         // 创建时间

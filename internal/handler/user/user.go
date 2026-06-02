@@ -70,7 +70,7 @@ func SyncRuntimeHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func APIRuntimeReloadStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodAPIRuntimeConfigReloadStatus, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := apiruntimelogic.NewLogic(r, sCtx)
-		return logicObj, logicObj.Status().WithReq(map[string]any{"action": "api_runtime_config_reload_status"})
+		return logicObj, logicObj.Status().WithReq(shared.ActionReq("api_runtime_config_reload_status"))
 	})
 }
 

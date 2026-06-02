@@ -307,6 +307,10 @@ func (m *Manager) publishRedis(ctx context.Context, body []byte) error {
 			"body": string(body),
 		},
 	}
+	if m.cfg.Redis.MaxLen > 0 {
+		args.MaxLen = m.cfg.Redis.MaxLen
+		args.Approx = true
+	}
 	return errors.Tag(m.redis.XAdd(ctx, args).Err())
 }
 
@@ -910,9 +914,7 @@ func (m *Manager) runDBOnce(ctx context.Context, limit int) (int, error) {
 		ctx = context.Background()
 	}
 	beginAt := time.Now()
-	if limit <= 0 {
-		limit = m.dbRunnerBatchSize()
-	}
+	limit = boundedPositiveInt(limit, m.dbRunnerBatchSize(), maxCollectorCarrierBatchSize)
 	now := time.Now()
 	if err := m.recoverExpiredRunning(ctx, limit, now); err != nil {
 		return 0, errors.Tag(err)

@@ -103,7 +103,7 @@ func ListTaskQueuesHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	// 该接口需要记录管理员查看任务队列的审计日志，因此走 actionLogHandler。
 	return shared.ActionLogHandler(shared.MethodListTaskQueues, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := tasklogic.NewTaskLogic(r, sCtx)
-		return logicObj, logicObj.ListQueues().WithReq(map[string]any{"action": "list_task_queues"})
+		return logicObj, logicObj.ListQueues().WithReq(shared.ActionReq("list_task_queues"))
 	})
 }
 
@@ -130,7 +130,7 @@ func GetConfigReloadStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	// 该接口属于后台运维能力，需要保留审计日志，因此统一走 actionLogHandler。
 	return shared.ActionLogHandler(shared.MethodGetConfigReloadStatus, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := tasklogic.NewTaskLogic(r, sCtx)
-		return logicObj, logicObj.GetConfigReloadStatus().WithReq(map[string]any{"action": "get_config_reload_status"})
+		return logicObj, logicObj.GetConfigReloadStatus().WithReq(shared.ActionReq("get_config_reload_status"))
 	})
 }
 
@@ -149,7 +149,7 @@ func RunConfigReloadHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	// 手动执行配置重载属于显式运维操作，需要统一落管理员审计日志。
 	return shared.ActionLogHandler(shared.MethodRunConfigReload, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := tasklogic.NewTaskLogic(r, sCtx)
-		return logicObj, logicObj.RunConfigReload().WithReq(map[string]any{"action": "run_config_reload"})
+		return logicObj, logicObj.RunConfigReload().WithReq(shared.ActionReq("run_config_reload"))
 	})
 }
 

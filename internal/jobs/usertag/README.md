@@ -9,7 +9,7 @@
 - `runtimectx`：统一 `workflow_id / mode / node / shard / batch` 日志字段和错误链路包装。
 - `route`：统一 `uid%N`、运行期 UID 和标签结果分片口径。
 - `queryplan`：批次级查询计划和默认拒绝无条件全表扫描的保护。
-- `repository`：结果表、只读快照、运行期表、工作流租约和事件 outbox 的通用访问层。
+- `repository`：结果表、运行期表、工作流租约和事件 outbox 的通用访问层。
 - `stage`：`prepare / collect_scope / evaluate_tags / resolve_changes / persist_results / finalize / dispatch_hooks` 骨架阶段。
 - `hook`：标签得到和失去事件 hook 注册表。
 - `workflow`：工作流编排服务。

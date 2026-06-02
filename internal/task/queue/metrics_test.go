@@ -2,6 +2,7 @@ package taskqueue
 
 import "testing"
 
+// TestNormalizeTaskMetricGuardedLabel 验证对应场景符合预期。
 func TestNormalizeTaskMetricGuardedLabel(t *testing.T) {
 	labels := map[string]struct{}{"registered": {}}
 	if got := normalizeTaskMetricGuardedLabel("", 1, labels); got != taskMetricLabelUnknown {

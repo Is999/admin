@@ -66,10 +66,10 @@ func TestHandlerServesRootIndex(t *testing.T) {
 // TestHandlerSetsCacheHeaders 校验文档内容与框架静态资源使用不同缓存策略。
 func TestHandlerSetsCacheHeaders(t *testing.T) {
 	tests := []struct {
-		name       string
-		path       string
-		wantStatus int
-		wantCache  string
+		name       string // name 表示测试场景名称。
+		path       string // path 表示请求路径。
+		wantStatus int    // wantStatus 表示期望 HTTP 状态码。
+		wantCache  string // wantCache 表示期望缓存控制头。
 	}{
 		{name: "文档首页", path: "/api/docs", wantStatus: http.StatusOK, wantCache: docsPageCacheHeader},
 		{name: "Markdown文档", path: "/api/docs/%E6%96%87%E6%A1%A3%E9%A6%96%E9%A1%B5.md", wantStatus: http.StatusOK, wantCache: docsPageCacheHeader},

@@ -27,7 +27,7 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
-			Path:        "/api/tasks/overview", // 查询任务列表。
+			Path:        "/api/tasks/overview", // 查询任务列表概览。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.TaskItemsList,
 			Description: shared.TaskItemsList.Describe,
@@ -59,7 +59,7 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
-			Path:        "/api/tasks/registry/task-types", // 查询任务队列概览。
+			Path:        "/api/tasks/registry/task-types", // 查询已注册任务类型。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.TaskQueueList,
 			Description: shared.TaskQueueList.Describe,
@@ -67,7 +67,7 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
-			Path:        "/api/tasks/registry/workflows", // 查询工作流状态。
+			Path:        "/api/tasks/registry/workflows", // 查询已注册工作流。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.TaskWorkflowStatus,
 			Description: shared.TaskWorkflowStatus.Describe,
@@ -97,7 +97,7 @@ func RouteSpecs() []shared.RouteSpec {
 			Description: shared.TaskConfigReloadRun.Describe,
 			Handler:     RunConfigReloadHandler,
 		},
-		// 固定路由必须排在 :taskId 参数路由前，避免 go-zero 优先匹配参数路由。
+		// 单段固定路由必须排在 :taskId 参数路由前，避免 go-zero 优先匹配参数路由。
 		{
 			Method:      http.MethodGet,
 			Path:        "/api/tasks/:taskId", // 查询任务详情。

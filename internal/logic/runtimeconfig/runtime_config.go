@@ -48,10 +48,10 @@ type ReleaseSnapshot struct {
 
 // StateCache 是 table-cache 中运行配置 active 版本状态。
 type StateCache struct {
-	ActiveReleaseID uint64 `json:"active_release_id"` // 当前发布 ID
-	ActiveVersion   uint64 `json:"active_version"`    // 当前版本号
-	ActiveChecksum  string `json:"active_checksum"`   // 当前快照 SHA256
-	PublishedAtUnix int64  `json:"published_at_unix"` // 最近发布时间戳
+	ActiveReleaseID uint64 `json:"active_release_id,string"` // 当前发布 ID，兼容 Redis Hash 字符串值
+	ActiveVersion   uint64 `json:"active_version,string"`    // 当前版本号，兼容 Redis Hash 字符串值
+	ActiveChecksum  string `json:"active_checksum"`          // 当前快照 SHA256
+	PublishedAtUnix int64  `json:"published_at_unix,string"` // 最近发布时间戳，兼容 Redis Hash 字符串值
 }
 
 // ActiveRelease 保存一次 active 版本和对应快照。
@@ -116,10 +116,10 @@ func PollIntervalSeconds(cfg config.Config) int {
 
 // CurrentSnapshotFromConfig 从当前配置提取数据库化的大列表片段。
 func CurrentSnapshotFromConfig(cfg config.Config) ReleaseSnapshot {
-	return ReleaseSnapshot{
+	return normalizeReleaseSnapshot(ReleaseSnapshot{
 		ArchiveJobs:  append([]config.ArchiveJobConfig(nil), cfg.Archive.Jobs...),
 		TaskPeriodic: append([]config.TaskPeriodicConfig(nil), cfg.Task.Periodic...),
-	}
+	})
 }
 
 // runtimeConfigSnapshotEmpty 判断发布快照是否未包含任何运行期大列表配置。
@@ -132,6 +132,7 @@ func ApplySnapshot(cfg *config.Config, snapshot ReleaseSnapshot) {
 	if cfg == nil {
 		return
 	}
+	snapshot = normalizeReleaseSnapshot(snapshot)
 	cfg.Archive.Jobs = append([]config.ArchiveJobConfig(nil), snapshot.ArchiveJobs...)
 	cfg.Task.Periodic = append([]config.TaskPeriodicConfig(nil), snapshot.TaskPeriodic...)
 }
@@ -389,7 +390,7 @@ func (l *RuntimeConfigLogic) ValidateDraft() *types.BizResult {
 	}
 	messages, err := ValidateSnapshot(snapshot)
 	if err != nil {
-		return types.NewBizResult(codes.ParamError).WithError(corelogic.WrapLogicError(err, "RuntimeConfigLogic.ValidateDraft 预检失败")).
+		return types.NewBizResult(codes.Success).
 			WithData(&types.RuntimeConfigValidateResp{Valid: false, Messages: append(messages, err.Error())})
 	}
 	_, _, checksum, err := EncodeSnapshot(snapshot)
@@ -520,6 +521,7 @@ func (l *RuntimeConfigLogic) publishDraft(remark string, baseReleaseID uint64) (
 
 // publishSnapshot 校验并持久化发布快照，同时触发运行态热加载。
 func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark string, baseReleaseID uint64) (*types.RuntimeConfigPublishResp, error) {
+	snapshot = normalizeReleaseSnapshot(snapshot)
 	if _, err := ValidateSnapshot(snapshot); err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -613,12 +615,13 @@ func (l *RuntimeConfigLogic) buildDraftSnapshot() (ReleaseSnapshot, error) {
 	}
 	appID, env := l.scope()
 	var periodicRows []model.RuntimeTaskPeriodic
-	if err = db.Where("app_id = ? AND env = ?", appID, env).
+	// writeDB 带路由 clause，跨模型查询必须新开 Session，避免沿用上一个 Statement。
+	if err = db.Session(&gorm.Session{NewDB: true}).Where("app_id = ? AND env = ?", appID, env).
 		Order("sort_order ASC").Order("id ASC").Find(&periodicRows).Error; err != nil {
 		return ReleaseSnapshot{}, errors.Tag(err)
 	}
 	var archiveRows []model.RuntimeArchiveJob
-	if err = db.Where("app_id = ? AND env = ?", appID, env).
+	if err = db.Session(&gorm.Session{NewDB: true}).Where("app_id = ? AND env = ?", appID, env).
 		Order("sort_order ASC").Order("id ASC").Find(&archiveRows).Error; err != nil {
 		return ReleaseSnapshot{}, errors.Tag(err)
 	}
@@ -644,21 +647,22 @@ func (l *RuntimeConfigLogic) replaceDraft(snapshot ReleaseSnapshot) error {
 	appID, env := l.scope()
 	adminID := l.adminID()
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("app_id = ? AND env = ?", appID, env).Delete(&model.RuntimeTaskPeriodic{}).Error; err != nil {
+		// 同一事务内跨模型操作也要清理 Statement，事务连接仍由 tx 保持。
+		if err := tx.Session(&gorm.Session{NewDB: true}).Where("app_id = ? AND env = ?", appID, env).Delete(&model.RuntimeTaskPeriodic{}).Error; err != nil {
 			return errors.Tag(err)
 		}
-		if err := tx.Where("app_id = ? AND env = ?", appID, env).Delete(&model.RuntimeArchiveJob{}).Error; err != nil {
+		if err := tx.Session(&gorm.Session{NewDB: true}).Where("app_id = ? AND env = ?", appID, env).Delete(&model.RuntimeArchiveJob{}).Error; err != nil {
 			return errors.Tag(err)
 		}
 		for index, item := range snapshot.TaskPeriodic {
 			row := periodicConfigToModel(item, appID, env, adminID, index)
-			if err := tx.Create(&row).Error; err != nil {
+			if err := tx.Session(&gorm.Session{NewDB: true}).Create(&row).Error; err != nil {
 				return errors.Tag(err)
 			}
 		}
 		for index, item := range snapshot.ArchiveJobs {
 			row := archiveConfigToModel(item, appID, env, adminID, index)
-			if err := tx.Create(&row).Error; err != nil {
+			if err := tx.Session(&gorm.Session{NewDB: true}).Create(&row).Error; err != nil {
 				return errors.Tag(err)
 			}
 		}
@@ -823,11 +827,12 @@ func (l *RuntimeConfigLogic) draftCounts() (int64, int64, error) {
 	}
 	appID, env := l.scope()
 	var periodicCount int64
-	if err = db.Model(&model.RuntimeTaskPeriodic{}).Where("app_id = ? AND env = ?", appID, env).Count(&periodicCount).Error; err != nil {
+	// 统计两个草稿表时不复用 Statement，避免表名被上一条 Count 污染。
+	if err = db.Session(&gorm.Session{NewDB: true}).Model(&model.RuntimeTaskPeriodic{}).Where("app_id = ? AND env = ?", appID, env).Count(&periodicCount).Error; err != nil {
 		return 0, 0, errors.Tag(err)
 	}
 	var archiveCount int64
-	if err = db.Model(&model.RuntimeArchiveJob{}).Where("app_id = ? AND env = ?", appID, env).Count(&archiveCount).Error; err != nil {
+	if err = db.Session(&gorm.Session{NewDB: true}).Model(&model.RuntimeArchiveJob{}).Where("app_id = ? AND env = ?", appID, env).Count(&archiveCount).Error; err != nil {
 		return 0, 0, errors.Tag(err)
 	}
 	return periodicCount, archiveCount, nil

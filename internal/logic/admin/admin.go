@@ -43,11 +43,6 @@ func buildAdminInfoCache(admin *model.Admin, token string) *types.AdminInfo {
 	return cachelogic.BuildAdminProfileCache(admin).ToAdminInfo(token)
 }
 
-// buildAdminProfileCache 把管理员模型转换成公开资料缓存结构。
-func buildAdminProfileCache(admin *model.Admin) *types.AdminProfile {
-	return cachelogic.BuildAdminProfileCache(admin)
-}
-
 // Login 校验管理员账号密码，更新登录态并写入缓存会话信息。
 func (l *AdminLogic) Login(req *types.LoginReq) *types.BizResult {
 	// 登录属于强一致鉴权链路，必须直接查主库，避免主从延迟导致禁用/改密状态未及时生效。
@@ -197,7 +192,7 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 		Description:     req.Description,
 		LastLoginTime:   time.Time{},
 		LastLoginIP:     "",
-		LastLoginIpaddr: "",
+		LastLoginIPAddr: "",
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
@@ -291,7 +286,7 @@ func (l *AdminLogic) GetAdminProfileByID(id int) (*types.AdminProfile, error) {
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
-		return buildAdminProfileCache(admin), nil
+		return cachelogic.BuildAdminProfileCache(admin), nil
 	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
@@ -342,7 +337,7 @@ func (l *AdminLogic) GetLoginAfterInfo(ctxAdmin *helper.CtxAdmin) *types.BizResu
 		return &types.BizResult{
 			Code:       codes.DBError,
 			MessageKey: i18n.MsgKeyRoleFetchFail,
-			Error:      errors.Wrapf(err, "AdminLogic.GetLoginAfterInfo 账号[%s]获取用户角色ID失败", ctxAdmin.Name),
+			Error:      errors.Wrapf(err, "AdminLogic.GetLoginAfterInfo 账号[%s]获取用户角色 ID失败", ctxAdmin.Name),
 		}
 	}
 	roles, err := (&rbaclogic.AdminRoleRelLogic{BaseLogic: l.BaseLogic}).GetRolesByUserID(int64(ctxAdmin.ID))
@@ -377,7 +372,7 @@ func (l *AdminLogic) GetLoginAfterInfo(ctxAdmin *helper.CtxAdmin) *types.BizResu
 		Description:       info.Description,
 		LastLoginTime:     info.LastLoginTime,
 		LastLoginIP:       info.LastLoginIP,
-		LastLoginIpaddr:   info.LastLoginIpaddr,
+		LastLoginIPAddr:   info.LastLoginIPAddr,
 		RoleIDs:           roleIDs,
 		Roles:             roles,
 		Token:             info.Token,

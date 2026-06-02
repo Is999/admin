@@ -215,9 +215,8 @@ type ListResp[T any] struct {
 }
 
 // DropdownItem 表示下拉框选项。
-// `Id` 保留旧字段命名以兼容既有前端和历史接口。
 type DropdownItem struct {
-	Id    any    `json:"id,omitempty"`   // ID
+	ID    any    `json:"id,omitempty"`   // ID
 	Label string `json:"label"`          // 名称
 	Value any    `json:"value"`          // 选项值
 	Meta  any    `json:"meta,omitempty"` // 附加元数据

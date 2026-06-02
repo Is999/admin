@@ -39,9 +39,9 @@ func TestRetainAssignablePermissionIDs(t *testing.T) {
 // TestParentRoleUsesFullPermissionScope 验证超级管理员父级不依赖角色权限关系表。
 func TestParentRoleUsesFullPermissionScope(t *testing.T) {
 	tests := []struct {
-		name         string
-		parentRoleID int
-		want         bool
+		name         string // name 表示测试场景名称。
+		parentRoleID int    // parentRoleID 表示测试字段。
+		want         bool   // want 表示期望结果。
 	}{
 		{name: "super admin", parentRoleID: corelogic.AdminSuperRoleID, want: true},
 		{name: "root parent", parentRoleID: 0, want: true},

@@ -228,9 +228,6 @@ func buildUserTagWorkflowReq(req *types.TriggerUserTagWorkflowReq, cfg config.Us
 	if req.DryRun {
 		targets = append(targets, "dry_run=1")
 	}
-	if req.SyncSnapshotOnly {
-		targets = append(targets, "sync_snapshot_only=1")
-	}
 
 	// 未显式传分片数时，优先复用 worker_count，其次回退到用户标签模块默认配置。
 	shardTotal := req.ShardTotal
@@ -277,7 +274,6 @@ func defaultUserTagUniqueKey(req *types.TriggerUserTagWorkflowReq) string {
 		"batch_size=" + strconv.Itoa(req.BatchSize),
 		"worker_count=" + strconv.Itoa(req.WorkerCount),
 		"dry_run=" + strconv.FormatBool(req.DryRun),
-		"sync_snapshot_only=" + strconv.FormatBool(req.SyncSnapshotOnly),
 	}, "|")
 	sum := sha1.Sum([]byte(canonical))
 	return fmt.Sprintf(keys.UserTagWorkflowUniqueSegment, mode, sum[:8])

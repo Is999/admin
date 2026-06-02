@@ -74,12 +74,12 @@ type messageContent struct {
 	Text string `json:"text"` // 文本消息内容
 }
 
-// responsePayload 兼容 Lark 机器人不同响应字段命名。
+// responsePayload 定义 Lark 机器人响应字段。
 type responsePayload struct {
-	Code          *int   `json:"code,omitempty"`          // 新版响应业务码，0 表示成功
-	Msg           string `json:"msg,omitempty"`           // 新版响应消息
-	StatusCode    *int   `json:"StatusCode,omitempty"`    // 旧版响应业务码，0 表示成功
-	StatusMessage string `json:"StatusMessage,omitempty"` // 旧版响应消息
+	Code          *int   `json:"code,omitempty"`          // 小写响应业务码，0 表示成功
+	Msg           string `json:"msg,omitempty"`           // 小写响应消息
+	StatusCode    *int   `json:"StatusCode,omitempty"`    // 大写响应业务码，0 表示成功
+	StatusMessage string `json:"StatusMessage,omitempty"` // 大写响应消息
 }
 
 // New 创建 Lark 告警器；未启用时返回 nil。

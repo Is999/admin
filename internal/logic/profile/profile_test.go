@@ -19,6 +19,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// newTestProfileSecurityLogic 构造测试依赖。
 func newTestProfileSecurityLogic() *securitylogic.SecurityLogic {
 	svcCtx := svc.NewServiceContext(config.Config{
 		AppID:        "site-a",
@@ -28,6 +29,7 @@ func newTestProfileSecurityLogic() *securitylogic.SecurityLogic {
 	return securitylogic.NewSecurityLogic(context.Background(), svcCtx)
 }
 
+// testLoginMFAFlagKey 表示测试辅助逻辑。
 func testLoginMFAFlagKey(logicObj *securitylogic.SecurityLogic, adminID int) string {
 	return keys.LoginCheckMFAFlagRedisKey(adminID)
 }

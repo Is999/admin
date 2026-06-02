@@ -135,6 +135,8 @@ func periodicModelToItem(row model.RuntimeTaskPeriodic) types.RuntimeTaskPeriodi
 
 // archiveReqToModel 把归档任务保存请求转换为草稿表模型。
 func archiveReqToModel(req *types.SaveRuntimeArchiveJobReq, appID, env string, adminID int) model.RuntimeArchiveJob {
+	archiveDelayDays := archiveDelayWithHotKeepDefault(req.HotKeepDays, req.ArchiveDelayDays)
+	deleteDelayDays := archiveDelayWithHotKeepDefault(req.HotKeepDays, req.DeleteDelayDays)
 	return model.RuntimeArchiveJob{
 		AppID:                   appID,
 		Env:                     env,
@@ -152,7 +154,7 @@ func archiveReqToModel(req *types.SaveRuntimeArchiveJobReq, appID, env string, a
 		SplitUnit:               req.SplitUnit,
 		CustomDays:              req.CustomDays,
 		HotKeepDays:             req.HotKeepDays,
-		ArchiveDelayDays:        req.ArchiveDelayDays,
+		ArchiveDelayDays:        archiveDelayDays,
 		ArchiveWindowSeconds:    req.ArchiveWindowSeconds,
 		ArchiveWindowMode:       req.ArchiveWindowMode,
 		ArchiveMaxWindowsPerRun: req.ArchiveMaxWindowsPerRun,
@@ -160,7 +162,7 @@ func archiveReqToModel(req *types.SaveRuntimeArchiveJobReq, appID, env string, a
 		ArchiveAutoLightRows:    req.ArchiveAutoLightRows,
 		ArchiveAutoLightMs:      req.ArchiveAutoLightMs,
 		DeleteDisabled:          req.DeleteDisabled,
-		DeleteDelayDays:         req.DeleteDelayDays,
+		DeleteDelayDays:         deleteDelayDays,
 		DeleteWindowSeconds:     req.DeleteWindowSeconds,
 		DeleteMaxWindowsPerRun:  req.DeleteMaxWindowsPerRun,
 		BatchSize:               req.BatchSize,
@@ -258,6 +260,7 @@ func archiveModelToConfig(row model.RuntimeArchiveJob) config.ArchiveJobConfig {
 
 // archiveConfigToModel 把运行配置项导入为归档任务草稿模型。
 func archiveConfigToModel(item config.ArchiveJobConfig, appID, env string, adminID int, index int) model.RuntimeArchiveJob {
+	item = normalizeArchiveConfigDefaults(item)
 	database := strings.TrimSpace(item.Database)
 	if database == "" {
 		database = "main"
@@ -301,6 +304,31 @@ func archiveConfigToModel(item config.ArchiveJobConfig, appID, env string, admin
 		CreatedByAdminID:        adminID,
 		UpdatedByAdminID:        adminID,
 	}
+}
+
+// normalizeReleaseSnapshot 补齐发布快照中的运行默认值，避免 YAML 导入、草稿表和 active release 语义漂移。
+func normalizeReleaseSnapshot(snapshot ReleaseSnapshot) ReleaseSnapshot {
+	snapshot.ArchiveJobs = append([]config.ArchiveJobConfig(nil), snapshot.ArchiveJobs...)
+	for index := range snapshot.ArchiveJobs {
+		snapshot.ArchiveJobs[index] = normalizeArchiveConfigDefaults(snapshot.ArchiveJobs[index])
+	}
+	snapshot.TaskPeriodic = append([]config.TaskPeriodicConfig(nil), snapshot.TaskPeriodic...)
+	return snapshot
+}
+
+// normalizeArchiveConfigDefaults 补齐归档任务默认值，保持草稿、发布快照和执行服务口径一致。
+func normalizeArchiveConfigDefaults(item config.ArchiveJobConfig) config.ArchiveJobConfig {
+	item.ArchiveDelayDays = archiveDelayWithHotKeepDefault(item.HotKeepDays, item.ArchiveDelayDays)
+	item.DeleteDelayDays = archiveDelayWithHotKeepDefault(item.HotKeepDays, item.DeleteDelayDays)
+	return item
+}
+
+// archiveDelayWithHotKeepDefault 补齐归档/删除延迟天数，避免草稿表与归档执行态默认值不一致。
+func archiveDelayWithHotKeepDefault(hotKeepDays, delayDays int) int {
+	if hotKeepDays > 0 && delayDays <= 0 {
+		return hotKeepDays
+	}
+	return delayDays
 }
 
 // archiveModelToItem 把归档任务草稿模型转换为管理端列表项。

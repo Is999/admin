@@ -78,7 +78,7 @@ func (l *AdminRoleLogic) descendantRoleIDsByDB(db *gorm.DB, roleID int) ([]int, 
 		Order("id ASC").
 		Pluck("id", &roleIDs).Error
 	if err != nil {
-		return nil, errors.Wrapf(err, "AdminRoleLogic.descendantRoleIDs 查询角色ID[%d]子孙角色失败", roleID)
+		return nil, errors.Wrapf(err, "AdminRoleLogic.descendantRoleIDs 查询角色 ID[%d]子孙角色失败", roleID)
 	}
 	return types.UniquePositiveInts(roleIDs), nil
 }
@@ -159,7 +159,7 @@ func (l *AdminRoleLogic) appendRolePermissions(db *gorm.DB, roleID int, permissi
 		})
 	}
 	if err := freshTxStatement(db).Create(&rows).Error; err != nil {
-		return errors.Wrapf(err, "AdminRoleLogic.appendRolePermissions 写入角色ID[%d]新增权限失败 permissionIDs=%v", roleID, permissionIDs)
+		return errors.Wrapf(err, "AdminRoleLogic.appendRolePermissions 写入角色 ID[%d]新增权限失败 permissionIDs=%v", roleID, permissionIDs)
 	}
 	return nil
 }
@@ -279,7 +279,7 @@ func (l *AdminRoleLogic) rolePidsTx(tx *gorm.DB, pid int, selfID int) (string, e
 	}
 	var parent model.AdminRole
 	if err := tx.Where("id = ? AND is_delete = 0", pid).First(&parent).Error; err != nil {
-		return "", errors.Wrapf(err, "AdminRoleLogic.rolePidsTx 查询父级角色ID[%d]失败", pid)
+		return "", errors.Wrapf(err, "AdminRoleLogic.rolePidsTx 查询父级角色 ID[%d]失败", pid)
 	}
 	if corelogic.ContainsTreeID(parent.Pids, selfID) {
 		return "", errors.Errorf("AdminRoleLogic.rolePidsTx 不能把角色移动到自己的子级下面 pid=%d selfID=%d", pid, selfID)
@@ -307,7 +307,7 @@ func (l *AdminRoleLogic) ensureRoleTitleUniqueTx(tx *gorm.DB, title string, igno
 func (l *AdminRoleLogic) ensureRoleExistsTx(tx *gorm.DB, roleID int) error {
 	var count int64
 	if err := freshTxStatement(tx).Model(&model.AdminRole{}).Where("id = ? AND is_delete = 0", roleID).Count(&count).Error; err != nil {
-		return errors.Wrapf(err, "AdminRoleLogic.ensureRoleExistsTx 检查角色ID[%d]是否存在失败", roleID)
+		return errors.Wrapf(err, "AdminRoleLogic.ensureRoleExistsTx 检查角色 ID[%d]是否存在失败", roleID)
 	}
 	if count == 0 {
 		return gorm.ErrRecordNotFound
@@ -322,7 +322,7 @@ func (l *AdminRoleLogic) replaceRolePermissionsTx(tx *gorm.DB, roleID int, permi
 		return errors.Tag(err)
 	}
 	if err := tx.Where("role_id = ?", roleID).Delete(&model.AdminRolePermissionRel{}).Error; err != nil {
-		return errors.Wrapf(err, "AdminRoleLogic.replaceRolePermissionsTx 清理角色ID[%d]原权限失败", roleID)
+		return errors.Wrapf(err, "AdminRoleLogic.replaceRolePermissionsTx 清理角色 ID[%d]原权限失败", roleID)
 	}
 	if len(permissionIDs) == 0 {
 		return nil
@@ -337,7 +337,7 @@ func (l *AdminRoleLogic) replaceRolePermissionsTx(tx *gorm.DB, roleID int, permi
 		})
 	}
 	if err := tx.Create(&rows).Error; err != nil {
-		return errors.Wrapf(err, "AdminRoleLogic.replaceRolePermissionsTx 写入角色ID[%d]权限关系失败", roleID)
+		return errors.Wrapf(err, "AdminRoleLogic.replaceRolePermissionsTx 写入角色 ID[%d]权限关系失败", roleID)
 	}
 	return nil
 }

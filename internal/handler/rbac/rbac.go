@@ -23,7 +23,7 @@ func ListRoleHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func TreeRoleHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodTreeRole, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := rbaclogic.NewAdminRoleLogic(r, sCtx)
-		return logicObj, logicObj.TreeList().WithReq(map[string]any{"action": "tree_role"})
+		return logicObj, logicObj.TreeList().WithReq(shared.ActionReq("tree_role"))
 	})
 }
 
@@ -31,7 +31,7 @@ func TreeRoleHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func TreeRoleOptionsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.RespHandlerFunc(func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := rbaclogic.NewAdminRoleLogic(r, sCtx)
-		return logicObj, logicObj.TreeList().WithReq(map[string]any{"action": "tree_role_options"})
+		return logicObj, logicObj.TreeList().WithReq(shared.ActionReq("tree_role_options"))
 	})
 }
 
@@ -109,7 +109,7 @@ func ListPermissionHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func TreePermissionHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodTreePermission, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := rbaclogic.NewAdminPermissionLogic(r, sCtx)
-		return logicObj, logicObj.TreeList().WithReq(map[string]any{"action": "tree_permission"})
+		return logicObj, logicObj.TreeList().WithReq(shared.ActionReq("tree_permission"))
 	})
 }
 
@@ -117,7 +117,7 @@ func TreePermissionHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func MaxPermissionUUIDHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodMaxPermissionUUID, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := rbaclogic.NewAdminPermissionLogic(r, sCtx)
-		return logicObj, logicObj.MaxUUID().WithReq(map[string]any{"action": "max_permission_uuid"})
+		return logicObj, logicObj.MaxUUID().WithReq(shared.ActionReq("max_permission_uuid"))
 	})
 }
 

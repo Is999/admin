@@ -151,7 +151,7 @@ func safeHeaderValue(value string) string {
 	return value
 }
 
-// asciiDownloadFileName 生成 filename 兼容字段；真实中文名通过 filename* 输出。
+// asciiDownloadFileName 生成 ASCII fallback 文件名；真实中文名通过 filename* 输出。
 func asciiDownloadFileName(fileName string) string {
 	fileName = safeDownloadFileName(fileName)
 	ext := filepath.Ext(fileName)
@@ -171,7 +171,7 @@ func asciiDownloadFileName(fileName string) string {
 	return builder.String()
 }
 
-// isASCIISafeExt 判断扩展名是否适合放入 filename 兼容字段。
+// isASCIISafeExt 判断扩展名是否适合放入 ASCII filename 参数。
 func isASCIISafeExt(ext string) bool {
 	if ext == "" || strings.ContainsAny(ext, "\r\n\x00/\\\";") {
 		return false

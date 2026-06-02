@@ -453,21 +453,21 @@ func validateSecretKeyEnabledValues(req *types.SaveSecretKeyReq) error {
 	}
 	if secretKeySignEnabled(req) || secretKeyCryptoEnabled(req) {
 		if _, err := resolvePEMText(req.RSAPublicKeyUserRef); err != nil {
-			return errors.Wrap(err, "用户RSA公钥文件不可用")
+			return errors.Wrap(err, "用户 RSA公钥文件不可用")
 		}
 		if _, err := resolvePEMText(req.RSAPrivateKeyServerRef); err != nil {
-			return errors.Wrap(err, "服务端RSA私钥文件不可用")
+			return errors.Wrap(err, "服务端 RSA私钥文件不可用")
 		}
 	}
 	if secretKeySignEnabled(req) {
 		if strings.TrimSpace(req.RSAPublicKeyServerRef) != "" {
 			if _, err := resolvePEMText(req.RSAPublicKeyServerRef); err != nil {
-				return errors.Wrap(err, "服务端RSA公钥文件不可用")
+				return errors.Wrap(err, "服务端 RSA公钥文件不可用")
 			}
 			return nil
 		}
 		if _, err := deriveServerPublicPEMFromPrivateRef(req.RSAPrivateKeyServerRef); err != nil {
-			return errors.Wrap(err, "服务端RSA公钥派生失败")
+			return errors.Wrap(err, "服务端 RSA公钥派生失败")
 		}
 	}
 	return nil
@@ -602,38 +602,38 @@ func (l *SecretKeyLogic) checkSecretKeyPayload(req *types.SaveSecretKeyReq, vers
 
 	if signEnabled || cryptoEnabled {
 		if _, err := normalizeSecretRef(sanitizedReq.RSAPublicKeyUserRef); err != nil {
-			appendError("rsa_public_key_user_ref.path", "用户RSA公钥路径", "启用签名验签或加密解密后，用户 RSA 公钥必须填写绝对路径，且不能直接录入 PEM")
+			appendError("rsa_public_key_user_ref.path", "用户 RSA公钥路径", "启用签名验签或加密解密后，用户 RSA 公钥必须填写绝对路径，且不能直接录入 PEM")
 		} else {
-			appendItem("rsa_public_key_user_ref.path", "用户RSA公钥路径", true, "用户 RSA 公钥路径格式正确", "")
+			appendItem("rsa_public_key_user_ref.path", "用户 RSA公钥路径", true, "用户 RSA 公钥路径格式正确", "")
 		}
 		if _, err := normalizeSecretRef(sanitizedReq.RSAPrivateKeyServerRef); err != nil {
-			appendError("rsa_private_key_server_ref.path", "服务端RSA私钥路径", "启用签名验签或加密解密后，服务端 RSA 私钥必须填写绝对路径，且不能直接录入 PEM")
+			appendError("rsa_private_key_server_ref.path", "服务端 RSA私钥路径", "启用签名验签或加密解密后，服务端 RSA 私钥必须填写绝对路径，且不能直接录入 PEM")
 		} else {
 			appendItem("rsa_private_key_server_ref.path", "服务端 RSA 私钥路径", true, "服务端 RSA 私钥路径格式正确", "")
 		}
 		var err error
 		userPublicPEM, err = resolvePEMText(sanitizedReq.RSAPublicKeyUserRef)
 		if err != nil {
-			appendError("rsa_public_key_user_ref.file", "用户RSA公钥文件", "用户 RSA 公钥文件不存在、不可读或内容不是有效 PEM")
+			appendError("rsa_public_key_user_ref.file", "用户 RSA公钥文件", "用户 RSA 公钥文件不存在、不可读或内容不是有效 PEM")
 		} else {
-			appendItem("rsa_public_key_user_ref.file", "用户RSA公钥文件", true, "用户 RSA 公钥文件可读取", "")
+			appendItem("rsa_public_key_user_ref.file", "用户 RSA公钥文件", true, "用户 RSA 公钥文件可读取", "")
 		}
 		serverPrivatePEM, err = resolvePEMText(sanitizedReq.RSAPrivateKeyServerRef)
 		if err != nil {
-			appendError("rsa_private_key_server_ref.file", "服务端RSA私钥文件", "服务端 RSA 私钥文件不存在、不可读或内容不是有效 PEM")
+			appendError("rsa_private_key_server_ref.file", "服务端 RSA私钥文件", "服务端 RSA 私钥文件不存在、不可读或内容不是有效 PEM")
 		} else {
-			appendItem("rsa_private_key_server_ref.file", "服务端RSA私钥文件", true, "服务端 RSA 私钥文件可读取", "")
+			appendItem("rsa_private_key_server_ref.file", "服务端 RSA私钥文件", true, "服务端 RSA 私钥文件可读取", "")
 		}
 		if _, userPublicErr := security.ParseRSAPublicKey(userPublicPEM); userPublicErr != nil {
-			appendError("rsa_public_key_user_ref.pem", "用户RSA公钥格式", "用户 RSA 公钥 PEM 格式不合法")
+			appendError("rsa_public_key_user_ref.pem", "用户 RSA公钥格式", "用户 RSA 公钥 PEM 格式不合法")
 		} else {
-			appendItem("rsa_public_key_user_ref.pem", "用户RSA公钥格式", true, "用户 RSA 公钥 PEM 格式正确", "")
+			appendItem("rsa_public_key_user_ref.pem", "用户 RSA公钥格式", true, "用户 RSA 公钥 PEM 格式正确", "")
 		}
 		serverPrivateKey, serverPrivateErr = security.ParseRSAPrivateKey(serverPrivatePEM)
 		if serverPrivateErr != nil {
-			appendError("rsa_private_key_server_ref.pem", "服务端RSA私钥格式", "服务端 RSA 私钥 PEM 格式不合法")
+			appendError("rsa_private_key_server_ref.pem", "服务端 RSA私钥格式", "服务端 RSA 私钥 PEM 格式不合法")
 		} else {
-			appendItem("rsa_private_key_server_ref.pem", "服务端RSA私钥格式", true, "服务端 RSA 私钥 PEM 格式正确", "")
+			appendItem("rsa_private_key_server_ref.pem", "服务端 RSA私钥格式", true, "服务端 RSA 私钥 PEM 格式正确", "")
 		}
 	} else {
 		appendItem("sign_status", "签名验签状态", true, "当前已关闭签名验签链路，跳过 RSA 材料校验", "")
@@ -642,42 +642,42 @@ func (l *SecretKeyLogic) checkSecretKeyPayload(req *types.SaveSecretKeyReq, vers
 	if signEnabled {
 		if strings.TrimSpace(sanitizedReq.RSAPublicKeyServerRef) == "" {
 			if serverPrivateErr != nil || serverPrivateKey == nil {
-				appendError("rsa_public_key_server_ref.derived", "服务端RSA公钥", "服务端 RSA 私钥格式未通过，无法派生公钥")
+				appendError("rsa_public_key_server_ref.derived", "服务端 RSA公钥", "服务端 RSA 私钥格式未通过，无法派生公钥")
 			} else {
 				var err error
 				serverPublicPEM, err = deriveRSAPublicPEMFromPrivateKey(serverPrivateKey)
 				if err != nil {
-					appendError("rsa_public_key_server_ref.derived", "服务端RSA公钥", "服务端 RSA 公钥派生失败")
+					appendError("rsa_public_key_server_ref.derived", "服务端 RSA公钥", "服务端 RSA 公钥派生失败")
 				} else {
 					serverPublicKey = &serverPrivateKey.PublicKey
-					appendItem("rsa_public_key_server_ref.derived", "服务端RSA公钥", true, "未配置公钥路径，已由服务端私钥派生", "")
+					appendItem("rsa_public_key_server_ref.derived", "服务端 RSA公钥", true, "未配置公钥路径，已由服务端私钥派生", "")
 				}
 			}
 		} else {
 			if _, err := normalizeSecretRef(sanitizedReq.RSAPublicKeyServerRef); err != nil {
-				appendError("rsa_public_key_server_ref.path", "服务端RSA公钥路径", "服务端 RSA 公钥路径格式错误，不能直接录入 PEM")
+				appendError("rsa_public_key_server_ref.path", "服务端 RSA公钥路径", "服务端 RSA 公钥路径格式错误，不能直接录入 PEM")
 			} else {
 				appendItem("rsa_public_key_server_ref.path", "服务端 RSA 公钥路径", true, "服务端 RSA 公钥路径格式正确", "")
 			}
 			var err error
 			serverPublicPEM, err = resolvePEMText(sanitizedReq.RSAPublicKeyServerRef)
 			if err != nil {
-				appendError("rsa_public_key_server_ref.file", "服务端RSA公钥文件", "服务端 RSA 公钥文件不存在、不可读或内容不是有效 PEM")
+				appendError("rsa_public_key_server_ref.file", "服务端 RSA公钥文件", "服务端 RSA 公钥文件不存在、不可读或内容不是有效 PEM")
 			} else {
-				appendItem("rsa_public_key_server_ref.file", "服务端RSA公钥文件", true, "服务端 RSA 公钥文件可读取", "")
+				appendItem("rsa_public_key_server_ref.file", "服务端 RSA公钥文件", true, "服务端 RSA 公钥文件可读取", "")
 			}
 			serverPublicKey, serverPublicErr = security.ParseRSAPublicKey(serverPublicPEM)
 			if serverPublicErr != nil {
-				appendError("rsa_public_key_server_ref.pem", "服务端RSA公钥格式", "服务端 RSA 公钥 PEM 格式不合法")
+				appendError("rsa_public_key_server_ref.pem", "服务端 RSA公钥格式", "服务端 RSA 公钥 PEM 格式不合法")
 			} else {
-				appendItem("rsa_public_key_server_ref.pem", "服务端RSA公钥格式", true, "服务端 RSA 公钥 PEM 格式正确", "")
+				appendItem("rsa_public_key_server_ref.pem", "服务端 RSA公钥格式", true, "服务端 RSA 公钥 PEM 格式正确", "")
 			}
 		}
 		if serverPublicKey != nil && serverPublicErr == nil && serverPrivateErr == nil {
 			rsaPairPassed := serverPublicKey.N.Cmp(serverPrivateKey.N) == 0 && serverPublicKey.E == serverPrivateKey.E
-			appendItem("rsa_server_pair.match", "服务端RSA配对", rsaPairPassed, "服务端 RSA 公私钥配对正确", "服务端 RSA 公钥与私钥不是同一对")
+			appendItem("rsa_server_pair.match", "服务端 RSA配对", rsaPairPassed, "服务端 RSA 公私钥配对正确", "服务端 RSA 公钥与私钥不是同一对")
 		} else {
-			appendError("rsa_server_pair.match", "服务端RSA配对", "服务端 RSA 公私钥格式未通过，暂时无法判断是否配对")
+			appendError("rsa_server_pair.match", "服务端 RSA配对", "服务端 RSA 公私钥格式未通过，暂时无法判断是否配对")
 		}
 	}
 

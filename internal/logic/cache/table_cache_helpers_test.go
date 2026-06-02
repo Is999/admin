@@ -29,9 +29,9 @@ func TestTableCacheKeyScope(t *testing.T) {
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
 
 	tests := []struct {
-		name string
-		key  string
-		want string
+		name string // name 表示测试场景名称。
+		key  string // key 表示待验证 key。
+		want string // want 表示期望结果。
 	}{
 		{
 			name: "scopes logical key",
@@ -70,9 +70,9 @@ func TestTableCacheLogicalKey(t *testing.T) {
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
 
 	tests := []struct {
-		name string
-		key  string
-		want string
+		name string // name 表示测试场景名称。
+		key  string // key 表示待验证 key。
+		want string // want 表示期望结果。
 	}{
 		{
 			name: "trims table cache key",

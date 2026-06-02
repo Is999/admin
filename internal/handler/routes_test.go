@@ -127,6 +127,7 @@ func TestDefaultRouteContractsAreDocumented(t *testing.T) {
 	}
 }
 
+// readDocsSiteMarkdown 读取测试所需数据。
 func readDocsSiteMarkdown(t *testing.T, root string) string {
 	t.Helper()
 	var builder strings.Builder

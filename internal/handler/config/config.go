@@ -112,13 +112,14 @@ func ExportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		logicObj := configlogic.NewSysConfigLogic(r, sCtx)
+		logMeta := shared.ActionLogParamFromMeta(shared.SysConfigExport)
 		filePath, fileName, resp := logicObj.ExportExcel(&req)
 		if resp != nil {
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, shared.ActionLogMap(shared.MethodExportSysConfigExcel), shared.MethodExportSysConfigExcel)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodExportSysConfigExcel)
 			return
 		}
-		if logMeta := shared.ActionLogMap(shared.MethodExportSysConfigExcel); logMeta != nil {
+		if logMeta != nil {
 			logicObj.AddAdminLog(logMeta.Action, logMeta.Route, string(shared.MethodExportSysConfigExcel), logMeta.Describe, &req)
 		}
 		if err := transfer.ServeDownload(
@@ -131,7 +132,7 @@ func ExportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"ExportSysConfigExcelHandler 输出字典导出文件[%s]失败", filePath).ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, shared.ActionLogMap(shared.MethodExportSysConfigExcel), shared.MethodExportSysConfigExcel)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodExportSysConfigExcel)
 		}
 	}
 }

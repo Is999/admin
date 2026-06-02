@@ -140,7 +140,7 @@ func taskItemMatchesListFilters(item types.TaskItem, workflowID string, taskName
 }
 
 // taskItemMatchesWorkflowID 判断任务是否属于指定工作流实例。
-// 工作流 ID 可能来自标准字段、任务头或旧任务 payload；这里逐层兜底，避免历史任务无法通过链路筛选定位。
+// 工作流 ID 可能来自标准字段、任务头或任务 payload；这里逐层读取，避免缺少单一字段时无法按链路筛选定位。
 func taskItemMatchesWorkflowID(item types.TaskItem, workflowID string) bool {
 	workflowID = strings.TrimSpace(workflowID)
 	if workflowID == "" {

@@ -103,6 +103,7 @@ func (a *App) watchRuntimeConfig(ctx context.Context) {
 	}
 }
 
+// reloadRuntimeConfigIfChanged 检测 active release 版本变化并触发运行配置重载。
 func (a *App) reloadRuntimeConfigIfChanged(ctx context.Context) error {
 	state, err := runtimeconfig.LoadActiveStateCached(ctx, a.ServiceContext)
 	if err != nil {
@@ -169,6 +170,7 @@ func (a *App) ReloadRuntimeConfig(ctx context.Context, source string) (svc.Runti
 	}, nil
 }
 
+// runtimeConfigPollDelay 返回带轻微抖动的 DB 运行配置轮询间隔，避免多实例同时打库。
 func runtimeConfigPollDelay(cfg config.Config) time.Duration {
 	interval := time.Duration(runtimeconfig.PollIntervalSeconds(cfg)) * time.Second
 	jitter := interval / 10

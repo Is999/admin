@@ -6,13 +6,15 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
+	"admin/common/idgen"
 	keys "admin/common/rediskeys"
 	"admin/internal/config"
 )
 
 const (
-	minAdminJWTSecretLength = 16 // JWT 密钥最小长度，避免明显弱配置启动
-	minAdminAppKeyLength    = 16 // 生产 app_key 最小长度
+	minAdminJWTSecretLength    = 16 // JWT 密钥最小长度，避免明显弱配置启动
+	minAdminAppKeyLength       = 16 // 生产 app_key 最小长度
+	defaultUserRouteShardCount = 1  // 业务用户默认保持单张物理表
 )
 
 // Collector 载体枚举限定配置文件可声明的事件投递通道。
@@ -41,6 +43,41 @@ func validateCoreConfig(c config.Config) error {
 		return errors.Errorf("redis.type 仅支持 single/cluster")
 	}
 	return nil
+}
+
+// validateSnowflakeConfig 校验分布式雪花 ID worker 配置。
+func validateSnowflakeConfig(cfg config.SnowflakeConfig) error {
+	if _, err := resolveSnowflakeWorkerID(cfg); err != nil {
+		return errors.Tag(err)
+	}
+	return nil
+}
+
+// resolveSnowflakeWorkerID 解析配置或环境变量中的显式 worker_id。
+func resolveSnowflakeWorkerID(cfg config.SnowflakeConfig) (int64, error) {
+	if cfg.WorkerID == nil {
+		return idgen.ResolveWorkerID(idgen.SnowflakeWorkerIDUnset)
+	}
+	return idgen.ResolveWorkerID(*cfg.WorkerID)
+}
+
+// configureSnowflakeWorkerID 发布当前进程使用的雪花 ID worker 配置。
+func configureSnowflakeWorkerID(cfg config.SnowflakeConfig) error {
+	workerID, err := resolveSnowflakeWorkerID(cfg)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	return idgen.ConfigureWorkerID(workerID)
+}
+
+// validateUserConfig 校验业务用户默认物理表数量，防止后台写入路由不可迁移。
+func validateUserConfig(cfg config.UserConfig) error {
+	switch cfg.RouteShardCount {
+	case 0, 1, 10, 100, 1000:
+		return nil
+	default:
+		return errors.Errorf("user.route_shard_count 仅支持 1/10/100/1000")
+	}
 }
 
 // validateAdminCollectorConfig 校验 Collector 载体配置是否自洽。

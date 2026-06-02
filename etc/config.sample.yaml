@@ -22,6 +22,16 @@ app_id: "1"
 # 全局应用密钥；使用强随机字符串。
 app_key: "3768559472499dbdfa97a1f2707402f781bfe874c81e14c8542a5734e180a43b"
 
+# 基于 github.com/bwmarrin/snowflake 的分布式雪花 ID；所有会写 user 表的 admin/api 实例 worker_id 必须全局唯一。
+snowflake:
+  # 范围 0-1023；建议按服务预留号段，例如 api=0-511、admin=512-767；成熟库不会自动分配 worker_id。
+  worker_id: 512
+
+# 业务用户写入路由；提升前必须完成 user_account 回填、目标表创建和多实例同步重启。
+user:
+  # 新增业务用户默认物理表数量，仅支持 1/10/100/1000。
+  route_shard_count: 1
+
 # JWT 密钥，请替换为强随机字符串。
 jwt_secret: "65aad1b2cd6e3293fca3f0cc0a9b96a82c57b1c88b716c29e251890553650fbe"
 # JWT 过期时间，单位秒。
@@ -59,10 +69,10 @@ config_files:
   # 运行期配置文件路径。
   runtime: "config.d/runtime.yaml"
 
-# 运行期大列表配置来源；默认 file。切到 database 前必须先在后台导入并发布 active release。
+# 运行期大列表配置来源；本样例显式走 database，由运行配置发布快照接管周期任务和归档任务。
 runtime_config:
-  # file=继续读取 config_files.runtime；database=使用发布快照覆盖周期任务和归档任务。
-  source: "file"
+  # database=使用发布快照覆盖周期任务和归档任务；首次无 active release 时会导入当前运行期文件作为初始版本。
+  source: "database"
   # DB 模式运行环境；为空时取 Mode。
   env: ""
   # DB 模式只轮询版本状态，版本变化才读取发布快照。
@@ -242,6 +252,8 @@ collector:
     group: "collector"
     # 消费者名前缀，实例后缀自动追加。
     consumer: "collector"
+    # Redis Stream 最大长度近似值，<=0 不裁剪。
+    max_len: 100000
     # XREADGROUP 阻塞等待时长，单位毫秒。
     block_ms: 1000
     # 单次读取或认领消息数量。

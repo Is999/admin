@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.0
+	github.com/bwmarrin/snowflake v0.3.0
 	github.com/dgraph-io/ristretto/v2 v2.4.0
 	github.com/go-redsync/redsync/v4 v4.16.0
 	github.com/go-sql-driver/mysql v1.10.0

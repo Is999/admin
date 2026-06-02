@@ -16,6 +16,7 @@ import (
 	"admin/internal/config"
 )
 
+// testVirusScanner 表示测试使用的辅助结构。
 type testVirusScanner struct {
 	called *bool // 是否已调用
 }

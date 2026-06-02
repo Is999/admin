@@ -67,9 +67,9 @@ const (
 	headerShardTotal   = "x-app-workflow-shard-total" // 工作流分片总数
 	headerAppID        = "x-app-id"                   // 当前应用 app_id
 
-	taskSearchFieldTaskName     = "taskName"     // 任务结果或兼容 payload 中的展示名称字段
+	taskSearchFieldTaskName     = "taskName"     // 任务结果或 payload 中的展示名称字段
 	taskSearchFieldTaskType     = "taskType"     // 任务结果中回写的任务类型字段
-	taskSearchFieldWorkflowID   = "workflowId"   // 工作流实例 ID 字段，兼容 payload/result 兜底匹配
+	taskSearchFieldWorkflowID   = "workflowId"   // 工作流实例 ID 字段，用于 payload/result 链路匹配
 	taskSearchFieldWorkflowName = "workflowName" // 工作流名称字段，周期任务排查常用该字段定位入口任务
 	taskSearchFieldWorkflowNode = "workflowNode" // 工作流节点字段，用于节点任务按脚本名检索
 	taskSearchFieldTaskSource   = "taskSource"   // 任务来源字段，用于区分 api/periodic/internal 等触发来源
@@ -1086,7 +1086,7 @@ func (m *Manager) prepareWorkflowArchivedTaskRerun(ctx context.Context, info *as
 	})
 }
 
-// persistTaskRecordForRerun 移除任务详情 hash 的 TTL，避免 archived 任务重跑后沿用旧过期时间。
+// persistTaskRecordForRerun 移除任务详情 hash 的 TTL，避免已归档任务重跑后继续使用原过期时间。
 func (m *Manager) persistTaskRecordForRerun(ctx context.Context, queue string, taskID string) error {
 	taskID = strings.TrimSpace(taskID)
 	queue = strings.TrimSpace(queue)

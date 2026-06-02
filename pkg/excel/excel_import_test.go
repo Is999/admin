@@ -9,6 +9,7 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// TestStreamImportSkipsBlankRows 验证对应场景符合预期。
 func TestStreamImportSkipsBlankRows(t *testing.T) {
 	workbook := excelize.NewFile()
 	filePath := filepath.Join(t.TempDir(), "import.xlsx")

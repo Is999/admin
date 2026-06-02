@@ -169,9 +169,9 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 func TestMFAResultByErrorRecognizesWrappedErrors(t *testing.T) {
 	// cases 表示不同 MFA 错误转换入口对已包装错误的期望业务码。
 	cases := []struct {
-		name string
-		got  *types.BizResult
-		want int
+		name string           // name 表示测试场景名称。
+		got  *types.BizResult // got 表示实际结果。
+		want int              // want 表示期望结果。
 	}{
 		{
 			name: "后台敏感操作MFA二次票据过期",

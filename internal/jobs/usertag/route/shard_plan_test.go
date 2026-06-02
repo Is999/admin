@@ -39,10 +39,19 @@ func TestPhysicalShardsForWorkflowCoprime(t *testing.T) {
 
 // TestTagShardsForWorkflowCoprime 验证标签结果分片也使用同一套物理分表覆盖规则。
 func TestTagShardsForWorkflowCoprime(t *testing.T) {
-	plan := NewShardPlan(10, 10)
+	plan := NewShardPlanWithResult(10, 10, 1000)
 	shards := plan.TagShardsForWorkflow(1, 3)
 	if len(shards) != 1000 {
 		t.Fatalf("unexpected coprime tag shards: %#v", shards)
+	}
+}
+
+// TestTagShardsForWorkflowDefaultsSinglePhysicalShard 验证默认标签结果表从单物理分表起步。
+func TestTagShardsForWorkflowDefaultsSinglePhysicalShard(t *testing.T) {
+	plan := NewShardPlan(0, 0)
+	shards := plan.TagShardsForWorkflow(3, 10)
+	if len(shards) != 1 || shards[0] != 0 {
+		t.Fatalf("unexpected default tag shards: %#v", shards)
 	}
 }
 

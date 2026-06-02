@@ -44,7 +44,7 @@ func NewTagRepository(deps RuntimeDeps) *TagRepository {
 
 // PrepareResultTables 清空 full 模式临时标签结果表。
 func (r *TagRepository) PrepareResultTables(ctx context.Context, opts types.RuntimeOptions) error {
-	if opts.DryRun || opts.SyncSnapshotOnly || opts.Mode != types.ModeFull {
+	if opts.DryRun || opts.Mode != types.ModeFull {
 		return nil
 	}
 	logDB, err := r.logDB()
@@ -69,7 +69,7 @@ func (r *TagRepository) PrepareResultTables(ctx context.Context, opts types.Runt
 
 // FinalizeResultTables 在 full 所有节点成功后交换 tmp 和线上结果表。
 func (r *TagRepository) FinalizeResultTables(ctx context.Context, opts types.RuntimeOptions) error {
-	if opts.DryRun || opts.SyncSnapshotOnly || opts.Mode != types.ModeFull {
+	if opts.DryRun || opts.Mode != types.ModeFull {
 		return nil
 	}
 	logDB, err := r.logDB()
@@ -90,40 +90,6 @@ func (r *TagRepository) FinalizeResultTables(ctx context.Context, opts types.Run
 		}
 	}
 	return nil
-}
-
-// RebuildReadSnapshotShard 重建当前执行分片负责的只读标签快照。
-func (r *TagRepository) RebuildReadSnapshotShard(ctx context.Context, opts types.RuntimeOptions) (int, error) {
-	if opts.DryRun || opts.Mode != types.ModeFull {
-		return 0, nil
-	}
-	logDB, err := r.logDB()
-	if err != nil {
-		return 0, errors.Tag(err)
-	}
-	total := 0
-	for _, shard := range r.deps.ShardPlan.TagShardsForWorkflow(opts.ShardIndex, opts.ShardTotal) {
-		sourceTable := model.UserTagShardTableName(shard)
-		targetTable := model.UserTagSyncShardTableName(shard)
-		if err := r.ensureResultShardTable(ctx, logDB, sourceTable); err != nil {
-			return total, errors.Wrapf(err, "创建用户标签结果表失败 table=%s", sourceTable)
-		}
-		if err := logDB.WithContext(ctx).Exec(userTagCreateLikeTableSQL(targetTable, sourceTable)).Error; err != nil {
-			return total, errors.Wrapf(err, "创建用户标签只读快照表失败 table=%s", targetTable)
-		}
-		if err := logDB.WithContext(ctx).Exec(userTagTruncateTableSQL(targetTable)).Error; err != nil {
-			return total, errors.Wrapf(err, "清空用户标签只读快照表失败 table=%s", targetTable)
-		}
-		result := logDB.WithContext(ctx).Exec(
-			"INSERT INTO " + quoteIdent(targetTable) + " (uid, shard_no, tag_type, tag_source, tag_data, tag_category, created_at, updated_at) " +
-				"SELECT uid, shard_no, tag_type, tag_source, tag_data, tag_category, created_at, updated_at FROM " + quoteIdent(sourceTable),
-		)
-		if result.Error != nil {
-			return total, errors.Wrapf(result.Error, "重建用户标签只读快照失败 table=%s", targetTable)
-		}
-		total += int(result.RowsAffected)
-	}
-	return total, nil
 }
 
 // ResetRuntimeState 清理当前工作流的运行期 UID、checkpoint 和事件 outbox。
@@ -404,7 +370,7 @@ func (r *TagRepository) runtimeUIDBatch(ctx context.Context, opts types.RuntimeO
 
 // RetryEventOutboxAbnormalRows 周期扫描并重派异常事件 outbox。
 func (r *TagRepository) RetryEventOutboxAbnormalRows(ctx context.Context, opts types.RuntimeOptions, dispatch EventDispatcher) (int, error) {
-	if opts.DryRun || opts.SyncSnapshotOnly {
+	if opts.DryRun {
 		return 0, nil
 	}
 	logDB, err := r.logDB()
@@ -419,7 +385,7 @@ func (r *TagRepository) RetryEventOutboxAbnormalRows(ctx context.Context, opts t
 
 // DrainEventOutboxShard 派发当前条件命中的事件 outbox，并在成功后标记完成。
 func (r *TagRepository) DrainEventOutboxShard(ctx context.Context, opts types.RuntimeOptions, dispatch EventDispatcher) (int, error) {
-	if opts.DryRun || opts.SyncSnapshotOnly {
+	if opts.DryRun {
 		return 0, nil
 	}
 	logDB, err := r.logDB()

@@ -132,6 +132,7 @@ func TestDefaultAdminBaselineMigrationsBlockedByDefault(t *testing.T) {
 	}
 }
 
+// testMigration 表示测试辅助逻辑。
 func testMigration(version string, name string) Migration {
 	return Migration{
 		Version:  version,
@@ -142,12 +143,14 @@ func testMigration(version string, name string) Migration {
 	}
 }
 
+// fakeMigrationStore 表示测试使用的辅助结构。
 type fakeMigrationStore struct {
-	applied       map[string]AppliedMigration
-	schemaEnsured bool
-	executed      []Migration
+	applied       map[string]AppliedMigration // applied 表示测试字段。
+	schemaEnsured bool                        // schemaEnsured 表示测试字段。
+	executed      []Migration                 // executed 表示测试字段。
 }
 
+// newFakeMigrationStore 构造测试依赖。
 func newFakeMigrationStore(applied map[string]AppliedMigration) *fakeMigrationStore {
 	if applied == nil {
 		applied = map[string]AppliedMigration{}
@@ -155,15 +158,18 @@ func newFakeMigrationStore(applied map[string]AppliedMigration) *fakeMigrationSt
 	return &fakeMigrationStore{applied: applied}
 }
 
+// EnsureSchema 表示测试辅助逻辑。
 func (s *fakeMigrationStore) EnsureSchema(context.Context, string) error {
 	s.schemaEnsured = true
 	return nil
 }
 
+// AppliedMigrations 表示测试辅助逻辑。
 func (s *fakeMigrationStore) AppliedMigrations(context.Context) (map[string]AppliedMigration, error) {
 	return s.applied, nil
 }
 
+// ExecuteMigration 表示测试辅助逻辑。
 func (s *fakeMigrationStore) ExecuteMigration(_ context.Context, migration Migration) error {
 	s.executed = append(s.executed, migration)
 	s.applied[migration.Version] = AppliedMigration{

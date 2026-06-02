@@ -83,22 +83,6 @@ func TestBuildUserTagWorkflowReqRecalculate(t *testing.T) {
 	}
 }
 
-// TestBuildUserTagWorkflowReqSyncSnapshotOnly 验证对应场景。
-func TestBuildUserTagWorkflowReqSyncSnapshotOnly(t *testing.T) {
-	req := &types.TriggerUserTagWorkflowReq{
-		Mode:             usertagtask.ModeFull,
-		SyncSnapshotOnly: true,
-	}
-	if err := req.Validate(); err != nil {
-		t.Fatalf("校验 full 请求失败: %v", err)
-	}
-
-	got := buildUserTagWorkflowReq(req, config.UserTagConfig{DefaultShardTotal: 8})
-	if !targetExists(got.Targets, "sync_snapshot_only=1") {
-		t.Fatalf("期望目标列表中包含 sync_snapshot_only 标记，实际为 %#v", got.Targets)
-	}
-}
-
 // TestBuildUserTagWorkflowReqUniqueKeyUsesCanonicalParams 验证默认唯一键只对完全相同的计算参数去重。
 func TestBuildUserTagWorkflowReqUniqueKeyUsesCanonicalParams(t *testing.T) {
 	first := &types.TriggerUserTagWorkflowReq{

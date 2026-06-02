@@ -157,9 +157,9 @@ func TestCollectorConfigWithAppIDScopesRedisStream(t *testing.T) {
 // TestNormalizeModeSupportsDocumentedCombinations 确保启动模式只接受文档声明的 1..7 组合。
 func TestNormalizeModeSupportsDocumentedCombinations(t *testing.T) {
 	tests := []struct {
-		name string
-		mode int
-		want int
+		name string // name 表示测试场景名称。
+		mode int    // mode 表示待规范化的 run_mode 配置值。
+		want int    // want 表示期望得到的启动模式位掩码。
 	}{
 		{name: "default", mode: 0, want: ModeAll},
 		{name: "api", mode: 1, want: ModeAPI},
@@ -196,10 +196,10 @@ func TestNormalizeModeRejectsUnsupportedCombinations(t *testing.T) {
 // TestModeLifecycleMatrix 确保运行模式与后台生命周期职责保持一致。
 func TestModeLifecycleMatrix(t *testing.T) {
 	tests := []struct {
-		mode       int
-		workerHook bool
-		taskHook   bool
-		api        bool
+		mode       int  // mode 表示待验证的启动模式。
+		workerHook bool // workerHook 表示是否应启动 Worker 生命周期。
+		taskHook   bool // taskHook 表示是否应启动任务生命周期。
+		api        bool // api 表示是否应启动 API 服务。
 	}{
 		{mode: 1, workerHook: false, taskHook: false, api: true},
 		{mode: 2, workerHook: true, taskHook: true, api: false},
@@ -226,9 +226,9 @@ func TestModeLifecycleMatrix(t *testing.T) {
 // TestFormatMode 确保位掩码模式按“数字(角色组合)”格式输出，便于和 run_mode 配置对照。
 func TestFormatMode(t *testing.T) {
 	tests := []struct {
-		name string
-		mode int
-		want string
+		name string // name 表示测试场景名称。
+		mode int    // mode 表示待格式化的启动模式。
+		want string // want 表示期望输出的可读模式名称。
 	}{
 		{name: "none", mode: 0, want: "none"},
 		{name: "api", mode: 1, want: "1(api)"},
@@ -480,7 +480,7 @@ hot_reload:
 
 	current := app.CurrentConfig()
 	if got := current.Redis.Addrs[0]; got != beforeCfg.Redis.Addrs[0] {
-		t.Fatalf("期望 Redis 运行配置保持旧值 %q，实际为 %q", beforeCfg.Redis.Addrs[0], got)
+		t.Fatalf("期望 Redis 运行配置保持原值 %q，实际为 %q", beforeCfg.Redis.Addrs[0], got)
 	}
 	if got := current.AppKey; got != "new-key" {
 		t.Fatalf("期望动态配置 app_key 已刷新，实际为 %q", got)
@@ -538,6 +538,8 @@ func TestHotReloadRestartSpecsValid(t *testing.T) {
 	specs := hotReloadRestartSpecs()
 	wantReasons := []string{
 		"app_id",
+		"snowflake",
+		"user.route_shard_count",
 		"run_mode",
 		componentNameHTTPServer,
 		"mode",
@@ -562,7 +564,7 @@ func TestHotReloadRestartSpecsValid(t *testing.T) {
 			t.Fatalf("热加载重启边界缺少变化判断: %s", spec.Reason)
 		}
 		if spec.Preserve == nil {
-			t.Fatalf("热加载重启边界缺少旧值保留逻辑: %s", spec.Reason)
+			t.Fatalf("热加载重启边界缺少原值保留逻辑: %s", spec.Reason)
 		}
 		if _, ok := seen[spec.Reason]; ok {
 			t.Fatalf("热加载重启边界重复: %s", spec.Reason)
@@ -571,7 +573,7 @@ func TestHotReloadRestartSpecsValid(t *testing.T) {
 	}
 }
 
-// TestBuildHotReloadEffectiveConfigPreservesRestartOnlyFields 确保待重启字段保留旧值，运行期字段仍可刷新。
+// TestBuildHotReloadEffectiveConfigPreservesRestartOnlyFields 确保待重启字段保留原值，运行期字段仍可刷新。
 func TestBuildHotReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 	before := config.Config{
 		RestConf: rest.RestConf{
@@ -580,6 +582,12 @@ func TestBuildHotReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 		},
 		RunMode: 5,
 		AppKey:  "old-key",
+		Snowflake: config.SnowflakeConfig{
+			WorkerID: int64Ptr(512),
+		},
+		User: config.UserConfig{
+			RouteShardCount: 1,
+		},
 		Redis: config.RedisConfig{
 			Addrs: []string{"127.0.0.1:6379"},
 		},
@@ -601,6 +609,8 @@ func TestBuildHotReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 	after.RestConf.Port = 9090
 	after.RunMode = 7
 	after.AppKey = "new-key"
+	after.Snowflake.WorkerID = int64Ptr(513)
+	after.User.RouteShardCount = 10
 	after.Redis = config.RedisConfig{Addrs: []string{"127.0.0.1:6380"}}
 	after.Task.DefaultQueue = "new-queue"
 	after.Task.Periodic = []config.TaskPeriodicConfig{{Name: "new-periodic", Workflow: "new.workflow"}}
@@ -609,19 +619,25 @@ func TestBuildHotReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 
 	effective := buildHotReloadEffectiveConfig(before, after)
 	if effective.RestConf.Port != before.RestConf.Port || effective.RunMode != before.RunMode {
-		t.Fatalf("期望 HTTP 与运行模式保持旧值，实际 port=%d run_mode=%d", effective.RestConf.Port, effective.RunMode)
+		t.Fatalf("期望 HTTP 与运行模式保持原值，实际 port=%d run_mode=%d", effective.RestConf.Port, effective.RunMode)
 	}
 	if effective.Redis.Addrs[0] != before.Redis.Addrs[0] {
-		t.Fatalf("期望 Redis 保持旧值，实际为 %+v", effective.Redis)
+		t.Fatalf("期望 Redis 保持原值，实际为 %+v", effective.Redis)
+	}
+	if effective.Snowflake.WorkerID == nil || *effective.Snowflake.WorkerID != *before.Snowflake.WorkerID {
+		t.Fatalf("期望雪花 worker_id 保持原值，实际为 %+v", effective.Snowflake)
+	}
+	if effective.User.RouteShardCount != before.User.RouteShardCount {
+		t.Fatalf("期望用户写入分表路由保持原值，实际为 %+v", effective.User)
 	}
 	if effective.Task.DefaultQueue != before.Task.DefaultQueue {
-		t.Fatalf("期望任务运行时配置保持旧值，实际 default_queue=%s", effective.Task.DefaultQueue)
+		t.Fatalf("期望任务运行时配置保持原值，实际 default_queue=%s", effective.Task.DefaultQueue)
 	}
 	if len(effective.Task.Periodic) != 1 || effective.Task.Periodic[0].Name != "new-periodic" {
 		t.Fatalf("期望周期任务列表刷新为新值，实际为 %+v", effective.Task.Periodic)
 	}
 	if effective.Workflows.UserTag.Enabled != before.Workflows.UserTag.Enabled {
-		t.Fatalf("期望用户标签插件启停保持旧值，实际为 %t", effective.Workflows.UserTag.Enabled)
+		t.Fatalf("期望用户标签插件启停保持原值，实际为 %t", effective.Workflows.UserTag.Enabled)
 	}
 	if effective.Workflows.UserTag.DefaultShardTotal != after.Workflows.UserTag.DefaultShardTotal {
 		t.Fatalf("期望用户标签运行参数刷新为新值，实际为 %d", effective.Workflows.UserTag.DefaultShardTotal)

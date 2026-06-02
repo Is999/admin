@@ -33,6 +33,43 @@ func TestValidateBootstrapConfigRejectsMissingAppID(t *testing.T) {
 	}
 }
 
+// TestValidateBootstrapConfigRejectsMissingSnowflakeWorkerID 确保雪花 worker_id 缺失时启动失败。
+func TestValidateBootstrapConfigRejectsMissingSnowflakeWorkerID(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.WorkerID = nil
+	t.Setenv("SNOWFLAKE_WORKER_ID", "")
+	if err := validateBootstrapConfig(cfg); err == nil {
+		t.Fatal("期望 snowflake.worker_id 缺失返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsInvalidSnowflakeWorkerID 确保雪花 worker_id 越界时启动失败。
+func TestValidateBootstrapConfigRejectsInvalidSnowflakeWorkerID(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.WorkerID = int64Ptr(1024)
+	if err := validateBootstrapConfig(cfg); err == nil {
+		t.Fatal("期望非法 snowflake.worker_id 返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsInvalidUserRouteShardCount 确保业务用户写入路由只允许平滑拆分档位。
+func TestValidateBootstrapConfigRejectsInvalidUserRouteShardCount(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.User.RouteShardCount = 64
+	if err := validateBootstrapConfig(cfg); err == nil {
+		t.Fatal("期望非法 user.route_shard_count 返回错误，实际为 nil")
+	}
+}
+
+// TestNormalizeBootstrapConfigDefaultsUserRouteShardCount 确保业务用户写入路由缺省时稳定回落单表。
+func TestNormalizeBootstrapConfigDefaultsUserRouteShardCount(t *testing.T) {
+	cfg := config.Config{}
+	normalizeBootstrapConfig(&cfg)
+	if cfg.User.RouteShardCount != defaultUserRouteShardCount {
+		t.Fatalf("route_shard_count = %d, want %d", cfg.User.RouteShardCount, defaultUserRouteShardCount)
+	}
+}
+
 // TestValidateBootstrapConfigRejectsInvalidCollectorTransport 确保 Collector 载体只能使用受支持枚举。
 func TestValidateBootstrapConfigRejectsInvalidCollectorTransport(t *testing.T) {
 	cfg := validAdminBootstrapConfig()
@@ -148,10 +185,14 @@ func TestValidateBootstrapConfigAcceptsProductionSafeConfig(t *testing.T) {
 	}
 }
 
+// validAdminBootstrapConfig 返回满足默认启动校验的管理端测试配置。
 func validAdminBootstrapConfig() config.Config {
 	return config.Config{
 		AppID:     "1",
 		JwtSecret: "test-jwt-secret-0123456789abcdef",
+		Snowflake: config.SnowflakeConfig{
+			WorkerID: int64Ptr(512),
+		},
 		Redis: config.RedisConfig{
 			Type:     "single",
 			Addrs:    []string{"127.0.0.1:6379"},
@@ -160,6 +201,7 @@ func validAdminBootstrapConfig() config.Config {
 	}
 }
 
+// validAdminProductionBootstrapConfig 返回满足生产模式校验的管理端测试配置。
 func validAdminProductionBootstrapConfig() config.Config {
 	cfg := validAdminBootstrapConfig()
 	cfg.Mode = "pro"
@@ -169,6 +211,7 @@ func validAdminProductionBootstrapConfig() config.Config {
 	return cfg
 }
 
+// validAdminSecuritySecretKey 返回生产模式可用的测试密钥配置。
 func validAdminSecuritySecretKey() config.SecuritySecretKeyConfig {
 	item := validAdminSecretKeyVersion("v1")
 	return config.SecuritySecretKeyConfig{
@@ -187,6 +230,7 @@ func validAdminSecuritySecretKey() config.SecuritySecretKeyConfig {
 	}
 }
 
+// validAdminSecretKeyVersion 返回指定版本的测试密钥材料。
 func validAdminSecretKeyVersion(version string) config.SecuritySecretKeyVersionConfig {
 	return config.SecuritySecretKeyVersionConfig{
 		KeyVersion:          version,
@@ -195,4 +239,9 @@ func validAdminSecretKeyVersion(version string) config.SecuritySecretKeyVersionC
 		RSAPublicKeyUser:    "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
 		RSAPrivateKeyServer: "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
 	}
+}
+
+// int64Ptr 返回 int64 指针，便于构造可选配置。
+func int64Ptr(value int64) *int64 {
+	return &value
 }

@@ -14,21 +14,37 @@ type RouteMeta struct {
 	Describe string                // 中文业务说明，供审计日志直接复用
 }
 
-// newRouteMeta 创建普通路由元数据。
+// defaultRouteMetas 按声明顺序登记内置路由元数据，供契约、测试和文档防漂移复用。
+var defaultRouteMetas []RouteMeta
+
+// newRouteMeta 创建并登记普通路由元数据，避免变量清单和默认清单双份维护。
 func newRouteMeta(alias middleware.RouteAlias, describe string) RouteMeta {
-	return RouteMeta{
+	return registerRouteMeta(RouteMeta{
 		Alias:    alias,
 		Describe: describe,
-	}
+	})
 }
 
-// newAuditRouteMeta 创建带管理员审计动作的路由元数据。
+// newAuditRouteMeta 创建并登记带管理员审计动作的路由元数据。
 func newAuditRouteMeta(alias middleware.RouteAlias, action model.AdminLogAction, describe string) RouteMeta {
-	return RouteMeta{
+	return registerRouteMeta(RouteMeta{
 		Alias:    alias,
 		Action:   action,
 		Describe: describe,
-	}
+	})
+}
+
+// registerRouteMeta 追加内置元数据并返回原值，保持声明点仍可直接赋给模块变量。
+func registerRouteMeta(meta RouteMeta) RouteMeta {
+	defaultRouteMetas = append(defaultRouteMetas, meta)
+	return meta
+}
+
+// DefaultRouteMetas 返回内置路由元数据快照，调用方不能修改全局声明顺序。
+func DefaultRouteMetas() []RouteMeta {
+	out := make([]RouteMeta, len(defaultRouteMetas))
+	copy(out, defaultRouteMetas)
+	return out
 }
 
 // 路由元数据变量集中维护路由别名、审计动作和中文说明，是路由注册与审计的统一契约。

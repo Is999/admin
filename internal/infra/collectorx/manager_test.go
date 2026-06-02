@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"admin/internal/config"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 // TestRuntimeRegistrySpecsValid 确保 Collector 运行时注册入口规格完整且名称唯一。
@@ -154,12 +157,45 @@ func TestCollectorBatchSizesAreBounded(t *testing.T) {
 	}
 }
 
+// TestPublishRedisUsesConfiguredMaxLen 验证 Redis Stream 写入会应用 max_len 裁剪配置。
+func TestPublishRedisUsesConfiguredMaxLen(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
+	manager := &Manager{
+		cfg: config.CollectorConfig{
+			Redis: config.CollectorRedisConfig{
+				Enabled: true,
+				MaxLen:  2,
+				Stream:  "collector:test",
+			},
+		},
+		redis: client,
+	}
+
+	for i := 0; i < 5; i++ {
+		if err := manager.publishRedis(context.Background(), []byte(`{"event_id":"e"}`)); err != nil {
+			t.Fatalf("publishRedis() error = %v", err)
+		}
+	}
+
+	length, err := client.XLen(context.Background(), "collector:test").Result()
+	if err != nil {
+		t.Fatalf("XLen() error = %v", err)
+	}
+	if length > 2 {
+		t.Fatalf("stream length = %d, want <= 2", length)
+	}
+}
+
 // TestNormalizeCollectorTransport 确保 transport 配置统一走常量和归一化逻辑，避免大小写或空值改变降级链路。
 func TestNormalizeCollectorTransport(t *testing.T) {
 	cases := []struct {
-		name      string
-		transport string
-		want      string
+		name      string // name 表示测试场景名称。
+		transport string // transport 表示待归一化的采集投递方式。
+		want      string // want 表示期望得到的采集投递方式。
 	}{
 		{name: "empty", transport: "", want: collectorTransportAuto},
 		{name: "blank", transport: "  ", want: collectorTransportAuto},
@@ -180,9 +216,9 @@ func TestNormalizeCollectorTransport(t *testing.T) {
 // TestDeliveriesTransportLabel 确保批量 outbox 指标标签使用统一 transport 常量，空值和混合来源有稳定兜底。
 func TestDeliveriesTransportLabel(t *testing.T) {
 	cases := []struct {
-		name       string
-		deliveries []eventDelivery
-		want       string
+		name       string          // name 表示测试场景名称。
+		deliveries []eventDelivery // deliveries 表示待统计标签的一批投递记录。
+		want       string          // want 表示期望得到的指标标签。
 	}{
 		{name: "empty", deliveries: nil, want: collectorTransportUnknown},
 		{name: "blank", deliveries: []eventDelivery{{transport: ""}}, want: collectorTransportUnknown},

@@ -32,6 +32,12 @@ func validateBootstrapConfig(c config.Config) error {
 	if err := validateCoreConfig(c); err != nil {
 		return errors.Tag(err)
 	}
+	if err := validateSnowflakeConfig(c.Snowflake); err != nil {
+		return errors.Tag(err)
+	}
+	if err := validateUserConfig(c.User); err != nil {
+		return errors.Tag(err)
+	}
 	if err := validateTaskRedisConfig(c.Task.Redis); err != nil {
 		return errors.Wrap(err, "校验任务系统 Redis 配置失败")
 	}
@@ -56,6 +62,9 @@ func normalizeBootstrapConfig(c *config.Config) {
 		return
 	}
 	inheritCollectorKafkaCommon(c)
+	if c.User.RouteShardCount <= 0 {
+		c.User.RouteShardCount = defaultUserRouteShardCount
+	}
 }
 
 // inheritCollectorKafkaCommon 让 Collector Kafka 复用顶层 Kafka 公共连接参数。

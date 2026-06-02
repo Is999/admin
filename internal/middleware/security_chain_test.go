@@ -15,6 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// TestSignatureMiddlewareRejectsRequestSignAll 验证对应场景符合预期。
 func TestSignatureMiddlewareRejectsRequestSignAll(t *testing.T) {
 	middleware := NewSignatureMiddleware(svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
 	err := middleware.verifyRequest(httptest.NewRequest(http.MethodPost, "/api/demo", nil), security.RouteSecurityPolicy{
@@ -25,6 +26,7 @@ func TestSignatureMiddlewareRejectsRequestSignAll(t *testing.T) {
 	}
 }
 
+// TestSignatureMiddlewareRejectsOversizeRequestSignField 验证对应场景符合预期。
 func TestSignatureMiddlewareRejectsOversizeRequestSignField(t *testing.T) {
 	middleware := NewSignatureMiddleware(svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
 	body := `{"username":"` + strings.Repeat("x", security.MaxSecurityFieldBytes+1) + `","sign":"demo"}`
@@ -36,6 +38,7 @@ func TestSignatureMiddlewareRejectsOversizeRequestSignField(t *testing.T) {
 	}
 }
 
+// TestSignatureMiddlewareRejectsResponseSignAll 验证对应场景符合预期。
 func TestSignatureMiddlewareRejectsResponseSignAll(t *testing.T) {
 	middleware := NewSignatureMiddleware(svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
 	recorder := newBodyRecorder()
@@ -48,6 +51,7 @@ func TestSignatureMiddlewareRejectsResponseSignAll(t *testing.T) {
 	}
 }
 
+// TestSignatureMiddlewareMarkRequestVerifiedFailsClosedOnAppIDMismatch 验证对应场景符合预期。
 func TestSignatureMiddlewareMarkRequestVerifiedFailsClosedOnAppIDMismatch(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
@@ -70,6 +74,7 @@ func TestSignatureMiddlewareMarkRequestVerifiedFailsClosedOnAppIDMismatch(t *tes
 	}
 }
 
+// TestDecodeAndValidateCipherParamsRejectsUndeclaredField 验证对应场景符合预期。
 func TestDecodeAndValidateCipherParamsRejectsUndeclaredField(t *testing.T) {
 	raw := security.EncodeCipherParams([]string{"profile"})
 	_, err := decodeAndValidateCipherParams(raw, []string{"password"}, "请求")
@@ -78,6 +83,7 @@ func TestDecodeAndValidateCipherParamsRejectsUndeclaredField(t *testing.T) {
 	}
 }
 
+// TestCryptoMiddlewareRejectsOversizeRequestCipherValue 验证对应场景符合预期。
 func TestCryptoMiddlewareRejectsOversizeRequestCipherValue(t *testing.T) {
 	middleware := NewCryptoMiddleware(svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
 	req := httptest.NewRequest(http.MethodPost, "/api/demo", strings.NewReader(`{"password":"`+strings.Repeat("x", security.MaxSecurityFieldBytes+1)+`"}`))
@@ -87,7 +93,11 @@ func TestCryptoMiddlewareRejectsOversizeRequestCipherValue(t *testing.T) {
 	}
 }
 
+// noopCryptor 表示测试使用的辅助结构。
 type noopCryptor struct{}
 
+// Encrypt 表示测试辅助逻辑。
 func (noopCryptor) Encrypt(data string) (string, error) { return data, nil }
+
+// Decrypt 表示测试辅助逻辑。
 func (noopCryptor) Decrypt(data string) (string, error) { return data, nil }

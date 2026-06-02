@@ -23,7 +23,7 @@ func ListCacheHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func GetCacheServerInfoHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodGetCacheServerInfo, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := cachemanagelogic.NewSystemCacheLogic(r, sCtx)
-		return logicObj, logicObj.ServerInfo().WithReq(map[string]any{"action": "cache_server_info"})
+		return logicObj, logicObj.ServerInfo().WithReq(shared.ActionReq("cache_server_info"))
 	})
 }
 
@@ -61,7 +61,7 @@ func RenewCacheHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func RenewAllCacheHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodRenewAllCache, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := cachemanagelogic.NewSystemCacheLogic(r, sCtx)
-		return logicObj, logicObj.RenewAll().WithReq(map[string]any{"action": "renew_all_cache"})
+		return logicObj, logicObj.RenewAll().WithReq(shared.ActionReq("renew_all_cache"))
 	})
 }
 

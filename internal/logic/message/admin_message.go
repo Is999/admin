@@ -156,9 +156,7 @@ func (l *AdminMessageLogic) MarkRead(req *types.AdminMessageMarkReadReq) *types.
 	return &types.BizResult{
 		Code:       codes.Success,
 		MessageKey: i18n.MsgKeyUpdateSuccess,
-		Data: map[string]any{
-			"affected": affected,
-		},
+		Data:       &types.AdminMessageAffectedResp{Affected: affected},
 	}
 }
 
@@ -192,9 +190,7 @@ func (l *AdminMessageLogic) Delete(req *types.AdminMessageDeleteReq) *types.BizR
 	return &types.BizResult{
 		Code:       codes.Success,
 		MessageKey: i18n.MsgKeyDeleteSuccess,
-		Data: map[string]any{
-			"affected": affected,
-		},
+		Data:       &types.AdminMessageAffectedResp{Affected: affected},
 	}
 }
 
@@ -250,9 +246,7 @@ func (l *AdminMessageLogic) Send(req *types.AdminMessageSendReq) *types.BizResul
 	return &types.BizResult{
 		Code:       codes.Success,
 		MessageKey: i18n.MsgKeyAddSuccess,
-		Data: map[string]any{
-			"id": msg.ID,
-		},
+		Data:       &types.AdminMessageSendResp{ID: msg.ID},
 	}
 }
 
@@ -409,20 +403,19 @@ func (l *AdminMessageLogic) Handle(req *types.AdminMessageHandleReq) *types.BizR
 	}
 
 	if msg.HandledStatus == 1 {
+		handledAt := ""
+		if msg.HandledAt != nil {
+			handledAt = msg.HandledAt.Format(time.DateTime)
+		}
 		return &types.BizResult{
 			Code:       codes.Success,
 			MessageKey: i18n.MsgKeyUpdateSuccess,
-			Data: map[string]any{
-				"id":                 msg.ID,
-				"handledStatus":      msg.HandledStatus,
-				"handledByAdminName": msg.HandledByAdminName,
-				"handledAt": func() string {
-					if msg.HandledAt != nil {
-						return msg.HandledAt.Format(time.DateTime)
-					}
-					return ""
-				}(),
-				"alreadyHandled": true,
+			Data: &types.AdminMessageHandleResp{
+				ID:                 msg.ID,
+				HandledStatus:      msg.HandledStatus,
+				HandledByAdminName: msg.HandledByAdminName,
+				HandledAt:          handledAt,
+				AlreadyHandled:     true,
 			},
 		}
 	}
@@ -439,10 +432,10 @@ func (l *AdminMessageLogic) Handle(req *types.AdminMessageHandleReq) *types.BizR
 		return &types.BizResult{
 			Code:       codes.Success,
 			MessageKey: i18n.MsgKeyUpdateSuccess,
-			Data: map[string]any{
-				"id":             msg.ID,
-				"handledStatus":  1,
-				"alreadyHandled": false,
+			Data: &types.AdminMessageHandleResp{
+				ID:             msg.ID,
+				HandledStatus:  1,
+				AlreadyHandled: false,
 			},
 		}
 	}
@@ -462,12 +455,12 @@ func (l *AdminMessageLogic) Handle(req *types.AdminMessageHandleReq) *types.BizR
 	return &types.BizResult{
 		Code:       codes.Success,
 		MessageKey: i18n.MsgKeyUpdateSuccess,
-		Data: map[string]any{
-			"id":                 latest.ID,
-			"handledStatus":      latest.HandledStatus,
-			"handledByAdminName": latest.HandledByAdminName,
-			"handledAt":          handledAt,
-			"alreadyHandled":     true,
+		Data: &types.AdminMessageHandleResp{
+			ID:                 latest.ID,
+			HandledStatus:      latest.HandledStatus,
+			HandledByAdminName: latest.HandledByAdminName,
+			HandledAt:          handledAt,
+			AlreadyHandled:     true,
 		},
 	}
 }

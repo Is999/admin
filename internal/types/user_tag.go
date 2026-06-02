@@ -21,7 +21,6 @@ type TriggerUserTagWorkflowReq struct {
 	BatchSize        int     `json:"batchSize,optional"`        // 游标批次大小
 	WorkerCount      int     `json:"workerCount,optional"`      // 节点内部 worker 数
 	DryRun           bool    `json:"dryRun,optional"`           // 只计算不落库
-	SyncSnapshotOnly bool    `json:"syncSnapshotOnly,optional"` // 只刷新只读快照，不派发事件 hook
 	UniqueKey        string  `json:"uniqueKey,optional"`        // 去重键
 	UniqueTTLSeconds *int    `json:"uniqueTTLSeconds,optional"` // 去重 TTL 秒
 	Retry            *int    `json:"retry,optional"`            // 覆盖默认重试次数
@@ -37,71 +36,48 @@ type ReleaseUserTagWorkflowLeaseReq struct {
 	TwoStepValue string `json:"twoStepValue,optional"` // MFA 二次校验票据 value，系统强制 MFA 时必填
 }
 
-// RecalculateUserTagReq 兼容 admin 指定标签重算请求。
+// RecalculateUserTagReq 表示 admin 指定标签重算请求。
 type RecalculateUserTagReq struct {
-	TagTypes              []int  `json:"tag_types"`                   // 指定重算的标签类型，兼容 admin 旧字段
-	TagTypesCamel         []int  `json:"tagTypes,optional"`           // 兼容 cron 内部驼峰字段
-	Queue                 string `json:"queue,optional"`              // 指定任务队列
-	ShardTotal            int    `json:"shardTotal,optional"`         // 分片数
-	ShardTotalSnake       int    `json:"shard_total,optional"`        // 分片数，兼容 snake_case
-	BatchSize             int    `json:"batchSize,optional"`          // 游标批次大小
-	BatchSizeSnake        int    `json:"batch_size,optional"`         // 游标批次大小，兼容 snake_case
-	WorkerCount           int    `json:"workerCount,optional"`        // 节点内部 worker 数
-	WorkerCountSnake      int    `json:"worker_count,optional"`       // 节点内部 worker 数，兼容 snake_case
-	DryRun                bool   `json:"dryRun,optional"`             // 只计算不落库
-	DryRunSnake           bool   `json:"dry_run,optional"`            // 只计算不落库，兼容 snake_case
-	UniqueTTLSeconds      *int   `json:"uniqueTTLSeconds,optional"`   // 去重 TTL 秒
-	UniqueTTLSecondsSnake *int   `json:"unique_ttl_seconds,optional"` // 去重 TTL 秒，兼容 snake_case
-	Retry                 *int   `json:"retry,optional"`              // 覆盖默认重试次数
-	TimeoutSeconds        *int   `json:"timeoutSeconds,optional"`     // 触发任务超时时间
-	TimeoutSecondsSnake   *int   `json:"timeout_seconds,optional"`    // 触发任务超时时间，兼容 snake_case
+	TagTypes         []int  `json:"tag_types"`                   // 指定重算的标签类型
+	Queue            string `json:"queue,optional"`              // 指定任务队列
+	ShardTotal       int    `json:"shard_total,optional"`        // 分片数
+	BatchSize        int    `json:"batch_size,optional"`         // 游标批次大小
+	WorkerCount      int    `json:"worker_count,optional"`       // 节点内部 worker 数
+	DryRun           bool   `json:"dry_run,optional"`            // 只计算不落库
+	UniqueTTLSeconds *int   `json:"unique_ttl_seconds,optional"` // 去重 TTL 秒
+	Retry            *int   `json:"retry,optional"`              // 覆盖默认重试次数
+	TimeoutSeconds   *int   `json:"timeout_seconds,optional"`    // 触发任务超时时间
 }
 
 // Validate 校验并归一化 admin 指定标签重算请求。
 func (r *RecalculateUserTagReq) Validate() error {
-	r.TagTypes = normalizeUserTagTypes(append(r.TagTypes, r.TagTypesCamel...))
-	if r.ShardTotal <= 0 {
-		r.ShardTotal = r.ShardTotalSnake
-	}
-	if r.BatchSize <= 0 {
-		r.BatchSize = r.BatchSizeSnake
-	}
-	if r.WorkerCount <= 0 {
-		r.WorkerCount = r.WorkerCountSnake
-	}
-	if r.UniqueTTLSeconds == nil {
-		r.UniqueTTLSeconds = r.UniqueTTLSecondsSnake
-	}
-	if r.TimeoutSeconds == nil {
-		r.TimeoutSeconds = r.TimeoutSecondsSnake
-	}
-	r.DryRun = r.DryRun || r.DryRunSnake
+	r.TagTypes = normalizeUserTagTypes(r.TagTypes)
 	if len(r.TagTypes) == 0 {
 		return errors.Errorf("tag_types 不能为空")
 	}
 	if r.ShardTotal < 0 || r.BatchSize < 0 || r.WorkerCount < 0 {
-		return errors.Errorf("shardTotal、batchSize、workerCount 不能小于 0")
+		return errors.Errorf("shard_total、batch_size、worker_count 不能小于 0")
 	}
 	if len(r.TagTypes) > options.MaxTagTypes {
 		return errors.Errorf("tagTypes 数量不能超过 %d", options.MaxTagTypes)
 	}
 	if r.ShardTotal > options.MaxShardTotal {
-		return errors.Errorf("shardTotal 不能超过 %d", options.MaxShardTotal)
+		return errors.Errorf("shard_total 不能超过 %d", options.MaxShardTotal)
 	}
 	if r.BatchSize > options.MaxBatchSize {
-		return errors.Errorf("batchSize 不能超过 %d", options.MaxBatchSize)
+		return errors.Errorf("batch_size 不能超过 %d", options.MaxBatchSize)
 	}
 	if r.WorkerCount > options.MaxWorkerCount {
-		return errors.Errorf("workerCount 不能超过 %d", options.MaxWorkerCount)
+		return errors.Errorf("worker_count 不能超过 %d", options.MaxWorkerCount)
 	}
 	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds <= 0 {
-		return errors.Errorf("uniqueTTLSeconds 必须大于 0")
+		return errors.Errorf("unique_ttl_seconds 必须大于 0")
 	}
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")
 	}
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
-		return errors.Errorf("timeoutSeconds 必须大于 0")
+		return errors.Errorf("timeout_seconds 必须大于 0")
 	}
 	return nil
 }
@@ -201,12 +177,6 @@ func (r *TriggerUserTagWorkflowReq) Validate() error {
 	}
 	if r.Mode == "recalculate" && len(r.TagTypes) == 0 {
 		return errors.Errorf("recalculate 模式必须提供 tagTypes")
-	}
-	if r.SyncSnapshotOnly && r.Mode != "full" {
-		return errors.Errorf("syncSnapshotOnly 仅支持 full 模式")
-	}
-	if r.SyncSnapshotOnly && r.DryRun {
-		return errors.Errorf("syncSnapshotOnly 与 dryRun 不能同时启用")
 	}
 	if r.ShardTotal < 0 || r.BatchSize < 0 || r.WorkerCount < 0 {
 		return errors.Errorf("shardTotal、batchSize、workerCount 不能小于 0")

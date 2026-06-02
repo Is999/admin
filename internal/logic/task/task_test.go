@@ -12,47 +12,58 @@ import (
 	"admin/internal/types"
 )
 
+// testConfigReloader 表示测试使用的辅助结构。
 type testConfigReloader struct {
-	triggered bool
-	source    string
-	err       error
+	triggered bool   // triggered 表示测试字段。
+	source    string // source 表示测试字段。
+	err       error  // err 表示待验证错误。
 }
 
+// taskOverviewFakeQueue 表示测试使用的辅助结构。
 type taskOverviewFakeQueue struct {
-	tasksByState map[string][]types.TaskItem
-	listCalls    []types.ListTaskItemsReq
+	tasksByState map[string][]types.TaskItem // tasksByState 表示测试字段。
+	listCalls    []types.ListTaskItemsReq    // listCalls 表示测试字段。
 }
 
+// IsEnabled 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) IsEnabled() bool { return true }
 
+// EnqueueTask 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) EnqueueTask(context.Context, string, []byte, ...svc.TaskOption) error {
 	return nil
 }
 
+// EnqueueCacheRefresh 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) EnqueueCacheRefresh(context.Context, string, []string) error {
 	return nil
 }
 
+// EnqueueWorkflowTrigger 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) EnqueueWorkflowTrigger(context.Context, *types.TriggerTaskWorkflowReq) (*types.TaskWorkflowTriggerResp, error) {
 	return nil, nil
 }
 
+// GetWorkflowStatus 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) GetWorkflowStatus(context.Context, string) (*types.TaskWorkflowStatusResp, error) {
 	return nil, nil
 }
 
+// EnqueueRegisteredTask 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) EnqueueRegisteredTask(context.Context, *types.EnqueueTaskReq) (*types.TaskEnqueueResp, error) {
 	return nil, nil
 }
 
+// ListRegisteredTaskTypes 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) ListRegisteredTaskTypes() []types.TaskTypeRegistryItem {
 	return nil
 }
 
+// ListRegisteredWorkflows 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) ListRegisteredWorkflows() []types.WorkflowRegistryItem {
 	return nil
 }
 
+// ListTasks 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) ListTasks(_ context.Context, req *types.ListTaskItemsReq) (*types.TaskListResp, error) {
 	if req == nil {
 		return &types.TaskListResp{Tasks: []types.TaskItem{}}, nil
@@ -90,18 +101,22 @@ func (f *taskOverviewFakeQueue) ListTasks(_ context.Context, req *types.ListTask
 	}, nil
 }
 
+// GetTaskInfo 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) GetTaskInfo(context.Context, *types.GetTaskInfoReq) (*types.TaskItem, error) {
 	return nil, nil
 }
 
+// RunTask 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) RunTask(context.Context, *types.OperateTaskReq) error {
 	return nil
 }
 
+// DeleteTask 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) DeleteTask(context.Context, *types.OperateTaskReq) error {
 	return nil
 }
 
+// ListQueues 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) ListQueues(context.Context) (*types.TaskQueueListResp, error) {
 	pending := f.stateCount(taskStatePending)
 	active := f.stateCount(taskStateActive)
@@ -125,9 +140,13 @@ func (f *taskOverviewFakeQueue) ListQueues(context.Context) (*types.TaskQueueLis
 	}, nil
 }
 
-func (f *taskOverviewFakeQueue) PauseQueue(context.Context, string) error  { return nil }
+// PauseQueue 表示测试辅助逻辑。
+func (f *taskOverviewFakeQueue) PauseQueue(context.Context, string) error { return nil }
+
+// ResumeQueue 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) ResumeQueue(context.Context, string) error { return nil }
 
+// stateCount 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) stateCount(state string) int {
 	return len(f.tasksByState[state])
 }
@@ -227,6 +246,7 @@ func TestListTasksOverviewWithFiltersScansOncePerState(t *testing.T) {
 	}
 }
 
+// buildFakeTaskItems 表示测试辅助逻辑。
 func buildFakeTaskItems(state string, count int) []types.TaskItem {
 	items := make([]types.TaskItem, 0, count)
 	for i := 0; i < count; i++ {

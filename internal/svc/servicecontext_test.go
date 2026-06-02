@@ -7,6 +7,7 @@ import (
 	"admin/internal/config"
 )
 
+// TestScopedWithContextCopiesConfigSnapshot 验证对应场景符合预期。
 func TestScopedWithContextCopiesConfigSnapshot(t *testing.T) {
 	svcCtx := NewServiceContext(config.Config{AppID: "root"}, Dependencies{})
 	svcCtx.configValue.Store(config.Config{AppID: "request"})

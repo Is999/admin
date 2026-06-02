@@ -28,6 +28,16 @@ type RedisConfig struct {
 	TLSInsecureSkipVerify bool              `json:"tls_insecure_skip_verify,optional"` // 是否跳过 TLS 证书校验（仅测试/代理场景使用）
 }
 
+// SnowflakeConfig 定义基于 bwmarrin/snowflake 的分布式雪花 ID 配置。
+type SnowflakeConfig struct {
+	WorkerID *int64 `json:"worker_id,optional"` // 当前实例全局唯一 worker_id/node_id，范围 0-1023
+}
+
+// UserConfig 定义业务用户写入和后续拆表路由配置。
+type UserConfig struct {
+	RouteShardCount int `json:"route_shard_count,optional,default=1"` // 新增业务用户默认物理表数量：1/10/100/1000
+}
+
 // SecuritySecretKeyVersionConfig 定义配置文件中的单个秘钥版本材料。
 // 当前 app_id 命中时优先使用这里的版本材料。
 type SecuritySecretKeyVersionConfig struct {
@@ -38,8 +48,8 @@ type SecuritySecretKeyVersionConfig struct {
 	AESIVRef               string `json:"aes_iv_ref,optional"`                 // AES IV 文件路径
 	RSAPublicKeyUser       string `json:"rsa_public_key_user,optional"`        // 用户 RSA 公钥 PEM 文本
 	RSAPublicKeyUserRef    string `json:"rsa_public_key_user_ref,optional"`    // 用户 RSA 公钥 PEM 文件绝对路径
-	RSAPublicKeyServer     string `json:"rsa_public_key_server,optional"`      // 兼容字段；为空时由服务端私钥派生公钥
-	RSAPublicKeyServerRef  string `json:"rsa_public_key_server_ref,optional"`  // 兼容字段；为空时由服务端私钥派生公钥
+	RSAPublicKeyServer     string `json:"rsa_public_key_server,optional"`      // 服务端 RSA 公钥 PEM 文本；为空时由私钥派生
+	RSAPublicKeyServerRef  string `json:"rsa_public_key_server_ref,optional"`  // 服务端 RSA 公钥文件路径；为空时由私钥派生
 	RSAPrivateKeyServer    string `json:"rsa_private_key_server,optional"`     // 服务端 RSA 私钥 PEM 文本
 	RSAPrivateKeyServerRef string `json:"rsa_private_key_server_ref,optional"` // 服务端 RSA 私钥 PEM 文件绝对路径
 	Remark                 string `json:"remark,optional"`                     // 版本备注，便于运维识别当前配置来源
@@ -55,8 +65,8 @@ type SecuritySecretKeyConfig struct {
 	AESIVRef               string                           `json:"aes_iv_ref,optional"`                 // 单版本 AES IV 文件绝对路径
 	RSAPublicKeyUser       string                           `json:"rsa_public_key_user,optional"`        // 单版本用户 RSA 公钥 PEM 文本
 	RSAPublicKeyUserRef    string                           `json:"rsa_public_key_user_ref,optional"`    // 单版本用户 RSA 公钥 PEM 文件绝对路径
-	RSAPublicKeyServer     string                           `json:"rsa_public_key_server,optional"`      // 兼容字段；为空时由服务端私钥派生公钥
-	RSAPublicKeyServerRef  string                           `json:"rsa_public_key_server_ref,optional"`  // 兼容字段；为空时由服务端私钥派生公钥
+	RSAPublicKeyServer     string                           `json:"rsa_public_key_server,optional"`      // 单版本服务端 RSA 公钥 PEM 文本；为空时由私钥派生
+	RSAPublicKeyServerRef  string                           `json:"rsa_public_key_server_ref,optional"`  // 单版本服务端 RSA 公钥文件路径；为空时由私钥派生
 	RSAPrivateKeyServer    string                           `json:"rsa_private_key_server,optional"`     // 单版本服务端 RSA 私钥 PEM 文本
 	RSAPrivateKeyServerRef string                           `json:"rsa_private_key_server_ref,optional"` // 单版本服务端 RSA 私钥 PEM 文件绝对路径
 	SignStatus             int                              `json:"sign_status,optional,default=1"`      // 签名验签状态：1启用，0停用
@@ -155,7 +165,7 @@ type CollectorRedisConfig struct {
 	Stream   string `json:"stream,optional"`   // Redis Stream 业务名称，运行时自动追加 app_id 前缀
 	Group    string `json:"group,optional"`    // Redis Stream 消费组
 	Consumer string `json:"consumer,optional"` // Redis Stream 消费者名前缀
-	MaxLen   int64  `json:"max_len,optional"`  // 兼容字段
+	MaxLen   int64  `json:"max_len,optional"`  // Stream 最大长度近似值，<=0 不裁剪
 	BlockMs  int64  `json:"block_ms,optional"` // XREADGROUP 阻塞等待毫秒数
 	Count    int64  `json:"count,optional"`    // 单次读取/认领消息数量
 }
@@ -182,11 +192,11 @@ type CollectorConfig struct {
 type UserTagConfig struct {
 	Enabled            bool `json:"enabled,optional"`              // 是否启用用户标签工作流插件
 	EventHookEnabled   bool `json:"event_hook_enabled,optional"`   // 是否启用标签得失事件 hook 派发
-	DefaultShardTotal  int  `json:"default_shard_total,optional"`  // 默认分片数，通常与 uid%10 分表保持一致
+	DefaultShardTotal  int  `json:"default_shard_total,optional"`  // 默认工作流任务分片数，小量数据建议从 1 开始
 	DefaultBatchSize   int  `json:"default_batch_size,optional"`   // 默认游标扫描批次大小
 	DefaultWorkerCount int  `json:"default_worker_count,optional"` // 节点内部 worker 默认值
 	RuntimeShardTotal  int  `json:"runtime_shard_total,optional"`  // 运行期 UID 索引分片数，默认 1000
-	ResultShardTotal   int  `json:"result_shard_total,optional"`   // 标签结果物理分表数量，默认 1000
+	ResultShardTotal   int  `json:"result_shard_total,optional"`   // 标签结果物理分表数量，默认 1
 	DiffBatchSize      int  `json:"diff_batch_size,optional"`      // 标签差异解析批次大小
 	EventBatchSize     int  `json:"event_batch_size,optional"`     // 事件 outbox 派发批次大小
 }
@@ -357,6 +367,8 @@ type Config struct {
 	RunMode         int                       `json:"run_mode,optional"`                     // 进程启动模式位掩码；未显式传 `-mode` 时作为兜底值
 	AppID           string                    `json:"app_id,optional"`                       // 站点/应用 ID（如 1）
 	AppKey          string                    `json:"app_key,optional"`                      // 全局应用密钥，用于 MFA 秘钥等敏感数据的库内加解密
+	Snowflake       SnowflakeConfig           `json:"snowflake,optional"`                    // 分布式雪花 ID 配置
+	User            UserConfig                `json:"user,optional"`                         // 业务用户写入路由配置
 	JwtSecret       string                    `json:"jwt_secret"`                            // JWT 签名密钥
 	JwtExpiresIn    int64                     `json:"jwt_expires_in,optional,default=86400"` // JWT 过期时间，单位秒，默认 24 小时
 	IsWhitePlatform bool                      `json:"is_white_platform,optional"`            // 是否白名单平台（用于兼容站点差异化逻辑）

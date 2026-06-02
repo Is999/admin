@@ -10,17 +10,17 @@ import (
 // TestSerialize 验证对应场景。
 func TestSerialize(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    any
-		maxBytes int
+		name     string   // name 表示测试场景名称。
+		input    any      // input 表示输入值。
+		maxBytes int      // maxBytes 表示最大字节数。
 		contains []string // 期望输出中必须包含的子串
 		excludes []string // 期望输出中不能包含的子串
 	}{
 		{
 			name: "简单结构体脱敏",
 			input: struct {
-				Username string `json:"username"`
-				Password string `json:"password"`
+				Username string `json:"username"` // Username 表示用户名。
+				Password string `json:"password"` // Password 表示密码。
 			}{
 				Username: "admin",
 				Password: "supersecret123",

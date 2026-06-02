@@ -139,21 +139,21 @@ func ListAdminMessageInbox(
 	}
 
 	type row struct {
-		ID                 int64      `gorm:"column:id"`
-		Type               string     `gorm:"column:type"`
-		Level              int        `gorm:"column:level"`
-		Title              string     `gorm:"column:title"`
-		Content            string     `gorm:"column:content"`
-		Data               string     `gorm:"column:data"`
-		Link               string     `gorm:"column:link"`
-		SenderAdminID      int        `gorm:"column:sender_admin_id"`
-		SenderAdminName    string     `gorm:"column:sender_admin_name"`
-		HandledStatus      int        `gorm:"column:handled_status"`
-		HandledByAdminName string     `gorm:"column:handled_by_admin_name"`
-		HandledAt          *time.Time `gorm:"column:handled_at"`
-		ReadStatus         int        `gorm:"column:read_status"`
-		ReadAt             *time.Time `gorm:"column:read_at"`
-		CreatedAt          time.Time  `gorm:"column:created_at"`
+		ID                 int64      `gorm:"column:id"`                    // 消息 ID
+		Type               string     `gorm:"column:type"`                  // 消息类型
+		Level              int        `gorm:"column:level"`                 // 消息等级
+		Title              string     `gorm:"column:title"`                 // 消息标题
+		Content            string     `gorm:"column:content"`               // 消息内容
+		Data               string     `gorm:"column:data"`                  // 扩展数据 JSON
+		Link               string     `gorm:"column:link"`                  // 跳转链接
+		SenderAdminID      int        `gorm:"column:sender_admin_id"`       // 发送人管理员 ID
+		SenderAdminName    string     `gorm:"column:sender_admin_name"`     // 发送人账号快照
+		HandledStatus      int        `gorm:"column:handled_status"`        // 处理状态
+		HandledByAdminName string     `gorm:"column:handled_by_admin_name"` // 处理人账号快照
+		HandledAt          *time.Time `gorm:"column:handled_at"`            // 处理时间
+		ReadStatus         int        `gorm:"column:read_status"`           // 收件人已读状态
+		ReadAt             *time.Time `gorm:"column:read_at"`               // 收件人已读时间
+		CreatedAt          time.Time  `gorm:"column:created_at"`            // 消息创建时间
 	}
 	var rows []row
 
@@ -278,21 +278,21 @@ func ListAdminMessageSent(
 	}
 
 	type row struct {
-		ID                 int64      `gorm:"column:id"`
-		Type               string     `gorm:"column:type"`
-		Level              int        `gorm:"column:level"`
-		Title              string     `gorm:"column:title"`
-		Content            string     `gorm:"column:content"`
-		Data               string     `gorm:"column:data"`
-		Link               string     `gorm:"column:link"`
-		SenderAdminID      int        `gorm:"column:sender_admin_id"`
-		SenderAdminName    string     `gorm:"column:sender_admin_name"`
-		ReceiverTotal      int64      `gorm:"column:receiver_total"`
-		ReceiverReadTotal  int64      `gorm:"column:receiver_read_total"`
-		HandledStatus      int        `gorm:"column:handled_status"`
-		HandledByAdminName string     `gorm:"column:handled_by_admin_name"`
-		HandledAt          *time.Time `gorm:"column:handled_at"`
-		CreatedAt          time.Time  `gorm:"column:created_at"`
+		ID                 int64      `gorm:"column:id"`                    // 消息 ID
+		Type               string     `gorm:"column:type"`                  // 消息类型
+		Level              int        `gorm:"column:level"`                 // 消息等级
+		Title              string     `gorm:"column:title"`                 // 消息标题
+		Content            string     `gorm:"column:content"`               // 消息内容
+		Data               string     `gorm:"column:data"`                  // 扩展数据 JSON
+		Link               string     `gorm:"column:link"`                  // 跳转链接
+		SenderAdminID      int        `gorm:"column:sender_admin_id"`       // 发送人管理员 ID
+		SenderAdminName    string     `gorm:"column:sender_admin_name"`     // 发送人账号快照
+		ReceiverTotal      int64      `gorm:"column:receiver_total"`        // 收件人总数
+		ReceiverReadTotal  int64      `gorm:"column:receiver_read_total"`   // 已读收件人数
+		HandledStatus      int        `gorm:"column:handled_status"`        // 处理状态
+		HandledByAdminName string     `gorm:"column:handled_by_admin_name"` // 处理人账号快照
+		HandledAt          *time.Time `gorm:"column:handled_at"`            // 处理时间
+		CreatedAt          time.Time  `gorm:"column:created_at"`            // 消息创建时间
 	}
 	var rows []row
 
@@ -362,13 +362,13 @@ type AdminMessageReceiverItem struct {
 // ListAdminMessageReceivers 查询指定消息的收件人已读明细（仅发送人可查看）。
 func ListAdminMessageReceivers(db *gorm.DB, messageID int64) ([]AdminMessageReceiverItem, error) {
 	type row struct {
-		ReceiverAdminID   int        `gorm:"column:receiver_admin_id"`
-		ReceiverAdminName string     `gorm:"column:name"`
-		ReceiverRealName  string     `gorm:"column:real_name"`
-		ReadStatus        int        `gorm:"column:read_status"`
-		ReadAt            *time.Time `gorm:"column:read_at"`
-		DeleteStatus      int        `gorm:"column:delete_status"`
-		DeletedAt         *time.Time `gorm:"column:deleted_at"`
+		ReceiverAdminID   int        `gorm:"column:receiver_admin_id"` // 收件人管理员 ID
+		ReceiverAdminName string     `gorm:"column:name"`              // 收件人账号
+		ReceiverRealName  string     `gorm:"column:real_name"`         // 收件人姓名
+		ReadStatus        int        `gorm:"column:read_status"`       // 已读状态
+		ReadAt            *time.Time `gorm:"column:read_at"`           // 已读时间
+		DeleteStatus      int        `gorm:"column:delete_status"`     // 删除状态
+		DeletedAt         *time.Time `gorm:"column:deleted_at"`        // 删除时间
 	}
 	var rows []row
 	if err := db.Table(TableNameAdminMessageReceiver+" AS r").

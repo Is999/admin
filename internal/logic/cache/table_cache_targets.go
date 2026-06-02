@@ -77,11 +77,11 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		},
 		{
 			Index:            "admin_role_ids",
-			Title:            "管理员角色ID",
+			Title:            "管理员角色 ID",
 			Key:              cacheTemplatePrefix(keys.AdminRoleIDsPattern),
 			KeyTitle:         keys.AdminRoleIDsPattern,
 			Type:             tablecache.TypeSet,
-			Remark:           "管理员启用角色ID集合缓存",
+			Remark:           "管理员启用角色 ID集合缓存",
 			TTL:              time.Hour,
 			AllowEmptyMarker: true,
 			Loader:           loadAdminRoleIDsTableCache(base),
@@ -394,7 +394,7 @@ func loadRoleStatusTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 // loadRolePermissionTableCache 加载单角色权限集合缓存数据。
 func loadRolePermissionTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 	return func(ctx context.Context, params tablecache.LoadParams) ([]tablecache.Entry, error) {
-		roleID, err := tableCacheFirstIntPart(params, "角色ID")
+		roleID, err := tableCacheFirstIntPart(params, "角色 ID")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}

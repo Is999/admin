@@ -1,6 +1,6 @@
-# 运行期大列表配置；由 config_files.runtime 引入并参与热加载。
+# 运行期配置文件；workflows 仍由 YAML 管理，archive_jobs/task_periodic 仅作为 DB 模式首次导入种子。
 
-# 归档任务列表；database 指定热表和历史表所在数据库。
+# 归档任务首次导入种子；发布后以运行配置数据表 active release 为准。
 archive_jobs:
   - name: "admin_log"
     # 是否启用该归档任务。
@@ -44,22 +44,22 @@ workflows:
     enabled: false
     # 是否启用标签得失事件 hook 派发；未注册 hook 时保持关闭。
     event_hook_enabled: false
-    # 默认工作流任务分片总数。
-    default_shard_total: 10
+    # 默认工作流任务分片总数；小量数据从 1 开始，按吞吐需要再扩。
+    default_shard_total: 1
     # 默认单批处理数量。
     default_batch_size: 2000
     # 节点内部 worker 默认值。
     default_worker_count: 4
     # 运行期 UID 索引分片数；shard_no 固定支持 0-999。
     runtime_shard_total: 1000
-    # 标签结果物理分表数；可按 1/10/100/1000 调整。
-    result_shard_total: 1000
+    # 标签结果物理分表数；小量数据保持 1，后续按 10/100/1000 平滑扩容。
+    result_shard_total: 1
     # 标签差异解析批次大小。
     diff_batch_size: 10000
     # 事件 outbox 派发批次大小。
     event_batch_size: 500
 
-# 周期任务列表；name 和 unique_key 必须唯一。
+# 周期任务首次导入种子；发布后以运行配置数据表 active release 为准。
 task_periodic:
   # 管理员审计日志归档和热表删除。
   - name: "archive-admin-log-hourly"
@@ -95,8 +95,8 @@ task_periodic:
     queue: "maintenance"
     # 目标列表；增量默认为空。
     targets: [ ]
-    # 分片总数；通常与用户标签分表数量保持一致。
-    shard_total: 10
+    # 分片总数；与数据量和处理吞吐匹配，默认单分片。
+    shard_total: 1
     # 失败自动重试次数。
     retry: 2
     # 单次任务超时，单位秒；0 表示不限制。

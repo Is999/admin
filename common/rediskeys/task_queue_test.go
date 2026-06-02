@@ -9,10 +9,10 @@ import (
 // TestTaskQueueName 验证队列名统一追加 app_id，完整跨站点队列名会失败闭合。
 func TestTaskQueueName(t *testing.T) {
 	tests := []struct {
-		name  string
-		appID string
-		queue string
-		want  string
+		name  string // name 表示测试场景名称。
+		appID string // appID 表示测试应用 ID。
+		queue string // queue 表示任务队列名。
+		want  string // want 表示期望结果。
 	}{
 		{
 			name:  "逻辑队列追加当前app前缀",
@@ -53,10 +53,10 @@ func TestTaskQueueName(t *testing.T) {
 // TestTaskQueueRedisKey 验证任务系统自管 key 统一收敛到 task 二级前缀。
 func TestTaskQueueRedisKey(t *testing.T) {
 	tests := []struct {
-		name  string
-		appID string
-		key   string
-		want  string
+		name  string // name 表示测试场景名称。
+		appID string // appID 表示测试应用 ID。
+		key   string // key 表示待验证 key。
+		want  string // want 表示期望结果。
 	}{
 		{
 			name:  "逻辑key追加task前缀",
@@ -150,10 +150,10 @@ func TestTaskRuntimeAndWorkflowKeys(t *testing.T) {
 // TestTaskSchedulerLeaderRedisKey 验证调度 leader 锁 key 的默认值和归一规则。
 func TestTaskSchedulerLeaderRedisKey(t *testing.T) {
 	tests := []struct {
-		name     string
-		appID    string
-		leaseKey string
-		want     string
+		name     string // name 表示测试场景名称。
+		appID    string // appID 表示测试应用 ID。
+		leaseKey string // leaseKey 表示租约 key。
+		want     string // want 表示期望结果。
 	}{
 		{name: "空配置使用默认key", appID: "215", want: "app:215:task:scheduler:leader"},
 		{name: "自定义逻辑key归入task前缀", appID: "215", leaseKey: "scheduler:new", want: "app:215:task:scheduler:new"},

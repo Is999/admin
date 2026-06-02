@@ -1,0 +1,1867 @@
+{
+  "version": 1,
+  "routes": [
+    {
+      "alias": "auth.captcha",
+      "method": "GET",
+      "path": "/api/auth/captcha",
+      "access": "public",
+      "describe": "获取登录图形验证码",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "auth.login",
+      "method": "POST",
+      "path": "/api/auth/login",
+      "access": "public",
+      "describe": "管理员登录",
+      "requestSign": [
+        "username",
+        "password",
+        "secureCode",
+        "key",
+        "captcha"
+      ],
+      "requestCipher": [
+        "password",
+        "secureCode"
+      ],
+      "responseSign": [
+        "token"
+      ],
+      "responseCipher": [
+        "token",
+        "user.phone",
+        "user.buildMFAURL"
+      ]
+    },
+    {
+      "alias": "auth.refresh",
+      "method": "POST",
+      "path": "/api/auth/refresh",
+      "access": "auth",
+      "describe": "刷新访问令牌",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [
+        "token",
+        "isRefresh"
+      ],
+      "responseCipher": [
+        "token"
+      ]
+    },
+    {
+      "alias": "auth.logout",
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "access": "auth",
+      "describe": "管理员退出登录",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "auth.codes",
+      "method": "GET",
+      "path": "/api/auth/codes",
+      "access": "auth",
+      "describe": "获取当前用户权限码",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "auth.profile",
+      "method": "GET",
+      "path": "/api/auth/profile",
+      "access": "auth",
+      "describe": "获取当前登录资料",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [
+        "token"
+      ],
+      "responseCipher": [
+        "token"
+      ]
+    },
+    {
+      "alias": "auth.verify_account",
+      "method": "POST",
+      "path": "/api/auth/verify-account",
+      "access": "public",
+      "describe": "验证账号并生成MFA绑定信息",
+      "requestSign": [
+        "username",
+        "password",
+        "secureCode",
+        "key",
+        "captcha"
+      ],
+      "requestCipher": [
+        "password",
+        "secureCode"
+      ],
+      "responseSign": [
+        "token"
+      ],
+      "responseCipher": [
+        "token",
+        "user.phone",
+        "user.buildMFAURL"
+      ]
+    },
+    {
+      "alias": "profile.mine",
+      "method": "GET",
+      "path": "/api/profile",
+      "access": "auth",
+      "describe": "获取当前管理员资料",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": [
+        "phone",
+        "buildMFAURL"
+      ]
+    },
+    {
+      "alias": "profile.check_secure",
+      "method": "POST",
+      "path": "/api/profile/check-secure",
+      "access": "auth",
+      "describe": "校验当前管理员密码",
+      "requestSign": [
+        "secure"
+      ],
+      "requestCipher": [
+        "secure"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "profile.check_mfa",
+      "method": "POST",
+      "path": "/api/profile/check-mfa",
+      "access": "auth",
+      "describe": "校验当前管理员MFA动态码",
+      "requestSign": [
+        "secure",
+        "scenarios",
+        "mfaSecureKey"
+      ],
+      "requestCipher": [
+        "secure",
+        "mfaSecureKey"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.list",
+      "method": "GET",
+      "path": "/api/admins",
+      "access": "auth",
+      "describe": "查询管理员列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.export",
+      "method": "POST",
+      "path": "/api/admins/exports",
+      "access": "auth",
+      "describe": "异步导出管理员列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.export.status",
+      "method": "GET",
+      "path": "/api/admins/exports/status/:jobId",
+      "access": "auth",
+      "describe": "查询管理员导出进度",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.export.download",
+      "method": "GET",
+      "path": "/api/admins/exports/download/:jobId",
+      "access": "auth",
+      "describe": "下载管理员导出文件",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.add",
+      "method": "POST",
+      "path": "/api/admins",
+      "access": "auth",
+      "describe": "新增管理员",
+      "requestSign": [
+        "username",
+        "realName",
+        "email",
+        "phone",
+        "password",
+        "mfaSecureKey",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "password",
+        "mfaSecureKey",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.status.update",
+      "method": "PATCH",
+      "path": "/api/admins/status/:id",
+      "access": "auth",
+      "describe": "修改管理员状态",
+      "requestSign": [
+        "status",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.password.reset",
+      "method": "POST",
+      "path": "/api/admins/password/reset/:id",
+      "access": "auth",
+      "describe": "重置管理员密码",
+      "requestSign": [
+        "password",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "password",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.reset.initial_state",
+      "method": "POST",
+      "path": "/api/admins/initial-state/reset/:id",
+      "access": "auth",
+      "describe": "重置管理员到首次登录前状态",
+      "requestSign": [
+        "password",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "password",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.role.list",
+      "method": "GET",
+      "path": "/api/admins/roles/:id",
+      "access": "auth",
+      "describe": "查询管理员角色",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.role.update",
+      "method": "PATCH",
+      "path": "/api/admins/roles/:id",
+      "access": "auth",
+      "describe": "编辑管理员角色",
+      "requestSign": [
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.info",
+      "method": "GET",
+      "path": "/api/admins/:id",
+      "access": "auth",
+      "describe": "查询管理员详情",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.update",
+      "method": "PATCH",
+      "path": "/api/admins/:id",
+      "access": "auth",
+      "describe": "编辑管理员",
+      "requestSign": [
+        "username",
+        "realName",
+        "email",
+        "phone",
+        "password",
+        "mfaSecureKey",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "password",
+        "mfaSecureKey",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.delete",
+      "method": "DELETE",
+      "path": "/api/admins/:id",
+      "access": "auth",
+      "describe": "删除管理员",
+      "requestSign": [
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.list",
+      "method": "GET",
+      "path": "/api/users",
+      "access": "auth",
+      "describe": "查询前台用户列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.add",
+      "method": "POST",
+      "path": "/api/users",
+      "access": "auth",
+      "describe": "新增前台用户",
+      "requestSign": [
+        "username",
+        "password",
+        "nickname",
+        "email",
+        "phone",
+        "avatar",
+        "status",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "password",
+        "email",
+        "phone",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.info",
+      "method": "GET",
+      "path": "/api/users/:id",
+      "access": "auth",
+      "describe": "查询前台用户详情",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.update",
+      "method": "PATCH",
+      "path": "/api/users/:id",
+      "access": "auth",
+      "describe": "编辑前台用户资料",
+      "requestSign": [
+        "nickname",
+        "email",
+        "phone",
+        "avatar",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "email",
+        "phone",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.status.update",
+      "method": "PATCH",
+      "path": "/api/users/status/:id",
+      "access": "auth",
+      "describe": "修改前台用户状态",
+      "requestSign": [
+        "status",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.password.reset",
+      "method": "POST",
+      "path": "/api/users/password/reset/:id",
+      "access": "auth",
+      "describe": "重置前台用户密码",
+      "requestSign": [
+        "password",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "password",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.runtime.sync",
+      "method": "POST",
+      "path": "/api/users/runtime-sync/:id",
+      "access": "auth",
+      "describe": "同步前台用户API运行态",
+      "requestSign": [
+        "profile",
+        "sessions",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "api_runtime.config_reload.status",
+      "method": "GET",
+      "path": "/api/api-runtime/config-reload",
+      "access": "auth",
+      "describe": "查询API配置热加载状态",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "api_runtime.config_reload.items",
+      "method": "GET",
+      "path": "/api/api-runtime/config-reload/items",
+      "access": "auth",
+      "describe": "查询API运行态配置项",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "api_runtime.config_reload.run",
+      "method": "POST",
+      "path": "/api/api-runtime/config-reload",
+      "access": "auth",
+      "describe": "手动触发API配置热加载",
+      "requestSign": [
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.mfa_status.update",
+      "method": "PATCH",
+      "path": "/api/admins/mfa-status/:id",
+      "access": "auth",
+      "describe": "修改管理员MFA状态",
+      "requestSign": [
+        "mfaStatus",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.mfa_secret_url",
+      "method": "GET",
+      "path": "/api/admins/mfa-secret-key-url/:id",
+      "access": "auth",
+      "describe": "生成管理员MFA绑定地址",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "profile.update_password",
+      "method": "PATCH",
+      "path": "/api/profile/password",
+      "access": "auth",
+      "describe": "个人中心修改密码",
+      "requestSign": [
+        "passwordOld",
+        "passwordNew",
+        "confirmPassword",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "passwordOld",
+        "passwordNew",
+        "confirmPassword",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "profile.update_mine",
+      "method": "PATCH",
+      "path": "/api/profile",
+      "access": "auth",
+      "describe": "个人中心修改资料",
+      "requestSign": [
+        "realName",
+        "email",
+        "phone",
+        "avatar",
+        "description",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "email",
+        "phone",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "profile.update_mfa_status",
+      "method": "PATCH",
+      "path": "/api/profile/mfa-status",
+      "access": "auth",
+      "describe": "个人中心修改MFA状态",
+      "requestSign": [
+        "mfaStatus",
+        "mfaSecureKey",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "mfaSecureKey",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "profile.update_mfa_secret",
+      "method": "PATCH",
+      "path": "/api/profile/mfa-secret",
+      "access": "auth",
+      "describe": "个人中心修改MFA秘钥",
+      "requestSign": [
+        "mfaSecureKey",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "mfaSecureKey",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "profile.refresh_mfa_secret",
+      "method": "POST",
+      "path": "/api/profile/mfa-secret/refresh",
+      "access": "auth",
+      "describe": "个人中心重新生成MFA秘钥",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "profile.update_avatar",
+      "method": "PATCH",
+      "path": "/api/profile/avatar",
+      "access": "auth",
+      "describe": "个人中心修改头像",
+      "requestSign": [
+        "avatar"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.list",
+      "method": "GET",
+      "path": "/api/roles",
+      "access": "auth",
+      "describe": "查询角色列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.tree.list",
+      "method": "GET",
+      "path": "/api/roles/tree",
+      "access": "auth",
+      "describe": "查询角色树",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.tree.options",
+      "method": "GET",
+      "path": "/api/roles/tree-options",
+      "access": "auth",
+      "describe": "查询角色树下拉",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.add",
+      "method": "POST",
+      "path": "/api/roles",
+      "access": "auth",
+      "describe": "新增角色",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.update",
+      "method": "PATCH",
+      "path": "/api/roles/:id",
+      "access": "auth",
+      "describe": "编辑角色",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.status.update",
+      "method": "PATCH",
+      "path": "/api/roles/status/:id",
+      "access": "auth",
+      "describe": "修改角色状态",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.permission.update",
+      "method": "PATCH",
+      "path": "/api/roles/permissions/:id",
+      "access": "auth",
+      "describe": "编辑角色权限",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.permission.tree",
+      "method": "GET",
+      "path": "/api/roles/permissions/tree/:id/:isPid",
+      "access": "auth",
+      "describe": "查询角色权限树",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "role.delete",
+      "method": "DELETE",
+      "path": "/api/roles/:id",
+      "access": "auth",
+      "describe": "删除角色",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "permission.list",
+      "method": "GET",
+      "path": "/api/permissions",
+      "access": "auth",
+      "describe": "查询权限列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "permission.tree.list",
+      "method": "GET",
+      "path": "/api/permissions/tree",
+      "access": "auth",
+      "describe": "查询权限树",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "permission.max_uuid",
+      "method": "GET",
+      "path": "/api/permissions/max-uuid",
+      "access": "auth",
+      "describe": "查询下一个权限UUID",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "permission.add",
+      "method": "POST",
+      "path": "/api/permissions",
+      "access": "auth",
+      "describe": "新增权限",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "permission.update",
+      "method": "PATCH",
+      "path": "/api/permissions/:id",
+      "access": "auth",
+      "describe": "编辑权限",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "permission.status.update",
+      "method": "PATCH",
+      "path": "/api/permissions/status/:id",
+      "access": "auth",
+      "describe": "修改权限状态",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "permission.delete",
+      "method": "DELETE",
+      "path": "/api/permissions/:id",
+      "access": "auth",
+      "describe": "删除权限",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.list",
+      "method": "GET",
+      "path": "/api/dicts",
+      "access": "auth",
+      "describe": "查询系统配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.add",
+      "method": "POST",
+      "path": "/api/dicts",
+      "access": "auth",
+      "describe": "新增系统配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.export",
+      "method": "GET",
+      "path": "/api/dicts/export",
+      "access": "auth",
+      "describe": "导出系统配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.import",
+      "method": "POST",
+      "path": "/api/dicts/import",
+      "access": "auth",
+      "describe": "导入系统配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.update",
+      "method": "PATCH",
+      "path": "/api/dicts/:id",
+      "access": "auth",
+      "describe": "编辑系统配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.cache",
+      "method": "GET",
+      "path": "/api/dicts/cache/:uuid",
+      "access": "auth",
+      "describe": "查看系统配置缓存",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.renew",
+      "method": "POST",
+      "path": "/api/dicts/cache/refresh/:uuid",
+      "access": "auth",
+      "describe": "刷新系统配置缓存",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.list",
+      "method": "GET",
+      "path": "/api/caches",
+      "access": "auth",
+      "describe": "查询缓存列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.server.info",
+      "method": "GET",
+      "path": "/api/caches/server-info",
+      "access": "auth",
+      "describe": "查看缓存服务器信息",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.key.info",
+      "method": "GET",
+      "path": "/api/caches/key-info",
+      "access": "auth",
+      "describe": "查看缓存键信息",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.search",
+      "method": "GET",
+      "path": "/api/caches/keys",
+      "access": "auth",
+      "describe": "搜索缓存键",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.key.info",
+      "method": "GET",
+      "path": "/api/caches/key-info/search",
+      "access": "auth",
+      "describe": "查看缓存键信息",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.renew",
+      "method": "POST",
+      "path": "/api/caches/refresh",
+      "access": "auth",
+      "describe": "刷新缓存",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.renew.all",
+      "method": "POST",
+      "path": "/api/caches/refresh-all",
+      "access": "auth",
+      "describe": "刷新全部缓存",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.warmup",
+      "method": "POST",
+      "path": "/api/caches/warmup",
+      "access": "auth",
+      "describe": "按模板预热缓存",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "admin.log.query",
+      "method": "GET",
+      "path": "/api/admin-logs",
+      "access": "auth",
+      "describe": "查询管理员审计日志",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "secretKey.index",
+      "method": "GET",
+      "path": "/api/secret-keys",
+      "access": "auth",
+      "describe": "查询秘钥列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "secretKey.get",
+      "method": "GET",
+      "path": "/api/secret-keys/:id",
+      "access": "auth",
+      "describe": "查询秘钥详情",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": [
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "json:versionList"
+      ]
+    },
+    {
+      "alias": "secretKey.add",
+      "method": "POST",
+      "path": "/api/secret-keys",
+      "access": "auth",
+      "describe": "新增秘钥",
+      "requestSign": [
+        "uuid",
+        "title",
+        "keyVersion",
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "status",
+        "signStatus",
+        "cryptoStatus",
+        "versionStatus",
+        "stableVersion",
+        "grayVersion",
+        "grayPercent",
+        "remark",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "secretKey.edit",
+      "method": "PATCH",
+      "path": "/api/secret-keys/:id",
+      "access": "auth",
+      "describe": "编辑秘钥",
+      "requestSign": [
+        "uuid",
+        "title",
+        "keyVersion",
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "status",
+        "signStatus",
+        "cryptoStatus",
+        "versionStatus",
+        "stableVersion",
+        "grayVersion",
+        "grayPercent",
+        "remark",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "secretKey.editStatus",
+      "method": "PATCH",
+      "path": "/api/secret-keys/status/:id",
+      "access": "auth",
+      "describe": "修改秘钥状态",
+      "requestSign": [
+        "status",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "secretKey.renew",
+      "method": "POST",
+      "path": "/api/secret-keys/cache/refresh/:uuid",
+      "access": "auth",
+      "describe": "刷新秘钥缓存",
+      "requestSign": [
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "secretKey.validate",
+      "method": "POST",
+      "path": "/api/secret-keys/validate",
+      "access": "auth",
+      "describe": "预检秘钥配置",
+      "requestSign": [
+        "uuid",
+        "title",
+        "keyVersion",
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "status",
+        "signStatus",
+        "cryptoStatus",
+        "versionStatus",
+        "stableVersion",
+        "grayVersion",
+        "grayPercent",
+        "remark",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "responseSign": [
+        "uuid",
+        "title",
+        "keyVersion",
+        "mode",
+        "status",
+        "allPassed",
+        "canSave",
+        "canEnable",
+        "runtimeChecked",
+        "cacheRefreshed",
+        "checkedAt",
+        "durationMs"
+      ],
+      "responseCipher": []
+    },
+    {
+      "alias": "secretKey.self_check",
+      "method": "POST",
+      "path": "/api/secret-keys/self-check/:uuid",
+      "access": "auth",
+      "describe": "执行秘钥自检",
+      "requestSign": [
+        "keyVersion",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [
+        "uuid",
+        "title",
+        "keyVersion",
+        "mode",
+        "status",
+        "allPassed",
+        "canSave",
+        "canEnable",
+        "runtimeChecked",
+        "cacheRefreshed",
+        "checkedAt",
+        "durationMs"
+      ],
+      "responseCipher": []
+    },
+    {
+      "alias": "security.debug.sign",
+      "method": "POST",
+      "path": "/api/security/debug/sign",
+      "access": "auth",
+      "describe": "安全调试签名",
+      "requestSign": [],
+      "requestCipher": [
+        "payloadText"
+      ],
+      "responseSign": [
+        "appId",
+        "requestId",
+        "traceId",
+        "timestamp",
+        "signatureType",
+        "payloadText",
+        "signText",
+        "sign"
+      ],
+      "responseCipher": [
+        "payloadText",
+        "signText",
+        "sign"
+      ]
+    },
+    {
+      "alias": "security.debug.verify",
+      "method": "POST",
+      "path": "/api/security/debug/verify",
+      "access": "auth",
+      "describe": "安全调试验签",
+      "requestSign": [],
+      "requestCipher": [
+        "payloadText",
+        "sign"
+      ],
+      "responseSign": [
+        "appId",
+        "requestId",
+        "traceId",
+        "timestamp",
+        "signatureType",
+        "payloadText",
+        "signText",
+        "sign",
+        "verified"
+      ],
+      "responseCipher": [
+        "payloadText",
+        "signText",
+        "sign"
+      ]
+    },
+    {
+      "alias": "security.debug.encrypt",
+      "method": "POST",
+      "path": "/api/security/debug/encrypt",
+      "access": "auth",
+      "describe": "安全调试加密",
+      "requestSign": [],
+      "requestCipher": [
+        "payloadText"
+      ],
+      "responseSign": [
+        "appId",
+        "cryptoType",
+        "cipherHeader",
+        "payloadText",
+        "resultPayloadText"
+      ],
+      "responseCipher": [
+        "payloadText",
+        "resultPayloadText"
+      ]
+    },
+    {
+      "alias": "security.debug.decrypt",
+      "method": "POST",
+      "path": "/api/security/debug/decrypt",
+      "access": "auth",
+      "describe": "安全调试解密",
+      "requestSign": [],
+      "requestCipher": [
+        "payloadText"
+      ],
+      "responseSign": [
+        "appId",
+        "cryptoType",
+        "cipherHeader",
+        "payloadText",
+        "resultPayloadText"
+      ],
+      "responseCipher": [
+        "payloadText",
+        "resultPayloadText"
+      ]
+    },
+    {
+      "alias": "message.list",
+      "method": "GET",
+      "path": "/api/admin-messages",
+      "access": "auth",
+      "describe": "查询管理员消息收件箱",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.sent_list",
+      "method": "GET",
+      "path": "/api/admin-messages/sent",
+      "access": "auth",
+      "describe": "查询管理员已发送消息",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.receivers",
+      "method": "GET",
+      "path": "/api/admin-messages/:id/receivers",
+      "access": "auth",
+      "describe": "查询管理员消息收件人明细",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.unread_count",
+      "method": "GET",
+      "path": "/api/admin-messages/unread-count",
+      "access": "auth",
+      "describe": "查询管理员未读消息数量",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.notifications",
+      "method": "GET",
+      "path": "/api/admin-messages/notifications",
+      "access": "auth",
+      "describe": "查询管理员通知列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.mark_read",
+      "method": "PATCH",
+      "path": "/api/admin-messages/read",
+      "access": "auth",
+      "describe": "标记管理员消息已读",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.delete",
+      "method": "POST",
+      "path": "/api/admin-messages/delete",
+      "access": "auth",
+      "describe": "删除管理员消息",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.send",
+      "method": "POST",
+      "path": "/api/admin-messages/send",
+      "access": "auth",
+      "describe": "发送管理员消息",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.handle",
+      "method": "POST",
+      "path": "/api/admin-messages/handle",
+      "access": "auth",
+      "describe": "标记管理员消息已处理",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.enqueue",
+      "method": "POST",
+      "path": "/api/tasks",
+      "access": "auth",
+      "describe": "手动投递任务",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.items.list",
+      "method": "GET",
+      "path": "/api/tasks",
+      "access": "auth",
+      "describe": "查询任务列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.items.list",
+      "method": "GET",
+      "path": "/api/tasks/overview",
+      "access": "auth",
+      "describe": "查询任务列表",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.workflow.trigger",
+      "method": "POST",
+      "path": "/api/tasks/workflows",
+      "access": "auth",
+      "describe": "手动触发工作流",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.workflow.status",
+      "method": "GET",
+      "path": "/api/tasks/workflows/:workflowId",
+      "access": "auth",
+      "describe": "查询工作流状态",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.queue.list",
+      "method": "GET",
+      "path": "/api/tasks/queues",
+      "access": "auth",
+      "describe": "查询任务队列概览",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.queue.list",
+      "method": "GET",
+      "path": "/api/tasks/registry/task-types",
+      "access": "auth",
+      "describe": "查询任务队列概览",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.workflow.status",
+      "method": "GET",
+      "path": "/api/tasks/registry/workflows",
+      "access": "auth",
+      "describe": "查询工作流状态",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.config.reload.status",
+      "method": "GET",
+      "path": "/api/tasks/config-reload",
+      "access": "auth",
+      "describe": "查询配置热加载状态",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.config.reload.items",
+      "method": "GET",
+      "path": "/api/tasks/config-reload/items",
+      "access": "auth",
+      "describe": "查询配置热加载配置项",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.config.reload.run",
+      "method": "POST",
+      "path": "/api/tasks/config-reload",
+      "access": "auth",
+      "describe": "手动触发配置热加载",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.info.get",
+      "method": "GET",
+      "path": "/api/tasks/:taskId",
+      "access": "auth",
+      "describe": "查询任务详情",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.queue.pause",
+      "method": "POST",
+      "path": "/api/tasks/queues/pause/:queue",
+      "access": "auth",
+      "describe": "暂停任务队列",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.run",
+      "method": "POST",
+      "path": "/api/tasks/run/:taskId",
+      "access": "auth",
+      "describe": "立即执行任务",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.delete",
+      "method": "DELETE",
+      "path": "/api/tasks/:taskId",
+      "access": "auth",
+      "describe": "删除任务",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "task.queue.resume",
+      "method": "POST",
+      "path": "/api/tasks/queues/resume/:queue",
+      "access": "auth",
+      "describe": "恢复任务队列",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.list",
+      "method": "GET",
+      "path": "/api/runtime-config/overview",
+      "access": "auth",
+      "describe": "查询运行配置概览",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.list",
+      "method": "GET",
+      "path": "/api/runtime-config/periodic",
+      "access": "auth",
+      "describe": "查询运行配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.save",
+      "method": "POST",
+      "path": "/api/runtime-config/periodic",
+      "access": "auth",
+      "describe": "保存运行配置草稿",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.save",
+      "method": "DELETE",
+      "path": "/api/runtime-config/periodic/:id",
+      "access": "auth",
+      "describe": "保存运行配置草稿",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.list",
+      "method": "GET",
+      "path": "/api/runtime-config/archive-jobs",
+      "access": "auth",
+      "describe": "查询运行配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.save",
+      "method": "POST",
+      "path": "/api/runtime-config/archive-jobs",
+      "access": "auth",
+      "describe": "保存运行配置草稿",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.save",
+      "method": "DELETE",
+      "path": "/api/runtime-config/archive-jobs/:id",
+      "access": "auth",
+      "describe": "保存运行配置草稿",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.validate",
+      "method": "POST",
+      "path": "/api/runtime-config/validate",
+      "access": "auth",
+      "describe": "预检运行配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.publish",
+      "method": "POST",
+      "path": "/api/runtime-config/publish",
+      "access": "auth",
+      "describe": "发布运行配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.list",
+      "method": "GET",
+      "path": "/api/runtime-config/releases",
+      "access": "auth",
+      "describe": "查询运行配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.list",
+      "method": "GET",
+      "path": "/api/runtime-config/releases/:releaseId",
+      "access": "auth",
+      "describe": "查询运行配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.rollback",
+      "method": "POST",
+      "path": "/api/runtime-config/rollback",
+      "access": "auth",
+      "describe": "回滚运行配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.import",
+      "method": "POST",
+      "path": "/api/runtime-config/import-current",
+      "access": "auth",
+      "describe": "导入运行配置",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "collector.overview",
+      "method": "GET",
+      "path": "/api/collector/overview",
+      "access": "auth",
+      "describe": "查询Collector概览",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "collector.task.list",
+      "method": "GET",
+      "path": "/api/collector/tasks",
+      "access": "auth",
+      "describe": "查询Collector任务",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "collector.run",
+      "method": "POST",
+      "path": "/api/collector/run",
+      "access": "auth",
+      "describe": "手动执行Collector",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "collector.task.retry",
+      "method": "POST",
+      "path": "/api/collector/tasks/retry",
+      "access": "auth",
+      "describe": "手动重试Collector任务",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user_tag.workflow.trigger",
+      "method": "POST",
+      "path": "/api/user-tags/workflows",
+      "access": "auth",
+      "describe": "触发用户标签工作流",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user_tag.recalculate",
+      "method": "POST",
+      "path": "/api/user-tags/recalculations",
+      "access": "auth",
+      "describe": "指定标签重新计算",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user_tag.workflow_lease.release",
+      "method": "POST",
+      "path": "/api/user-tags/workflow-lease/release",
+      "access": "auth",
+      "describe": "释放用户标签工作流互斥锁",
+      "requestSign": [
+        "workflowId",
+        "mode",
+        "reason",
+        "twoStepKey",
+        "twoStepValue"
+      ],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user_tag.workflow.trigger",
+      "method": "POST",
+      "path": "/internal/user-tags/workflows",
+      "access": "internal",
+      "describe": "触发用户标签工作流",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user_tag.recalculate",
+      "method": "POST",
+      "path": "/internal/user-tags/recalculations",
+      "access": "internal",
+      "describe": "指定标签重新计算",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "internal.auth.init_admin_bootstrap",
+      "method": "POST",
+      "path": "/internal/auth/init-admin-bootstrap",
+      "access": "internal",
+      "describe": "内网初始化管理员账号",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "docs.index",
+      "method": "POST",
+      "path": "/api/docs/session",
+      "access": "auth",
+      "describe": "创建文档访问会话",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    }
+  ]
+}

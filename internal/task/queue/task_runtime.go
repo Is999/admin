@@ -272,7 +272,7 @@ func taskExecutionStatsFromResult(result []byte) *taskstats.Snapshot {
 		return nil
 	}
 	var payload struct {
-		ExecutionTrace *taskstats.Snapshot `json:"executionTrace"`
+		ExecutionTrace *taskstats.Snapshot `json:"executionTrace"` // ExecutionTrace 表示任务结果中的处理量统计摘要。
 	}
 	if err := json.Unmarshal(result, &payload); err != nil || payload.ExecutionTrace == nil || payload.ExecutionTrace.Empty() {
 		return nil

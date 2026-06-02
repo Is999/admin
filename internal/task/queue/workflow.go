@@ -217,7 +217,7 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 		if complete {
 			return spec.WorkflowID, nil
 		}
-		// 旧版本或 Redis 异常可能留下只有 meta、缺少 nodes/node hash 的半初始化数据。
+		// Redis 异常可能留下只有 meta、缺少 nodes/node hash 的半初始化数据。
 		// 这里先按精确 key 清理，再重建完整工作流元数据，避免后续误判工作流已存在但无法推进。
 		if err = m.cleanupIncompleteWorkflowMetadata(ctx, spec.WorkflowID, def); err != nil {
 			return "", errors.Tag(err)

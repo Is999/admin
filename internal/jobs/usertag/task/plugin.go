@@ -266,7 +266,6 @@ func userTagEventOutboxRetryOptions(payload WorkflowPayload, defaults Defaults) 
 		BatchSize:        positiveOr(payload.BatchSize, defaults.EventBatchSize),
 		WorkerCount:      positiveOr(payload.WorkerCount, defaults.WorkerCount),
 		DryRun:           payload.DryRun,
-		SyncSnapshotOnly: payload.SyncSnapshotOnly,
 		EventHookEnabled: defaults.EventHookEnabled,
 	}
 	if err := usertagoptions.ValidateRuntimeOptions(opts); err != nil {

@@ -323,17 +323,15 @@ func (l *CollectorLogic) RunNow(req *types.RunCollectorReq) *types.BizResult {
 	if req == nil {
 		return types.ParamErrorResult(nil)
 	}
+	if err := req.Validate(); err != nil {
+		return types.ParamErrorResult(err)
+	}
 	if l.Svc == nil || l.Svc.Collector == nil {
 		return types.NewBizResult(codes.ServerError).
 			SetI18nMessage(i18n.MsgKeyInternalErrorFormat, "Collector 未初始化").
 			WithError(types.Nil)
 	}
 
-	if req.BizType != "" {
-		return types.NewBizResult(codes.ParamError).
-			SetI18nMessage(i18n.MsgKeyParamErrorFormat, "collector 手动执行暂不支持按 bizType 过滤").
-			WithError(types.Nil)
-	}
 	processed, err := l.Svc.Collector.RunNow(l.Ctx, req.Limit)
 	invalidateCollectorOverviewCache()
 	resp := &types.RunCollectorResp{
@@ -353,23 +351,16 @@ func (l *CollectorLogic) RetryTasks(req *types.RetryCollectorTasksReq) *types.Bi
 	if req == nil {
 		return types.ParamErrorResult(nil)
 	}
-	if len(req.IDs) == 0 {
-		return types.NewBizResult(codes.ParamError).
-			SetI18nMessage(i18n.MsgKeyParamErrorFormat, "ids 不能为空").
-			WithError(types.Nil)
+	if err := req.Validate(); err != nil {
+		return types.ParamErrorResult(err)
 	}
 
 	db := l.Svc.WriteDB(svc.DatabaseMain)
 
 	delay := time.Duration(req.DelaySeconds) * time.Second
-	if delay < 0 {
-		delay = 0
-	}
 	resetAttempt := true
-	if req.ResetAttempt || req.DelaySeconds != 0 {
-		// ResetAttempt 默认 true；前端未传时保持默认。
-		// DelaySeconds 非 0 时即表示人工干预，仍按默认重置重试次数处理。
-		resetAttempt = true
+	if req.ResetAttempt != nil {
+		resetAttempt = *req.ResetAttempt
 	}
 
 	now := time.Now()
@@ -384,8 +375,13 @@ func (l *CollectorLogic) RetryTasks(req *types.RetryCollectorTasksReq) *types.Bi
 		updates["attempt"] = 0
 	}
 
-	tx := db.Model(&model.CollectorOutbox{}).Where("id IN ?", req.IDs)
-	if err := tx.Updates(updates).Error; err != nil {
+	result := db.Model(&model.CollectorOutbox{}).
+		Where("id IN ? AND state IN ?", req.IDs, []model.CollectorOutboxState{
+			model.CollectorOutboxStateRetry,
+			model.CollectorOutboxStateDead,
+		}).
+		Updates(updates)
+	if err := result.Error; err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err, "CollectorLogic.RetryTasks Updates").ToBizResult()
 	}
 	invalidateCollectorOverviewCache()
@@ -393,7 +389,7 @@ func (l *CollectorLogic) RetryTasks(req *types.RetryCollectorTasksReq) *types.Bi
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeySuccess).
 		WithData(&types.RetryCollectorTasksResp{
-			Updated: len(req.IDs),
+			Updated: int(result.RowsAffected),
 		})
 }
 

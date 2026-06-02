@@ -13,6 +13,7 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// TestBuildRowsConcurrentlyKeepsOrder 验证对应场景符合预期。
 func TestBuildRowsConcurrentlyKeepsOrder(t *testing.T) {
 	items := []int{1, 2, 3, 4, 5}
 	rows, err := BuildRowsConcurrently(items, 2, 4, func(item int) ([]any, error) {
@@ -63,6 +64,7 @@ func TestConcurrentRowsJobBufferSizeUsesWorkerBound(t *testing.T) {
 	}
 }
 
+// TestStreamExportUsesUnifiedCore 验证对应场景符合预期。
 func TestStreamExportUsesUnifiedCore(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "stream_export.xlsx")
 	source := []int{1, 2, 3, 4, 5}

@@ -9,9 +9,9 @@ import (
 // TestAdminRedisKeyTemplatesStayLogical 验证 key 常量只保存业务段，不提前拼 app_id 前缀。
 func TestAdminRedisKeyTemplatesStayLogical(t *testing.T) {
 	tests := []struct {
-		name string
-		got  string
-		want string
+		name string // name 表示测试场景名称。
+		got  string // got 表示实际结果。
+		want string // want 表示期望结果。
 	}{
 		{name: "admin info", got: keys.AdminInfo, want: "admin:info:%d"},
 		{name: "admin info pattern", got: keys.AdminInfoPattern, want: "admin:info:{adminID}"},
@@ -37,9 +37,9 @@ func TestAdminRedisKeyTemplatesStayLogical(t *testing.T) {
 func TestAdminRedisKeysUseAppScope(t *testing.T) {
 	useAppID(t, "site-a")
 	tests := []struct {
-		name string
-		got  string
-		want string
+		name string // name 表示测试场景名称。
+		got  string // got 表示实际结果。
+		want string // want 表示期望结果。
 	}{
 		{name: "admin info", got: keys.AdminInfoRedisKey(7), want: "app:site-a:admin:info:7"},
 		{name: "admin info pattern", got: keys.AdminInfoPatternRedisKey(), want: "app:site-a:admin:info:{adminID}"},

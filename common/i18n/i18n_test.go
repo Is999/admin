@@ -6,10 +6,11 @@ import (
 	"admin/common/codes"
 )
 
+// TestNormalizeLocale 验证对应场景符合预期。
 func TestNormalizeLocale(t *testing.T) {
 	cases := []struct {
-		in   string
-		want string
+		in   string // in 表示输入值。
+		want string // want 表示期望结果。
 	}{
 		{"", LocaleZHCN},
 		{"zh-CN,zh;q=0.9,en;q=0.8", LocaleZHCN},
@@ -25,6 +26,7 @@ func TestNormalizeLocale(t *testing.T) {
 	}
 }
 
+// TestMessageByCode 验证对应场景符合预期。
 func TestMessageByCode(t *testing.T) {
 	if got := MessageByCode(codes.Success, LocaleENUS); got != "Success" {
 		t.Fatalf("MessageByCode(Success,en)=%q", got)

@@ -2,6 +2,7 @@ package excel
 
 import "testing"
 
+// TestRecommendShardCount 验证对应场景符合预期。
 func TestRecommendShardCount(t *testing.T) {
 	if got := RecommendShardCount(0, 200, 4, 2); got != 1 {
 		t.Fatalf("RecommendShardCount 空数据返回不正确: got=%d", got)
@@ -14,6 +15,7 @@ func TestRecommendShardCount(t *testing.T) {
 	}
 }
 
+// TestBuildOrderedIDShards 验证对应场景符合预期。
 func TestBuildOrderedIDShards(t *testing.T) {
 	shards := BuildOrderedIDShards(10, 109, 4)
 	if len(shards) != 4 {

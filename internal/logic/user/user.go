@@ -22,13 +22,13 @@ import (
 )
 
 const (
-	// userDatabase 表示前台用户表固定使用后台默认主库。
+	// userDatabase 表示 user 业务用户表固定使用后台默认主库。
 	userDatabase svc.DbName = svc.DatabaseMain
-	// userIDNamespace 表示后台新增前台用户使用的雪花 ID 命名空间。
+	// userIDNamespace 表示后台新增业务用户使用的雪花 ID 命名空间。
 	userIDNamespace = "admin.user"
 )
 
-// Logic 承载后台直连管理前台用户表的业务逻辑。
+// Logic 承载后台直连管理业务用户表的业务逻辑。
 type Logic struct {
 	*adminlogic.AdminLogic // 复用后台登录态、MFA 和审计公共能力
 }
@@ -43,6 +43,13 @@ func (l *Logic) List(req *types.UserListReq) *types.BizResult {
 	db, err := l.userReadDB()
 	if err != nil {
 		return l.userDBError("UserLogic.List 前台用户库未配置", err)
+	}
+	useAccountList, err := l.useUserAccountList(db)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 判断业务用户分表状态失败").ToBizResult()
+	}
+	if useAccountList {
+		return l.listByUserAccount(db, req)
 	}
 	dbq := db.Model(&model.User{})
 	if req.ID > 0 {
@@ -71,6 +78,38 @@ func (l *Logic) List(req *types.UserListReq) *types.BizResult {
 	items := make([]types.UserItem, 0, len(list))
 	for _, row := range list {
 		items = append(items, userModelToItem(row))
+	}
+	return types.NewBizResult(codes.Success).
+		SetI18nMessage(i18n.MsgKeyQuerySuccess).
+		WithData(types.ListResp[types.UserItem]{List: items, Total: total})
+}
+
+// listByUserAccount 在物理分表阶段通过账号索引分页定位用户，避免扫描所有分表。
+func (l *Logic) listByUserAccount(db *gorm.DB, req *types.UserListReq) *types.BizResult {
+	if err := validateUserAccountListReq(req); err != nil {
+		return types.ParamErrorResult(err).WithError(err)
+	}
+	dbq := db.Model(&model.UserAccount{})
+	if req.ID > 0 {
+		dbq = dbq.Where("user_id = ?", req.ID)
+	}
+	if req.ShardNo != nil {
+		dbq = dbq.Where("shard_no = ?", *req.ShardNo)
+	}
+	if req.Username != "" {
+		dbq = dbq.Where("username LIKE ?", req.Username+"%")
+	}
+	accounts, total, err := model.List[model.UserAccount](dbq, req.Page, req.PageSize, userAccountOrderField(req.OrderBy), corelogic.NormalizedOrderDirection(req.Order))
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 查询前台用户账号索引失败").ToBizResult()
+	}
+	items := make([]types.UserItem, 0, len(accounts))
+	for _, account := range accounts {
+		row, err := model.FindUserByAccount(db, &account)
+		if err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 读取前台用户 ID[%d]失败", account.UserID).ToBizResult()
+		}
+		items = append(items, userModelToItem(*row))
 	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
@@ -110,7 +149,7 @@ func (l *Logic) Create(req *types.CreateUserReq) *types.BizResult {
 	}
 	userID, err := idgen.NextID(userIDNamespace)
 	if err != nil {
-		return types.ServerError(i18n.MsgKeyInternalError, err, "UserLogic.Create 生成前台用户ID失败").ToBizResult()
+		return types.ServerError(i18n.MsgKeyInternalError, err, "UserLogic.Create 生成前台用户 ID失败").ToBizResult()
 	}
 
 	now := time.Now()
@@ -134,7 +173,8 @@ func (l *Logic) Create(req *types.CreateUserReq) *types.BizResult {
 	if row.Nickname == "" {
 		row.Nickname = row.Username
 	}
-	if err = db.Omit("last_login_at").Create(row).Error; err != nil {
+	routeShardCount := l.Svc.CurrentConfig().User.RouteShardCount
+	if err = model.CreateUserWithAccount(db, row, routeShardCount, "last_login_at"); err != nil {
 		if corelogic.IsMySQLDuplicateEntryError(err) {
 			return userAlreadyExistsResult(req.Username, err)
 		}
@@ -172,8 +212,8 @@ func (l *Logic) Update(req *types.UpdateUserReq) *types.BizResult {
 			return l.userDBError("UserLogic.Update 前台用户库未配置", err)
 		}
 		updates["updated_at"] = time.Now()
-		if err = db.Model(&model.User{}).Where("id = ?", req.ID).Updates(updates).Error; err != nil {
-			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.Update 更新前台用户ID[%d]失败", req.ID).ToBizResult()
+		if err = model.UpdateUser(db, req.ID, updates); err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.Update 更新前台用户 ID[%d]失败", req.ID).ToBizResult()
 		}
 		row, err = l.getUser(req.ID)
 		if err != nil {
@@ -228,11 +268,11 @@ func (l *Logic) UpdateStatus(req *types.UserStatusReq) *types.BizResult {
 			return l.userDBError("UserLogic.UpdateStatus 前台用户库未配置", err)
 		}
 		now := time.Now()
-		if err = db.Model(&model.User{}).Where("id = ?", req.ID).Updates(map[string]any{
+		if err = model.UpdateUser(db, req.ID, map[string]any{
 			"status":     status,
 			"updated_at": now,
-		}).Error; err != nil {
-			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.UpdateStatus 修改前台用户ID[%d]状态失败", req.ID).ToBizResult()
+		}); err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.UpdateStatus 修改前台用户 ID[%d]状态失败", req.ID).ToBizResult()
 		}
 		row.Status = status
 		row.UpdatedAt = now
@@ -262,7 +302,7 @@ func (l *Logic) ResetPassword(req *types.ResetUserPasswordReq) *types.BizResult 
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(req.Password)), bcrypt.DefaultCost)
 	if err != nil {
-		return types.ServerError(i18n.MsgKeyInternalError, err, "UserLogic.ResetPassword 生成前台用户ID[%d]密码哈希失败", req.ID).ToBizResult()
+		return types.ServerError(i18n.MsgKeyInternalError, err, "UserLogic.ResetPassword 生成前台用户 ID[%d]密码哈希失败", req.ID).ToBizResult()
 	}
 	syncResp, err := l.syncUserRuntime(req.ID, false, true, "admin_reset_user_password")
 	if err != nil {
@@ -273,11 +313,8 @@ func (l *Logic) ResetPassword(req *types.ResetUserPasswordReq) *types.BizResult 
 		return l.userDBError("UserLogic.ResetPassword 前台用户库未配置", err)
 	}
 	now := time.Now()
-	if err = db.Model(&model.User{}).Where("id = ?", req.ID).Updates(map[string]any{
-		"password_hash": string(passwordHash),
-		"updated_at":    now,
-	}).Error; err != nil {
-		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.ResetPassword 更新前台用户ID[%d]密码失败", req.ID).ToBizResult()
+	if err = model.UpdateUserPasswordHash(db, req.ID, string(passwordHash), now); err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.ResetPassword 更新前台用户 ID[%d]密码失败", req.ID).ToBizResult()
 	}
 	row.UpdatedAt = now
 	return types.NewBizResult(codes.UpdateSuccess).
@@ -363,12 +400,12 @@ func (l *Logic) syncUserRuntime(userID int64, profile bool, sessions bool, reaso
 	return *resp, nil
 }
 
-// userDBError 返回前台用户库配置或访问错误。
+// userDBError 返回业务用户库配置或访问错误。
 func (l *Logic) userDBError(context string, err error) *types.BizResult {
 	return types.DBError(i18n.MsgKeyDBError, err, context).ToBizResult()
 }
 
-// userOrderField 把前端排序字段映射到前台用户表字段。
+// userOrderField 把前端排序字段映射到业务用户表字段。
 func userOrderField(orderBy string) string {
 	switch strings.TrimSpace(orderBy) {
 	case "username":
@@ -390,6 +427,45 @@ func userOrderField(orderBy string) string {
 	default:
 		return "id"
 	}
+}
+
+// userAccountOrderField 把前端排序字段映射到账号索引表字段。
+func userAccountOrderField(orderBy string) string {
+	switch strings.TrimSpace(orderBy) {
+	case "username":
+		return "username"
+	case "shardNo":
+		return "shard_no"
+	default:
+		return "user_id"
+	}
+}
+
+// validateUserAccountListReq 校验分表阶段账号索引列表支持的过滤和排序边界。
+func validateUserAccountListReq(req *types.UserListReq) error {
+	if req == nil {
+		return errors.New("用户列表请求为空")
+	}
+	if strings.TrimSpace(req.Email) != "" || strings.TrimSpace(req.Phone) != "" || req.Status != nil {
+		return errors.New("用户分表阶段列表仅支持按 ID、shardNo、username 查询，email/phone/status 请接入搜索或后台索引")
+	}
+	switch strings.TrimSpace(req.OrderBy) {
+	case "", "id", "username", "shardNo":
+		return nil
+	default:
+		return errors.New("用户分表阶段列表仅支持按 id、username、shardNo 排序")
+	}
+}
+
+// useUserAccountList 判断当前请求是否应使用账号索引驱动的分表列表路径。
+func (l *Logic) useUserAccountList(db *gorm.DB) (bool, error) {
+	if l == nil || l.Svc == nil {
+		return false, nil
+	}
+	if l.Svc.CurrentConfig().User.RouteShardCount > model.UserRouteShardCountDefault {
+		return true, nil
+	}
+	return model.HasSplitUserAccounts(db)
 }
 
 // buildUserProfileUpdates 生成前台用户资料更新字段。
@@ -436,9 +512,9 @@ func ptrUserItem(item types.UserItem) *types.UserItem {
 // userFindResult 统一转换前台用户查找失败响应。
 func userFindResult(context string, id int64, err error) *types.BizResult {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return types.NotFound(i18n.MsgKeyUserNotFound, errors.Wrapf(err, "%s 前台用户ID[%d]不存在", context, id)).ToBizResult()
+		return types.NotFound(i18n.MsgKeyUserNotFound, errors.Wrapf(err, "%s 前台用户 ID[%d]不存在", context, id)).ToBizResult()
 	}
-	return types.DBError(i18n.MsgKeyDBError, errors.Wrapf(err, "%s 查询前台用户ID[%d]失败", context, id)).ToBizResult()
+	return types.DBError(i18n.MsgKeyDBError, errors.Wrapf(err, "%s 查询前台用户 ID[%d]失败", context, id)).ToBizResult()
 }
 
 // userAlreadyExistsResult 返回前台用户名重复的明确业务响应。

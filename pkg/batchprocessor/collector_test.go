@@ -39,7 +39,7 @@ func (m *mockModule) Process(context.Context, string, int) (int, error) {
 
 // panicFlushModule 用于验证业务 Flush panic 不会击穿收集器后台协程。
 type panicFlushModule struct {
-	mockModule
+	mockModule        // 嵌入字段表示测试复用的基础能力。
 	fallbackCount int // fallbackCount 记录兜底落地次数
 }
 
@@ -58,9 +58,9 @@ func (m *panicFlushModule) RequiredFallback(context.Context, Data, error) error 
 
 // slowFallbackModule 用于验证慢 fallback 不会阻塞 flush 主链路。
 type slowFallbackModule struct {
-	mockModule
-	started chan struct{} // started 表示 fallback 已进入执行
-	release chan struct{} // release 用于放行测试 fallback
+	mockModule               // 嵌入字段表示测试复用的基础能力。
+	started    chan struct{} // started 表示 fallback 已进入执行
+	release    chan struct{} // release 用于放行测试 fallback
 }
 
 // Flush 模拟批量落地失败。

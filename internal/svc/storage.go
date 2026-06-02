@@ -140,9 +140,9 @@ func (s *ServiceContext) storageRuntime() *StorageRuntime {
 func objectStorageFingerprint(cfg config.FileStorageConfig) string {
 	// 仅纳入会影响对象存储实例的字段，避免上传模式或扫描器变更导致 S3 client 无意义重建。
 	body, err := json.Marshal(struct {
-		Type  string                        `json:"type"`
-		Local config.FileStorageLocalConfig `json:"local"`
-		S3    config.FileStorageS3Config    `json:"s3"`
+		Type  string                        `json:"type"`  // Type 表示文件存储类型。
+		Local config.FileStorageLocalConfig `json:"local"` // Local 表示本地存储配置。
+		S3    config.FileStorageS3Config    `json:"s3"`    // S3 表示对象存储配置。
 	}{
 		Type:  cfg.Type,
 		Local: cfg.Local,

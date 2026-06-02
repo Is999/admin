@@ -203,7 +203,7 @@ func BuildAdminProfileCache(admin *model.Admin) *types.AdminProfile {
 		Description:       admin.Description,
 		LastLoginTime:     corelogic.FormatDateTime(admin.LastLoginTime),
 		LastLoginIP:       admin.LastLoginIP,
-		LastLoginIpaddr:   admin.LastLoginIpaddr,
+		LastLoginIPAddr:   admin.LastLoginIPAddr,
 		CreatedAt:         corelogic.FormatDateTime(admin.CreatedAt),
 		UpdatedAt:         corelogic.FormatDateTime(admin.UpdatedAt),
 	}

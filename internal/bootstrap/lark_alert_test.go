@@ -19,10 +19,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// larkAlertPayload 表示测试使用的辅助结构。
 type larkAlertPayload struct {
-	MsgType string `json:"msg_type"`
+	MsgType string `json:"msg_type"` // MsgType 表示测试字段。
+	// Content 表示 Lark 文本消息内容。
 	Content struct {
-		Text string `json:"text"`
+		Text string `json:"text"` // Text 表示测试字段。
 	} `json:"content"`
 }
 

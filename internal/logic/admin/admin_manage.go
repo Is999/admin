@@ -526,7 +526,7 @@ func adminModelToItem(admin model.Admin, roleIDs []int, roles []types.AdminRoleI
 		Description:       admin.Description,
 		LastLoginTime:     corelogic.FormatDateTime(admin.LastLoginTime),
 		LastLoginIP:       admin.LastLoginIP,
-		LastLoginIpaddr:   admin.LastLoginIpaddr,
+		LastLoginIPAddr:   admin.LastLoginIPAddr,
 		RoleIDs:           roleIDs,
 		Roles:             roles,
 		CreatedAt:         corelogic.FormatDateTime(admin.CreatedAt),

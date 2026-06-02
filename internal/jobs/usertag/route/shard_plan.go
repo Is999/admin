@@ -9,11 +9,11 @@ import (
 
 const (
 	// defaultShardTotal 是工作流任务拆分兜底分片数。
-	defaultShardTotal = 10
+	defaultShardTotal = 1
 	// defaultRuntimeShardTotal 是运行期 UID 索引默认分片数。
 	defaultRuntimeShardTotal = 1000
 	// defaultResultShardTotal 是用户标签结果表默认物理分片数。
-	defaultResultShardTotal = 1000
+	defaultResultShardTotal = 1
 )
 
 // Shard 表示一次工作流执行中的分片信息。
@@ -135,10 +135,10 @@ func validateColumn(column string) error {
 	return nil
 }
 
-// physicalShardsForWorkflow 根据中国剩余定理口径计算当前工作流分片覆盖的物理分表。
+// physicalShardsForWorkflow 计算当前工作流分片覆盖的物理分表。
 // 只有 physical_shard 与 workflow_shard 在 gcd(workflow_total, physical_total) 下同余时，该物理表才可能包含当前分片 UID。
 func (p ShardPlan) physicalShardsForWorkflow(shardIndex, shardTotal, physicalTotal int) []int {
-	physicalTotal = positiveOr(physicalTotal, defaultShardTotal)
+	physicalTotal = positiveOr(physicalTotal, defaultResultShardTotal)
 	workflow := p.NormalizeShard(shardIndex, shardTotal)
 	divisor := gcd(workflow.Total, physicalTotal)
 	out := make([]int, 0, physicalTotal)

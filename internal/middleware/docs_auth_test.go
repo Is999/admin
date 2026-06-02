@@ -9,9 +9,9 @@ import (
 // TestDocsRouteAliasForPath 验证文档站按目录映射到更细的权限别名。
 func TestDocsRouteAliasForPath(t *testing.T) {
 	cases := []struct {
-		name string
-		path string
-		want routealias.Alias
+		name string           // name 表示测试场景名称。
+		path string           // path 表示请求路径。
+		want routealias.Alias // want 表示期望结果。
 	}{
 		{name: "首页", path: "/api/docs", want: routealias.DocsIndex},
 		{name: "站点公共资源", path: "/api/docs/_sidebar.md", want: routealias.DocsIndex},

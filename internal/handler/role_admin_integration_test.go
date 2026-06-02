@@ -29,56 +29,58 @@ import (
 
 // roleAdminIntegrationResp 表示接口统一业务响应结构，便于集成测试解码 code/message/data。
 type roleAdminIntegrationResp struct {
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"`
+	Code    int             `json:"code"`    // Code 表示响应业务码。
+	Message string          `json:"message"` // Message 表示响应消息。
+	Data    json.RawMessage `json:"data"`    // Data 表示响应数据。
 }
 
 // roleAdminIntegrationLoginResp 表示登录返回的令牌结构。
 type roleAdminIntegrationLoginResp struct {
-	Token string `json:"token"`
+	Token string `json:"token"` // Token 表示登录令牌。
 }
 
 // roleAdminIntegrationCaptchaResp 表示图形验证码返回结构。
 type roleAdminIntegrationCaptchaResp struct {
-	Key   string `json:"key"`
-	Image string `json:"image"`
+	Key   string `json:"key"`   // Key 表示测试 key。
+	Image string `json:"image"` // Image 表示验证码图片。
 }
 
 // roleAdminIntegrationPermissionItem 表示权限树节点结构。
 type roleAdminIntegrationPermissionItem struct {
-	ID       int                                  `json:"id"`
-	UUID     string                               `json:"uuid"`
-	Module   string                               `json:"module"`
-	Status   int                                  `json:"status"`
-	Checked  bool                                 `json:"checked"`
-	Children []roleAdminIntegrationPermissionItem `json:"children"`
+	ID       int                                  `json:"id"`       // ID 表示测试记录 ID。
+	UUID     string                               `json:"uuid"`     // UUID 表示测试 UUID。
+	Module   string                               `json:"module"`   // Module 表示权限模块。
+	Status   int                                  `json:"status"`   // Status 表示状态值。
+	Checked  bool                                 `json:"checked"`  // Checked 表示权限是否选中。
+	Children []roleAdminIntegrationPermissionItem `json:"children"` // Children 表示子节点列表。
 }
 
 // roleAdminIntegrationRoleItem 表示角色树节点结构。
 type roleAdminIntegrationRoleItem struct {
-	ID          int                            `json:"id"`
-	Title       string                         `json:"title"`
-	Status      int                            `json:"status"`
-	Permissions []int                          `json:"permissions"`
-	Children    []roleAdminIntegrationRoleItem `json:"children"`
+	ID          int                            `json:"id"`          // ID 表示测试记录 ID。
+	Title       string                         `json:"title"`       // Title 表示标题。
+	Status      int                            `json:"status"`      // Status 表示状态值。
+	Permissions []int                          `json:"permissions"` // Permissions 表示权限列表。
+	Children    []roleAdminIntegrationRoleItem `json:"children"`    // Children 表示子节点列表。
 }
 
 // roleAdminIntegrationAdminRoleItem 表示管理员已绑定角色项。
 type roleAdminIntegrationAdminRoleItem struct {
-	ID     int    `json:"id"`
-	RoleID int    `json:"roleID"`
-	Title  string `json:"title"`
+	ID     int    `json:"id"`     // ID 表示测试记录 ID。
+	RoleID int    `json:"roleID"` // RoleID 表示角色 ID。
+	Title  string `json:"title"`  // Title 表示标题。
 }
 
 // roleAdminIntegrationAdminItem 表示管理员列表项。
 type roleAdminIntegrationAdminItem struct {
-	ID       int    `json:"id"`
-	Username string `json:"username"`
+	ID       int    `json:"id"`       // ID 表示测试记录 ID。
+	Username string `json:"username"` // Username 表示用户名。
 }
 
 const (
-	integrationAppID        = "1"
+	// integrationAppID 表示测试使用的常量。
+	integrationAppID = "1"
+	// integrationSignatureMD5 表示测试使用的常量。
 	integrationSignatureMD5 = "M"
 )
 
@@ -215,7 +217,7 @@ func TestRoleAdminIntegrationFlows(t *testing.T) {
 	}, nil)
 
 	var adminList struct {
-		List []roleAdminIntegrationAdminItem `json:"list"`
+		List []roleAdminIntegrationAdminItem `json:"list"` // List 表示列表数据。
 	}
 	integrationMustDo(t, client, http.MethodGet, fmt.Sprintf("%s/api/admins?username=%s", baseURL, url.QueryEscape(adminUsername)), "admin.list", superToken, nil, &adminList)
 	if len(adminList.List) != 1 {
@@ -292,8 +294,8 @@ func integrationWaitForServer(t *testing.T, baseURL string, startErrCh <-chan er
 
 // integrationMFATwoStepTicket 表示测试里直接签发的 MFA 二次校验票据。
 type integrationMFATwoStepTicket struct {
-	Key   string
-	Value string
+	Key   string // Key 表示测试 key。
+	Value string // Value 表示字段值。
 }
 
 // integrationIssueMFATwoStep 为指定管理员直接签发指定场景的 MFA 二次票据，避免集成测试依赖固定 TOTP 秘钥。
@@ -384,6 +386,7 @@ func integrationLooksLikeJWT(token string) bool {
 	return parts[0] != "" && parts[1] != "" && parts[2] != ""
 }
 
+// integrationShouldSign 返回集成测试辅助数据。
 func integrationShouldSign(alias string) bool {
 	alias = strings.TrimSpace(alias)
 	if alias == "" || strings.EqualFold(alias, "ignore") {
@@ -393,23 +396,28 @@ func integrationShouldSign(alias string) bool {
 	return len(policy.RequestSign) > 0 || len(policy.ResponseSign) > 0
 }
 
+// integrationAppHeader 返回集成测试辅助数据。
 func integrationAppHeader() string {
 	return base64.StdEncoding.EncodeToString([]byte(integrationAppID))
 }
 
+// integrationTraceID 返回集成测试辅助数据。
 func integrationTraceID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
+// integrationTimestamp 返回集成测试辅助数据。
 func integrationTimestamp() string {
 	return fmt.Sprintf("%d", time.Now().Unix())
 }
 
+// integrationSignValue 返回集成测试辅助数据。
 func integrationSignValue(signText string) string {
 	sum := md5.Sum([]byte(signText))
 	return hex.EncodeToString(sum[:])
 }
 
+// integrationAttachSignature 返回集成测试辅助数据。
 func integrationAttachSignature(alias string, payload map[string]any, traceID string, timestamp string) map[string]any {
 	next := make(map[string]any, len(payload)+1)
 	for k, v := range payload {

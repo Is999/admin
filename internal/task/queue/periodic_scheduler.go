@@ -237,7 +237,7 @@ func (m *Manager) schedulerLeaderStillHeld(ctx context.Context) (bool, error) {
 }
 
 // periodicQueueBackpressureOK 检查周期任务目标队列是否低于配置积压上限。
-// 当 max_queue_backlog<=0 时不启用背压，保持旧版本“按 cron 投递”的兼容行为。
+// 当 max_queue_backlog<=0 时不启用背压，按 cron 配置持续投递。
 func (m *Manager) periodicQueueBackpressureOK(ctx context.Context, cfg *asynq.PeriodicTaskConfig) (bool, string, int64, int64, error) {
 	if m == nil {
 		return false, "", 0, 0, errors.Errorf("任务队列管理器未初始化")

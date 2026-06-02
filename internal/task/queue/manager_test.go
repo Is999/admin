@@ -111,8 +111,8 @@ func TestRegisterWorkflowRejectsInvalidDAG(t *testing.T) {
 	defer cleanup()
 
 	tests := []struct {
-		name string
-		def  *WorkflowDefinition
+		name string              // name 表示测试场景名称。
+		def  *WorkflowDefinition // def 表示测试字段。
 	}{
 		{
 			name: "missing dependency",
@@ -1281,10 +1281,10 @@ func TestFinalFailureHookOnlyRunsForArchivedTask(t *testing.T) {
 	var retryCalled atomic.Int32
 	var hookCalls atomic.Int32
 	type hookSnapshot struct {
-		taskType   string
-		workflowID string
-		mode       string
-		errText    string
+		taskType   string // taskType 表示测试字段。
+		workflowID string // workflowID 表示测试字段。
+		mode       string // mode 表示测试字段。
+		errText    string // errText 表示测试字段。
 	}
 	hookCh := make(chan hookSnapshot, 2)
 	if err := manager.RegisterFinalFailureHook(func(ctx context.Context, task *asynq.Task, meta WorkflowTaskMeta, runErr error) error {
@@ -1912,9 +1912,9 @@ func TestQueueInfoBacklogIgnoresArchivedAndActive(t *testing.T) {
 func TestPeriodicCronParserNextTimes(t *testing.T) {
 	base := time.Date(2026, 5, 9, 10, 0, 3, 0, time.Local)
 	tests := []struct {
-		name string
-		spec string
-		want time.Time
+		name string    // name 表示测试场景名称。
+		spec string    // spec 表示测试字段。
+		want time.Time // want 表示期望结果。
 	}{
 		{
 			name: "five-field-minute-cron",
@@ -2430,7 +2430,7 @@ func TestDeleteExpiredArchivedTasksRemovesTaskCache(t *testing.T) {
 			fields = append(fields, "unique_key", uniqueKey)
 		}
 		if err = manager.redis.HSet(ctx, keys.TaskAsynqTaskHashKey(internalQueue, oldTaskID), fields...).Err(); err != nil {
-			t.Fatalf("写入旧任务 hash 失败: %v", err)
+			t.Fatalf("写入过期任务 hash 失败: %v", err)
 		}
 	}
 	if err = manager.redis.HSet(ctx, newTaskKey, "state", "archived").Err(); err != nil {
@@ -2452,11 +2452,11 @@ func TestDeleteExpiredArchivedTasksRemovesTaskCache(t *testing.T) {
 		oldTaskKeys = append(oldTaskKeys, keys.TaskAsynqTaskHashKey(internalQueue, oldTaskID))
 	}
 	if exists := manager.redis.Exists(ctx, oldTaskKeys...).Val(); exists != 0 {
-		t.Fatalf("旧任务 hash 或唯一键仍存在，exists=%d", exists)
+		t.Fatalf("过期任务 hash 或唯一键仍存在，exists=%d", exists)
 	}
 	for _, oldTaskID := range oldTaskIDs {
 		if _, err = manager.redis.ZScore(ctx, archivedKey, oldTaskID).Result(); !errors.Is(err, redis.Nil) {
-			t.Fatalf("旧任务 zset 成员仍存在，task_id=%s err=%v", oldTaskID, err)
+			t.Fatalf("过期任务 zset 成员仍存在，task_id=%s err=%v", oldTaskID, err)
 		}
 	}
 	if exists := manager.redis.Exists(ctx, newTaskKey).Val(); exists != 1 {
@@ -2502,6 +2502,7 @@ func TestLeaderRunnerAvoidsDuplicateSchedulerAndFailsOver(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool { return acquired2.Load() == 1 })
 }
 
+// newTestManager 构造测试依赖。
 func newTestManager(t *testing.T) (*Manager, func()) {
 	t.Helper()
 	server, client := newTestRedis(t)
@@ -2533,6 +2534,7 @@ func newTestManager(t *testing.T) (*Manager, func()) {
 	return manager, cleanup
 }
 
+// useRuntimeAppID 表示测试辅助逻辑。
 func useRuntimeAppID(t *testing.T, appID string) {
 	t.Helper()
 	prev := runtimecfg.Get()
@@ -2542,6 +2544,7 @@ func useRuntimeAppID(t *testing.T, appID string) {
 	})
 }
 
+// newTestRedis 构造测试依赖。
 func newTestRedis(t *testing.T) (*miniredis.Miniredis, redis.UniversalClient) {
 	t.Helper()
 	server := miniredis.RunT(t)
@@ -2549,6 +2552,7 @@ func newTestRedis(t *testing.T) (*miniredis.Miniredis, redis.UniversalClient) {
 	return server, client
 }
 
+// testNoopPayload 表示测试辅助逻辑。
 func testNoopPayload(spec WorkflowStartSpec, node *WorkflowNodeDefinition, shardIndex, shardTotal int) ([]byte, error) {
 	return mustJSONBytes(NoopPayload{
 		WorkflowTaskMeta: WorkflowTaskMeta{
@@ -2562,6 +2566,7 @@ func testNoopPayload(spec WorkflowStartSpec, node *WorkflowNodeDefinition, shard
 	}), nil
 }
 
+// testWorkflowDefinition 表示测试辅助逻辑。
 func testWorkflowDefinition(name string) *WorkflowDefinition {
 	return &WorkflowDefinition{
 		Name: name,
@@ -2574,6 +2579,7 @@ func testWorkflowDefinition(name string) *WorkflowDefinition {
 	}
 }
 
+// findWorkflowIDWithoutGrayShard 表示测试辅助逻辑。
 func findWorkflowIDWithoutGrayShard(t *testing.T, nodeName string, shardTotal int, grayPercent int) string {
 	t.Helper()
 	for i := 0; i < 1000; i++ {
@@ -2586,6 +2592,7 @@ func findWorkflowIDWithoutGrayShard(t *testing.T, nodeName string, shardTotal in
 	return ""
 }
 
+// waitForCondition 表示测试辅助逻辑。
 func waitForCondition(t *testing.T, timeout time.Duration, check func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

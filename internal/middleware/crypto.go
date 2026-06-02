@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	// cipherWholeBody 表示已废弃的整包加密标记，仅用于拒绝非法输入。
+	// cipherWholeBody 表示禁用的整包加密标记，仅用于拒绝非法输入。
 	cipherWholeBody = security.CipherWholeBody
 	// cipherJSONPrefix 表示字段值加解密前需要做 JSON 编解码。
 	cipherJSONPrefix = security.CipherJSONPrefix
@@ -296,7 +296,7 @@ func decodeAndValidateCipherParams(raw string, allowed []string, scope string) (
 	return params, nil
 }
 
-// hasCipherWholeBody 判断字段列表是否包含已废弃的整包加密标记。
+// hasCipherWholeBody 判断字段列表是否包含禁用的整包加密标记。
 func hasCipherWholeBody(fields []string) bool {
 	for _, field := range fields {
 		if strings.EqualFold(strings.TrimSpace(field), cipherWholeBody) {

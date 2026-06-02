@@ -18,13 +18,16 @@ import (
 	"github.com/hibiken/asynq"
 )
 
+// mockPlugin 表示测试使用的辅助结构。
 type mockPlugin struct {
-	name string
-	run  func(*Runtime) error
+	name string               // name 表示测试场景名称。
+	run  func(*Runtime) error // run 表示测试字段。
 }
 
+// Name 表示测试辅助逻辑。
 func (p mockPlugin) Name() string { return p.name }
 
+// Setup 表示测试辅助逻辑。
 func (p mockPlugin) Setup(runtime *Runtime) error {
 	if p.run == nil {
 		return nil
@@ -368,6 +371,7 @@ func TestUserTagPluginRegistersMaintenanceWorkflows(t *testing.T) {
 	}
 }
 
+// newTestManager 构造测试依赖。
 func newTestManager() *taskqueue.Manager {
 	return &taskqueue.Manager{}
 }

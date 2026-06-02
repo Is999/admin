@@ -41,10 +41,10 @@ type RuntimeConfigSnapshot struct {
 
 // RuntimeTaskPeriodicQueryReq 查询周期任务草稿。
 type RuntimeTaskPeriodicQueryReq struct {
-	GetPageReq
-	Workflow string `form:"workflow,optional"` // 工作流过滤
-	Enabled  *bool  `form:"enabled,optional"`  // 启用状态过滤
-	Keyword  string `form:"keyword,optional"`  // 名称/队列关键字
+	GetPageReq        // GetPageReq 表示分页参数。
+	Workflow   string `form:"workflow,optional"` // 工作流过滤
+	Enabled    *bool  `form:"enabled,optional"`  // 启用状态过滤
+	Keyword    string `form:"keyword,optional"`  // 名称/队列关键字
 }
 
 // Validate 校验并归一化周期任务查询参数。
@@ -111,10 +111,10 @@ func (r *SaveRuntimeTaskPeriodicReq) Validate() error {
 
 // RuntimeArchiveJobQueryReq 查询归档任务草稿。
 type RuntimeArchiveJobQueryReq struct {
-	GetPageReq
-	Enabled  *bool  `form:"enabled,optional"`  // 启用状态过滤
-	Database string `form:"database,optional"` // 数据库过滤
-	Keyword  string `form:"keyword,optional"`  // 名称/表名关键字
+	GetPageReq        // GetPageReq 表示分页参数。
+	Enabled    *bool  `form:"enabled,optional"`  // 启用状态过滤
+	Database   string `form:"database,optional"` // 数据库过滤
+	Keyword    string `form:"keyword,optional"`  // 名称/表名关键字
 }
 
 // Validate 校验并归一化归档任务查询参数。
@@ -287,7 +287,7 @@ type RuntimeConfigPublishResp struct {
 
 // RuntimeConfigReleaseQueryReq 查询发布历史。
 type RuntimeConfigReleaseQueryReq struct {
-	GetPageReq
+	GetPageReq // GetPageReq 表示分页参数。
 }
 
 // Validate 校验发布历史查询参数。
@@ -311,9 +311,9 @@ type RuntimeConfigReleaseItem struct {
 
 // RuntimeConfigReleaseDetailResp 表示发布快照详情。
 type RuntimeConfigReleaseDetailResp struct {
-	RuntimeConfigReleaseItem
-	SnapshotJSON string `json:"snapshotJson"` // 发布快照 JSON
-	SnapshotYAML string `json:"snapshotYaml"` // 发布快照 YAML
+	RuntimeConfigReleaseItem        // RuntimeConfigReleaseItem 表示发布历史基础信息。
+	SnapshotJSON             string `json:"snapshotJson"` // 发布快照 JSON
+	SnapshotYAML             string `json:"snapshotYaml"` // 发布快照 YAML
 }
 
 // RuntimeTaskPeriodicItem 表示周期任务配置项。

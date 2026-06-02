@@ -14,7 +14,7 @@ type LoginReq struct {
 	Password   string `json:"password"`            // 明文密码，进入逻辑层后会参与校验
 	Captcha    string `json:"captcha,optional"`    // 图形验证码内容
 	Key        string `json:"key,optional"`        // 图形验证码 key
-	SecureCode string `json:"secureCode,optional"` // 安全验证码预留字段，用于签名规则兼容
+	SecureCode string `json:"secureCode,optional"` // 安全验证码，参与登录签名与加密
 	Ip         string `json:"ip,optional"`         // 登录 IP，允许由前端或网关注入
 }
 
@@ -27,12 +27,6 @@ func (r *LoginReq) Validate() error {
 		return errors.Errorf("密码不能为空")
 	}
 	return nil
-}
-
-// LoginResp 表示登录成功后的最小回执。
-type LoginResp struct {
-	Id    int    `json:"-"`     // 管理员 ID，仅供服务端内部透传；保留旧字段名以兼容既有调用方
-	Token string `json:"token"` // JWT 访问令牌
 }
 
 // LoginCaptchaResp 表示登录图形验证码响应。
@@ -82,7 +76,7 @@ type AdminInfo struct {
 	Description       string `json:"description"`       // 备注说明
 	LastLoginTime     string `json:"lastLoginTime"`     // 最近登录时间
 	LastLoginIP       string `json:"lastLoginIP"`       // 最近登录 IP
-	LastLoginIpaddr   string `json:"LastLoginIpaddr"`   // 最近登录 IP 归属地；沿用旧 JSON 字段名以前端
+	LastLoginIPAddr   string `json:"lastLoginIpaddr"`   // 最近登录 IP 归属地
 	Token             string `json:"token"`             // 当前登录态 JWT 令牌
 }
 
@@ -101,7 +95,7 @@ type AdminProfile struct {
 	Description       string `json:"description"`       // 备注说明
 	LastLoginTime     string `json:"lastLoginTime"`     // 最近登录时间
 	LastLoginIP       string `json:"lastLoginIP"`       // 最近登录 IP
-	LastLoginIpaddr   string `json:"LastLoginIpaddr"`   // 最近登录 IP 归属地；沿用历史字段名
+	LastLoginIPAddr   string `json:"lastLoginIpaddr"`   // 最近登录 IP 归属地
 	CreatedAt         string `json:"createdAt"`         // 创建时间
 	UpdatedAt         string `json:"updatedAt"`         // 更新时间
 }
@@ -124,7 +118,7 @@ func (a *AdminProfile) ToAdminInfo(token string) *AdminInfo {
 		Description:       a.Description,
 		LastLoginTime:     a.LastLoginTime,
 		LastLoginIP:       a.LastLoginIP,
-		LastLoginIpaddr:   a.LastLoginIpaddr,
+		LastLoginIPAddr:   a.LastLoginIPAddr,
 		Token:             token,
 	}
 }
@@ -144,7 +138,7 @@ func (a *AdminInfo) ToMap() map[string]any {
 		"description":       a.Description,
 		"lastLoginTime":     a.LastLoginTime,
 		"lastLoginIP":       a.LastLoginIP,
-		"LastLoginIpaddr":   a.LastLoginIpaddr, // 保持与历史缓存字段名一致
+		"lastLoginIpaddr":   a.LastLoginIPAddr,
 		"token":             a.Token,
 	}
 }
@@ -195,8 +189,8 @@ func (a *AdminInfo) FromMap(m map[string]string) error {
 	if v, ok := m["lastLoginIP"]; ok {
 		a.LastLoginIP = v
 	}
-	if v, ok := m["LastLoginIpaddr"]; ok {
-		a.LastLoginIpaddr = v
+	if v, ok := m["lastLoginIpaddr"]; ok {
+		a.LastLoginIPAddr = v
 	}
 	if v, ok := m["token"]; ok {
 		a.Token = v
@@ -206,7 +200,6 @@ func (a *AdminInfo) FromMap(m map[string]string) error {
 }
 
 // AdminLoginAfterInfoResp 表示前端登录完成后初始化页面所需的管理员资料。
-// 其中 `LastLoginIpaddr` 保留历史字段命名，避免影响既有前端解析。
 type AdminLoginAfterInfoResp struct {
 	ID                int      `json:"id"`                // 管理员 ID，前端登录态初始化必需字段
 	UserName          string   `json:"username"`          // 登录用户名，前端登录态初始化必需字段
@@ -221,7 +214,7 @@ type AdminLoginAfterInfoResp struct {
 	Description       string   `json:"description"`       // 备注说明，前端登录态初始化必需字段
 	LastLoginTime     string   `json:"lastLoginTime"`     // 最近登录时间
 	LastLoginIP       string   `json:"lastLoginIP"`       // 最近登录 IP
-	LastLoginIpaddr   string   `json:"LastLoginIpaddr"`   // 最近登录 IP 归属地；沿用历史字段名
+	LastLoginIPAddr   string   `json:"lastLoginIpaddr"`   // 最近登录 IP 归属地
 	RoleIDs           []int    `json:"roleIds"`           // 当前账号启用角色 ID 列表；前端据此识别超级管理员角色
 	Roles             []string `json:"roles"`             // 角色列表，供前端权限展示与布局判断
 	Token             string   `json:"token"`             // JWT 令牌，前端登录态初始化必需字段

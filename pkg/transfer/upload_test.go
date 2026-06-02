@@ -15,6 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// TestExpectedChunkSize 验证对应场景符合预期。
 func TestExpectedChunkSize(t *testing.T) {
 	session := &UploadSession{
 		FileSize:    1025,
@@ -29,6 +30,7 @@ func TestExpectedChunkSize(t *testing.T) {
 	}
 }
 
+// TestBuildUploadFingerprint 验证对应场景符合预期。
 func TestBuildUploadFingerprint(t *testing.T) {
 	left := buildUploadFingerprint(1, "excel-import", "demo.xlsx", 1024, "abc123")
 	right := buildUploadFingerprint(1, "excel-import", "demo.xlsx", 1024, "abc123")
@@ -37,6 +39,7 @@ func TestBuildUploadFingerprint(t *testing.T) {
 	}
 }
 
+// TestVerifyUploadedFileHash 验证对应场景符合预期。
 func TestVerifyUploadedFileHash(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "demo.txt")
 	if err := os.WriteFile(filePath, []byte("hello"), 0o644); err != nil {
@@ -83,6 +86,7 @@ func TestCopyUploadedFileAcrossDevicesVerifiesHashDuringCopy(t *testing.T) {
 	}
 }
 
+// newTestUploadManager 构造测试依赖。
 func newTestUploadManager(t *testing.T) (*LocalUploadManager, string) {
 	t.Helper()
 	redisServer := miniredis.RunT(t)

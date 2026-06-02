@@ -39,7 +39,7 @@ var renewLeaderScriptText string
 var releaseLeaderScriptText string
 
 // deleteExpiredArchivedTasksScriptText 保存归档失败任务过期清理 Lua 脚本源码。
-// 按 archived zset 分数批量删除旧任务 hash、唯一键和 zset 成员，避免失败任务长期堆积。
+// 按 archived zset 分数批量删除过期任务 hash、唯一键和 zset 成员，避免失败任务长期堆积。
 //
 //go:embed assets/delete_expired_archived_tasks.lua
 var deleteExpiredArchivedTasksScriptText string

@@ -76,32 +76,42 @@ type SecurityDebugCipherReq struct {
 	PayloadText  string   `json:"payloadText,optional"`  // JSON 对象文本
 }
 
-// ValidateEncrypt 校验加密调试请求。
-func (r *SecurityDebugCipherReq) ValidateEncrypt() error {
-	r.AppID = strings.TrimSpace(r.AppID)
-	r.CryptoType = strings.ToUpper(strings.TrimSpace(r.CryptoType))
-	r.PayloadText = strings.TrimSpace(r.PayloadText)
+// Validate 校验加解密调试请求的通用字段。
+func (r *SecurityDebugCipherReq) Validate() error {
+	r.normalize()
 	if r.AppID == "" {
 		return errors.Errorf("AppID不能为空")
-	}
-	if r.PayloadText == "" {
-		return errors.Errorf("待加密内容不能为空")
 	}
 	return r.validateCipherFields()
 }
 
+// ValidateEncrypt 校验加密调试请求。
+func (r *SecurityDebugCipherReq) ValidateEncrypt() error {
+	if err := r.Validate(); err != nil {
+		return errors.Tag(err)
+	}
+	if r.PayloadText == "" {
+		return errors.Errorf("待加密内容不能为空")
+	}
+	return nil
+}
+
 // ValidateDecrypt 校验解密调试请求。
 func (r *SecurityDebugCipherReq) ValidateDecrypt() error {
-	r.AppID = strings.TrimSpace(r.AppID)
-	r.CryptoType = strings.ToUpper(strings.TrimSpace(r.CryptoType))
-	r.PayloadText = strings.TrimSpace(r.PayloadText)
-	if r.AppID == "" {
-		return errors.Errorf("AppID不能为空")
+	if err := r.Validate(); err != nil {
+		return errors.Tag(err)
 	}
 	if r.PayloadText == "" {
 		return errors.Errorf("待解密内容不能为空")
 	}
-	return r.validateCipherFields()
+	return nil
+}
+
+// normalize 归一化安全调试台加解密请求字段。
+func (r *SecurityDebugCipherReq) normalize() {
+	r.AppID = strings.TrimSpace(r.AppID)
+	r.CryptoType = strings.ToUpper(strings.TrimSpace(r.CryptoType))
+	r.PayloadText = strings.TrimSpace(r.PayloadText)
 }
 
 // NormalizedCryptoType 返回归一化后的加密方式。
@@ -119,15 +129,26 @@ func (r *SecurityDebugCipherReq) NormalizedCipherFields() []string {
 
 // validateCipherFields 校验安全调试台只能使用字段级加解密。
 func (r *SecurityDebugCipherReq) validateCipherFields() error {
-	fields := r.NormalizedCipherFields()
+	fields := make([]string, 0, len(r.CipherFields))
+	seen := make(map[string]struct{}, len(r.CipherFields))
+	for _, field := range r.CipherFields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		if strings.EqualFold(field, security.CipherWholeBody) {
+			return errors.Errorf("不允许整包加密")
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		fields = append(fields, field)
+	}
 	if len(fields) == 0 {
 		return errors.Errorf("加密字段不能为空")
 	}
-	for _, field := range fields {
-		if strings.EqualFold(strings.TrimSpace(field), security.CipherWholeBody) {
-			return errors.Errorf("不允许整包加密")
-		}
-	}
+	r.CipherFields = fields
 	return nil
 }
 

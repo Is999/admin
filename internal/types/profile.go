@@ -12,7 +12,7 @@ import (
 type ProfileLoginReq struct {
 	Username   string `json:"username,optional"`   // 登录用户名
 	Password   string `json:"password"`            // 登录密码，沿用前端加密/签名后的传参
-	SecureCode string `json:"secureCode,optional"` // 安全验证码预留字段
+	SecureCode string `json:"secureCode,optional"` // 安全验证码，参与登录签名与加密
 	Captcha    string `json:"captcha,optional"`    // 图形验证码字段
 	Key        string `json:"key,optional"`        // 图形验证码 key 字段
 }

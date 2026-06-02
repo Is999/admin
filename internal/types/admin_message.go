@@ -201,6 +201,15 @@ type AdminMessageHandleReq struct {
 	ID int64 `json:"id"` // 消息ID
 }
 
+// AdminMessageHandleResp 表示消息处理状态更新结果。
+type AdminMessageHandleResp struct {
+	ID                 int64  `json:"id"`                 // 消息ID
+	HandledStatus      int    `json:"handledStatus"`      // 处理状态：0未处理 1已处理
+	HandledByAdminName string `json:"handledByAdminName"` // 处理人账号
+	HandledAt          string `json:"handledAt"`          // 处理时间
+	AlreadyHandled     bool   `json:"alreadyHandled"`     // 是否在本次请求前已处理
+}
+
 // Validate 校验处理请求参数。
 func (r *AdminMessageHandleReq) Validate() error {
 	if r.ID <= 0 {
@@ -234,6 +243,11 @@ func (r *AdminMessageNotificationReq) Validate() error {
 type AdminMessageMarkReadReq struct {
 	IDs []int64 `json:"ids,optional"` // 消息ID列表
 	All bool    `json:"all,optional"` // 是否标记全部
+}
+
+// AdminMessageAffectedResp 表示批量消息操作影响行数。
+type AdminMessageAffectedResp struct {
+	Affected int64 `json:"affected"` // 影响行数
 }
 
 // Validate 校验标记已读请求参数。
@@ -273,6 +287,11 @@ type AdminMessageSendReq struct {
 	Data        string `json:"data,optional"`        // 扩展数据JSON
 	Link        string `json:"link,optional"`        // 跳转链接
 	ReceiverIDs []int  `json:"receiverIDs,optional"` // 收件人管理员ID列表；为空表示广播给全部启用管理员
+}
+
+// AdminMessageSendResp 表示发送消息结果。
+type AdminMessageSendResp struct {
+	ID int64 `json:"id"` // 消息ID
 }
 
 // Validate 校验发送消息参数。

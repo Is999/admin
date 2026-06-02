@@ -4,9 +4,11 @@ import "admin/internal/config"
 
 const (
 	// defaultShardTotal 是用户标签工作流默认任务分片数。
-	defaultShardTotal = 10
-	// defaultPhysicalShardTotal 是用户标签默认 runtime/result 物理分片数。
-	defaultPhysicalShardTotal = 1000
+	defaultShardTotal = 1
+	// defaultRuntimeShardTotal 是运行期 UID 索引默认逻辑分片数。
+	defaultRuntimeShardTotal = 1000
+	// defaultResultShardTotal 是用户标签结果表默认物理分表数。
+	defaultResultShardTotal = 1
 	// defaultBatchSize 是默认游标批次大小。
 	defaultBatchSize = 2000
 	// defaultWorkerCount 是默认节点内部 worker 数。
@@ -33,8 +35,8 @@ type Defaults struct {
 func NewDefaults(cfg config.UserTagConfig) Defaults {
 	return Defaults{
 		ShardTotal:        boundedPositiveOr(cfg.DefaultShardTotal, defaultShardTotal, MaxShardTotal),
-		RuntimeShardTotal: boundedPositiveOr(cfg.RuntimeShardTotal, defaultPhysicalShardTotal, MaxPhysicalShardTotal),
-		ResultShardTotal:  boundedPositiveOr(cfg.ResultShardTotal, defaultPhysicalShardTotal, MaxPhysicalShardTotal),
+		RuntimeShardTotal: boundedPositiveOr(cfg.RuntimeShardTotal, defaultRuntimeShardTotal, MaxPhysicalShardTotal),
+		ResultShardTotal:  boundedPositiveOr(cfg.ResultShardTotal, defaultResultShardTotal, MaxPhysicalShardTotal),
 		BatchSize:         boundedPositiveOr(cfg.DefaultBatchSize, defaultBatchSize, MaxBatchSize),
 		WorkerCount:       boundedPositiveOr(cfg.DefaultWorkerCount, defaultWorkerCount, MaxWorkerCount),
 		DiffBatchSize:     boundedPositiveOr(cfg.DiffBatchSize, defaultDiffBatchSize, MaxBatchSize),

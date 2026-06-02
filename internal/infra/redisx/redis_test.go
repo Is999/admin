@@ -81,9 +81,9 @@ func TestRewriteClusterAddr(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		addr string
-		want string
+		name string // name 表示测试场景名称。
+		addr string // addr 表示测试连接地址。
+		want string // want 表示期望结果。
 	}{
 		{
 			name: "host only mapping",
@@ -179,10 +179,10 @@ func TestHookProcessHookPreservesSentinelError(t *testing.T) {
 // TestIsRedisScriptCacheMiss 验证 Redis 脚本缓存缺失只匹配 EVALSHA 类命令。
 func TestIsRedisScriptCacheMiss(t *testing.T) {
 	tests := []struct {
-		name string
-		cmd  redis.Cmder
-		err  error
-		want bool
+		name string      // name 表示测试场景名称。
+		cmd  redis.Cmder // cmd 表示待验证命令。
+		err  error       // err 表示待验证错误。
+		want bool        // want 表示期望结果。
 	}{
 		{
 			name: "evalsha noscript sentinel",

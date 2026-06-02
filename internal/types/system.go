@@ -43,7 +43,6 @@ type SaveRoleReq struct {
 	Status      *int   `json:"status,optional"`                          // 角色状态：1 正常，0 禁用；新增未传默认正常
 	Description string `json:"description"`                              // 角色描述
 	Permissions []int  `json:"permissions,optional"`                     // 角色权限 ID 列表
-	IsExtends   int    `json:"is_extends,optional"`                      // 是否继承同步子级权限，当前作为兼容字段保留
 }
 
 // CreateRoleReq 表示新增角色请求。
@@ -53,7 +52,6 @@ type CreateRoleReq struct {
 	Status      *int   `json:"status,optional"`      // 角色状态：1 正常，0 禁用；新增未传默认正常
 	Description string `json:"description"`          // 角色描述
 	Permissions []int  `json:"permissions,optional"` // 角色权限 ID 列表
-	IsExtends   int    `json:"is_extends,optional"`  // 是否继承同步子级权限，当前作为兼容字段保留
 }
 
 // ToSaveRoleReq 转为统一的角色保存请求，便于复用创建逻辑。
@@ -67,7 +65,6 @@ func (r *CreateRoleReq) ToSaveRoleReq() *SaveRoleReq {
 		Status:      r.Status,
 		Description: r.Description,
 		Permissions: r.Permissions,
-		IsExtends:   r.IsExtends,
 	}
 }
 
@@ -96,7 +93,7 @@ func (r *SaveRoleReq) Validate() error {
 		return errors.Errorf("角色状态不合法")
 	}
 	if r.Pid < 0 {
-		return errors.Errorf("父级角色ID不合法")
+		return errors.Errorf("父级角色 ID不合法")
 	}
 	return nil
 }
@@ -118,7 +115,7 @@ func (r *RoleStatusReq) StatusValue() int {
 // Validate 校验角色状态请求。
 func (r *RoleStatusReq) Validate() error {
 	if r.ID <= 0 {
-		return errors.Errorf("角色ID不能为空")
+		return errors.Errorf("角色 ID不能为空")
 	}
 	if status := r.StatusValue(); status != 0 && status != 1 {
 		return errors.Errorf("角色状态不合法")
@@ -135,7 +132,7 @@ type RolePermissionReq struct {
 // Validate 校验角色权限查询请求。
 func (r *RolePermissionReq) Validate() error {
 	if r.ID <= 0 {
-		return errors.Errorf("角色ID不能为空")
+		return errors.Errorf("角色 ID不能为空")
 	}
 	if r.IsPid == "" {
 		r.IsPid = "n"
@@ -150,13 +147,12 @@ func (r *RolePermissionReq) Validate() error {
 type RolePermissionSaveReq struct {
 	ID          int   `path:"id" json:"id,optional" form:"id,optional"` // 角色 ID
 	Permissions []int `json:"permissions"`                              // 权限 ID 列表
-	IsExtends   int   `json:"is_extends,optional"`                      // 是否继承同步子级权限，当前作为兼容字段保留
 }
 
 // Validate 校验保存角色权限请求。
 func (r *RolePermissionSaveReq) Validate() error {
 	if r.ID <= 0 {
-		return errors.Errorf("角色ID不能为空")
+		return errors.Errorf("角色 ID不能为空")
 	}
 	r.Permissions = UniquePositiveInts(r.Permissions)
 	return nil

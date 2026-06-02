@@ -6,6 +6,7 @@ import (
 	"admin/internal/config"
 )
 
+// TestSetTrimsAppID 验证对应场景符合预期。
 func TestSetTrimsAppID(t *testing.T) {
 	prev := Get()
 	Set(config.Config{AppID: " 215 "})
@@ -17,6 +18,7 @@ func TestSetTrimsAppID(t *testing.T) {
 	}
 }
 
+// TestGetReturnsEmptyBeforeSet 验证对应场景符合预期。
 func TestGetReturnsEmptyBeforeSet(t *testing.T) {
 	prev := Get()
 	Set(config.Config{})
@@ -28,6 +30,7 @@ func TestGetReturnsEmptyBeforeSet(t *testing.T) {
 	}
 }
 
+// TestRestoreSnapshot 验证对应场景符合预期。
 func TestRestoreSnapshot(t *testing.T) {
 	prev := Get()
 	Set(config.Config{AppID: "new-app"})

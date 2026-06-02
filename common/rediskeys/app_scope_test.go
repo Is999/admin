@@ -11,12 +11,13 @@ func scopedTestKey(appID string, key string) string {
 	return keys.ScopeRoot + appID + ":" + key
 }
 
+// TestWithPrefix 验证对应场景符合预期。
 func TestWithPrefix(t *testing.T) {
 	tests := []struct {
-		name  string
-		appID string
-		key   string
-		want  string
+		name  string // name 表示测试场景名称。
+		appID string // appID 表示测试应用 ID。
+		key   string // key 表示待验证 key。
+		want  string // want 表示期望结果。
 	}{
 		{
 			name:  "scopes logical key",
@@ -60,11 +61,12 @@ func TestWithPrefix(t *testing.T) {
 	}
 }
 
+// TestHasPrefix 验证对应场景符合预期。
 func TestHasPrefix(t *testing.T) {
 	tests := []struct {
-		name string
-		key  string
-		want bool
+		name string // name 表示测试场景名称。
+		key  string // key 表示待验证 key。
+		want bool   // want 表示期望结果。
 	}{
 		{name: "scoped key", key: scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)), want: true},
 		{name: "empty logical key", key: "app:site-a:", want: false},
@@ -82,12 +84,13 @@ func TestHasPrefix(t *testing.T) {
 	}
 }
 
+// TestOwner 验证对应场景符合预期。
 func TestOwner(t *testing.T) {
 	tests := []struct {
-		name   string
-		key    string
-		want   string
-		wantOK bool
+		name   string // name 表示测试场景名称。
+		key    string // key 表示待验证 key。
+		want   string // want 表示期望结果。
+		wantOK bool   // wantOK 表示期望是否成功。
 	}{
 		{name: "scoped key", key: scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)), want: "site-a", wantOK: true},
 		{name: "table cache key", key: "app:site-a:table:role_tree", want: "site-a", wantOK: true},
@@ -107,12 +110,13 @@ func TestOwner(t *testing.T) {
 	}
 }
 
+// TestIsForeignKey 验证对应场景符合预期。
 func TestIsForeignKey(t *testing.T) {
 	tests := []struct {
-		name  string
-		appID string
-		key   string
-		want  bool
+		name  string // name 表示测试场景名称。
+		appID string // appID 表示测试应用 ID。
+		key   string // key 表示待验证 key。
+		want  bool   // want 表示期望结果。
 	}{
 		{name: "current app key", appID: "site-a", key: scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)), want: false},
 		{name: "other app key", appID: "site-a", key: scopedTestKey("site-b", keys.AdminInfoLogicalKey(1)), want: true},
@@ -132,6 +136,7 @@ func TestIsForeignKey(t *testing.T) {
 	}
 }
 
+// TestWithPrefixWithEmptyAppIDFailsClosed 验证对应场景符合预期。
 func TestWithPrefixWithEmptyAppIDFailsClosed(t *testing.T) {
 	useAppID(t, "")
 	if got := keys.Prefix(); got != "" {
@@ -145,11 +150,12 @@ func TestWithPrefixWithEmptyAppIDFailsClosed(t *testing.T) {
 	}
 }
 
+// TestTrimPrefix 验证对应场景符合预期。
 func TestTrimPrefix(t *testing.T) {
 	tests := []struct {
-		name string
-		key  string
-		want string
+		name string // name 表示测试场景名称。
+		key  string // key 表示待验证 key。
+		want string // want 表示期望结果。
 	}{
 		{
 			name: "trims scoped key",

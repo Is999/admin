@@ -99,10 +99,10 @@ func TestMarkPermissionTreeCheckedDisablesOutOfScopeCheckedNode(t *testing.T) {
 // TestResolvePermissionUpdateParentID 验证权限编辑时的父级 ID 父级保留语义。
 func TestResolvePermissionUpdateParentID(t *testing.T) {
 	tests := []struct {
-		name       string
-		currentPid int
-		requestPid int
-		want       int
+		name       string // name 表示测试场景名称。
+		currentPid int    // currentPid 表示测试字段。
+		requestPid int    // requestPid 表示测试字段。
+		want       int    // want 表示期望结果。
 	}{
 		{
 			name:       "existing root remains root when request pid is zero",
@@ -136,10 +136,10 @@ func TestResolvePermissionUpdateParentID(t *testing.T) {
 // TestPermissionParentChanged 验证只有真实迁移父级时才触发父级可管理范围校验。
 func TestPermissionParentChanged(t *testing.T) {
 	tests := []struct {
-		name       string
-		currentPid int
-		nextPid    int
-		want       bool
+		name       string // name 表示测试场景名称。
+		currentPid int    // currentPid 表示测试字段。
+		nextPid    int    // nextPid 表示测试字段。
+		want       bool   // want 表示期望结果。
 	}{
 		{
 			name:       "root edit does not count as moving to root",

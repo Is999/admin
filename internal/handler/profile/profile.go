@@ -23,7 +23,7 @@ func AuthVerifyAccountHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func ProfileMineHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.MethodProfileMine, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := profilelogic.NewProfileLogic(r, sCtx)
-		return logicObj, logicObj.Mine().WithReq(map[string]any{"action": "profile_mine"})
+		return logicObj, logicObj.Mine().WithReq(shared.ActionReq("profile_mine"))
 	})
 }
 

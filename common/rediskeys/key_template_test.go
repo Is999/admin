@@ -6,11 +6,12 @@ import (
 	keys "admin/common/rediskeys"
 )
 
+// TestKeyTemplatePrefix 验证对应场景符合预期。
 func TestKeyTemplatePrefix(t *testing.T) {
 	tests := []struct {
-		name     string
-		template string
-		want     string
+		name     string // name 表示测试场景名称。
+		template string // template 表示待验证 key 模板。
+		want     string // want 表示期望结果。
 	}{
 		{
 			name:     "brace placeholder",

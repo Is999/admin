@@ -8,8 +8,6 @@ import (
 const (
 	// TableNameUserTagShardPrefix 用户标签结果分片表名前缀。
 	TableNameUserTagShardPrefix = "user_tag_"
-	// TableNameUserTagSyncShardPrefix 用户标签同步快照分片表名前缀。
-	TableNameUserTagSyncShardPrefix = "user_tag_sync_"
 )
 
 // UserTagRecord 表示最终用户标签记录。
@@ -38,9 +36,4 @@ func UserTagTmpShardTableName(shard int) string {
 // UserTagSwapShardTableName 返回指定分片的 full 原子切换中间表名。
 func UserTagSwapShardTableName(shard int) string {
 	return fmt.Sprintf("%s%d_swap", TableNameUserTagShardPrefix, shard)
-}
-
-// UserTagSyncShardTableName 返回指定分片的用户标签同步快照表名。
-func UserTagSyncShardTableName(shard int) string {
-	return fmt.Sprintf("%s%d", TableNameUserTagSyncShardPrefix, shard)
 }

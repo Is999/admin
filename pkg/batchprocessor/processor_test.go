@@ -9,7 +9,7 @@ import (
 
 // panicProcessModule 用于验证业务 Process panic 会被执行器转成错误。
 type panicProcessModule struct {
-	mockModule
+	mockModule // 嵌入字段表示测试复用的基础能力。
 }
 
 // Process 模拟业务批处理 panic。

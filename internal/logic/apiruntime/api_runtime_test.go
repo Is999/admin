@@ -70,8 +70,8 @@ func TestConfigReloadItemsUsesInternalOpsRoute(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Fatalf("method = %s, want GET", r.Method)
 		}
-		if r.URL.Path != apiRuntimeConfigReloadItemsPath {
-			t.Fatalf("path = %s, want %s", r.URL.Path, apiRuntimeConfigReloadItemsPath)
+		if r.URL.Path != "/internal/system/config-reload/items" {
+			t.Fatalf("path = %s, want /internal/system/config-reload/items", r.URL.Path)
 		}
 		if got := r.Header.Get(apiRuntimeOpsTokenHeader); got != "ops-token" {
 			t.Fatalf("%s = %q, want ops-token", apiRuntimeOpsTokenHeader, got)
@@ -128,8 +128,8 @@ func TestConfigReloadItemsUsesInternalOpsRoute(t *testing.T) {
 func TestConfigReloadItemsAcceptsLargeConfigSnapshot(t *testing.T) {
 	largeYAML := strings.Repeat("security:\n  app_key: app_****_key\n", 40_000)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != apiRuntimeConfigReloadItemsPath {
-			t.Fatalf("path = %s, want %s", r.URL.Path, apiRuntimeConfigReloadItemsPath)
+		if r.URL.Path != "/internal/system/config-reload/items" {
+			t.Fatalf("path = %s, want /internal/system/config-reload/items", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status":  true,

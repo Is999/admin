@@ -8,32 +8,32 @@ import (
 )
 
 const (
-	// userPasswordMinLength 表示前台用户后台重置密码的最小长度。
+	// userPasswordMinLength 表示业务用户后台重置密码的最小长度。
 	userPasswordMinLength = 8
-	// userPasswordMaxLength 表示前台用户后台重置密码的最大长度。
+	// userPasswordMaxLength 表示业务用户后台重置密码的最大长度。
 	userPasswordMaxLength = 64
-	// userShardNoMod 表示前台用户固定取模分片上限。
+	// userShardNoMod 表示用户 ID 哈希分片上限，与 idgen.ShardMod 保持一致。
 	userShardNoMod = 1000
 )
 
-// UserListReq 表示前台用户列表查询请求。
+// UserListReq 表示业务用户列表查询请求。
 type UserListReq struct {
-	ID       int64  `json:"id,optional" form:"id,optional"`             // 用户 ID 精确筛选
-	ShardNo  *int   `json:"shardNo,optional" form:"shardNo,optional"`   // 取模分片筛选：0-999
-	Username string `json:"username,optional" form:"username,optional"` // 用户名筛选
-	Email    string `json:"email,optional" form:"email,optional"`       // 邮箱筛选
-	Phone    string `json:"phone,optional" form:"phone,optional"`       // 手机号筛选
-	Status   *int   `json:"status,optional" form:"status,optional"`     // 状态筛选：1 正常，0 禁用
-	GetOrderReq
-	GetPageReq
+	ID          int64  `json:"id,optional" form:"id,optional"`             // 用户 ID 精确筛选
+	ShardNo     *int   `json:"shardNo,optional" form:"shardNo,optional"`   // ID 哈希分片筛选：0-999
+	Username    string `json:"username,optional" form:"username,optional"` // 用户名筛选
+	Email       string `json:"email,optional" form:"email,optional"`       // 邮箱筛选
+	Phone       string `json:"phone,optional" form:"phone,optional"`       // 手机号筛选
+	Status      *int   `json:"status,optional" form:"status,optional"`     // 状态筛选：1 正常，0 禁用
+	GetOrderReq        // GetOrderReq 表示排序参数。
+	GetPageReq         // GetPageReq 表示分页参数。
 }
 
-// UserIDReq 表示前台用户详情路径请求。
+// UserIDReq 表示业务用户详情路径请求。
 type UserIDReq struct {
 	ID int64 `path:"id" json:"id,optional" form:"id,optional"` // 用户 ID
 }
 
-// Validate 校验前台用户详情路径请求。
+// Validate 校验业务用户详情路径请求。
 func (r *UserIDReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("用户 ID 不能为空")
@@ -41,7 +41,7 @@ func (r *UserIDReq) Validate() error {
 	return nil
 }
 
-// Validate 校验前台用户列表查询请求。
+// Validate 校验业务用户列表查询请求。
 func (r *UserListReq) Validate() error {
 	r.Username = strings.TrimSpace(r.Username)
 	r.Email = strings.TrimSpace(r.Email)
@@ -184,7 +184,7 @@ func (r *SyncUserRuntimeReq) Validate() error {
 // UserItem 表示前台用户列表和详情项。
 type UserItem struct {
 	ID          int64  `json:"id"`          // 用户 ID
-	ShardNo     int    `json:"shardNo"`     // 取模分片
+	ShardNo     int    `json:"shardNo"`     // ID 哈希分片，来源 CRC32(id字符串)%1000，便于分表和分片游标查询
 	Username    string `json:"username"`    // 用户名
 	Nickname    string `json:"nickname"`    // 昵称
 	Email       string `json:"email"`       // 邮箱

@@ -9,7 +9,7 @@ const TableNameAdminRolePermissionRel = "admin_role_permission_rel"
 
 // AdminRolePermissionRel 表示角色与权限点的关联关系。
 type AdminRolePermissionRel struct {
-	RoleID       int64     `gorm:"column:role_id;type:bigint unsigned;primaryKey;comment:角色ID" json:"role_id"`                                                // 角色 ID
+	RoleID       int64     `gorm:"column:role_id;type:bigint unsigned;primaryKey;comment:角色 ID" json:"role_id"`                                               // 角色 ID
 	PermissionID int64     `gorm:"column:permission_id;type:bigint unsigned;primaryKey;index:idx_permission_id,priority:1;comment:权限ID" json:"permission_id"` // 权限 ID
 	CreatedAt    time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP" json:"created_at"`                                      // 关联创建时间
 }

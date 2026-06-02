@@ -10,15 +10,14 @@ func TestRecalculateUserTagReqValidate(t *testing.T) {
 	retry := 2
 	timeout := 300
 	req := &RecalculateUserTagReq{
-		TagTypes:              []int{30, 5, 30, -1},
-		TagTypesCamel:         []int{2},
-		ShardTotalSnake:       10,
-		BatchSizeSnake:        2000,
-		WorkerCountSnake:      4,
-		DryRunSnake:           true,
-		UniqueTTLSecondsSnake: &ttl,
-		Retry:                 &retry,
-		TimeoutSecondsSnake:   &timeout,
+		TagTypes:         []int{30, 5, 30, -1, 2},
+		ShardTotal:       10,
+		BatchSize:        2000,
+		WorkerCount:      4,
+		DryRun:           true,
+		UniqueTTLSeconds: &ttl,
+		Retry:            &retry,
+		TimeoutSeconds:   &timeout,
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("校验请求失败: %v", err)
@@ -30,10 +29,10 @@ func TestRecalculateUserTagReqValidate(t *testing.T) {
 		t.Fatalf("规范化后的标签类型不符合预期: %v", req.TagTypes)
 	}
 	if req.ShardTotal != 10 || req.BatchSize != 2000 || req.WorkerCount != 4 {
-		t.Fatalf("snake_case 参数未正确归一化: shard=%d batch=%d worker=%d", req.ShardTotal, req.BatchSize, req.WorkerCount)
+		t.Fatalf("重算参数被意外改写: shard=%d batch=%d worker=%d", req.ShardTotal, req.BatchSize, req.WorkerCount)
 	}
 	if !req.DryRun || req.UniqueTTLSeconds == nil || *req.UniqueTTLSeconds != ttl || req.Retry == nil || *req.Retry != retry || req.TimeoutSeconds == nil || *req.TimeoutSeconds != timeout {
-		t.Fatalf("snake_case 开关字段未正确归一化")
+		t.Fatalf("重算开关字段被意外改写")
 	}
 }
 
@@ -55,22 +54,6 @@ func TestUserTagReqValidateRejectsNegativeRetry(t *testing.T) {
 	recalculateReq := &RecalculateUserTagReq{TagTypes: []int{30}, Retry: &retry}
 	if err := recalculateReq.Validate(); err == nil {
 		t.Fatalf("期望标签重算拒绝负数 retry")
-	}
-}
-
-// TestTriggerUserTagWorkflowReqSyncSnapshotOnlyRequiresFull 验证对应场景。
-func TestTriggerUserTagWorkflowReqSyncSnapshotOnlyRequiresFull(t *testing.T) {
-	req := &TriggerUserTagWorkflowReq{Mode: "delta", SyncSnapshotOnly: true}
-	if err := req.Validate(); err == nil {
-		t.Fatalf("期望返回 syncSnapshotOnly 仅支持 full 模式错误")
-	}
-}
-
-// TestTriggerUserTagWorkflowReqSyncSnapshotOnlyConflictDryRun 验证对应场景。
-func TestTriggerUserTagWorkflowReqSyncSnapshotOnlyConflictDryRun(t *testing.T) {
-	req := &TriggerUserTagWorkflowReq{Mode: "full", SyncSnapshotOnly: true, DryRun: true}
-	if err := req.Validate(); err == nil {
-		t.Fatalf("期望返回 syncSnapshotOnly 与 dryRun 冲突错误")
 	}
 }
 

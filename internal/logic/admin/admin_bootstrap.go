@@ -163,7 +163,7 @@ func (l *AdminBootstrapLogic) resetBootstrapAdminTx(tx *gorm.DB, admin *model.Ad
 	admin.Description = chooseBootstrapString(req.Description, admin.Description)
 	admin.LastLoginTime = time.Time{}
 	admin.LastLoginIP = ""
-	admin.LastLoginIpaddr = ""
+	admin.LastLoginIPAddr = ""
 	admin.UpdatedAt = time.Now()
 	return admin, nil
 }

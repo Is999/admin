@@ -1,5 +1,22 @@
 package types
 
+import (
+	"strings"
+
+	"github.com/Is999/go-utils/errors"
+)
+
+const (
+	// collectorStateMin 表示 Collector 最小任务状态码。
+	collectorStateMin = 0
+	// collectorStateMax 表示 Collector 最大任务状态码。
+	collectorStateMax = 4
+	// collectorRunMaxLimit 表示人工触发单轮执行的最大领取数量。
+	collectorRunMaxLimit = 5000
+	// collectorRetryMaxIDs 表示人工批量重试一次最多处理的任务数量。
+	collectorRetryMaxIDs = 500
+)
+
 // ListCollectorTasksReq 表示 Collector 任务列表查询请求。
 type ListCollectorTasksReq struct {
 	GetPageReq // 复用分页参数
@@ -9,8 +26,26 @@ type ListCollectorTasksReq struct {
 	State     *int   `form:"state,optional"`     // 任务状态过滤：0/1/2/3/4
 }
 
+// Validate 校验并归一化 Collector 任务列表查询请求。
+func (r *ListCollectorTasksReq) Validate() error {
+	r.BizType = strings.TrimSpace(r.BizType)
+	r.Transport = strings.ToLower(strings.TrimSpace(r.Transport))
+	if r.State != nil && (*r.State < collectorStateMin || *r.State > collectorStateMax) {
+		return errors.Errorf("任务状态不合法")
+	}
+	if r.Transport != "" && !isCollectorTransport(r.Transport) {
+		return errors.Errorf("传输通道不合法")
+	}
+	return r.GetPageReq.Validate()
+}
+
 // CollectorOverviewReq 表示 Collector 概览查询请求。
 type CollectorOverviewReq struct{}
+
+// Validate 保持 Collector 概览请求与其它 go-zero 请求入口一致。
+func (r *CollectorOverviewReq) Validate() error {
+	return nil
+}
 
 // CollectorWindowStatResp 表示一个时间窗口内的处理统计。
 type CollectorWindowStatResp struct {
@@ -95,8 +130,18 @@ type CollectorTaskResp struct {
 
 // RunCollectorReq 表示手动触发执行 Collector 任务的请求。
 type RunCollectorReq struct {
-	BizType string `json:"bizType,optional"` // 指定业务类型；为空表示全量
-	Limit   int    `json:"limit,optional"`   // 单次执行上限；为空时使用后端默认值
+	Limit int `json:"limit,optional"` // 单次执行上限；为空时使用后端默认值
+}
+
+// Validate 校验手动触发 Collector 任务的请求。
+func (r *RunCollectorReq) Validate() error {
+	if r.Limit < 0 {
+		return errors.Errorf("执行数量限制不合法")
+	}
+	if r.Limit > collectorRunMaxLimit {
+		return errors.Errorf("执行数量不能超过%d", collectorRunMaxLimit)
+	}
+	return nil
 }
 
 // RunCollectorResp 表示手动触发执行结果。
@@ -110,10 +155,47 @@ type RunCollectorResp struct {
 type RetryCollectorTasksReq struct {
 	IDs          []int64 `json:"ids"`                   // 任务 ID 列表
 	DelaySeconds int     `json:"delaySeconds,optional"` // 相对当前时间延迟执行，单位秒
-	ResetAttempt bool    `json:"resetAttempt,optional"` // 是否重置 attempt（默认 true）
+	ResetAttempt *bool   `json:"resetAttempt,optional"` // 是否重置 attempt，未传时默认重置
+}
+
+// Validate 校验并归一化人工重试 Collector 任务的请求。
+func (r *RetryCollectorTasksReq) Validate() error {
+	if len(r.IDs) == 0 {
+		return errors.Errorf("ids不能为空")
+	}
+	if len(r.IDs) > collectorRetryMaxIDs {
+		return errors.Errorf("ids一次最多处理%d个", collectorRetryMaxIDs)
+	}
+	if r.DelaySeconds < 0 {
+		return errors.Errorf("延迟秒数不合法")
+	}
+	seen := make(map[int64]struct{}, len(r.IDs))
+	ids := make([]int64, 0, len(r.IDs))
+	for _, id := range r.IDs {
+		if id <= 0 {
+			return errors.Errorf("任务ID不合法")
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	r.IDs = ids
+	return nil
 }
 
 // RetryCollectorTasksResp 表示手动重试响应。
 type RetryCollectorTasksResp struct {
 	Updated int `json:"updated"` // 成功更新的任务数量
+}
+
+// isCollectorTransport 判断任务来源过滤值是否受支持。
+func isCollectorTransport(value string) bool {
+	switch value {
+	case "db", "kafka", "redis":
+		return true
+	default:
+		return false
+	}
 }

@@ -59,11 +59,7 @@ func (s *FinalizeStage) Run(ctx *runtimectx.Context, plans map[string]any) (Resu
 	if err := s.repo.FinalizeResultTables(ctx.Context, ctx.Options); err != nil {
 		return Result{}, ctx.Wrap(err, "切换最终标签表失败")
 	}
-	count, err := s.repo.RebuildReadSnapshotShard(ctx.Context, ctx.Options)
-	if err != nil {
-		return Result{}, ctx.Wrap(err, "重建只读标签快照失败")
-	}
-	return Result{Updated: int64(count)}, nil
+	return Result{}, nil
 }
 
 // DispatchHooksStage 负责派发标签得到和失去事件 hook。

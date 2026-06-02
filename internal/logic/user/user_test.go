@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"admin/internal/config"
 	"admin/internal/model"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -43,6 +44,53 @@ func TestUserModelUsesUserTable(t *testing.T) {
 	}
 	if tableName := (&model.User{}).TableName(); tableName != "user" {
 		t.Fatalf("User.TableName() = %q, want user", tableName)
+	}
+}
+
+// TestValidateUserAccountListReq 验证分表阶段后台列表不会退化为扫描用户分表。
+func TestValidateUserAccountListReq(t *testing.T) {
+	req := &types.UserListReq{
+		Username:    "demo",
+		GetOrderReq: types.GetOrderReq{OrderBy: "username"},
+	}
+	if err := validateUserAccountListReq(req); err != nil {
+		t.Fatalf("validateUserAccountListReq() error = %v", err)
+	}
+
+	req.Email = "demo@example.com"
+	if err := validateUserAccountListReq(req); err == nil {
+		t.Fatal("expected email filter to be rejected in account-index list")
+	}
+
+	req.Email = ""
+	req.OrderBy = "lastLoginAt"
+	if err := validateUserAccountListReq(req); err == nil {
+		t.Fatal("expected unsupported order field to be rejected in account-index list")
+	}
+}
+
+// TestUserAccountOrderField 验证分表阶段排序字段只映射账号索引可承载列。
+func TestUserAccountOrderField(t *testing.T) {
+	if got := userAccountOrderField("id"); got != "user_id" {
+		t.Fatalf("userAccountOrderField(id) = %q, want user_id", got)
+	}
+	if got := userAccountOrderField("shardNo"); got != "shard_no" {
+		t.Fatalf("userAccountOrderField(shardNo) = %q, want shard_no", got)
+	}
+}
+
+// TestUseUserAccountListHonorsSplitWriteConfig 验证写入路由切分后列表直接走账号索引。
+func TestUseUserAccountListHonorsSplitWriteConfig(t *testing.T) {
+	svcCtx := svc.NewServiceContext(config.Config{
+		User: config.UserConfig{RouteShardCount: 10},
+	}, svc.Dependencies{})
+	logicObj := NewLogic(nil, svcCtx)
+	got, err := logicObj.useUserAccountList(nil)
+	if err != nil {
+		t.Fatalf("useUserAccountList() error = %v", err)
+	}
+	if !got {
+		t.Fatal("useUserAccountList() = false, want true for split write config")
 	}
 }
 

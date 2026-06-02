@@ -140,6 +140,23 @@ type ActionLogParam struct {
 	Describe string               // 中文业务说明
 }
 
+// ActionLogParamFromMeta 从路由元数据生成审计日志参数，统一 RouteMeta 到审计字段的转换规则。
+func ActionLogParamFromMeta(meta RouteMeta) *ActionLogParam {
+	if meta.Action == "" {
+		return nil
+	}
+	return &ActionLogParam{
+		Action:   meta.Action,
+		Route:    string(meta.Alias),
+		Describe: meta.Describe,
+	}
+}
+
+// ActionReq 返回仅包含 action 字段的最小请求上下文，用于无请求体接口补充审计或响应链路信息。
+func ActionReq(action string) map[string]any {
+	return map[string]any{"action": action}
+}
+
 // Method 定义为字符串类型，用作内部方法标识。
 type Method string
 
@@ -509,12 +526,8 @@ func ActionLogRegistry() map[Method]RouteMeta {
 // ActionLogMap 从中心化注册表里取路由审计元数据，避免 handler 和路由定义出现双份映射。
 func ActionLogMap(name Method) *ActionLogParam {
 	meta, ok := actionLogRegistry[name]
-	if !ok || meta.Action == "" {
+	if !ok {
 		return nil
 	}
-	return &ActionLogParam{
-		Action:   meta.Action,
-		Route:    string(meta.Alias),
-		Describe: meta.Describe,
-	}
+	return ActionLogParamFromMeta(meta)
 }

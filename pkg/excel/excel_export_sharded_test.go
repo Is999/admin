@@ -13,14 +13,17 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// shardedExportRow 表示测试使用的辅助结构。
 type shardedExportRow struct {
-	ID int
+	ID int // ID 表示测试记录 ID。
 }
 
+// shardedExportShard 表示测试使用的辅助结构。
 type shardedExportShard struct {
-	ID int
+	ID int // ID 表示测试记录 ID。
 }
 
+// TestApplyStreamExportShardedOpts 验证对应场景符合预期。
 func TestApplyStreamExportShardedOpts(t *testing.T) {
 	base := StreamExportShardedOptions[shardedExportRow, int, shardedExportShard]{
 		FilePath: "test.xlsx",
@@ -57,11 +60,11 @@ func TestApplyStreamExportShardedOpts(t *testing.T) {
 // TestExportResultBufferSizeUsesConcurrentShardLimit 验证结果通道容量按并发分片数计算，避免海量分片放大内存。
 func TestExportResultBufferSizeUsesConcurrentShardLimit(t *testing.T) {
 	tests := []struct {
-		name                string
-		shardCount          int
-		maxConcurrentShards int
-		chunkBufferSize     int
-		want                int
+		name                string // name 表示测试场景名称。
+		shardCount          int    // shardCount 表示测试字段。
+		maxConcurrentShards int    // maxConcurrentShards 表示测试字段。
+		chunkBufferSize     int    // chunkBufferSize 表示测试字段。
+		want                int    // want 表示期望结果。
 	}{
 		{name: "limited by concurrent shards", shardCount: 1000, maxConcurrentShards: 4, chunkBufferSize: 2, want: 8},
 		{name: "limited by shard count", shardCount: 2, maxConcurrentShards: 10, chunkBufferSize: 3, want: 6},
@@ -80,11 +83,11 @@ func TestExportResultBufferSizeUsesConcurrentShardLimit(t *testing.T) {
 // TestDefaultPendingExportChunks 验证乱序缓存默认上限只随并发缓冲扩张，避免总分片数放大内存。
 func TestDefaultPendingExportChunks(t *testing.T) {
 	tests := []struct {
-		name                string
-		shardCount          int
-		maxConcurrentShards int
-		chunkBufferSize     int
-		want                int
+		name                string // name 表示测试场景名称。
+		shardCount          int    // shardCount 表示测试字段。
+		maxConcurrentShards int    // maxConcurrentShards 表示测试字段。
+		chunkBufferSize     int    // chunkBufferSize 表示测试字段。
+		want                int    // want 表示期望结果。
 	}{
 		{name: "default bounded by concurrent buffer", shardCount: 1000, maxConcurrentShards: 4, chunkBufferSize: 2, want: 16},
 		{name: "minimum", shardCount: 0, maxConcurrentShards: 0, chunkBufferSize: 0, want: 2},
@@ -99,6 +102,7 @@ func TestDefaultPendingExportChunks(t *testing.T) {
 	}
 }
 
+// TestStreamExportShardedKeepsGlobalOrder 验证对应场景符合预期。
 func TestStreamExportShardedKeepsGlobalOrder(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "sharded.xlsx")
 	source := map[int][]int{
@@ -397,9 +401,9 @@ func TestStreamExportShardedWritesRowsAfterEmptyShard(t *testing.T) {
 func TestStreamExportRetryDelayUsesExponentialBackoff(t *testing.T) {
 	base := 100 * time.Millisecond
 	tests := []struct {
-		name    string
-		attempt int
-		want    time.Duration
+		name    string        // name 表示测试场景名称。
+		attempt int           // attempt 表示测试字段。
+		want    time.Duration // want 表示期望结果。
 	}{
 		{name: "first retry", attempt: 0, want: base},
 		{name: "second retry", attempt: 1, want: 2 * base},

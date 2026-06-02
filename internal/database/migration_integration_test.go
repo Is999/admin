@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// integrationMySQLDSNEnv 表示测试使用的常量。
 const integrationMySQLDSNEnv = "INTEGRATION_MYSQL_DSN"
 
 // TestAdminMigrationBlocksBootstrapOnMySQL 使用真实 MySQL 校验后台基线默认被拦截。
@@ -40,6 +41,7 @@ func TestAdminMigrationBlocksBootstrapOnMySQL(t *testing.T) {
 	}
 }
 
+// openIntegrationMySQL 表示测试辅助逻辑。
 func openIntegrationMySQL(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv(integrationMySQLDSNEnv))
@@ -70,6 +72,7 @@ func openIntegrationMySQL(t *testing.T) *gorm.DB {
 	return nil
 }
 
+// resetIntegrationTables 表示测试辅助逻辑。
 func resetIntegrationTables(t *testing.T, db *gorm.DB, tables ...string) {
 	t.Helper()
 	for _, table := range tables {

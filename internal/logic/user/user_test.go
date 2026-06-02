@@ -1,22 +1,23 @@
-package apiuser
+package user
 
 import (
 	"strings"
 	"testing"
 
+	"admin/internal/model"
 	"admin/internal/svc"
 	"admin/internal/types"
 )
 
-// TestBuildAPIUserProfileUpdatesKeepsExplicitEmptyValue 验证空字符串是显式清空资料，不应被忽略。
-func TestBuildAPIUserProfileUpdatesKeepsExplicitEmptyValue(t *testing.T) {
+// TestBuildUserProfileUpdatesKeepsExplicitEmptyValue 验证空字符串是显式清空资料，不应被忽略。
+func TestBuildUserProfileUpdatesKeepsExplicitEmptyValue(t *testing.T) {
 	nickname := "  新昵称  "
 	email := "  "
-	req := &types.UpdateAPIUserReq{
+	req := &types.UpdateUserReq{
 		Nickname: &nickname,
 		Email:    &email,
 	}
-	updates := buildAPIUserProfileUpdates(req)
+	updates := buildUserProfileUpdates(req)
 	if updates["nickname"] != "新昵称" {
 		t.Fatalf("nickname update = %v, want trimmed nickname", updates["nickname"])
 	}
@@ -28,22 +29,26 @@ func TestBuildAPIUserProfileUpdatesKeepsExplicitEmptyValue(t *testing.T) {
 	}
 }
 
-// TestAPIUserDatabaseDefaultsToAPINamedDB 验证前台用户库默认落到命名库 api，而不是后台主库。
-func TestAPIUserDatabaseDefaultsToAPINamedDB(t *testing.T) {
-	if got := apiUserDatabase(""); got != svc.DbName("api") {
-		t.Fatalf("apiUserDatabase(empty) = %q, want api", got)
+// TestUserDatabaseUsesMainDB 验证前台用户管理固定使用默认主库。
+func TestUserDatabaseUsesMainDB(t *testing.T) {
+	if userDatabase != svc.DatabaseMain {
+		t.Fatalf("userDatabase = %q, want %q", userDatabase, svc.DatabaseMain)
 	}
-	if got := apiUserDatabase(" main "); got != svc.DatabaseMain {
-		t.Fatalf("apiUserDatabase(main) = %q, want main", got)
+}
+
+// TestUserModelUsesUserTable 验证后台管理前台用户时读取统一 user 表。
+func TestUserModelUsesUserTable(t *testing.T) {
+	if model.TableNameUser != "user" {
+		t.Fatalf("TableNameUser = %q, want user", model.TableNameUser)
 	}
-	if got := apiUserDatabase(" api_read "); got != svc.DbName("api_read") {
-		t.Fatalf("apiUserDatabase(api_read) = %q, want api_read", got)
+	if tableName := (&model.User{}).TableName(); tableName != "user" {
+		t.Fatalf("User.TableName() = %q, want user", tableName)
 	}
 }
 
 // TestAPIRuntimeSyncWarningPreservesDBSuccessSemantics 验证写库后的同步失败只作为可重试告警返回。
 func TestAPIRuntimeSyncWarningPreservesDBSuccessSemantics(t *testing.T) {
-	resp := apiRuntimeSyncWarning(7, types.APIUserRuntimeSyncResp{Enabled: true}, "资料已更新", assertError("timeout"))
+	resp := apiRuntimeSyncWarning(7, types.UserRuntimeSyncResp{Enabled: true}, "资料已更新", assertError("timeout"))
 	if resp.Success {
 		t.Fatal("sync warning should mark success false")
 	}

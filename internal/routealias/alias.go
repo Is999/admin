@@ -36,8 +36,8 @@ const (
 	DocsAPIAdmin Alias = "docs.api.admin"
 	// DocsAPITask 表示任务系统接口文档目录路由别名。
 	DocsAPITask Alias = "docs.api.task"
-	// DocsAPIUserTag 表示用户标签接口文档目录路由别名。
-	DocsAPIUserTag Alias = "docs.api.user_tag"
+	// DocsUserTag 表示用户标签接口文档目录路由别名。
+	DocsUserTag Alias = "docs.user_tag"
 	// DocsAPIServiceIndex 表示前台 API 接口文档首页和规范路由别名。
 	DocsAPIServiceIndex Alias = "docs.api_service.index"
 	// DocsAPIServiceFront 表示前台 API 前台系统接口文档目录路由别名。
@@ -87,22 +87,24 @@ const (
 )
 
 const (
-	// APIUserList 表示查询前台用户列表路由别名。
-	APIUserList Alias = "api_user.list"
-	// APIUserInfo 表示查询前台用户详情路由别名。
-	APIUserInfo Alias = "api_user.info"
-	// APIUserAdd 表示新增前台用户路由别名。
-	APIUserAdd Alias = "api_user.add"
-	// APIUserUpdate 表示编辑前台用户资料路由别名。
-	APIUserUpdate Alias = "api_user.update"
-	// APIUserStatusUpdate 表示修改前台用户状态路由别名。
-	APIUserStatusUpdate Alias = "api_user.status.update"
-	// APIUserPasswordReset 表示重置前台用户密码路由别名。
-	APIUserPasswordReset Alias = "api_user.password.reset"
-	// APIUserRuntimeSync 表示同步前台用户 API 运行态路由别名。
-	APIUserRuntimeSync Alias = "api_user.runtime.sync"
+	// UserList 表示查询前台用户列表路由别名。
+	UserList Alias = "user.list"
+	// UserInfo 表示查询前台用户详情路由别名。
+	UserInfo Alias = "user.info"
+	// UserAdd 表示新增前台用户路由别名。
+	UserAdd Alias = "user.add"
+	// UserUpdate 表示编辑前台用户资料路由别名。
+	UserUpdate Alias = "user.update"
+	// UserStatusUpdate 表示修改前台用户状态路由别名。
+	UserStatusUpdate Alias = "user.status.update"
+	// UserPasswordReset 表示重置前台用户密码路由别名。
+	UserPasswordReset Alias = "user.password.reset"
+	// UserRuntimeSync 表示同步前台用户 API 运行态路由别名。
+	UserRuntimeSync Alias = "user.runtime.sync"
 	// APIRuntimeConfigReloadStatus 表示查询 API 配置热加载状态路由别名。
 	APIRuntimeConfigReloadStatus Alias = "api_runtime.config_reload.status"
+	// APIRuntimeConfigReloadItems 表示查询 API 运行态配置项路由别名。
+	APIRuntimeConfigReloadItems Alias = "api_runtime.config_reload.items"
 	// APIRuntimeConfigReloadRun 表示触发 API 配置热加载路由别名。
 	APIRuntimeConfigReloadRun Alias = "api_runtime.config_reload.run"
 )

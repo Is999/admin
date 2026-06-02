@@ -175,14 +175,15 @@ const (
 	triggerAdminExport           method = "triggerAdminExport"           // 提交管理员异步导出任务
 	getAdminExportStatus         method = "getAdminExportStatus"         // 查询管理员异步导出进度
 	downloadAdminExport          method = "downloadAdminExport"          // 下载管理员异步导出文件
-	apiUserList                  method = "apiUserList"                  // 查询前台用户列表
-	apiUserInfo                  method = "apiUserInfo"                  // 查询前台用户详情
-	apiUserAdd                   method = "apiUserAdd"                   // 新增前台用户
-	apiUserUpdate                method = "apiUserUpdate"                // 编辑前台用户资料
-	apiUserStatusUpdate          method = "apiUserStatusUpdate"          // 修改前台用户状态
-	apiUserPasswordReset         method = "apiUserPasswordReset"         // 重置前台用户密码
-	apiUserRuntimeSync           method = "apiUserRuntimeSync"           // 同步前台用户API运行态
+	userList                     method = "userList"                     // 查询前台用户列表
+	userInfo                     method = "userInfo"                     // 查询前台用户详情
+	userAdd                      method = "userAdd"                      // 新增前台用户
+	userUpdate                   method = "userUpdate"                   // 编辑前台用户资料
+	userStatusUpdate             method = "userStatusUpdate"             // 修改前台用户状态
+	userPasswordReset            method = "userPasswordReset"            // 重置前台用户密码
+	userRuntimeSync              method = "userRuntimeSync"              // 同步前台用户API运行态
 	apiRuntimeConfigReloadStatus method = "apiRuntimeConfigReloadStatus" // 查询API配置热加载状态
+	apiRuntimeConfigReloadItems  method = "apiRuntimeConfigReloadItems"  // 查询API运行态配置项
 	apiRuntimeConfigReloadRun    method = "apiRuntimeConfigReloadRun"    // 手动触发API配置热加载
 	listRole                     method = "listRole"                     // 查询角色列表
 	treeRole                     method = "treeRole"                     // 查询角色树
@@ -289,14 +290,15 @@ const (
 	MethodTriggerAdminExport           Method = triggerAdminExport           // 提交管理员异步导出任务
 	MethodGetAdminExportStatus         Method = getAdminExportStatus         // 查询管理员异步导出进度
 	MethodDownloadAdminExport          Method = downloadAdminExport          // 下载管理员异步导出文件
-	MethodAPIUserList                  Method = apiUserList                  // 查询前台用户列表
-	MethodAPIUserInfo                  Method = apiUserInfo                  // 查询前台用户详情
-	MethodAPIUserAdd                   Method = apiUserAdd                   // 新增前台用户
-	MethodAPIUserUpdate                Method = apiUserUpdate                // 编辑前台用户资料
-	MethodAPIUserStatusUpdate          Method = apiUserStatusUpdate          // 修改前台用户状态
-	MethodAPIUserPasswordReset         Method = apiUserPasswordReset         // 重置前台用户密码
-	MethodAPIUserRuntimeSync           Method = apiUserRuntimeSync           // 同步前台用户API运行态
+	MethodUserList                     Method = userList                     // 查询前台用户列表
+	MethodUserInfo                     Method = userInfo                     // 查询前台用户详情
+	MethodUserAdd                      Method = userAdd                      // 新增前台用户
+	MethodUserUpdate                   Method = userUpdate                   // 编辑前台用户资料
+	MethodUserStatusUpdate             Method = userStatusUpdate             // 修改前台用户状态
+	MethodUserPasswordReset            Method = userPasswordReset            // 重置前台用户密码
+	MethodUserRuntimeSync              Method = userRuntimeSync              // 同步前台用户API运行态
 	MethodAPIRuntimeConfigReloadStatus Method = apiRuntimeConfigReloadStatus // 查询API配置热加载状态
+	MethodAPIRuntimeConfigReloadItems  Method = apiRuntimeConfigReloadItems  // 查询API运行态配置项
 	MethodAPIRuntimeConfigReloadRun    Method = apiRuntimeConfigReloadRun    // 手动触发API配置热加载
 	MethodListRole                     Method = listRole                     // 查询角色列表
 	MethodTreeRole                     Method = treeRole                     // 查询角色树
@@ -408,14 +410,15 @@ var actionLogRegistry = map[method]RouteMeta{
 	triggerAdminExport:           AdminExportTrigger,           // 提交管理员异步导出任务
 	getAdminExportStatus:         AdminExportStatus,            // 查询管理员异步导出进度
 	downloadAdminExport:          AdminExportDownload,          // 下载管理员异步导出文件
-	apiUserList:                  APIUserList,                  // 查询前台用户列表
-	apiUserInfo:                  APIUserInfo,                  // 查询前台用户详情
-	apiUserAdd:                   APIUserAdd,                   // 新增前台用户
-	apiUserUpdate:                APIUserUpdate,                // 编辑前台用户资料
-	apiUserStatusUpdate:          APIUserStatusUpdate,          // 修改前台用户状态
-	apiUserPasswordReset:         APIUserPasswordReset,         // 重置前台用户密码
-	apiUserRuntimeSync:           APIUserRuntimeSync,           // 同步前台用户API运行态
+	userList:                     UserList,                     // 查询前台用户列表
+	userInfo:                     UserInfo,                     // 查询前台用户详情
+	userAdd:                      UserAdd,                      // 新增前台用户
+	userUpdate:                   UserUpdate,                   // 编辑前台用户资料
+	userStatusUpdate:             UserStatusUpdate,             // 修改前台用户状态
+	userPasswordReset:            UserPasswordReset,            // 重置前台用户密码
+	userRuntimeSync:              UserRuntimeSync,              // 同步前台用户API运行态
 	apiRuntimeConfigReloadStatus: APIRuntimeConfigReloadStatus, // 查询API配置热加载状态
+	apiRuntimeConfigReloadItems:  APIRuntimeConfigReloadItems,  // 查询API运行态配置项
 	apiRuntimeConfigReloadRun:    APIRuntimeConfigReloadRun,    // 手动触发API配置热加载
 	listRole:                     RoleList,                     // 查询角色列表
 	treeRole:                     RoleTreeList,                 // 查询角色树

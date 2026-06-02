@@ -7,6 +7,7 @@ import (
 	"github.com/Is999/go-utils/errors"
 
 	"gorm.io/gorm"
+	"gorm.io/plugin/dbresolver"
 )
 
 // insertSchemaMigrationSQL 登记已成功执行的迁移版本。
@@ -30,7 +31,7 @@ func (s *GormMigrationStore) EnsureSchema(ctx context.Context, schemaSQL string)
 	if strings.TrimSpace(schemaSQL) == "" {
 		return errors.Errorf("schema_migrations DDL 为空")
 	}
-	if err := s.db.WithContext(ctx).Exec(schemaSQL).Error; err != nil {
+	if err := s.db.WithContext(ctx).Clauses(dbresolver.Write).Exec(schemaSQL).Error; err != nil {
 		return errors.Wrap(err, "创建 schema_migrations 表失败")
 	}
 	return nil
@@ -41,15 +42,9 @@ func (s *GormMigrationStore) AppliedMigrations(ctx context.Context) (map[string]
 	if s == nil || s.db == nil {
 		return nil, errors.Errorf("数据库迁移 GORM 连接为空")
 	}
-	exists, err := s.hasSchemaMigrationsTable(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "检查 schema_migrations 表失败")
-	}
-	if !exists {
-		return map[string]AppliedMigration{}, nil
-	}
 	var rows []AppliedMigration
-	err = s.db.WithContext(ctx).
+	err := s.db.WithContext(ctx).
+		Clauses(dbresolver.Write).
 		Table("schema_migrations").
 		Select("version, name, asset, checksum").
 		Scan(&rows).Error
@@ -66,21 +61,12 @@ func (s *GormMigrationStore) AppliedMigrations(ctx context.Context) (map[string]
 	return applied, nil
 }
 
-// hasSchemaMigrationsTable 检查版本表是否存在，避免缺表时触发查询失败日志。
-func (s *GormMigrationStore) hasSchemaMigrationsTable(ctx context.Context) (bool, error) {
-	var count int64
-	if err := s.db.WithContext(ctx).Raw(SchemaMigrationsExistsSQL(), "schema_migrations").Scan(&count).Error; err != nil {
-		return false, errors.Tag(err)
-	}
-	return count > 0, nil
-}
-
 // ExecuteMigration 在事务中执行 SQL 并登记版本。
 func (s *GormMigrationStore) ExecuteMigration(ctx context.Context, migration Migration) error {
 	if s == nil || s.db == nil {
 		return errors.Errorf("数据库迁移 GORM 连接为空")
 	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return s.db.WithContext(ctx).Clauses(dbresolver.Write).Transaction(func(tx *gorm.DB) error {
 		statements := splitMigrationStatements(migration.SQL)
 		if len(statements) == 0 {
 			return errors.Errorf("数据库迁移 SQL 为空 version=%s name=%s asset=%s", migration.Version, migration.Name, migration.Asset)

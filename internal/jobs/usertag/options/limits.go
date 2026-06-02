@@ -9,6 +9,8 @@ import (
 const (
 	// MaxShardTotal 限制单个用户标签工作流可拆出的最大节点分片数，避免误触发造成任务风暴。
 	MaxShardTotal = 128
+	// MaxPhysicalShardTotal 限制运行期和结果物理分片数量，当前 shard_no 固定为 0-999。
+	MaxPhysicalShardTotal = 1000
 	// MaxBatchSize 限制单批 SQL 游标、IN 查询和 outbox claim 大小。
 	MaxBatchSize = 10000
 	// MaxWorkerCount 限制节点内部并发配置，当前主要用于入口防御和未来扩展。

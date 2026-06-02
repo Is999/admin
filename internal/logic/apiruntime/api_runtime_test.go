@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"admin/internal/config"
+	"admin/internal/types"
 )
 
 // TestSyncUserRuntimeUsesInternalOpsRoute 验证 admin 只调用 API 内网运行态同步接口。
@@ -59,6 +61,104 @@ func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 	}
 	if resp.Message != "API 运行态已同步" {
 		t.Fatalf("message = %q, want default sync message", resp.Message)
+	}
+}
+
+// TestConfigReloadItemsUsesInternalOpsRoute 验证 API 运行态配置项查询会透传筛选 query。
+func TestConfigReloadItemsUsesInternalOpsRoute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != apiRuntimeConfigReloadItemsPath {
+			t.Fatalf("path = %s, want %s", r.URL.Path, apiRuntimeConfigReloadItemsPath)
+		}
+		if got := r.Header.Get(apiRuntimeOpsTokenHeader); got != "ops-token" {
+			t.Fatalf("%s = %q, want ops-token", apiRuntimeOpsTokenHeader, got)
+		}
+		query := r.URL.Query()
+		if query.Get("keyword") != "security" || query.Get("page") != "2" || query.Get("pageSize") != "50" || query.Get("sensitiveOnly") != "true" {
+			t.Fatalf("query = %s, want keyword/security page/2 pageSize/50 sensitiveOnly/true", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  true,
+			"code":    1000,
+			"message": "ok",
+			"data": map[string]any{
+				"keyword":       "security",
+				"sensitiveOnly": true,
+				"page":          2,
+				"pageSize":      50,
+				"total":         1,
+				"items": []map[string]any{
+					{
+						"path":      "security.app_key",
+						"value":     "app_****_key",
+						"valueType": "string",
+						"sensitive": true,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(config.APIServiceConfig{
+		InternalBaseURL: server.URL,
+		OpsToken:        "ops-token",
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	resp, err := client.ConfigReloadItems(context.Background(), &types.TaskConfigItemQueryReq{
+		Keyword:       " security ",
+		Page:          2,
+		PageSize:      50,
+		SensitiveOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("ConfigReloadItems() error = %v", err)
+	}
+	if resp == nil || resp.Keyword != "security" || resp.Total != 1 || len(resp.Items) != 1 || resp.Items[0].Path != "security.app_key" {
+		t.Fatalf("response = %+v, want one security config item", resp)
+	}
+}
+
+// TestConfigReloadItemsAcceptsLargeConfigSnapshot 验证较大的 API 配置快照不会被固定 1MiB 上限截断。
+func TestConfigReloadItemsAcceptsLargeConfigSnapshot(t *testing.T) {
+	largeYAML := strings.Repeat("security:\n  app_key: app_****_key\n", 40_000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != apiRuntimeConfigReloadItemsPath {
+			t.Fatalf("path = %s, want %s", r.URL.Path, apiRuntimeConfigReloadItemsPath)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  true,
+			"code":    1000,
+			"message": "ok",
+			"data": map[string]any{
+				"page":         1,
+				"pageSize":     20,
+				"snapshotYaml": largeYAML,
+				"runtimeYaml":  largeYAML,
+				"items":        []map[string]any{},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(config.APIServiceConfig{
+		InternalBaseURL: server.URL,
+		OpsToken:        "ops-token",
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	resp, err := client.ConfigReloadItems(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ConfigReloadItems() error = %v", err)
+	}
+	if resp == nil || resp.SnapshotYAML != largeYAML || resp.RuntimeYAML != largeYAML {
+		t.Fatalf("ConfigReloadItems() did not preserve large YAML snapshot")
 	}
 }
 

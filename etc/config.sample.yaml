@@ -70,8 +70,6 @@ runtime_config:
 
 # 前台 API 接入配置；用户表由 admin 直连 DB 管理，运行态缓存/会话同步才调用 API 内网接口。
 api_service:
-  # 前台用户表所在命名库，对应 site_mysql.api。
-  user_database: "api"
   # API 内网地址，仅 admin 后端调用。
   internal_base_url: "http://127.0.0.1:8890"
   # API ops.config_reload_token 对应的运维令牌。

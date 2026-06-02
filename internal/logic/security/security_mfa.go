@@ -81,8 +81,8 @@ const (
 	MFAScenarioSecretKeyManage = 11
 	// MFAScenarioRuntimeConfigManage 表示运行配置发布、回滚和导入场景。
 	MFAScenarioRuntimeConfigManage = 12
-	// MFAScenarioAPIUserManage 表示前台用户管理敏感操作场景。
-	MFAScenarioAPIUserManage = 13
+	// MFAScenarioUserManage 表示前台用户管理敏感操作场景。
+	MFAScenarioUserManage = 13
 	// MFAScenarioAPIRuntimeManage 表示 API 运行态热加载管理场景。
 	MFAScenarioAPIRuntimeManage = 14
 )

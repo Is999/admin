@@ -1,4 +1,4 @@
-package apiuser
+package user
 
 import (
 	"net/http"
@@ -11,58 +11,58 @@ func RouteSpecs() []shared.RouteSpec {
 	return []shared.RouteSpec{
 		{
 			Method:      http.MethodGet,
-			Path:        "/api/api-users", // 查询前台用户列表。
+			Path:        "/api/users", // 查询前台用户列表。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.APIUserList,
-			Description: shared.APIUserList.Describe,
+			Meta:        shared.UserList,
+			Description: shared.UserList.Describe,
 			Handler:     ListHandler,
 		},
 		{
 			Method:      http.MethodPost,
-			Path:        "/api/api-users", // 新增前台用户。
+			Path:        "/api/users", // 新增前台用户。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.APIUserAdd,
-			Description: shared.APIUserAdd.Describe,
+			Meta:        shared.UserAdd,
+			Description: shared.UserAdd.Describe,
 			Handler:     CreateHandler,
 		},
 		{
 			Method:      http.MethodGet,
-			Path:        "/api/api-users/:id", // 查询前台用户详情。
+			Path:        "/api/users/:id", // 查询前台用户详情。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.APIUserInfo,
-			Description: shared.APIUserInfo.Describe,
+			Meta:        shared.UserInfo,
+			Description: shared.UserInfo.Describe,
 			Handler:     GetHandler,
 		},
 		{
 			Method:      http.MethodPatch,
-			Path:        "/api/api-users/:id", // 编辑前台用户资料。
+			Path:        "/api/users/:id", // 编辑前台用户资料。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.APIUserUpdate,
-			Description: shared.APIUserUpdate.Describe,
+			Meta:        shared.UserUpdate,
+			Description: shared.UserUpdate.Describe,
 			Handler:     UpdateHandler,
 		},
 		{
 			Method:      http.MethodPatch,
-			Path:        "/api/api-users/status/:id", // 修改前台用户状态。
+			Path:        "/api/users/status/:id", // 修改前台用户状态。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.APIUserStatusUpdate,
-			Description: shared.APIUserStatusUpdate.Describe,
+			Meta:        shared.UserStatusUpdate,
+			Description: shared.UserStatusUpdate.Describe,
 			Handler:     UpdateStatusHandler,
 		},
 		{
 			Method:      http.MethodPost,
-			Path:        "/api/api-users/password/reset/:id", // 重置前台用户密码。
+			Path:        "/api/users/password/reset/:id", // 重置前台用户密码。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.APIUserPasswordReset,
-			Description: shared.APIUserPasswordReset.Describe,
+			Meta:        shared.UserPasswordReset,
+			Description: shared.UserPasswordReset.Describe,
 			Handler:     ResetPasswordHandler,
 		},
 		{
 			Method:      http.MethodPost,
-			Path:        "/api/api-users/runtime-sync/:id", // 手动同步前台用户 API 运行态。
+			Path:        "/api/users/runtime-sync/:id", // 手动同步前台用户 API 运行态。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.APIUserRuntimeSync,
-			Description: shared.APIUserRuntimeSync.Describe,
+			Meta:        shared.UserRuntimeSync,
+			Description: shared.UserRuntimeSync.Describe,
 			Handler:     SyncRuntimeHandler,
 		},
 		{
@@ -72,6 +72,14 @@ func RouteSpecs() []shared.RouteSpec {
 			Meta:        shared.APIRuntimeConfigReloadStatus,
 			Description: shared.APIRuntimeConfigReloadStatus.Describe,
 			Handler:     APIRuntimeReloadStatusHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/api-runtime/config-reload/items", // 查询 API 当前运行态配置项。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.APIRuntimeConfigReloadItems,
+			Description: shared.APIRuntimeConfigReloadItems.Describe,
+			Handler:     APIRuntimeReloadItemsHandler,
 		},
 		{
 			Method:      http.MethodPost,

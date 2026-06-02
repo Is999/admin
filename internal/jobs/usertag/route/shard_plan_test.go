@@ -41,7 +41,7 @@ func TestPhysicalShardsForWorkflowCoprime(t *testing.T) {
 func TestTagShardsForWorkflowCoprime(t *testing.T) {
 	plan := NewShardPlan(10, 10)
 	shards := plan.TagShardsForWorkflow(1, 3)
-	if len(shards) != 10 {
+	if len(shards) != 1000 {
 		t.Fatalf("unexpected coprime tag shards: %#v", shards)
 	}
 }
@@ -55,6 +55,22 @@ func TestIndexedUIDConditionPrefersShardNo(t *testing.T) {
 	}
 	if condition.Expr != "shard_no = ?" || len(condition.Args) != 1 || condition.Args[0] != 3 {
 		t.Fatalf("unexpected condition: %#v", condition)
+	}
+}
+
+// TestIndexedUIDConditionUsesShardNoSet 验证工作流分片可映射到 1000 分片索引集合。
+func TestIndexedUIDConditionUsesShardNoSet(t *testing.T) {
+	plan := NewShardPlanWithResult(10, 1000, 1000)
+	condition, err := plan.IndexedUIDCondition("uid", "shard_no", Shard{Index: 3, Total: 10})
+	if err != nil {
+		t.Fatalf("indexed condition failed: %v", err)
+	}
+	if condition.Expr != "shard_no IN ?" || len(condition.Args) != 1 {
+		t.Fatalf("unexpected condition: %#v", condition)
+	}
+	values, ok := condition.Args[0].([]int)
+	if !ok || len(values) != 100 || values[0] != 3 || values[99] != 993 {
+		t.Fatalf("unexpected shard values: %#v", condition.Args)
 	}
 }
 

@@ -5,8 +5,8 @@ archive_jobs:
   - name: "admin_log"
     # 是否启用该归档任务。
     enabled: true
-    # 热表/历史表所属逻辑库：admin|config|game|log。
-    database: "admin"
+    # 热表/历史表所属逻辑库；默认主库填写 main。
+    database: "main"
     # 归档热表名。
     table_name: "admin_log"
     # 热表保留天数。
@@ -44,14 +44,16 @@ workflows:
     enabled: false
     # 是否启用标签得失事件 hook 派发；未注册 hook 时保持关闭。
     event_hook_enabled: false
-    # 默认标签分片总数。
+    # 默认工作流任务分片总数。
     default_shard_total: 10
     # 默认单批处理数量。
     default_batch_size: 2000
     # 节点内部 worker 默认值。
     default_worker_count: 4
-    # 运行期 UID 索引分片数。
-    runtime_shard_total: 10
+    # 运行期 UID 索引分片数；shard_no 固定支持 0-999。
+    runtime_shard_total: 1000
+    # 标签结果物理分表数；可按 1/10/100/1000 调整。
+    result_shard_total: 1000
     # 标签差异解析批次大小。
     diff_batch_size: 10000
     # 事件 outbox 派发批次大小。

@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	adminhandler "admin/internal/handler/admin"
-	apiuserhandler "admin/internal/handler/apiuser"
 	authhandler "admin/internal/handler/auth"
 	cachehandler "admin/internal/handler/cachemanage"
 	collectorhandler "admin/internal/handler/collector"
@@ -20,6 +19,7 @@ import (
 	"admin/internal/handler/shared"
 	taskhandler "admin/internal/handler/task"
 	transferhandler "admin/internal/handler/transfer"
+	userhandler "admin/internal/handler/user"
 	usertaghandler "admin/internal/handler/usertag"
 	"admin/internal/middleware"
 	"admin/internal/svc"
@@ -218,11 +218,11 @@ var builtinRouteModuleSpecs = []RouteModuleSpec{
 		Routes:      adminhandler.RouteSpecs,
 	},
 	{
-		Name:        "api_user",
-		File:        "internal/handler/apiuser/routes.go",
-		Method:      "apiuser.RouteSpecs",
+		Name:        "user",
+		File:        "internal/handler/user/routes.go",
+		Method:      "user.RouteSpecs",
 		Description: "注册前台用户和 API 运行态管理路由",
-		Routes:      apiuserhandler.RouteSpecs,
+		Routes:      userhandler.RouteSpecs,
 	},
 	{
 		Name:        "profile",

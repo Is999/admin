@@ -8,8 +8,12 @@ import (
 )
 
 const (
-	// defaultShardTotal 是 路由层兜底分片数。
+	// defaultShardTotal 是工作流任务拆分兜底分片数。
 	defaultShardTotal = 10
+	// defaultRuntimeShardTotal 是运行期 UID 索引默认分片数。
+	defaultRuntimeShardTotal = 1000
+	// defaultResultShardTotal 是用户标签结果表默认物理分片数。
+	defaultResultShardTotal = 1000
 )
 
 // Shard 表示一次工作流执行中的分片信息。
@@ -28,13 +32,20 @@ type Condition struct {
 type ShardPlan struct {
 	ShardTotal        int // 工作流默认分片数
 	RuntimeShardTotal int // 运行期 UID 索引分片数量
+	ResultShardTotal  int // 标签结果物理分表数量
 }
 
 // NewShardPlan 创建分片计划，非法配置统一回退到默认值。
 func NewShardPlan(shardTotal, runtimeShardTotal int) ShardPlan {
+	return NewShardPlanWithResult(shardTotal, runtimeShardTotal, defaultResultShardTotal)
+}
+
+// NewShardPlanWithResult 创建包含结果物理分表数量的分片计划。
+func NewShardPlanWithResult(shardTotal, runtimeShardTotal, resultShardTotal int) ShardPlan {
 	return ShardPlan{
 		ShardTotal:        positiveOr(shardTotal, defaultShardTotal),
-		RuntimeShardTotal: positiveOr(runtimeShardTotal, defaultShardTotal),
+		RuntimeShardTotal: positiveOr(runtimeShardTotal, defaultRuntimeShardTotal),
+		ResultShardTotal:  positiveOr(resultShardTotal, defaultResultShardTotal),
 	}
 }
 
@@ -59,9 +70,8 @@ func (p ShardPlan) UIDShard(uid int64, shardTotal int) int {
 }
 
 // TagShardsForWorkflow 返回当前工作流分片需要处理的最终标签物理分表。
-// 标签结果表数量当前复用 ShardTotal，后续如果独立配置可在这里集中扩展。
 func (p ShardPlan) TagShardsForWorkflow(shardIndex, shardTotal int) []int {
-	return p.physicalShardsForWorkflow(shardIndex, shardTotal, p.ShardTotal)
+	return p.physicalShardsForWorkflow(shardIndex, shardTotal, p.ResultShardTotal)
 }
 
 // UIDModuloCondition 返回 UID 取模分片条件。
@@ -77,7 +87,7 @@ func (p ShardPlan) UIDModuloCondition(column string, shard Shard) (Condition, er
 }
 
 // IndexedUIDCondition 返回 runtime_uid 这类单表索引分片条件。
-// 当工作流分片数等于运行期 UID 索引分片数时优先走 shard_no，命中联合索引；否则回退 UID 取模。
+// 工作流分片能映射到 runtime_shard_total 时优先走 shard_no，无法整除时回退 UID 取模。
 func (p ShardPlan) IndexedUIDCondition(uidColumn, shardColumn string, shard Shard) (Condition, error) {
 	if err := validateColumn(uidColumn); err != nil {
 		return Condition{}, errors.Tag(err)
@@ -86,13 +96,28 @@ func (p ShardPlan) IndexedUIDCondition(uidColumn, shardColumn string, shard Shar
 		return Condition{}, errors.Tag(err)
 	}
 	normalized := p.NormalizeShard(shard.Index, shard.Total)
+	if normalized.Total <= 1 {
+		return Condition{}, nil
+	}
 	if normalized.Total == p.RuntimeShardTotal {
 		return Condition{Expr: fmt.Sprintf("%s = ?", shardColumn), Args: []any{normalized.Index}}, nil
+	}
+	if p.RuntimeShardTotal > normalized.Total && p.RuntimeShardTotal%normalized.Total == 0 {
+		return Condition{Expr: fmt.Sprintf("%s IN ?", shardColumn), Args: []any{p.indexedShardValues(normalized)}}, nil
 	}
 	return Condition{
 		Expr: fmt.Sprintf("MOD(%s, ?) = ?", uidColumn),
 		Args: []any{normalized.Total, normalized.Index},
 	}, nil
+}
+
+// indexedShardValues 返回当前工作流分片覆盖的 runtime shard_no 集合。
+func (p ShardPlan) indexedShardValues(shard Shard) []int {
+	values := make([]int, 0, p.RuntimeShardTotal/shard.Total)
+	for shardNo := shard.Index; shardNo < p.RuntimeShardTotal; shardNo += shard.Total {
+		values = append(values, shardNo)
+	}
+	return values
 }
 
 // validateColumn 校验列名只包含简单标识符和点号，避免把外部输入拼进 SQL。

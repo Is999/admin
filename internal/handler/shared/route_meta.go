@@ -106,22 +106,24 @@ var (
 	AdminExportDownload = newAuditRouteMeta("admin.export.download", model.ActionAdminExportDownload, "下载管理员导出文件")
 
 	// 前台用户模块
-	// APIUserList 查询前台用户列表。
-	APIUserList = newAuditRouteMeta(routealias.APIUserList, model.ActionAPIUserList, "查询前台用户列表")
-	// APIUserInfo 查询前台用户详情。
-	APIUserInfo = newAuditRouteMeta(routealias.APIUserInfo, model.ActionAPIUserInfo, "查询前台用户详情")
-	// APIUserAdd 新增前台用户。
-	APIUserAdd = newAuditRouteMeta(routealias.APIUserAdd, model.ActionAPIUserAdd, "新增前台用户")
-	// APIUserUpdate 编辑前台用户资料。
-	APIUserUpdate = newAuditRouteMeta(routealias.APIUserUpdate, model.ActionAPIUserUpdate, "编辑前台用户资料")
-	// APIUserStatusUpdate 修改前台用户状态。
-	APIUserStatusUpdate = newAuditRouteMeta(routealias.APIUserStatusUpdate, model.ActionAPIUserStatusUpdate, "修改前台用户状态")
-	// APIUserPasswordReset 重置前台用户密码。
-	APIUserPasswordReset = newAuditRouteMeta(routealias.APIUserPasswordReset, model.ActionAPIUserPasswordReset, "重置前台用户密码")
-	// APIUserRuntimeSync 同步前台用户 API 运行态。
-	APIUserRuntimeSync = newAuditRouteMeta(routealias.APIUserRuntimeSync, model.ActionAPIUserRuntimeSync, "同步前台用户API运行态")
+	// UserList 查询前台用户列表。
+	UserList = newAuditRouteMeta(routealias.UserList, model.ActionUserList, "查询前台用户列表")
+	// UserInfo 查询前台用户详情。
+	UserInfo = newAuditRouteMeta(routealias.UserInfo, model.ActionUserInfo, "查询前台用户详情")
+	// UserAdd 新增前台用户。
+	UserAdd = newAuditRouteMeta(routealias.UserAdd, model.ActionUserAdd, "新增前台用户")
+	// UserUpdate 编辑前台用户资料。
+	UserUpdate = newAuditRouteMeta(routealias.UserUpdate, model.ActionUserUpdate, "编辑前台用户资料")
+	// UserStatusUpdate 修改前台用户状态。
+	UserStatusUpdate = newAuditRouteMeta(routealias.UserStatusUpdate, model.ActionUserStatusUpdate, "修改前台用户状态")
+	// UserPasswordReset 重置前台用户密码。
+	UserPasswordReset = newAuditRouteMeta(routealias.UserPasswordReset, model.ActionUserPasswordReset, "重置前台用户密码")
+	// UserRuntimeSync 同步前台用户 API 运行态。
+	UserRuntimeSync = newAuditRouteMeta(routealias.UserRuntimeSync, model.ActionUserRuntimeSync, "同步前台用户API运行态")
 	// APIRuntimeConfigReloadStatus 查询 API 配置热加载状态。
 	APIRuntimeConfigReloadStatus = newAuditRouteMeta(routealias.APIRuntimeConfigReloadStatus, model.ActionAPIRuntimeConfigReloadStatus, "查询API配置热加载状态")
+	// APIRuntimeConfigReloadItems 查询 API 运行态配置项。
+	APIRuntimeConfigReloadItems = newAuditRouteMeta(routealias.APIRuntimeConfigReloadItems, model.ActionAPIRuntimeConfigReloadItems, "查询API运行态配置项")
 	// APIRuntimeConfigReloadRun 手动触发 API 配置热加载。
 	APIRuntimeConfigReloadRun = newAuditRouteMeta(routealias.APIRuntimeConfigReloadRun, model.ActionAPIRuntimeConfigReloadRun, "手动触发API配置热加载")
 

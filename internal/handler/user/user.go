@@ -1,67 +1,67 @@
-package apiuser
+package user
 
 import (
 	"net/http"
 
 	"admin/internal/handler/shared"
 	apiruntimelogic "admin/internal/logic/apiruntime"
-	apiuserlogic "admin/internal/logic/apiuser"
+	userlogic "admin/internal/logic/user"
 	"admin/internal/svc"
 	"admin/internal/types"
 )
 
 // ListHandler 查询前台用户列表。
 func ListHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.APIUserListReq](shared.MethodAPIUserList, func(r *http.Request, sCtx *svc.ServiceContext, req *types.APIUserListReq) (shared.LogicObj, *types.BizResult) {
-		logicObj := apiuserlogic.NewLogic(r, sCtx)
+	return shared.ActionHandler[types.UserListReq](shared.MethodUserList, func(r *http.Request, sCtx *svc.ServiceContext, req *types.UserListReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.List(req)
 	})(sCtx)
 }
 
 // GetHandler 查询前台用户详情。
 func GetHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.APIUserIDReq](shared.MethodAPIUserInfo, func(r *http.Request, sCtx *svc.ServiceContext, req *types.APIUserIDReq) (shared.LogicObj, *types.BizResult) {
-		logicObj := apiuserlogic.NewLogic(r, sCtx)
+	return shared.ActionHandler[types.UserIDReq](shared.MethodUserInfo, func(r *http.Request, sCtx *svc.ServiceContext, req *types.UserIDReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.Get(req)
 	})(sCtx)
 }
 
 // CreateHandler 新增前台用户。
 func CreateHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.CreateAPIUserReq](shared.MethodAPIUserAdd, func(r *http.Request, sCtx *svc.ServiceContext, req *types.CreateAPIUserReq) (shared.LogicObj, *types.BizResult) {
-		logicObj := apiuserlogic.NewLogic(r, sCtx)
+	return shared.ActionHandler[types.CreateUserReq](shared.MethodUserAdd, func(r *http.Request, sCtx *svc.ServiceContext, req *types.CreateUserReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.Create(req)
 	})(sCtx)
 }
 
 // UpdateHandler 编辑前台用户资料。
 func UpdateHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.UpdateAPIUserReq](shared.MethodAPIUserUpdate, func(r *http.Request, sCtx *svc.ServiceContext, req *types.UpdateAPIUserReq) (shared.LogicObj, *types.BizResult) {
-		logicObj := apiuserlogic.NewLogic(r, sCtx)
+	return shared.ActionHandler[types.UpdateUserReq](shared.MethodUserUpdate, func(r *http.Request, sCtx *svc.ServiceContext, req *types.UpdateUserReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.Update(req)
 	})(sCtx)
 }
 
 // UpdateStatusHandler 修改前台用户状态。
 func UpdateStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.APIUserStatusReq](shared.MethodAPIUserStatusUpdate, func(r *http.Request, sCtx *svc.ServiceContext, req *types.APIUserStatusReq) (shared.LogicObj, *types.BizResult) {
-		logicObj := apiuserlogic.NewLogic(r, sCtx)
+	return shared.ActionHandler[types.UserStatusReq](shared.MethodUserStatusUpdate, func(r *http.Request, sCtx *svc.ServiceContext, req *types.UserStatusReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.UpdateStatus(req)
 	})(sCtx)
 }
 
 // ResetPasswordHandler 重置前台用户密码。
 func ResetPasswordHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ResetAPIUserPasswordReq](shared.MethodAPIUserPasswordReset, func(r *http.Request, sCtx *svc.ServiceContext, req *types.ResetAPIUserPasswordReq) (shared.LogicObj, *types.BizResult) {
-		logicObj := apiuserlogic.NewLogic(r, sCtx)
+	return shared.ActionHandler[types.ResetUserPasswordReq](shared.MethodUserPasswordReset, func(r *http.Request, sCtx *svc.ServiceContext, req *types.ResetUserPasswordReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.ResetPassword(req)
 	})(sCtx)
 }
 
 // SyncRuntimeHandler 手动同步前台用户 API 运行态。
 func SyncRuntimeHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SyncAPIUserRuntimeReq](shared.MethodAPIUserRuntimeSync, func(r *http.Request, sCtx *svc.ServiceContext, req *types.SyncAPIUserRuntimeReq) (shared.LogicObj, *types.BizResult) {
-		logicObj := apiuserlogic.NewLogic(r, sCtx)
+	return shared.ActionHandler[types.SyncUserRuntimeReq](shared.MethodUserRuntimeSync, func(r *http.Request, sCtx *svc.ServiceContext, req *types.SyncUserRuntimeReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.SyncRuntime(req)
 	})(sCtx)
 }
@@ -72,6 +72,14 @@ func APIRuntimeReloadStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		logicObj := apiruntimelogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.Status().WithReq(map[string]any{"action": "api_runtime_config_reload_status"})
 	})
+}
+
+// APIRuntimeReloadItemsHandler 查询 API 当前运行态配置项。
+func APIRuntimeReloadItemsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.TaskConfigItemQueryReq](shared.MethodAPIRuntimeConfigReloadItems, func(r *http.Request, sCtx *svc.ServiceContext, req *types.TaskConfigItemQueryReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := apiruntimelogic.NewLogic(r, sCtx)
+		return logicObj, logicObj.Items(req)
+	})(sCtx)
 }
 
 // APIRuntimeReloadRunHandler 手动触发 API 配置热加载。

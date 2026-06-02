@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"admin/internal/config"
+
 	"gorm.io/gorm"
 )
 
@@ -26,5 +28,17 @@ func TestCheckRuntimeConfigUpdatedPropagatesDatabaseError(t *testing.T) {
 func TestCheckRuntimeConfigUpdatedAcceptsAffectedRow(t *testing.T) {
 	if err := checkRuntimeConfigUpdated(&gorm.DB{RowsAffected: 1}, 42, "周期任务草稿"); err != nil {
 		t.Fatalf("checkRuntimeConfigUpdated() error = %v", err)
+	}
+}
+
+func TestRuntimeConfigSnapshotEmpty(t *testing.T) {
+	if !runtimeConfigSnapshotEmpty(ReleaseSnapshot{}) {
+		t.Fatal("空快照应判定为空")
+	}
+	if runtimeConfigSnapshotEmpty(ReleaseSnapshot{TaskPeriodic: []config.TaskPeriodicConfig{{Name: "demo"}}}) {
+		t.Fatal("包含周期任务的快照不应判定为空")
+	}
+	if runtimeConfigSnapshotEmpty(ReleaseSnapshot{ArchiveJobs: []config.ArchiveJobConfig{{Name: "archive"}}}) {
+		t.Fatal("包含归档任务的快照不应判定为空")
 	}
 }

@@ -34,7 +34,7 @@ func (d RuntimeDeps) AddRuntimeUIDs(ctx context.Context, workflowID, scope strin
 		rows = append(rows, model.UserTagRuntimeUID{
 			WorkflowID: workflowID,
 			UID:        uid,
-			ShardNo:    int8(d.ShardPlan.UIDShard(uid, d.ShardPlan.RuntimeShardTotal)),
+			ShardNo:    d.ShardPlan.UIDShard(uid, d.ShardPlan.RuntimeShardTotal),
 			Scope:      scope,
 			CreatedAt:  now,
 			UpdatedAt:  now,

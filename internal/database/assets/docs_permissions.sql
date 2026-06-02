@@ -10,7 +10,7 @@ INSERT INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, 
 (160, '200064', '接口文档规范', 'docs.api.index', 99, '65,99', 0, '访问接口文档首页和统一规范(查看)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (161, '200065', '后台系统接口文档', 'docs.api.admin', 99, '65,99', 0, '访问后台系统接口文档目录(查看)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (162, '200066', '任务系统接口文档', 'docs.api.task', 99, '65,99', 0, '访问任务系统接口文档目录(查看)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-(163, '200067', '用户标签接口文档', 'docs.api.user_tag', 99, '65,99', 0, '访问用户标签接口文档目录(查看)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(163, '200067', '用户标签接口文档', 'docs.user_tag', 99, '65,99', 0, '访问用户标签接口文档目录(查看)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (164, '200068', '前台API接口规范', 'docs.api_service.index', 99, '65,99', 0, '访问前台API接口文档首页和规范(查看)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (165, '200069', '前台API接口文档', 'docs.api_service.front', 99, '65,99', 0, '访问前台API前台系统接口文档目录(查看)', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON DUPLICATE KEY UPDATE

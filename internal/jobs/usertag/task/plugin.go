@@ -157,7 +157,7 @@ func releaseUserTagWorkflowLeaseOnFinalFailure(ctx context.Context, svcCtx *svc.
 	if svcCtx != nil {
 		defaults = NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
 	}
-	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
+	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlanWithResult(defaults.ShardTotal, defaults.RuntimeShardTotal, defaults.ResultShardTotal))
 	return repository.NewTagRepository(deps).ReleaseWorkflowLease(ctx, usertagtypes.RuntimeOptions{
 		WorkflowID: workflowID,
 		Mode:       usertagtypes.ModeFull,
@@ -201,7 +201,7 @@ func runUserTagEventOutboxRetryTask(ctx context.Context, task *asynq.Task, svcCt
 	if !opts.EventHookEnabled {
 		return nil
 	}
-	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
+	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlanWithResult(defaults.ShardTotal, defaults.RuntimeShardTotal, defaults.ResultShardTotal))
 	_, err = repository.NewTagRepository(deps).DrainEventOutboxShard(ctx, opts, hook.DefaultRegistry().Dispatch)
 	return errors.Tag(err)
 }
@@ -222,7 +222,7 @@ func runUserTagEventOutboxRetryScanTask(ctx context.Context, svcCtx *svc.Service
 	if !opts.EventHookEnabled {
 		return nil
 	}
-	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
+	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlanWithResult(defaults.ShardTotal, defaults.RuntimeShardTotal, defaults.ResultShardTotal))
 	lockKey := keys.UserTagEventOutboxRetryScanRedisKey()
 	err = redislock.WithLock(ctx, svcCtx.Rds, lockKey, userTagEventOutboxRetryScanLockTTL, func(lockCtx context.Context) error {
 		_, runErr := repository.NewTagRepository(deps).RetryEventOutboxAbnormalRows(lockCtx, opts, hook.DefaultRegistry().Dispatch)
@@ -241,7 +241,7 @@ func runUserTagRuntimeCleanupTask(ctx context.Context, svcCtx *svc.ServiceContex
 	if svcCtx == nil {
 		return errors.Errorf("用户标签运行期清理失败：ServiceContext 为空")
 	}
-	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal))
+	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlanWithResult(defaults.ShardTotal, defaults.RuntimeShardTotal, defaults.ResultShardTotal))
 	lockKey := keys.UserTagRuntimeCleanupRedisKey()
 	err := redislock.WithLock(ctx, svcCtx.Rds, lockKey, userTagRuntimeCleanupLockTTL, func(lockCtx context.Context) error {
 		return repository.NewTagRepository(deps).CleanupStaleRuntimeTables(lockCtx, time.Now())

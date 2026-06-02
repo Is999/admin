@@ -49,11 +49,11 @@ var sensitiveProfileFields = []string{"username", "realName", "email", "phone", 
 // sensitiveProfileCipherFields 收口管理员资料变更链路的请求解密字段。
 var sensitiveProfileCipherFields = []string{"password", "mfaSecureKey", "twoStepKey", "twoStepValue"}
 
-// sensitiveAPIUserProfileFields 收口前台用户后台管理链路的敏感请求字段。
-var sensitiveAPIUserProfileFields = []string{"username", "password", "nickname", "email", "phone", "avatar", "status", "twoStepKey", "twoStepValue"}
+// sensitiveUserProfileFields 收口前台用户后台管理链路的敏感请求字段。
+var sensitiveUserProfileFields = []string{"username", "password", "nickname", "email", "phone", "avatar", "status", "twoStepKey", "twoStepValue"}
 
-// sensitiveAPIUserProfileCipherFields 收口前台用户后台管理链路的请求解密字段。
-var sensitiveAPIUserProfileCipherFields = []string{"password", "email", "phone", "twoStepKey", "twoStepValue"}
+// sensitiveUserProfileCipherFields 收口前台用户后台管理链路的请求解密字段。
+var sensitiveUserProfileCipherFields = []string{"password", "email", "phone", "twoStepKey", "twoStepValue"}
 
 // sensitiveSecretKeyFields 收口秘钥管理写操作的敏感请求字段。
 // 这组字段包含主配置开关、版本选路、AES/RSA 文件引用和二次确认票据，供新增和编辑秘钥接口共用。
@@ -150,31 +150,31 @@ var RouteSecurityPolicies = map[routealias.Alias]RouteSecurityPolicy{
 		RequestSign:   []string{"password", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"password", "twoStepKey", "twoStepValue"},
 	},
-	// admin.role.update 表示覆盖保存管理员角色接口：角色集合与二次确认票据统一参与签名。
+	// admin.role.update 表示覆盖保存管理员角色接口：只签名二次确认票据，角色数组由请求校验和角色范围校验收口。
 	routealias.AdminRoleUpdate: {
-		RequestSign: []string{"roleIDs", "twoStepKey", "twoStepValue"},
+		RequestSign: []string{"twoStepKey", "twoStepValue"},
 	},
-	// api_user.add 表示后台新增前台用户接口：账号资料、密码与二次确认票据统一保护。
-	routealias.APIUserAdd: {
-		RequestSign:   sensitiveAPIUserProfileFields,
-		RequestCipher: sensitiveAPIUserProfileCipherFields,
+	// user.add 表示后台新增前台用户接口：账号资料、密码与二次确认票据统一保护。
+	routealias.UserAdd: {
+		RequestSign:   sensitiveUserProfileFields,
+		RequestCipher: sensitiveUserProfileCipherFields,
 	},
-	// api_user.update 表示后台编辑前台用户资料接口：资料字段与二次确认票据统一保护。
-	routealias.APIUserUpdate: {
+	// user.update 表示后台编辑前台用户资料接口：资料字段与二次确认票据统一保护。
+	routealias.UserUpdate: {
 		RequestSign:   []string{"nickname", "email", "phone", "avatar", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"email", "phone", "twoStepKey", "twoStepValue"},
 	},
-	// api_user.status.update 表示后台修改前台用户状态接口：状态与二次确认票据必须参与签名。
-	routealias.APIUserStatusUpdate: {
+	// user.status.update 表示后台修改前台用户状态接口：状态与二次确认票据必须参与签名。
+	routealias.UserStatusUpdate: {
 		RequestSign: []string{"status", "twoStepKey", "twoStepValue"},
 	},
-	// api_user.password.reset 表示后台重置前台用户密码接口：密码与二次确认票据统一保护。
-	routealias.APIUserPasswordReset: {
+	// user.password.reset 表示后台重置前台用户密码接口：密码与二次确认票据统一保护。
+	routealias.UserPasswordReset: {
 		RequestSign:   []string{"password", "twoStepKey", "twoStepValue"},
 		RequestCipher: []string{"password", "twoStepKey", "twoStepValue"},
 	},
-	// api_user.runtime.sync 表示手动同步前台用户运行态接口：同步范围与二次确认票据统一保护。
-	routealias.APIUserRuntimeSync: {
+	// user.runtime.sync 表示手动同步前台用户运行态接口：同步范围与二次确认票据统一保护。
+	routealias.UserRuntimeSync: {
 		RequestSign: []string{"profile", "sessions", "twoStepKey", "twoStepValue"},
 	},
 	// api_runtime.config_reload.run 表示触发 API 配置热加载接口：二次确认票据必须参与签名。

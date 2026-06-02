@@ -55,7 +55,7 @@ func NewService(ctx context.Context, svcCtx *svc.ServiceContext) *Service {
 	}
 
 	// 分片计划和 RuntimeDeps 必须在所有仓储之间共享，保证骨架阶段使用同一套运行期分片口径。
-	shardPlan := route.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal)
+	shardPlan := route.NewShardPlanWithResult(defaults.ShardTotal, defaults.RuntimeShardTotal, defaults.ResultShardTotal)
 	service := &Service{
 		ctx:      ctx,
 		svcCtx:   svcCtx,

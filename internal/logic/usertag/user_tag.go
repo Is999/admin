@@ -97,7 +97,7 @@ func (l *UserTagLogic) ReleaseWorkflowLease(req *types.ReleaseUserTagWorkflowLea
 			WithError(corelogic.WrapLogicError(errors.Errorf("用户标签工作流互斥租约需要 Redis，但 Redis 未初始化 workflow_id=%s mode=%s", req.WorkflowID, req.Mode), "UserTagLogic.ReleaseWorkflowLease Redis不可用"))
 	}
 	defaults := usertagtask.NewDefaults(l.Svc.CurrentConfig().Workflows.UserTag)
-	repo := usertagrepo.NewTagRepository(usertagrepo.NewRuntimeDeps(l.Svc, usertagroute.NewShardPlan(defaults.ShardTotal, defaults.RuntimeShardTotal)))
+	repo := usertagrepo.NewTagRepository(usertagrepo.NewRuntimeDeps(l.Svc, usertagroute.NewShardPlanWithResult(defaults.ShardTotal, defaults.RuntimeShardTotal, defaults.ResultShardTotal)))
 	releaseResult, err := repo.ManualReleaseWorkflowLease(l.Ctx, usertagtypes.RuntimeOptions{
 		WorkflowID: req.WorkflowID,
 		Mode:       req.Mode,

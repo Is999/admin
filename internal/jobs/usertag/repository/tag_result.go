@@ -54,6 +54,9 @@ func (r *TagRepository) PrepareResultTables(ctx context.Context, opts types.Runt
 	for _, shard := range r.deps.ShardPlan.TagShardsForWorkflow(opts.ShardIndex, opts.ShardTotal) {
 		currentTable := model.UserTagShardTableName(shard)
 		tmpTable := model.UserTagTmpShardTableName(shard)
+		if err := r.ensureResultShardTable(ctx, logDB, currentTable); err != nil {
+			return errors.Wrapf(err, "创建用户标签结果表失败 table=%s", currentTable)
+		}
 		if err := logDB.WithContext(ctx).Exec(userTagCreateLikeTableSQL(tmpTable, currentTable)).Error; err != nil {
 			return errors.Wrapf(err, "创建用户标签临时表失败 table=%s", tmpTable)
 		}
@@ -102,6 +105,9 @@ func (r *TagRepository) RebuildReadSnapshotShard(ctx context.Context, opts types
 	for _, shard := range r.deps.ShardPlan.TagShardsForWorkflow(opts.ShardIndex, opts.ShardTotal) {
 		sourceTable := model.UserTagShardTableName(shard)
 		targetTable := model.UserTagSyncShardTableName(shard)
+		if err := r.ensureResultShardTable(ctx, logDB, sourceTable); err != nil {
+			return total, errors.Wrapf(err, "创建用户标签结果表失败 table=%s", sourceTable)
+		}
 		if err := logDB.WithContext(ctx).Exec(userTagCreateLikeTableSQL(targetTable, sourceTable)).Error; err != nil {
 			return total, errors.Wrapf(err, "创建用户标签只读快照表失败 table=%s", targetTable)
 		}
@@ -109,8 +115,8 @@ func (r *TagRepository) RebuildReadSnapshotShard(ctx context.Context, opts types
 			return total, errors.Wrapf(err, "清空用户标签只读快照表失败 table=%s", targetTable)
 		}
 		result := logDB.WithContext(ctx).Exec(
-			"INSERT INTO " + quoteIdent(targetTable) + " (uid, tag_type, tag_source, tag_data, tag_category, created_at, updated_at) " +
-				"SELECT uid, tag_type, tag_source, tag_data, tag_category, created_at, updated_at FROM " + quoteIdent(sourceTable),
+			"INSERT INTO " + quoteIdent(targetTable) + " (uid, shard_no, tag_type, tag_source, tag_data, tag_category, created_at, updated_at) " +
+				"SELECT uid, shard_no, tag_type, tag_source, tag_data, tag_category, created_at, updated_at FROM " + quoteIdent(sourceTable),
 		)
 		if result.Error != nil {
 			return total, errors.Wrapf(result.Error, "重建用户标签只读快照失败 table=%s", targetTable)
@@ -385,9 +391,11 @@ func (r *TagRepository) runtimeUIDBatch(ctx context.Context, opts types.RuntimeO
 	query := logDB.WithContext(ctx).Table(model.TableNameUserTagRuntimeUID).
 		Select("uid").
 		Where("workflow_id = ? AND uid > ?", opts.WorkflowID, lastUID).
-		Where(condition.Expr, condition.Args...).
 		Order("uid ASC").
 		Limit(batchSize)
+	if condition.Expr != "" {
+		query = query.Where(condition.Expr, condition.Args...)
+	}
 	if err := query.Find(&uids).Error; err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -555,12 +563,25 @@ func (r *TagRepository) applyEventOutboxScope(query *gorm.DB, opts types.Runtime
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
-		query = query.Where(condition.Expr, condition.Args...)
+		if condition.Expr != "" {
+			query = query.Where(condition.Expr, condition.Args...)
+		}
 	}
 	if len(opts.UIDs) > 0 {
 		query = query.Where("uid IN ?", opts.UIDs)
 	}
 	return query, nil
+}
+
+// ensureResultShardTable 按需创建用户标签结果物理分表。
+func (r *TagRepository) ensureResultShardTable(ctx context.Context, db *gorm.DB, table string) error {
+	if db == nil {
+		return errors.New("用户标签结果表数据库连接为空")
+	}
+	if table == model.UserTagShardTableName(0) {
+		return nil
+	}
+	return errors.Tag(db.WithContext(ctx).Exec(userTagCreateLikeTableSQL(table, model.UserTagShardTableName(0))).Error)
 }
 
 // markEventOutboxFailed 标记事件派发失败并设置下一次重试时间。

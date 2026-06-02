@@ -28,9 +28,9 @@ func applyStartupRuntimeConfig(ctx context.Context, svcCtx *svc.ServiceContext, 
 	if cfg == nil || !runtimeconfig.IsDatabaseSource(*cfg) {
 		return nil
 	}
-	active, err := runtimeconfig.LoadActiveSnapshotCached(ctx, svcCtx)
+	active, err := runtimeconfig.EnsureInitialRelease(ctx, svcCtx)
 	if err != nil {
-		return errors.Wrap(err, "加载数据库运行配置 active release 失败")
+		return errors.Wrap(err, "加载或初始化数据库运行配置 active release 失败")
 	}
 	runtimeconfig.ApplySnapshot(cfg, active.Snapshot)
 	svcCtx.UpdateConfig(*cfg)

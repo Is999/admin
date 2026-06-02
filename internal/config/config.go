@@ -185,7 +185,8 @@ type UserTagConfig struct {
 	DefaultShardTotal  int  `json:"default_shard_total,optional"`  // 默认分片数，通常与 uid%10 分表保持一致
 	DefaultBatchSize   int  `json:"default_batch_size,optional"`   // 默认游标扫描批次大小
 	DefaultWorkerCount int  `json:"default_worker_count,optional"` // 节点内部 worker 默认值
-	RuntimeShardTotal  int  `json:"runtime_shard_total,optional"`  // 运行期 UID 索引分片数，默认 10
+	RuntimeShardTotal  int  `json:"runtime_shard_total,optional"`  // 运行期 UID 索引分片数，默认 1000
+	ResultShardTotal   int  `json:"result_shard_total,optional"`   // 标签结果物理分表数量，默认 1000
 	DiffBatchSize      int  `json:"diff_batch_size,optional"`      // 标签差异解析批次大小
 	EventBatchSize     int  `json:"event_batch_size,optional"`     // 事件 outbox 派发批次大小
 }
@@ -270,9 +271,8 @@ type RuntimeConfigSourceConfig struct {
 	PollIntervalSeconds int    `json:"poll_interval_seconds,optional"` // DB 模式版本轮询间隔秒数，默认 30
 }
 
-// APIServiceConfig 定义 admin 访问前台 API 数据库和内网运维接口的配置。
+// APIServiceConfig 定义 admin 访问前台 API 内网运维接口的配置。
 type APIServiceConfig struct {
-	UserDatabase    string `json:"user_database,optional"`     // 前台用户表所在命名库，默认 api，对应 site_mysql.api
 	InternalBaseURL string `json:"internal_base_url,optional"` // API 内网地址，仅 admin 后端调用
 	OpsToken        string `json:"ops_token,optional"`         // API 内网运维令牌，只在后端请求头使用
 	TimeoutSeconds  int    `json:"timeout_seconds,optional"`   // API 内网调用超时秒数，默认 5
@@ -363,7 +363,7 @@ type Config struct {
 	HotReload       HotReloadConfig           `json:"hot_reload,optional"`                   // config.yaml 热加载配置
 	ConfigFiles     ConfigFilesConfig         `json:"config_files,optional"`                 // 外部配置文件入口
 	RuntimeConfig   RuntimeConfigSourceConfig `json:"runtime_config,optional"`               // 运行期大列表配置来源
-	APIService      APIServiceConfig          `json:"api_service,optional"`                  // 前台 API 数据库与内网运维接口配置
+	APIService      APIServiceConfig          `json:"api_service,optional"`                  // 前台 API 内网运维接口配置
 	FileStorage     FileStorageConfig         `json:"file_storage,optional"`                 // 统一文件存储配置，支持本地与 S3
 	Security        SecurityConfig            `json:"security,optional"`                     // 后台接口签名验签和加解密配置
 	Observability   ObservabilityConfig       `json:"observability,optional"`                // 日志、审计、追踪等可观测性配置

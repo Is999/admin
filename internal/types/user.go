@@ -8,15 +8,18 @@ import (
 )
 
 const (
-	// apiUserPasswordMinLength 表示前台用户后台重置密码的最小长度。
-	apiUserPasswordMinLength = 8
-	// apiUserPasswordMaxLength 表示前台用户后台重置密码的最大长度。
-	apiUserPasswordMaxLength = 64
+	// userPasswordMinLength 表示前台用户后台重置密码的最小长度。
+	userPasswordMinLength = 8
+	// userPasswordMaxLength 表示前台用户后台重置密码的最大长度。
+	userPasswordMaxLength = 64
+	// userShardNoMod 表示前台用户固定取模分片上限。
+	userShardNoMod = 1000
 )
 
-// APIUserListReq 表示前台用户列表查询请求。
-type APIUserListReq struct {
+// UserListReq 表示前台用户列表查询请求。
+type UserListReq struct {
 	ID       int64  `json:"id,optional" form:"id,optional"`             // 用户 ID 精确筛选
+	ShardNo  *int   `json:"shardNo,optional" form:"shardNo,optional"`   // 取模分片筛选：0-999
 	Username string `json:"username,optional" form:"username,optional"` // 用户名筛选
 	Email    string `json:"email,optional" form:"email,optional"`       // 邮箱筛选
 	Phone    string `json:"phone,optional" form:"phone,optional"`       // 手机号筛选
@@ -25,13 +28,13 @@ type APIUserListReq struct {
 	GetPageReq
 }
 
-// APIUserIDReq 表示前台用户详情路径请求。
-type APIUserIDReq struct {
+// UserIDReq 表示前台用户详情路径请求。
+type UserIDReq struct {
 	ID int64 `path:"id" json:"id,optional" form:"id,optional"` // 用户 ID
 }
 
 // Validate 校验前台用户详情路径请求。
-func (r *APIUserIDReq) Validate() error {
+func (r *UserIDReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("用户 ID 不能为空")
 	}
@@ -39,12 +42,15 @@ func (r *APIUserIDReq) Validate() error {
 }
 
 // Validate 校验前台用户列表查询请求。
-func (r *APIUserListReq) Validate() error {
+func (r *UserListReq) Validate() error {
 	r.Username = strings.TrimSpace(r.Username)
 	r.Email = strings.TrimSpace(r.Email)
 	r.Phone = strings.TrimSpace(r.Phone)
 	if r.Status != nil && (*r.Status != 0 && *r.Status != 1) {
 		return errors.Errorf("用户状态不合法")
+	}
+	if r.ShardNo != nil && (*r.ShardNo < 0 || *r.ShardNo >= userShardNoMod) {
+		return errors.Errorf("用户分片号必须在0-%d之间", userShardNoMod-1)
 	}
 	if err := r.GetOrderReq.Validate(); err != nil {
 		return errors.Tag(err)
@@ -52,8 +58,8 @@ func (r *APIUserListReq) Validate() error {
 	return r.GetPageReq.Validate()
 }
 
-// CreateAPIUserReq 表示后台新增前台用户请求。
-type CreateAPIUserReq struct {
+// CreateUserReq 表示后台新增前台用户请求。
+type CreateUserReq struct {
 	Username     string `json:"username"`              // 用户名，3-32 位
 	Password     string `json:"password"`              // 登录密码
 	Nickname     string `json:"nickname,optional"`     // 昵称，为空时使用用户名
@@ -66,17 +72,17 @@ type CreateAPIUserReq struct {
 }
 
 // Validate 校验后台新增前台用户请求。
-func (r *CreateAPIUserReq) Validate() error {
+func (r *CreateUserReq) Validate() error {
 	r.Username = strings.TrimSpace(r.Username)
 	r.Password = strings.TrimSpace(r.Password)
 	r.Nickname = strings.TrimSpace(r.Nickname)
 	r.Email = strings.TrimSpace(r.Email)
 	r.Phone = strings.TrimSpace(r.Phone)
 	r.Avatar = strings.TrimSpace(r.Avatar)
-	if err := validateAPIUsername(r.Username); err != nil {
+	if err := validateUsername(r.Username); err != nil {
 		return errors.Tag(err)
 	}
-	if err := validateAPIUserPassword(r.Password, true); err != nil {
+	if err := validateUserPassword(r.Password, true); err != nil {
 		return errors.Tag(err)
 	}
 	if r.Status != nil && (*r.Status != 0 && *r.Status != 1) {
@@ -85,8 +91,8 @@ func (r *CreateAPIUserReq) Validate() error {
 	return nil
 }
 
-// UpdateAPIUserReq 表示后台编辑前台用户资料请求。
-type UpdateAPIUserReq struct {
+// UpdateUserReq 表示后台编辑前台用户资料请求。
+type UpdateUserReq struct {
 	ID           int64   `path:"id" json:"id,optional" form:"id,optional"` // 用户 ID
 	Nickname     *string `json:"nickname,optional"`                        // 昵称
 	Email        *string `json:"email,optional"`                           // 邮箱
@@ -97,7 +103,7 @@ type UpdateAPIUserReq struct {
 }
 
 // Validate 校验后台编辑前台用户资料请求。
-func (r *UpdateAPIUserReq) Validate() error {
+func (r *UpdateUserReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("用户 ID 不能为空")
 	}
@@ -120,8 +126,8 @@ func (r *UpdateAPIUserReq) Validate() error {
 	return nil
 }
 
-// APIUserStatusReq 表示后台修改前台用户状态请求。
-type APIUserStatusReq struct {
+// UserStatusReq 表示后台修改前台用户状态请求。
+type UserStatusReq struct {
 	ID           int64  `path:"id" json:"id,optional" form:"id,optional"`           // 用户 ID
 	Status       *int   `json:"status,optional" form:"status,optional"`             // 状态：1 正常，0 禁用
 	TwoStepKey   string `json:"twoStepKey,optional" form:"twoStepKey,optional"`     // MFA 二次票据 key
@@ -129,7 +135,7 @@ type APIUserStatusReq struct {
 }
 
 // Validate 校验后台修改前台用户状态请求。
-func (r *APIUserStatusReq) Validate() error {
+func (r *UserStatusReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("用户 ID 不能为空")
 	}
@@ -139,8 +145,8 @@ func (r *APIUserStatusReq) Validate() error {
 	return nil
 }
 
-// ResetAPIUserPasswordReq 表示后台重置前台用户密码请求。
-type ResetAPIUserPasswordReq struct {
+// ResetUserPasswordReq 表示后台重置前台用户密码请求。
+type ResetUserPasswordReq struct {
 	ID           int64  `path:"id" json:"id,optional" form:"id,optional"` // 用户 ID
 	Password     string `json:"password"`                                 // 新密码
 	TwoStepKey   string `json:"twoStepKey,optional"`                      // MFA 二次票据 key
@@ -148,15 +154,15 @@ type ResetAPIUserPasswordReq struct {
 }
 
 // Validate 校验后台重置前台用户密码请求。
-func (r *ResetAPIUserPasswordReq) Validate() error {
+func (r *ResetUserPasswordReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("用户 ID 不能为空")
 	}
-	return validateAPIUserPassword(r.Password, true)
+	return validateUserPassword(r.Password, true)
 }
 
-// SyncAPIUserRuntimeReq 表示手动同步前台用户 API 运行态请求。
-type SyncAPIUserRuntimeReq struct {
+// SyncUserRuntimeReq 表示手动同步前台用户 API 运行态请求。
+type SyncUserRuntimeReq struct {
 	ID           int64  `path:"id" json:"id,optional" form:"id,optional"` // 用户 ID
 	Profile      bool   `json:"profile,optional"`                         // 是否同步资料缓存
 	Sessions     bool   `json:"sessions,optional"`                        // 是否失效登录态
@@ -165,7 +171,7 @@ type SyncAPIUserRuntimeReq struct {
 }
 
 // Validate 校验手动同步前台用户 API 运行态请求。
-func (r *SyncAPIUserRuntimeReq) Validate() error {
+func (r *SyncUserRuntimeReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("用户 ID 不能为空")
 	}
@@ -175,9 +181,10 @@ func (r *SyncAPIUserRuntimeReq) Validate() error {
 	return nil
 }
 
-// APIUserItem 表示前台用户列表和详情项。
-type APIUserItem struct {
+// UserItem 表示前台用户列表和详情项。
+type UserItem struct {
 	ID          int64  `json:"id"`          // 用户 ID
+	ShardNo     int    `json:"shardNo"`     // 取模分片
 	Username    string `json:"username"`    // 用户名
 	Nickname    string `json:"nickname"`    // 昵称
 	Email       string `json:"email"`       // 邮箱
@@ -190,8 +197,8 @@ type APIUserItem struct {
 	UpdatedAt   string `json:"updatedAt"`   // 更新时间
 }
 
-// APIUserRuntimeSyncResp 表示 admin 调用 API 运行态同步后的回执。
-type APIUserRuntimeSyncResp struct {
+// UserRuntimeSyncResp 表示 admin 调用 API 运行态同步后的回执。
+type UserRuntimeSyncResp struct {
 	Enabled                 bool   `json:"enabled"`                 // 是否已配置 API 内网同步
 	Success                 bool   `json:"success"`                 // 本次同步是否成功
 	UserID                  int64  `json:"userId"`                  // 用户 ID
@@ -200,10 +207,10 @@ type APIUserRuntimeSyncResp struct {
 	Message                 string `json:"message"`                 // 同步结果说明
 }
 
-// APIUserMutationResp 表示前台用户写操作响应。
-type APIUserMutationResp struct {
-	Item *APIUserItem           `json:"item,omitempty"` // 最新用户资料
-	Sync APIUserRuntimeSyncResp `json:"sync"`           // API 运行态同步结果
+// UserMutationResp 表示前台用户写操作响应。
+type UserMutationResp struct {
+	Item *UserItem           `json:"item,omitempty"` // 最新用户资料
+	Sync UserRuntimeSyncResp `json:"sync"`           // API 运行态同步结果
 }
 
 // APIRuntimeConfigReloadReq 表示后台触发 API 配置热加载请求。
@@ -224,16 +231,23 @@ type APIRuntimeConfigReloadResp struct {
 	Message   string                      `json:"message"`   // 调用结果说明
 }
 
-// validateAPIUsername 校验前台用户名基础长度。
-func validateAPIUsername(username string) error {
+// APIRuntimeConfigItemsResp 表示 admin 查询 API 运行态配置项后的回执。
+type APIRuntimeConfigItemsResp struct {
+	Connected bool                     `json:"connected"` // 是否已配置并成功访问 API 内网接口
+	Items     *TaskConfigItemQueryResp `json:"items"`     // API 返回的运行态配置项快照
+	Message   string                   `json:"message"`   // 调用结果说明
+}
+
+// validateUsername 校验前台用户名基础长度。
+func validateUsername(username string) error {
 	if len(username) < 3 || len(username) > 32 {
 		return errors.Errorf("用户名必须为3-32位")
 	}
 	return nil
 }
 
-// validateAPIUserPassword 校验前台用户后台密码。
-func validateAPIUserPassword(password string, required bool) error {
+// validateUserPassword 校验前台用户后台密码。
+func validateUserPassword(password string, required bool) error {
 	password = strings.TrimSpace(password)
 	if password == "" {
 		if required {
@@ -241,7 +255,7 @@ func validateAPIUserPassword(password string, required bool) error {
 		}
 		return nil
 	}
-	if len(password) < apiUserPasswordMinLength || len(password) > apiUserPasswordMaxLength {
+	if len(password) < userPasswordMinLength || len(password) > userPasswordMaxLength {
 		return errors.Errorf("密码必须为8-64位")
 	}
 	for _, item := range password {

@@ -79,22 +79,24 @@ const (
 	ActionAdminExportDownload AdminLogAction = "下载管理员导出文件"
 
 	// 前台用户管理相关。
-	// ActionAPIUserList 查询前台用户列表。
-	ActionAPIUserList AdminLogAction = "查询前台用户列表"
-	// ActionAPIUserInfo 查询前台用户详情。
-	ActionAPIUserInfo AdminLogAction = "查询前台用户详情"
-	// ActionAPIUserAdd 新增前台用户。
-	ActionAPIUserAdd AdminLogAction = "新增前台用户"
-	// ActionAPIUserUpdate 编辑前台用户。
-	ActionAPIUserUpdate AdminLogAction = "编辑前台用户"
-	// ActionAPIUserStatusUpdate 修改前台用户状态。
-	ActionAPIUserStatusUpdate AdminLogAction = "修改前台用户状态"
-	// ActionAPIUserPasswordReset 重置前台用户密码。
-	ActionAPIUserPasswordReset AdminLogAction = "重置前台用户密码"
-	// ActionAPIUserRuntimeSync 同步前台用户运行态。
-	ActionAPIUserRuntimeSync AdminLogAction = "同步前台用户运行态"
+	// ActionUserList 查询前台用户列表。
+	ActionUserList AdminLogAction = "查询前台用户列表"
+	// ActionUserInfo 查询前台用户详情。
+	ActionUserInfo AdminLogAction = "查询前台用户详情"
+	// ActionUserAdd 新增前台用户。
+	ActionUserAdd AdminLogAction = "新增前台用户"
+	// ActionUserUpdate 编辑前台用户。
+	ActionUserUpdate AdminLogAction = "编辑前台用户"
+	// ActionUserStatusUpdate 修改前台用户状态。
+	ActionUserStatusUpdate AdminLogAction = "修改前台用户状态"
+	// ActionUserPasswordReset 重置前台用户密码。
+	ActionUserPasswordReset AdminLogAction = "重置前台用户密码"
+	// ActionUserRuntimeSync 同步前台用户运行态。
+	ActionUserRuntimeSync AdminLogAction = "同步前台用户运行态"
 	// ActionAPIRuntimeConfigReloadStatus 查询 API 配置热加载状态。
 	ActionAPIRuntimeConfigReloadStatus AdminLogAction = "查询API配置热加载状态"
+	// ActionAPIRuntimeConfigReloadItems 查询 API 运行态配置项。
+	ActionAPIRuntimeConfigReloadItems AdminLogAction = "查询API运行态配置项"
 	// ActionAPIRuntimeConfigReloadRun 触发 API 配置热加载。
 	ActionAPIRuntimeConfigReloadRun AdminLogAction = "触发API配置热加载"
 

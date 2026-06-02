@@ -31,14 +31,18 @@ const (
 	apiRuntimeOpsTokenHeader = "X-Ops-Token"
 	// apiRuntimeConfigReloadStatusPath 表示 API 配置热加载状态内网路径。
 	apiRuntimeConfigReloadStatusPath = "/internal/system/config-reload/status"
+	// apiRuntimeConfigReloadItemsPath 表示 API 运行态配置项内网路径。
+	apiRuntimeConfigReloadItemsPath = "/internal/system/config-reload/items"
 	// apiRuntimeConfigReloadRunPath 表示 API 配置热加载触发内网路径。
 	apiRuntimeConfigReloadRunPath = "/internal/system/config-reload/run"
-	// apiUserRuntimeSyncPathPrefix 表示 API 用户运行态同步内网路径前缀。
-	apiUserRuntimeSyncPathPrefix = "/internal/users/"
+	// userRuntimeSyncPathPrefix 表示前台用户 API 运行态同步内网路径前缀。
+	userRuntimeSyncPathPrefix = "/internal/users/"
 	// apiDocsInternalPathPrefix 表示 API 内网文档资源路径前缀。
 	apiDocsInternalPathPrefix = "/internal/docs"
 	// apiDocsMaxResponseBytes 限制单个 API 文档资源最大响应，避免代理异常大文件。
 	apiDocsMaxResponseBytes = 4 << 20
+	// apiRuntimeMaxResponseBytes 限制 API 运维接口 JSON 响应，配置快照允许超过 1MiB。
+	apiRuntimeMaxResponseBytes = 8 << 20
 )
 
 // Logic 负责调用必须落在 API 进程内的运行态能力。
@@ -143,6 +147,29 @@ func (l *Logic) Status() *types.BizResult {
 		WithData(&types.APIRuntimeConfigReloadResp{Connected: true, Status: status, Message: "API 热加载状态已获取"})
 }
 
+// Items 查询 API 当前运行态配置项。
+func (l *Logic) Items(req *types.TaskConfigItemQueryReq) *types.BizResult {
+	if req == nil {
+		req = &types.TaskConfigItemQueryReq{}
+	}
+	if err := req.Validate(); err != nil {
+		return types.ParamErrorResult(err)
+	}
+	client, err := NewClient(l.Svc.CurrentConfig().APIService)
+	if err != nil {
+		return types.NewBizResult(codes.Success).
+			SetI18nMessage(i18n.MsgKeyQuerySuccess).
+			WithData(&types.APIRuntimeConfigItemsResp{Connected: false, Message: err.Error()})
+	}
+	items, err := client.ConfigReloadItems(l.Ctx, req)
+	if err != nil {
+		return types.ServerError(i18n.MsgKeyTaskQueryFail, err, "APIRuntimeLogic.Items 查询 API 运行态配置项失败").ToBizResult()
+	}
+	return types.NewBizResult(codes.Success).
+		SetI18nMessage(i18n.MsgKeyQuerySuccess).
+		WithData(&types.APIRuntimeConfigItemsResp{Connected: true, Items: items, Message: "API 运行态配置项已获取"})
+}
+
 // Reload 手动触发 API 配置热加载。
 func (l *Logic) Reload(req *types.APIRuntimeConfigReloadReq) *types.BizResult {
 	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioAPIRuntimeManage, req.TwoStepKey, req.TwoStepValue); err != nil {
@@ -168,21 +195,45 @@ func (c *Client) ConfigReloadStatus(ctx context.Context) (*types.TaskConfigReloa
 	return requestAPI[types.TaskConfigReloadStatusResp](ctx, c, http.MethodGet, apiRuntimeConfigReloadStatusPath, nil)
 }
 
+// ConfigReloadItems 查询 API 运行态配置项。
+func (c *Client) ConfigReloadItems(ctx context.Context, req *types.TaskConfigItemQueryReq) (*types.TaskConfigItemQueryResp, error) {
+	query := url.Values{}
+	if req != nil {
+		if strings.TrimSpace(req.Keyword) != "" {
+			query.Set("keyword", strings.TrimSpace(req.Keyword))
+		}
+		if req.SensitiveOnly {
+			query.Set("sensitiveOnly", "true")
+		}
+		if req.Page > 0 {
+			query.Set("page", strconv.Itoa(req.Page))
+		}
+		if req.PageSize > 0 {
+			query.Set("pageSize", strconv.Itoa(req.PageSize))
+		}
+	}
+	path := apiRuntimeConfigReloadItemsPath
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	return requestAPI[types.TaskConfigItemQueryResp](ctx, c, http.MethodGet, path, nil)
+}
+
 // RunConfigReload 手动触发 API 配置热加载。
 func (c *Client) RunConfigReload(ctx context.Context) (*types.TaskConfigReloadStatusResp, error) {
 	return requestAPI[types.TaskConfigReloadStatusResp](ctx, c, http.MethodPost, apiRuntimeConfigReloadRunPath, nil)
 }
 
-// SyncUserRuntime 同步 API 用户资料缓存或登录态。
-func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool, sessions bool, reason string) (*types.APIUserRuntimeSyncResp, error) {
+// SyncUserRuntime 同步前台用户在 API 进程内的资料缓存或登录态。
+func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool, sessions bool, reason string) (*types.UserRuntimeSyncResp, error) {
 	if userID <= 0 {
 		return nil, errors.New("用户ID不能为空")
 	}
 	if !profile && !sessions {
 		profile = true
 	}
-	path := apiUserRuntimeSyncPathPrefix + strconv.FormatInt(userID, 10) + "/runtime-sync"
-	data, err := requestAPI[types.APIUserRuntimeSyncResp](ctx, c, http.MethodPost, path, userRuntimeSyncPayload{
+	path := userRuntimeSyncPathPrefix + strconv.FormatInt(userID, 10) + "/runtime-sync"
+	data, err := requestAPI[types.UserRuntimeSyncResp](ctx, c, http.MethodPost, path, userRuntimeSyncPayload{
 		Profile:  profile,
 		Sessions: sessions,
 		Reason:   strings.TrimSpace(reason),
@@ -253,9 +304,12 @@ func requestAPI[T any](ctx context.Context, c *Client, method string, path strin
 		return nil, errors.Wrap(err, "请求 API 内网接口失败")
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, apiRuntimeMaxResponseBytes+1))
 	if err != nil {
 		return nil, errors.Wrap(err, "读取 API 内网响应失败")
+	}
+	if len(body) > apiRuntimeMaxResponseBytes {
+		return nil, errors.Errorf("API 内网响应超过大小限制 max_bytes=%d", apiRuntimeMaxResponseBytes)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, errors.Errorf("API 内网接口 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

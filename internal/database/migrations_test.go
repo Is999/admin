@@ -60,22 +60,6 @@ func TestSchemaMigrationsSQL(t *testing.T) {
 	}
 }
 
-// TestSchemaMigrationsExistsSQL 确保版本表存在性检查 SQL 来自资产文件。
-func TestSchemaMigrationsExistsSQL(t *testing.T) {
-	sql := SchemaMigrationsExistsSQL()
-	if sql == "" {
-		t.Fatal("SchemaMigrationsExistsSQL() is empty")
-	}
-	if strings.Contains(sql, "用途：") {
-		t.Fatalf("SchemaMigrationsExistsSQL() should strip header comments: %q", sql)
-	}
-	for _, want := range []string{"information_schema.tables", "DATABASE()", "table_name"} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("SchemaMigrationsExistsSQL() missing %q: %q", want, sql)
-		}
-	}
-}
-
 // TestPendingMigrations 确保已登记版本不会再次进入待执行列表。
 func TestPendingMigrations(t *testing.T) {
 	migrations := DefaultMigrations()

@@ -70,8 +70,24 @@ func TestRunMigrationsDetectsChecksumMismatch(t *testing.T) {
 		migration.Version: {Version: migration.Version, Name: migration.Name, Checksum: "changed"},
 	})
 
-	if _, err := RunMigrations(context.Background(), store, []Migration{migration}, MigrationRunOptions{DryRun: true}); err == nil {
+	if _, err := RunMigrations(context.Background(), store, []Migration{migration}, MigrationRunOptions{DryRun: true, StrictChecksum: true}); err == nil {
 		t.Fatal("期望 checksum 不一致返回错误，实际为 nil")
+	}
+}
+
+// TestRunMigrationsIgnoresChecksumMismatchByDefault 确保未发布迁移漂移默认不阻断增量迁移。
+func TestRunMigrationsIgnoresChecksumMismatchByDefault(t *testing.T) {
+	migration := testMigration("202606050001", "create_demo")
+	store := newFakeMigrationStore(map[string]AppliedMigration{
+		migration.Version: {Version: migration.Version, Name: migration.Name, Checksum: "changed"},
+	})
+
+	results, err := RunMigrations(context.Background(), store, []Migration{migration}, MigrationRunOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("RunMigrations() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Status != MigrationStatusApplied || results[0].Reason == "" {
+		t.Fatalf("checksum drift should be applied with reason: %+v", results)
 	}
 }
 

@@ -65,6 +65,16 @@ func TestPolicyByRouteForSecretKeyChecks(t *testing.T) {
 	}
 }
 
+// TestPolicyByRouteForAdminRoleUpdate 验证管理员角色分配接口不把角色数组放入轻量签名字段。
+func TestPolicyByRouteForAdminRoleUpdate(t *testing.T) {
+	policy := PolicyByRoute(string(routealias.AdminRoleUpdate))
+	wantRequestSign := []string{"twoStepKey", "twoStepValue"}
+
+	if !reflect.DeepEqual(policy.RequestSign, wantRequestSign) {
+		t.Fatalf("PolicyByRoute(admin.role.update) request sign = %#v, want %#v", policy.RequestSign, wantRequestSign)
+	}
+}
+
 // TestPolicyByRouteForUnknownAliasIsEmpty 验证未知路由别名不会触发隐式全字段签名。
 func TestPolicyByRouteForUnknownAliasIsEmpty(t *testing.T) {
 	policy := PolicyByRoute("unknown.route")

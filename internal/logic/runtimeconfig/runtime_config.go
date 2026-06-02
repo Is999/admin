@@ -2,8 +2,6 @@ package runtimeconfig
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -20,7 +18,6 @@ import (
 	securitylogic "admin/internal/logic/security"
 	"admin/internal/model"
 	"admin/internal/svc"
-	"admin/internal/task/queue"
 	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
@@ -125,6 +122,10 @@ func CurrentSnapshotFromConfig(cfg config.Config) ReleaseSnapshot {
 	}
 }
 
+func runtimeConfigSnapshotEmpty(snapshot ReleaseSnapshot) bool {
+	return len(snapshot.ArchiveJobs) == 0 && len(snapshot.TaskPeriodic) == 0
+}
+
 // ApplySnapshot 把发布快照覆盖到完整配置；不会修改 YAML-only 段。
 func ApplySnapshot(cfg *config.Config, snapshot ReleaseSnapshot) {
 	if cfg == nil {
@@ -159,6 +160,36 @@ func EncodeSnapshot(snapshot ReleaseSnapshot) (string, string, string, error) {
 // LoadActiveSnapshotCached 从 table-cache 读取当前 active 发布快照。
 func LoadActiveSnapshotCached(ctx context.Context, svcCtx *svc.ServiceContext) (*ActiveRelease, error) {
 	logicObj := NewRuntimeConfigLogicWithContext(ctx, svcCtx)
+	return logicObj.loadActiveSnapshotCached()
+}
+
+// EnsureInitialRelease 确保 DB 模式首次启动时已有 active 发布快照。
+// 当 active 为空且当前文件包含运行配置时，会自动导入当前文件快照为首个发布版本。
+func EnsureInitialRelease(ctx context.Context, svcCtx *svc.ServiceContext) (*ActiveRelease, error) {
+	logicObj := NewRuntimeConfigLogicWithContext(ctx, svcCtx)
+	state, err := logicObj.loadActiveStateCached()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if state.ActiveReleaseID != 0 {
+		return logicObj.loadActiveSnapshotCached()
+	}
+	snapshot := CurrentSnapshotFromConfig(logicObj.currentConfig())
+	if runtimeConfigSnapshotEmpty(snapshot) {
+		return nil, errors.Errorf("运行配置未发布 active release env=%s，且当前文件没有可迁移的 task_periodic/archive_jobs", RuntimeEnv(logicObj.currentConfig()))
+	}
+	if _, err = ValidateSnapshot(snapshot); err != nil {
+		return nil, errors.Wrap(err, "自动迁移当前文件运行配置失败")
+	}
+	if err = logicObj.replaceDraft(snapshot); err != nil {
+		return nil, errors.Wrap(err, "写入运行配置初始草稿失败")
+	}
+	if _, err = logicObj.publishSnapshot(snapshot, "bootstrap import current runtime config", 0); err != nil {
+		if active, loadErr := logicObj.loadActiveSnapshotCached(); loadErr == nil {
+			return active, nil
+		}
+		return nil, errors.Wrap(err, "发布运行配置初始版本失败")
+	}
 	return logicObj.loadActiveSnapshotCached()
 }
 
@@ -499,6 +530,10 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
+	publishedByName := admin.Name
+	if strings.TrimSpace(publishedByName) == "" {
+		publishedByName = "system"
+	}
 	var release model.RuntimeConfigRelease
 	var previousReleaseID uint64
 	err = db.Transaction(func(tx *gorm.DB) error {
@@ -518,7 +553,7 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 			BaseReleaseID:      baseReleaseID,
 			Remark:             strings.TrimSpace(remark),
 			PublishedByAdminID: admin.ID,
-			PublishedByName:    admin.Name,
+			PublishedByName:    publishedByName,
 			PublishedAt:        now,
 		}
 		if err = tx.Create(&release).Error; err != nil {
@@ -814,481 +849,4 @@ func (l *RuntimeConfigLogic) adminID() int {
 		return 0
 	}
 	return admin.ID
-}
-
-// ValidateSnapshot 校验发布快照的周期任务和归档任务唯一性。
-func ValidateSnapshot(snapshot ReleaseSnapshot) ([]string, error) {
-	messages := []string{
-		fmt.Sprintf("周期任务 %d 条", len(snapshot.TaskPeriodic)),
-		fmt.Sprintf("归档任务 %d 条", len(snapshot.ArchiveJobs)),
-	}
-	if err := validatePeriodicConfigs(snapshot.TaskPeriodic); err != nil {
-		return messages, errors.Tag(err)
-	}
-	if err := validateArchiveJobConfigs(snapshot.ArchiveJobs); err != nil {
-		return messages, errors.Tag(err)
-	}
-	return messages, nil
-}
-
-func validatePeriodicConfigs(items []config.TaskPeriodicConfig) error {
-	taskKeys := make(map[string]struct{}, len(items))
-	uniqueKeys := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		if strings.TrimSpace(item.Workflow) == "" {
-			return errors.Errorf("周期任务 workflow 不能为空 name=%s", strings.TrimSpace(item.Name))
-		}
-		if strings.TrimSpace(item.Cron) == "" && item.EverySeconds <= 0 {
-			return errors.Errorf("周期任务必须配置 cron 或 every_seconds name=%s", strings.TrimSpace(item.Name))
-		}
-		if strings.TrimSpace(item.Cron) != "" && item.EverySeconds > 0 {
-			return errors.Errorf("周期任务 cron 与 every_seconds 不能同时配置 name=%s", strings.TrimSpace(item.Name))
-		}
-		if item.GrayPercent < 0 || item.GrayPercent > 100 {
-			return errors.Errorf("周期任务 gray_percent 必须在 0 到 100 之间 name=%s", strings.TrimSpace(item.Name))
-		}
-		if item.Retry < 0 || item.TimeoutSeconds < 0 || item.ShardTotal < 0 || item.UniqueTTLSeconds < 0 {
-			return errors.Errorf("周期任务数值参数不能小于 0 name=%s", strings.TrimSpace(item.Name))
-		}
-		taskKey, err := taskqueue.PeriodicTaskConfigKey(item)
-		if err != nil {
-			return errors.Wrapf(err, "周期任务配置无效 name=%s workflow=%s", strings.TrimSpace(item.Name), strings.TrimSpace(item.Workflow))
-		}
-		if _, ok := taskKeys[taskKey]; ok {
-			return errors.Errorf("周期任务稳定键重复: %s", taskKey)
-		}
-		taskKeys[taskKey] = struct{}{}
-		uniqueKey := strings.TrimSpace(item.UniqueKey)
-		if uniqueKey == "" {
-			continue
-		}
-		if _, ok := uniqueKeys[uniqueKey]; ok {
-			return errors.Errorf("周期任务 unique_key 重复: %s", uniqueKey)
-		}
-		uniqueKeys[uniqueKey] = struct{}{}
-	}
-	return nil
-}
-
-func validateArchiveJobConfigs(items []config.ArchiveJobConfig) error {
-	names := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			return errors.Errorf("归档任务 name 不能为空")
-		}
-		if _, ok := names[name]; ok {
-			return errors.Errorf("归档任务名称重复: %s", name)
-		}
-		names[name] = struct{}{}
-		if strings.TrimSpace(item.TableName) == "" {
-			return errors.Errorf("归档任务 table_name 不能为空 name=%s", name)
-		}
-		if item.CustomDays < 0 || item.HotKeepDays < 0 || item.ArchiveDelayDays < 0 ||
-			item.ArchiveWindowSeconds < 0 || item.ArchiveMaxWindowsPerRun < 0 ||
-			item.ArchiveAutoMaxWindows < 0 || item.ArchiveAutoLightRows < 0 ||
-			item.ArchiveAutoLightMs < 0 || item.DeleteDelayDays < 0 ||
-			item.DeleteWindowSeconds < 0 || item.DeleteMaxWindowsPerRun < 0 ||
-			item.BatchSize < 0 || item.DeleteBatchSize < 0 || item.MaxHistoryTables < 0 {
-			return errors.Errorf("归档任务数值参数不能小于 0 name=%s", name)
-		}
-	}
-	return nil
-}
-
-func periodicReqToModel(req *types.SaveRuntimeTaskPeriodicReq, appID, env string, adminID int) model.RuntimeTaskPeriodic {
-	return model.RuntimeTaskPeriodic{
-		AppID:            appID,
-		Env:              env,
-		Name:             req.Name,
-		Enabled:          req.Enabled,
-		Cron:             req.Cron,
-		EverySeconds:     req.EverySeconds,
-		Workflow:         req.Workflow,
-		Queue:            req.Queue,
-		Targets:          model.StringSlice(req.Targets),
-		ShardTotal:       req.ShardTotal,
-		GrayPercent:      req.GrayPercent,
-		Retry:            req.Retry,
-		TimeoutSeconds:   req.TimeoutSeconds,
-		Deadline:         req.Deadline,
-		UniqueKey:        req.UniqueKey,
-		UniqueTTLSeconds: req.UniqueTTLSeconds,
-		SortOrder:        req.SortOrder,
-		Remark:           req.Remark,
-		CreatedByAdminID: adminID,
-		UpdatedByAdminID: adminID,
-	}
-}
-
-func periodicModelUpdateMap(row model.RuntimeTaskPeriodic) map[string]any {
-	return map[string]any{
-		"name":                row.Name,
-		"enabled":             row.Enabled,
-		"cron":                row.Cron,
-		"every_seconds":       row.EverySeconds,
-		"workflow":            row.Workflow,
-		"queue":               row.Queue,
-		"targets_json":        row.Targets,
-		"shard_total":         row.ShardTotal,
-		"gray_percent":        row.GrayPercent,
-		"retry":               row.Retry,
-		"timeout_seconds":     row.TimeoutSeconds,
-		"deadline":            row.Deadline,
-		"unique_key":          row.UniqueKey,
-		"unique_ttl_seconds":  row.UniqueTTLSeconds,
-		"sort_order":          row.SortOrder,
-		"remark":              row.Remark,
-		"updated_by_admin_id": row.UpdatedByAdminID,
-	}
-}
-
-func periodicModelToConfig(row model.RuntimeTaskPeriodic) config.TaskPeriodicConfig {
-	enabled := row.Enabled
-	return config.TaskPeriodicConfig{
-		Enabled:          &enabled,
-		Name:             row.Name,
-		Cron:             row.Cron,
-		EverySeconds:     row.EverySeconds,
-		Workflow:         row.Workflow,
-		Queue:            row.Queue,
-		Targets:          []string(row.Targets),
-		ShardTotal:       row.ShardTotal,
-		GrayPercent:      row.GrayPercent,
-		Retry:            row.Retry,
-		TimeoutSeconds:   row.TimeoutSeconds,
-		Deadline:         row.Deadline,
-		UniqueKey:        row.UniqueKey,
-		UniqueTTLSeconds: row.UniqueTTLSeconds,
-	}
-}
-
-func periodicConfigToModel(item config.TaskPeriodicConfig, appID, env string, adminID int, index int) model.RuntimeTaskPeriodic {
-	enabled := true
-	if item.Enabled != nil {
-		enabled = *item.Enabled
-	}
-	return model.RuntimeTaskPeriodic{
-		AppID:            appID,
-		Env:              env,
-		Name:             strings.TrimSpace(item.Name),
-		Enabled:          enabled,
-		Cron:             strings.TrimSpace(item.Cron),
-		EverySeconds:     item.EverySeconds,
-		Workflow:         strings.TrimSpace(item.Workflow),
-		Queue:            strings.TrimSpace(item.Queue),
-		Targets:          model.StringSlice(uniqueStrings(item.Targets)),
-		ShardTotal:       item.ShardTotal,
-		GrayPercent:      item.GrayPercent,
-		Retry:            item.Retry,
-		TimeoutSeconds:   item.TimeoutSeconds,
-		Deadline:         strings.TrimSpace(item.Deadline),
-		UniqueKey:        strings.TrimSpace(item.UniqueKey),
-		UniqueTTLSeconds: item.UniqueTTLSeconds,
-		SortOrder:        index + 1,
-		CreatedByAdminID: adminID,
-		UpdatedByAdminID: adminID,
-	}
-}
-
-func periodicModelToItem(row model.RuntimeTaskPeriodic) types.RuntimeTaskPeriodicItem {
-	return types.RuntimeTaskPeriodicItem{
-		ID:               row.ID,
-		Enabled:          row.Enabled,
-		Name:             row.Name,
-		Cron:             row.Cron,
-		EverySeconds:     row.EverySeconds,
-		Workflow:         row.Workflow,
-		Queue:            row.Queue,
-		Targets:          []string(row.Targets),
-		ShardTotal:       row.ShardTotal,
-		GrayPercent:      row.GrayPercent,
-		Retry:            row.Retry,
-		TimeoutSeconds:   row.TimeoutSeconds,
-		Deadline:         row.Deadline,
-		UniqueKey:        row.UniqueKey,
-		UniqueTTLSeconds: row.UniqueTTLSeconds,
-		SortOrder:        row.SortOrder,
-		Remark:           row.Remark,
-		CreatedAt:        corelogic.FormatDateTime(row.CreatedAt),
-		UpdatedAt:        corelogic.FormatDateTime(row.UpdatedAt),
-	}
-}
-
-func archiveReqToModel(req *types.SaveRuntimeArchiveJobReq, appID, env string, adminID int) model.RuntimeArchiveJob {
-	return model.RuntimeArchiveJob{
-		AppID:                   appID,
-		Env:                     env,
-		Name:                    req.Name,
-		Enabled:                 req.Enabled,
-		Database:                req.Database,
-		HotTableName:            req.TableName,
-		TimeColumn:              req.TimeColumn,
-		TimeColumnType:          req.TimeColumnType,
-		TimeColumnFormat:        req.TimeColumnFormat,
-		TimeColumnUnixUnit:      req.TimeColumnUnixUnit,
-		PrimaryKey:              req.PrimaryKey,
-		ArchiveCondition:        req.ArchiveCondition,
-		DeleteCondition:         req.DeleteCondition,
-		SplitUnit:               req.SplitUnit,
-		CustomDays:              req.CustomDays,
-		HotKeepDays:             req.HotKeepDays,
-		ArchiveDelayDays:        req.ArchiveDelayDays,
-		ArchiveWindowSeconds:    req.ArchiveWindowSeconds,
-		ArchiveWindowMode:       req.ArchiveWindowMode,
-		ArchiveMaxWindowsPerRun: req.ArchiveMaxWindowsPerRun,
-		ArchiveAutoMaxWindows:   req.ArchiveAutoMaxWindows,
-		ArchiveAutoLightRows:    req.ArchiveAutoLightRows,
-		ArchiveAutoLightMs:      req.ArchiveAutoLightMs,
-		DeleteDisabled:          req.DeleteDisabled,
-		DeleteDelayDays:         req.DeleteDelayDays,
-		DeleteWindowSeconds:     req.DeleteWindowSeconds,
-		DeleteMaxWindowsPerRun:  req.DeleteMaxWindowsPerRun,
-		BatchSize:               req.BatchSize,
-		DeleteBatchSize:         req.DeleteBatchSize,
-		MaxHistoryTables:        req.MaxHistoryTables,
-		HistoryTablePrefix:      req.HistoryTablePrefix,
-		HistoryTableNameRule:    req.HistoryTableNameRule,
-		StartAt:                 req.StartAt,
-		QueryWriteDB:            req.QueryWriteDB,
-		SortOrder:               req.SortOrder,
-		Remark:                  req.Remark,
-		CreatedByAdminID:        adminID,
-		UpdatedByAdminID:        adminID,
-	}
-}
-
-func archiveModelUpdateMap(row model.RuntimeArchiveJob) map[string]any {
-	return map[string]any{
-		"name":                        row.Name,
-		"enabled":                     row.Enabled,
-		"database_name":               row.Database,
-		"table_name":                  row.HotTableName,
-		"time_column":                 row.TimeColumn,
-		"time_column_type":            row.TimeColumnType,
-		"time_column_format":          row.TimeColumnFormat,
-		"time_column_unix_unit":       row.TimeColumnUnixUnit,
-		"primary_key":                 row.PrimaryKey,
-		"archive_condition":           row.ArchiveCondition,
-		"delete_condition":            row.DeleteCondition,
-		"split_unit":                  row.SplitUnit,
-		"custom_days":                 row.CustomDays,
-		"hot_keep_days":               row.HotKeepDays,
-		"archive_delay_days":          row.ArchiveDelayDays,
-		"archive_window_seconds":      row.ArchiveWindowSeconds,
-		"archive_window_mode":         row.ArchiveWindowMode,
-		"archive_max_windows_per_run": row.ArchiveMaxWindowsPerRun,
-		"archive_auto_max_windows":    row.ArchiveAutoMaxWindows,
-		"archive_auto_light_rows":     row.ArchiveAutoLightRows,
-		"archive_auto_light_ms":       row.ArchiveAutoLightMs,
-		"delete_disabled":             row.DeleteDisabled,
-		"delete_delay_days":           row.DeleteDelayDays,
-		"delete_window_seconds":       row.DeleteWindowSeconds,
-		"delete_max_windows_per_run":  row.DeleteMaxWindowsPerRun,
-		"batch_size":                  row.BatchSize,
-		"delete_batch_size":           row.DeleteBatchSize,
-		"max_history_tables":          row.MaxHistoryTables,
-		"history_table_prefix":        row.HistoryTablePrefix,
-		"history_table_name_rule":     row.HistoryTableNameRule,
-		"start_at":                    row.StartAt,
-		"query_write_db":              row.QueryWriteDB,
-		"sort_order":                  row.SortOrder,
-		"remark":                      row.Remark,
-		"updated_by_admin_id":         row.UpdatedByAdminID,
-	}
-}
-
-func archiveModelToConfig(row model.RuntimeArchiveJob) config.ArchiveJobConfig {
-	return config.ArchiveJobConfig{
-		Name:                    row.Name,
-		Enabled:                 row.Enabled,
-		Database:                row.Database,
-		TableName:               row.HotTableName,
-		TimeColumn:              row.TimeColumn,
-		TimeColumnType:          row.TimeColumnType,
-		TimeColumnFormat:        row.TimeColumnFormat,
-		TimeColumnUnixUnit:      row.TimeColumnUnixUnit,
-		PrimaryKey:              row.PrimaryKey,
-		ArchiveCondition:        row.ArchiveCondition,
-		DeleteCondition:         row.DeleteCondition,
-		SplitUnit:               row.SplitUnit,
-		CustomDays:              row.CustomDays,
-		HotKeepDays:             row.HotKeepDays,
-		ArchiveDelayDays:        row.ArchiveDelayDays,
-		ArchiveWindowSeconds:    row.ArchiveWindowSeconds,
-		ArchiveWindowMode:       row.ArchiveWindowMode,
-		ArchiveMaxWindowsPerRun: row.ArchiveMaxWindowsPerRun,
-		ArchiveAutoMaxWindows:   row.ArchiveAutoMaxWindows,
-		ArchiveAutoLightRows:    row.ArchiveAutoLightRows,
-		ArchiveAutoLightMs:      row.ArchiveAutoLightMs,
-		DeleteDisabled:          row.DeleteDisabled,
-		DeleteDelayDays:         row.DeleteDelayDays,
-		DeleteWindowSeconds:     row.DeleteWindowSeconds,
-		DeleteMaxWindowsPerRun:  row.DeleteMaxWindowsPerRun,
-		BatchSize:               row.BatchSize,
-		DeleteBatchSize:         row.DeleteBatchSize,
-		MaxHistoryTables:        row.MaxHistoryTables,
-		HistoryTablePrefix:      row.HistoryTablePrefix,
-		HistoryTableNameRule:    row.HistoryTableNameRule,
-		StartAt:                 row.StartAt,
-		QueryWriteDB:            row.QueryWriteDB,
-	}
-}
-
-func archiveConfigToModel(item config.ArchiveJobConfig, appID, env string, adminID int, index int) model.RuntimeArchiveJob {
-	database := strings.TrimSpace(item.Database)
-	if database == "" {
-		database = "main"
-	}
-	return model.RuntimeArchiveJob{
-		AppID:                   appID,
-		Env:                     env,
-		Name:                    strings.TrimSpace(item.Name),
-		Enabled:                 item.Enabled,
-		Database:                database,
-		HotTableName:            strings.TrimSpace(item.TableName),
-		TimeColumn:              strings.TrimSpace(item.TimeColumn),
-		TimeColumnType:          strings.TrimSpace(item.TimeColumnType),
-		TimeColumnFormat:        strings.TrimSpace(item.TimeColumnFormat),
-		TimeColumnUnixUnit:      strings.TrimSpace(item.TimeColumnUnixUnit),
-		PrimaryKey:              strings.TrimSpace(item.PrimaryKey),
-		ArchiveCondition:        strings.TrimSpace(item.ArchiveCondition),
-		DeleteCondition:         strings.TrimSpace(item.DeleteCondition),
-		SplitUnit:               strings.TrimSpace(item.SplitUnit),
-		CustomDays:              item.CustomDays,
-		HotKeepDays:             item.HotKeepDays,
-		ArchiveDelayDays:        item.ArchiveDelayDays,
-		ArchiveWindowSeconds:    item.ArchiveWindowSeconds,
-		ArchiveWindowMode:       strings.TrimSpace(item.ArchiveWindowMode),
-		ArchiveMaxWindowsPerRun: item.ArchiveMaxWindowsPerRun,
-		ArchiveAutoMaxWindows:   item.ArchiveAutoMaxWindows,
-		ArchiveAutoLightRows:    item.ArchiveAutoLightRows,
-		ArchiveAutoLightMs:      item.ArchiveAutoLightMs,
-		DeleteDisabled:          item.DeleteDisabled,
-		DeleteDelayDays:         item.DeleteDelayDays,
-		DeleteWindowSeconds:     item.DeleteWindowSeconds,
-		DeleteMaxWindowsPerRun:  item.DeleteMaxWindowsPerRun,
-		BatchSize:               item.BatchSize,
-		DeleteBatchSize:         item.DeleteBatchSize,
-		MaxHistoryTables:        item.MaxHistoryTables,
-		HistoryTablePrefix:      strings.TrimSpace(item.HistoryTablePrefix),
-		HistoryTableNameRule:    strings.TrimSpace(item.HistoryTableNameRule),
-		StartAt:                 strings.TrimSpace(item.StartAt),
-		QueryWriteDB:            item.QueryWriteDB,
-		SortOrder:               index + 1,
-		CreatedByAdminID:        adminID,
-		UpdatedByAdminID:        adminID,
-	}
-}
-
-func archiveModelToItem(row model.RuntimeArchiveJob) types.RuntimeArchiveJobItem {
-	return types.RuntimeArchiveJobItem{
-		ID:                      row.ID,
-		Enabled:                 row.Enabled,
-		Name:                    row.Name,
-		Database:                row.Database,
-		TableName:               row.HotTableName,
-		TimeColumn:              row.TimeColumn,
-		TimeColumnType:          row.TimeColumnType,
-		TimeColumnFormat:        row.TimeColumnFormat,
-		TimeColumnUnixUnit:      row.TimeColumnUnixUnit,
-		PrimaryKey:              row.PrimaryKey,
-		ArchiveCondition:        row.ArchiveCondition,
-		DeleteCondition:         row.DeleteCondition,
-		SplitUnit:               row.SplitUnit,
-		CustomDays:              row.CustomDays,
-		HotKeepDays:             row.HotKeepDays,
-		ArchiveDelayDays:        row.ArchiveDelayDays,
-		ArchiveWindowSeconds:    row.ArchiveWindowSeconds,
-		ArchiveWindowMode:       row.ArchiveWindowMode,
-		ArchiveMaxWindowsPerRun: row.ArchiveMaxWindowsPerRun,
-		ArchiveAutoMaxWindows:   row.ArchiveAutoMaxWindows,
-		ArchiveAutoLightRows:    row.ArchiveAutoLightRows,
-		ArchiveAutoLightMs:      row.ArchiveAutoLightMs,
-		DeleteDisabled:          row.DeleteDisabled,
-		DeleteDelayDays:         row.DeleteDelayDays,
-		DeleteWindowSeconds:     row.DeleteWindowSeconds,
-		DeleteMaxWindowsPerRun:  row.DeleteMaxWindowsPerRun,
-		BatchSize:               row.BatchSize,
-		DeleteBatchSize:         row.DeleteBatchSize,
-		MaxHistoryTables:        row.MaxHistoryTables,
-		HistoryTablePrefix:      row.HistoryTablePrefix,
-		HistoryTableNameRule:    row.HistoryTableNameRule,
-		StartAt:                 row.StartAt,
-		QueryWriteDB:            row.QueryWriteDB,
-		SortOrder:               row.SortOrder,
-		Remark:                  row.Remark,
-		CreatedAt:               corelogic.FormatDateTime(row.CreatedAt),
-		UpdatedAt:               corelogic.FormatDateTime(row.UpdatedAt),
-	}
-}
-
-func stateCacheToItem(state StateCache) types.RuntimeConfigStateItem {
-	return types.RuntimeConfigStateItem{
-		ActiveReleaseID: state.ActiveReleaseID,
-		ActiveVersion:   state.ActiveVersion,
-		ActiveChecksum:  state.ActiveChecksum,
-		PublishedAt:     formatUnix(state.PublishedAtUnix),
-	}
-}
-
-func releaseModelToItem(row model.RuntimeConfigRelease) types.RuntimeConfigReleaseItem {
-	return types.RuntimeConfigReleaseItem{
-		ID:                 row.ID,
-		VersionNo:          row.VersionNo,
-		Checksum:           row.Checksum,
-		BaseReleaseID:      row.BaseReleaseID,
-		RestartRequired:    row.RestartRequired,
-		RestartReason:      row.RestartReason,
-		Remark:             row.Remark,
-		PublishedByAdminID: row.PublishedByAdminID,
-		PublishedByName:    row.PublishedByName,
-		PublishedAt:        corelogic.FormatDateTime(row.PublishedAt),
-	}
-}
-
-func snapshotToResp(snapshot ReleaseSnapshot) types.RuntimeConfigSnapshot {
-	resp := types.RuntimeConfigSnapshot{
-		ArchiveJobs:  make([]types.RuntimeArchiveJobItem, 0, len(snapshot.ArchiveJobs)),
-		TaskPeriodic: make([]types.RuntimeTaskPeriodicItem, 0, len(snapshot.TaskPeriodic)),
-	}
-	for index, item := range snapshot.ArchiveJobs {
-		resp.ArchiveJobs = append(resp.ArchiveJobs, archiveModelToItem(archiveConfigToModel(item, "", "", 0, index)))
-	}
-	for index, item := range snapshot.TaskPeriodic {
-		resp.TaskPeriodic = append(resp.TaskPeriodic, periodicModelToItem(periodicConfigToModel(item, "", "", 0, index)))
-	}
-	return resp
-}
-
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
-func formatUnix(ts int64) string {
-	if ts <= 0 {
-		return ""
-	}
-	return corelogic.FormatDateTime(time.Unix(ts, 0))
-}
-
-func uniqueStrings(items []string) []string {
-	if len(items) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(items))
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if _, ok := seen[item]; ok {
-			continue
-		}
-		seen[item] = struct{}{}
-		result = append(result, item)
-	}
-	return result
 }

@@ -24,6 +24,13 @@ type mockPlugin struct {
 	run  func(*Runtime) error // run 表示测试字段。
 }
 
+// enabledTaskPeriodicConfig 构造测试中显式启用的周期任务配置。
+func enabledTaskPeriodicConfig(item config.TaskPeriodicConfig) config.TaskPeriodicConfig {
+	enabled := true
+	item.Enabled = &enabled
+	return item
+}
+
 // Name 表示测试辅助逻辑。
 func (p mockPlugin) Name() string { return p.name }
 
@@ -290,11 +297,11 @@ func TestRegisterCacheRefreshTargetRejectsDuplicate(t *testing.T) {
 // TestRegisterPeriodicTaskStoresConfig 确保周期任务能通过运行时注册，并保留给调度层消费。
 func TestRegisterPeriodicTaskStoresConfig(t *testing.T) {
 	runtime := NewRuntime(nil, nil)
-	cfg := config.TaskPeriodicConfig{
+	cfg := enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 		Name:     "demo-periodic",
 		Cron:     "*/5 * * * *",
 		Workflow: "cache.refresh",
-	}
+	})
 	if err := runtime.RegisterPeriodicTask(cfg); err != nil {
 		t.Fatalf("注册周期任务失败: %v", err)
 	}
@@ -310,11 +317,11 @@ func TestRegisterPeriodicTaskStoresConfig(t *testing.T) {
 // TestRegisterPeriodicTaskRejectsDuplicate 确保重复的周期任务定义会被拒绝，避免调度重复执行。
 func TestRegisterPeriodicTaskRejectsDuplicate(t *testing.T) {
 	runtime := NewRuntime(nil, nil)
-	cfg := config.TaskPeriodicConfig{
+	cfg := enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 		Name:     "demo-periodic",
 		Cron:     "*/5 * * * *",
 		Workflow: "cache.refresh",
-	}
+	})
 	if err := runtime.RegisterPeriodicTask(cfg); err != nil {
 		t.Fatalf("首次注册失败: %v", err)
 	}
@@ -326,11 +333,11 @@ func TestRegisterPeriodicTaskRejectsDuplicate(t *testing.T) {
 // TestNewPeriodicWorkflowPlugin 确保函数式周期插件能复用统一注册入口。
 func TestNewPeriodicWorkflowPlugin(t *testing.T) {
 	runtime := NewRuntime(nil, nil)
-	plugin := NewPeriodicWorkflowPlugin("periodic.plugin", config.TaskPeriodicConfig{
+	plugin := NewPeriodicWorkflowPlugin("periodic.plugin", enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 		Name:     "demo-plugin",
 		Cron:     "0 * * * *",
 		Workflow: "cache.refresh",
-	})
+	}))
 	if err := runtime.RegisterPlugins(plugin); err != nil {
 		t.Fatalf("注册周期工作流插件失败: %v", err)
 	}

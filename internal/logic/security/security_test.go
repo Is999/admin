@@ -135,6 +135,7 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 		string(routealias.APIRuntimeConfigReloadRun),
 		"runtime.config.index",
 		"runtime.config.list",
+		"runtime.config.overview",
 		"runtime.config.save",
 		"runtime.config.validate",
 		"runtime.config.publish",

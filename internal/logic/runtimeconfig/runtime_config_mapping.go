@@ -81,7 +81,7 @@ func periodicModelToConfig(row model.RuntimeTaskPeriodic) config.TaskPeriodicCon
 
 // periodicConfigToModel 把运行配置项导入为周期任务草稿模型。
 func periodicConfigToModel(item config.TaskPeriodicConfig, appID, env string, adminID int, index int) model.RuntimeTaskPeriodic {
-	enabled := true
+	enabled := false
 	if item.Enabled != nil {
 		enabled = *item.Enabled
 	}

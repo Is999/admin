@@ -63,6 +63,8 @@ workflows:
 task_periodic:
   # 管理员审计日志归档和热表删除。
   - name: "archive-admin-log-hourly"
+    # 是否启用该任务。
+    enabled: true
     # 每小时第 5 分钟触发。
     cron: "5 * * * *"
     # 触发的工作流名称。

@@ -25,6 +25,13 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// enabledTaskPeriodicConfig 构造测试中显式启用的周期任务配置。
+func enabledTaskPeriodicConfig(item config.TaskPeriodicConfig) config.TaskPeriodicConfig {
+	enabled := true
+	item.Enabled = &enabled
+	return item
+}
+
 // TestTaskLogMessageIncludesTaskIdentity 验证任务生命周期日志正文带上任务身份字段。
 func TestTaskLogMessageIncludesTaskIdentity(t *testing.T) {
 	msg := taskLogMessage("任务 开始执行", &requestctx.Meta{
@@ -372,7 +379,7 @@ func TestManagerUpdateConfigRefreshesSnapshot(t *testing.T) {
 			LeaseKey: "task:scheduler:new",
 		},
 		Periodic: []config.TaskPeriodicConfig{
-			{Name: "demo", Cron: "*/5 * * * *", Workflow: "cache.refresh"},
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{Name: "demo", Cron: "*/5 * * * *", Workflow: "cache.refresh"}),
 		},
 	})
 
@@ -1710,12 +1717,12 @@ func TestRegisterPeriodicTaskRejectsConfigDuplicate(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
-	cfg := config.TaskPeriodicConfig{
+	cfg := enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 		Name:     "dup-periodic",
 		Cron:     "*/5 * * * *",
 		Workflow: WorkflowNameCacheRefresh,
 		Queue:    QueueMaintenance,
-	}
+	})
 	manager.UpdateConfig(config.TaskQueueConfig{
 		Enabled:  true,
 		AppID:    "1",
@@ -1732,12 +1739,12 @@ func TestAllPeriodicTasksDedupesConfigAndPluginTasks(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
-	cfg := config.TaskPeriodicConfig{
+	cfg := enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 		Name:     "same-periodic",
 		Cron:     "*/5 * * * *",
 		Workflow: WorkflowNameCacheRefresh,
 		Queue:    QueueMaintenance,
-	}
+	})
 	manager.UpdateConfig(config.TaskQueueConfig{
 		Enabled:  true,
 		AppID:    "1",
@@ -1754,8 +1761,8 @@ func TestAllPeriodicTasksDedupesConfigAndPluginTasks(t *testing.T) {
 	}
 }
 
-// TestAllPeriodicTasksSkipsExplicitlyDisabled 验证周期任务可通过 enabled=false 临时关闭，保留 workflow 手动触发能力。
-func TestAllPeriodicTasksSkipsExplicitlyDisabled(t *testing.T) {
+// TestAllPeriodicTasksRequiresExplicitEnabled 验证周期任务只有显式启用才会进入调度。
+func TestAllPeriodicTasksRequiresExplicitEnabled(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -1772,19 +1779,25 @@ func TestAllPeriodicTasksSkipsExplicitlyDisabled(t *testing.T) {
 				Queue:    QueueMaintenance,
 			},
 			{
-				Name:     "default-enabled-periodic",
+				Name:     "missing-enabled-periodic",
 				Cron:     "*/10 * * * *",
 				Workflow: WorkflowNameCacheRefresh,
 				Queue:    QueueMaintenance,
 			},
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
+				Name:     "enabled-periodic",
+				Cron:     "*/15 * * * *",
+				Workflow: WorkflowNameCacheRefresh,
+				Queue:    QueueMaintenance,
+			}),
 		},
 	})
 
 	items := manager.allPeriodicTasks()
 	if len(items) != 1 {
-		t.Fatalf("期望只保留默认启用的周期任务，实际为 %d", len(items))
+		t.Fatalf("期望只保留显式启用的周期任务，实际为 %d", len(items))
 	}
-	if items[0].Name != "default-enabled-periodic" {
+	if items[0].Name != "enabled-periodic" {
 		t.Fatalf("保留的周期任务 = %s", items[0].Name)
 	}
 }
@@ -1801,24 +1814,24 @@ func TestPeriodicConfigsSkipsInvalidAndKeepsValid(t *testing.T) {
 		Enabled: true,
 		AppID:   "1",
 		Periodic: []config.TaskPeriodicConfig{
-			{
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 				Name:     "missing-workflow",
 				Cron:     "*/5 * * * *",
 				Workflow: "missing.workflow",
-			},
-			{
+			}),
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 				Name:     "invalid-cron",
 				Cron:     "bad cron",
 				Workflow: "valid.workflow",
-			},
-			{
+			}),
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 				Name:             "valid-periodic",
 				Cron:             "*/5 * * * *",
 				Workflow:         "valid.workflow",
 				Queue:            QueueMaintenance,
 				UniqueKey:        "valid-periodic",
 				UniqueTTLSeconds: 60,
-			},
+			}),
 		},
 	})
 
@@ -1846,16 +1859,16 @@ func TestPeriodicConfigsSupportsSecondLevelSchedule(t *testing.T) {
 		Enabled: true,
 		AppID:   "1",
 		Periodic: []config.TaskPeriodicConfig{
-			{
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 				Name:     "six-field-cron",
 				Cron:     "*/10 * * * * *",
 				Workflow: "second.workflow",
-			},
-			{
+			}),
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 				Name:         "every-seconds",
 				EverySeconds: 5,
 				Workflow:     "second.workflow",
-			},
+			}),
 		},
 	})
 
@@ -1958,11 +1971,11 @@ func TestSchedulerEnabledRespectsConfigSwitch(t *testing.T) {
 			Enabled: false,
 		},
 		Periodic: []config.TaskPeriodicConfig{
-			{
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 				Name:     "disabled-scheduler-periodic",
 				Cron:     "*/5 * * * *",
 				Workflow: "first.workflow",
-			},
+			}),
 		},
 	})
 
@@ -2225,13 +2238,13 @@ func TestListTasksFiltersPeriodicTaskByWorkflowName(t *testing.T) {
 	}
 	manager.mu.Lock()
 	manager.periodic = []config.TaskPeriodicConfig{
-		{
+		enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 			Name:       "user-tag-delta-daily",
 			Cron:       "15 3 * * *",
 			Workflow:   "user_tag.delta.refresh",
 			Queue:      QueueMaintenance,
 			ShardTotal: 10,
-		},
+		}),
 	}
 	manager.mu.Unlock()
 	configs, err := manager.periodicConfigs()
@@ -2273,11 +2286,11 @@ func TestValidatePeriodicTaskDefinitionsToleratesMissingWorkflow(t *testing.T) {
 
 	cfg := manager.CurrentConfig()
 	cfg.Periodic = []config.TaskPeriodicConfig{
-		{
+		enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
 			Name:     "missing-periodic-workflow",
 			Cron:     "*/10 * * * *",
 			Workflow: "missing.workflow",
-		},
+		}),
 	}
 	manager.UpdateConfig(cfg)
 

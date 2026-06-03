@@ -20,6 +20,13 @@ import (
 	"github.com/zeromicro/go-zero/rest"
 )
 
+// enabledTaskPeriodicConfig 构造测试中显式启用的周期任务配置。
+func enabledTaskPeriodicConfig(item config.TaskPeriodicConfig) config.TaskPeriodicConfig {
+	enabled := true
+	item.Enabled = &enabled
+	return item
+}
+
 // TestAppUpdateConfigPropagatesSnapshot 确保应用配置更新会同步刷新 ServiceContext 与 TaskManager 快照。
 func TestAppUpdateConfigPropagatesSnapshot(t *testing.T) {
 	svcCtx := svc.NewServiceContext(config.Config{
@@ -30,7 +37,13 @@ func TestAppUpdateConfigPropagatesSnapshot(t *testing.T) {
 	app := &App{ServiceContext: svcCtx}
 	app.UpdateConfig(config.Config{
 		JwtSecret: "new-secret",
-		Task:      config.TaskQueueConfig{Enabled: true, DefaultQueue: "new-queue", Periodic: []config.TaskPeriodicConfig{{Name: "demo"}}},
+		Task: config.TaskQueueConfig{
+			Enabled:      true,
+			DefaultQueue: "new-queue",
+			Periodic: []config.TaskPeriodicConfig{
+				enabledTaskPeriodicConfig(config.TaskPeriodicConfig{Name: "demo"}),
+			},
+		},
 		Workflows: config.WorkflowsConfig{UserTag: config.UserTagConfig{Enabled: true}},
 		HotReload: config.HotReloadConfig{Enabled: true},
 		Kafka:     config.KafkaConfig{Enabled: true},
@@ -526,7 +539,9 @@ func TestDetectHotReloadRestartImpact(t *testing.T) {
 	}
 
 	after = before
-	after.Task.Periodic = []config.TaskPeriodicConfig{{Name: "runtime-periodic", Workflow: "runtime.workflow"}}
+	after.Task.Periodic = []config.TaskPeriodicConfig{
+		enabledTaskPeriodicConfig(config.TaskPeriodicConfig{Name: "runtime-periodic", Workflow: "runtime.workflow"}),
+	}
 	restartRequired, restartReason = detectHotReloadRestartImpact(before, after)
 	if restartRequired {
 		t.Fatalf("单独变更 task.periodic 不应要求重启，实际原因为 %q", restartReason)
@@ -595,7 +610,7 @@ func TestBuildHotReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 			Enabled:      true,
 			DefaultQueue: "old-queue",
 			Periodic: []config.TaskPeriodicConfig{
-				{Name: "old-periodic", Workflow: "old.workflow"},
+				enabledTaskPeriodicConfig(config.TaskPeriodicConfig{Name: "before-periodic", Workflow: "before.workflow"}),
 			},
 		},
 		Workflows: config.WorkflowsConfig{
@@ -613,7 +628,9 @@ func TestBuildHotReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 	after.User.RouteShardCount = 10
 	after.Redis = config.RedisConfig{Addrs: []string{"127.0.0.1:6380"}}
 	after.Task.DefaultQueue = "new-queue"
-	after.Task.Periodic = []config.TaskPeriodicConfig{{Name: "new-periodic", Workflow: "new.workflow"}}
+	after.Task.Periodic = []config.TaskPeriodicConfig{
+		enabledTaskPeriodicConfig(config.TaskPeriodicConfig{Name: "new-periodic", Workflow: "new.workflow"}),
+	}
 	after.Workflows.UserTag.Enabled = true
 	after.Workflows.UserTag.DefaultShardTotal = 16
 

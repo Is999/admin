@@ -146,7 +146,7 @@ func TestRuntimeConfigBaselineSeedsDefaultRelease(t *testing.T) {
 	if len(matches) != 2 {
 		t.Fatal("runtime config migration assets missing default release snapshot JSON")
 	}
-	if got := sha256Hex(matches[1]); got != "b1dbf79448b31e09700ba3765613936264a2c23254b1270b83a9c3e6c6c2342f" {
+	if got := sha256Hex(matches[1]); got != "a7c2508fdc7b46830b31ee7f7d82ea1946db7f5a5a974fe588f72fa7442d74af" {
 		t.Fatalf("default release snapshot checksum = %s", got)
 	}
 	if !strings.Contains(matches[1], `"enabled":false`) {

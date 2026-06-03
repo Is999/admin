@@ -73,7 +73,7 @@ func (m *Manager) syncSchedulerConfigStatus(cfg config.TaskQueueConfig) {
 		status.RenewIntervalSeconds = int(m.schedulerRenewIntervalByConfig(cfg) / time.Second)
 		status.SyncIntervalSeconds = int(m.schedulerSyncIntervalByConfig(cfg) / time.Second)
 		status.HeartbeatIntervalSeconds = int(m.schedulerHeartbeatIntervalByConfig(cfg) / time.Second)
-		status.PeriodicTaskCount = len(dedupePeriodicTasks(append([]config.TaskPeriodicConfig(nil), cfg.Periodic...)))
+		status.PeriodicTaskCount = len(dedupePeriodicTasks(enabledPeriodicTasks(append([]config.TaskPeriodicConfig(nil), cfg.Periodic...))))
 		if strings.TrimSpace(status.LastStatus) != "" {
 			return status
 		}

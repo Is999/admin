@@ -168,8 +168,6 @@ const (
 	// 管理员模块
 	authVerifyAccount            method = "authVerifyAccount"            // 验证账号并返回MFA绑定信息
 	profileMine                  method = "profileMine"                  // 获取当前管理员资料
-	profileCheckSecure           method = "profileCheckSecure"           // 校验当前管理员密码
-	profileCheckMFA              method = "profileCheckMFA"              // 校验当前管理员MFA动态码
 	profileUpdatePassword        method = "profileUpdatePassword"        // 个人中心修改密码
 	profileUpdateMine            method = "profileUpdateMine"            // 个人中心修改资料
 	profileUpdateMFAStatus       method = "profileUpdateMFAStatus"       // 个人中心修改MFA状态
@@ -283,8 +281,6 @@ const (
 const (
 	MethodAuthVerifyAccount            Method = authVerifyAccount            // 验证账号并返回MFA绑定信息
 	MethodProfileMine                  Method = profileMine                  // 获取当前管理员资料
-	MethodProfileCheckSecure           Method = profileCheckSecure           // 校验当前管理员密码
-	MethodProfileCheckMFA              Method = profileCheckMFA              // 校验当前管理员MFA动态码
 	MethodProfileUpdatePassword        Method = profileUpdatePassword        // 个人中心修改密码
 	MethodProfileUpdateMine            Method = profileUpdateMine            // 个人中心修改资料
 	MethodProfileUpdateMFAStatus       Method = profileUpdateMFAStatus       // 个人中心修改MFA状态
@@ -403,8 +399,6 @@ var actionLogRegistry = map[method]RouteMeta{
 	// 管理员模块
 	authVerifyAccount:            AuthVerifyAccount,            // 验证账号并返回MFA绑定信息
 	profileMine:                  ProfileMine,                  // 获取当前管理员资料
-	profileCheckSecure:           ProfileCheckSecure,           // 校验当前管理员密码
-	profileCheckMFA:              ProfileCheckMFA,              // 校验当前管理员MFA动态码
 	profileUpdatePassword:        ProfileUpdatePassword,        // 个人中心修改密码
 	profileUpdateMine:            ProfileUpdateMine,            // 个人中心修改资料
 	profileUpdateMFAStatus:       ProfileUpdateMFA,             // 个人中心修改MFA状态

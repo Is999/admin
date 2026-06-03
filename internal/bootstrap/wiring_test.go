@@ -220,11 +220,11 @@ future_feature:
 		t.Fatalf("未知顶层配置不应导致启动失败: %v", err)
 	}
 	if cfg.Workflows.UserTag.DefaultShardTotal != 0 {
-		t.Fatalf("未知顶层 user_tag 不应被旧结构隐式合并，实际为 %+v", cfg.Workflows.UserTag)
+		t.Fatalf("未知顶层 user_tag 不应被隐式合并，实际为 %+v", cfg.Workflows.UserTag)
 	}
 }
 
-// TestLoadConfigIgnoresUnknownRuntimeConfigBlock 确保旧结构不会误合并未知运行时配置块。
+// TestLoadConfigIgnoresUnknownRuntimeConfigBlock 确保未知运行期配置块不会误合并。
 func TestLoadConfigIgnoresUnknownRuntimeConfigBlock(t *testing.T) {
 	dir := t.TempDir()
 	mainFile := filepath.Join(dir, "config.yaml")
@@ -449,8 +449,8 @@ workflows:
 	}
 }
 
-// TestLoadConfigIgnoresOldRuntimeConfigShape 确保外部运行期旧结构不会阻断当前进程启动。
-func TestLoadConfigIgnoresOldRuntimeConfigShape(t *testing.T) {
+// TestLoadConfigIgnoresNestedRuntimeTaskBlock 确保运行期文件不会误合并非白名单任务块。
+func TestLoadConfigIgnoresNestedRuntimeTaskBlock(t *testing.T) {
 	dir := t.TempDir()
 	mainFile := filepath.Join(dir, "config.yaml")
 	if err := os.MkdirAll(filepath.Join(dir, "config.d"), 0o755); err != nil {
@@ -466,18 +466,18 @@ config_files:
 	if err := os.WriteFile(runtimeFile, []byte(`
 task:
   periodic:
-    - name: "old-periodic"
+    - name: "ignored-periodic"
       cron: "0 2 * * *"
-      workflow: "old.workflow"
+      workflow: "ignored.workflow"
 `), 0o644); err != nil {
 		t.Fatalf("写入外部配置失败: %v", err)
 	}
 	cfg, err := LoadConfig(mainFile)
 	if err != nil {
-		t.Fatalf("旧结构外部配置不应导致启动失败: %v", err)
+		t.Fatalf("非白名单任务块不应导致启动失败: %v", err)
 	}
 	if len(cfg.Task.Periodic) != 0 {
-		t.Fatalf("旧结构 task.periodic 不应被运行期文件隐式合并，实际数量=%d", len(cfg.Task.Periodic))
+		t.Fatalf("非白名单 task.periodic 不应被运行期文件隐式合并，实际数量=%d", len(cfg.Task.Periodic))
 	}
 }
 

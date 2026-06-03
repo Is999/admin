@@ -271,7 +271,7 @@ var (
 	// TaskConfigReloadRun 手动触发配置热加载。
 	TaskConfigReloadRun = newAuditRouteMeta("task.config.reload.run", model.ActionTaskConfigReloadRun, "手动触发配置热加载")
 	// RuntimeConfigOverview 查询运行配置概览。
-	RuntimeConfigOverview = newAuditRouteMeta("runtime.config.list", model.ActionRuntimeConfigOverview, "查询运行配置概览")
+	RuntimeConfigOverview = newAuditRouteMeta("runtime.config.overview", model.ActionRuntimeConfigOverview, "查询运行配置概览")
 	// RuntimeConfigList 查询运行配置列表。
 	RuntimeConfigList = newAuditRouteMeta("runtime.config.list", model.ActionRuntimeConfigList, "查询运行配置")
 	// RuntimeConfigSave 保存运行配置草稿。

@@ -214,7 +214,7 @@ type TaskQueueSchedulerConfig struct {
 
 // TaskPeriodicConfig 定义一个周期性工作流触发配置。
 type TaskPeriodicConfig struct {
-	Enabled          *bool    `json:"enabled,optional"`            // 是否启用该周期任务
+	Enabled          *bool    `json:"enabled,optional"`            // 是否启用该周期任务；未配置时默认启用
 	Name             string   `json:"name,optional"`               // 周期任务名称；为空时使用 cron/workflow/queue 生成去重键
 	Cron             string   `json:"cron,optional"`               // cron 表达式；支持 5 段或带秒字段的 6 段表达式
 	EverySeconds     int      `json:"every_seconds,optional"`      // 秒级固定间隔；>0 时生成 @every Ns 调度，不能和 cron 同时配置
@@ -228,6 +228,11 @@ type TaskPeriodicConfig struct {
 	Deadline         string   `json:"deadline,optional"`           // 截止时间（RFC3339）
 	UniqueKey        string   `json:"unique_key,optional"`         // 去重键
 	UniqueTTLSeconds int      `json:"unique_ttl_seconds,optional"` // 去重 TTL（秒）
+}
+
+// EnabledOrDefault 返回周期任务启用状态；未配置 enabled 时按默认启用处理。
+func (c TaskPeriodicConfig) EnabledOrDefault() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // TaskQueueConfig 定义任务系统的 Worker、队列、聚合、独立 Redis 与工作流保留参数。

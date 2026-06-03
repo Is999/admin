@@ -1761,8 +1761,8 @@ func TestAllPeriodicTasksDedupesConfigAndPluginTasks(t *testing.T) {
 	}
 }
 
-// TestAllPeriodicTasksRequiresExplicitEnabled 验证周期任务只有显式启用才会进入调度。
-func TestAllPeriodicTasksRequiresExplicitEnabled(t *testing.T) {
+// TestAllPeriodicTasksDefaultsMissingEnabledToEnabled 验证周期任务缺省 enabled 时默认参与调度。
+func TestAllPeriodicTasksDefaultsMissingEnabledToEnabled(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -1794,11 +1794,11 @@ func TestAllPeriodicTasksRequiresExplicitEnabled(t *testing.T) {
 	})
 
 	items := manager.allPeriodicTasks()
-	if len(items) != 1 {
-		t.Fatalf("期望只保留显式启用的周期任务，实际为 %d", len(items))
+	if len(items) != 2 {
+		t.Fatalf("期望保留缺省启用和显式启用的周期任务，实际为 %d", len(items))
 	}
-	if items[0].Name != "enabled-periodic" {
-		t.Fatalf("保留的周期任务 = %s", items[0].Name)
+	if items[0].Name != "missing-enabled-periodic" || items[1].Name != "enabled-periodic" {
+		t.Fatalf("保留的周期任务 = %+v", items)
 	}
 }
 

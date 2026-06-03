@@ -81,15 +81,11 @@ func periodicModelToConfig(row model.RuntimeTaskPeriodic) config.TaskPeriodicCon
 
 // periodicConfigToModel 把运行配置项导入为周期任务草稿模型。
 func periodicConfigToModel(item config.TaskPeriodicConfig, appID, env string, adminID int, index int) model.RuntimeTaskPeriodic {
-	enabled := false
-	if item.Enabled != nil {
-		enabled = *item.Enabled
-	}
 	return model.RuntimeTaskPeriodic{
 		AppID:            appID,
 		Env:              env,
 		Name:             strings.TrimSpace(item.Name),
-		Enabled:          enabled,
+		Enabled:          item.EnabledOrDefault(),
 		Cron:             strings.TrimSpace(item.Cron),
 		EverySeconds:     item.EverySeconds,
 		Workflow:         strings.TrimSpace(item.Workflow),
@@ -313,7 +309,19 @@ func normalizeReleaseSnapshot(snapshot ReleaseSnapshot) ReleaseSnapshot {
 		snapshot.ArchiveJobs[index] = normalizeArchiveConfigDefaults(snapshot.ArchiveJobs[index])
 	}
 	snapshot.TaskPeriodic = append([]config.TaskPeriodicConfig(nil), snapshot.TaskPeriodic...)
+	for index := range snapshot.TaskPeriodic {
+		snapshot.TaskPeriodic[index] = normalizePeriodicConfigDefaults(snapshot.TaskPeriodic[index])
+	}
 	return snapshot
+}
+
+// normalizePeriodicConfigDefaults 补齐周期任务默认启用语义，保持 YAML 导入、草稿和 active release 一致。
+func normalizePeriodicConfigDefaults(item config.TaskPeriodicConfig) config.TaskPeriodicConfig {
+	if item.Enabled == nil {
+		enabled := true
+		item.Enabled = &enabled
+	}
+	return item
 }
 
 // normalizeArchiveConfigDefaults 补齐归档任务默认值，保持草稿、发布快照和执行服务口径一致。

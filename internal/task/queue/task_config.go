@@ -301,11 +301,11 @@ func PeriodicTaskConfigKey(cfg config.TaskPeriodicConfig) (string, error) {
 	return periodicTaskKey(cfg)
 }
 
-// enabledPeriodicTasks 只保留显式启用的周期任务。
+// enabledPeriodicTasks 保留默认启用或显式启用的周期任务，显式 enabled=false 才关闭。
 func enabledPeriodicTasks(items []config.TaskPeriodicConfig) []config.TaskPeriodicConfig {
 	result := make([]config.TaskPeriodicConfig, 0, len(items))
 	for _, item := range items {
-		if item.Enabled == nil || !*item.Enabled {
+		if !item.EnabledOrDefault() {
 			continue
 		}
 		result = append(result, item)

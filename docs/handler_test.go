@@ -33,6 +33,10 @@ func TestIndexKeepsFastDocsConfig(t *testing.T) {
 	if !strings.Contains(html, "startSearchIndex") || !strings.Contains(html, "window.fetch(docFetchURL") {
 		t.Fatal("docs search must build index asynchronously in current page")
 	}
+	if !strings.Contains(html, "function isApiDocsRoute") ||
+		!strings.Contains(html, "segments[0] === 'api' && segments[1] === '接口文档'") {
+		t.Fatal("api docs hash must keep api namespace before loading markdown")
+	}
 	if !strings.Contains(html, "/api/docs/vendor/docsify/docsify.min.js") ||
 		!strings.Contains(html, "/api/docs/vendor/docsify/vue.css") {
 		t.Fatal("docsify assets must use local vendor paths")

@@ -233,6 +233,11 @@
         return !window.location.hash || window.location.hash === '#/' || window.location.hash === '#';
       }
 
+      // API 文档通过 Admin 文档站代理，hash 前缀不能被裁掉。
+      function isApiDocsRoute(segments) {
+        return segments.length >= 2 && segments[0] === 'api' && segments[1] === '接口文档';
+      }
+
       function rewriteRenderedLinks() {
         var selectors = ['.sidebar-nav a', '.app-nav a'];
         if (isHomeRoute()) {
@@ -385,6 +390,9 @@
 
         var segments = decodedPath.split('/').filter(Boolean);
         if (segments.length < 2) {
+          return;
+        }
+        if (isApiDocsRoute(segments)) {
           return;
         }
 

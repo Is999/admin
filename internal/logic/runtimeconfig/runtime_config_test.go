@@ -108,6 +108,21 @@ func TestCurrentSnapshotFromConfigDefaultsArchiveDelayDays(t *testing.T) {
 	}
 }
 
+// TestCurrentSnapshotFromConfigDefaultsPeriodicEnabled 验证周期任务快照缺省 enabled 时按启用处理。
+func TestCurrentSnapshotFromConfigDefaultsPeriodicEnabled(t *testing.T) {
+	snapshot := CurrentSnapshotFromConfig(config.Config{
+		Task: config.TaskQueueConfig{Periodic: []config.TaskPeriodicConfig{
+			{Name: "archive-admin-log-hourly", Cron: "5 * * * *", Workflow: "archive.run"},
+		}},
+	})
+	if len(snapshot.TaskPeriodic) != 1 {
+		t.Fatalf("TaskPeriodic len=%d want 1", len(snapshot.TaskPeriodic))
+	}
+	if snapshot.TaskPeriodic[0].Enabled == nil || !*snapshot.TaskPeriodic[0].Enabled {
+		t.Fatalf("期望周期任务默认启用，实际=%v", snapshot.TaskPeriodic[0].Enabled)
+	}
+}
+
 // TestEncodeSnapshotUsesNormalizedArchiveDelayDays 验证编码快照前会写入归一化后的归档延迟字段。
 func TestEncodeSnapshotUsesNormalizedArchiveDelayDays(t *testing.T) {
 	snapshot := normalizeReleaseSnapshot(ReleaseSnapshot{ArchiveJobs: []config.ArchiveJobConfig{
@@ -119,6 +134,18 @@ func TestEncodeSnapshotUsesNormalizedArchiveDelayDays(t *testing.T) {
 	}
 	if !strings.Contains(jsonText, `"archive_delay_days":32`) || !strings.Contains(jsonText, `"delete_delay_days":32`) {
 		t.Fatalf("encoded snapshot missing normalized delay days: %s", jsonText)
+	}
+}
+
+// TestPeriodicConfigToModelDefaultsEnabled 验证运行配置首次导入草稿时周期任务默认启用。
+func TestPeriodicConfigToModelDefaultsEnabled(t *testing.T) {
+	row := periodicConfigToModel(config.TaskPeriodicConfig{
+		Name:     "archive-admin-log-hourly",
+		Cron:     "5 * * * *",
+		Workflow: "archive.run",
+	}, "1", "dev", 7, 0)
+	if !row.Enabled {
+		t.Fatal("期望缺省 enabled 的周期任务导入草稿时默认启用")
 	}
 }
 

@@ -239,7 +239,7 @@ func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool
 	return data, nil
 }
 
-// DocsAsset 通过 API 内网接口读取可在后台展示的接口文档资源。
+// DocsAsset 通过 API 内网接口读取可在后台展示的文档资源。
 func (c *Client) DocsAsset(ctx context.Context, docsPath string) (*DocsAsset, error) {
 	if c == nil || c.client == nil {
 		return nil, errors.New("API 内网客户端未初始化")

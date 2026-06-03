@@ -20,7 +20,7 @@ import (
 
 // ListSysConfigHandler 查询系统常量配置列表。
 func ListSysConfigHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SysConfigListReq](shared.MethodListSysConfig,
+	return shared.ActionHandler[types.SysConfigListReq](shared.SysConfigList,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SysConfigListReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := configlogic.NewSysConfigLogic(r, svcCtx)
 			return logicObj, logicObj.List(req)
@@ -30,10 +30,10 @@ func ListSysConfigHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // AddSysConfigHandler 新增系统常量配置。
 func AddSysConfigHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionLogHandler(shared.MethodAddSysConfig, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionLogHandler(shared.SysConfigAdd, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		var req types.CreateSysConfigReq
 		if err := parseSysConfigJSONRequest(r, &req); err != nil {
-			return nil, shared.ParamErrorResult(0, err)
+			return nil, shared.ParamErrorResult(err)
 		}
 		logicObj := configlogic.NewSysConfigLogic(r, sCtx)
 		resp := logicObj.Create(req.ToSaveSysConfigReq())
@@ -44,10 +44,10 @@ func AddSysConfigHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // UpdateSysConfigHandler 编辑系统常量配置。
 func UpdateSysConfigHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionLogHandler(shared.MethodUpdateSysConfig, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionLogHandler(shared.SysConfigUpdate, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		var req types.SaveSysConfigReq
 		if err := parseSysConfigJSONRequest(r, &req); err != nil {
-			return nil, shared.ParamErrorResult(0, err)
+			return nil, shared.ParamErrorResult(err)
 		}
 		logicObj := configlogic.NewSysConfigLogic(r, sCtx)
 		resp := logicObj.Update(&req)
@@ -85,7 +85,7 @@ func parseSysConfigJSONRequest(r *http.Request, req any) error {
 
 // GetSysConfigCacheHandler 查看系统常量配置缓存。
 func GetSysConfigCacheHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.UUIDPathReq](shared.MethodGetSysConfigCache,
+	return shared.ActionHandler[types.UUIDPathReq](shared.SysConfigCache,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.UUIDPathReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := configlogic.NewSysConfigLogic(r, svcCtx)
 			return logicObj, logicObj.GetCache(req)
@@ -95,7 +95,7 @@ func GetSysConfigCacheHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // RenewSysConfigHandler 刷新系统常量配置缓存。
 func RenewSysConfigHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.UUIDPathReq](shared.MethodRenewSysConfig,
+	return shared.ActionHandler[types.UUIDPathReq](shared.SysConfigRenew,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.UUIDPathReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := configlogic.NewSysConfigLogic(r, svcCtx)
 			return logicObj, logicObj.Renew(req)
@@ -108,7 +108,7 @@ func ExportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.SysConfigExcelExportReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(0, err), nil, "")
+			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := configlogic.NewSysConfigLogic(r, sCtx)
@@ -116,11 +116,11 @@ func ExportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		filePath, fileName, resp := logicObj.ExportExcel(&req)
 		if resp != nil {
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodExportSysConfigExcel)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
 			return
 		}
 		if logMeta != nil {
-			logicObj.AddAdminLog(logMeta.Action, logMeta.Route, string(shared.MethodExportSysConfigExcel), logMeta.Describe, &req)
+			logicObj.AddAdminLog(logMeta.Action, logMeta.Route, logMeta.Method, logMeta.Describe, &req)
 		}
 		if err := transfer.ServeDownload(
 			w,
@@ -132,14 +132,14 @@ func ExportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"ExportSysConfigExcelHandler 输出字典导出文件[%s]失败", filePath).ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodExportSysConfigExcel)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
 		}
 	}
 }
 
 // ImportSysConfigExcelHandler 导入字典配置 Excel 文件。
 func ImportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SysConfigExcelImportReq](shared.MethodImportSysConfigExcel,
+	return shared.ActionHandler[types.SysConfigExcelImportReq](shared.SysConfigImport,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SysConfigExcelImportReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := configlogic.NewSysConfigLogic(r, svcCtx)
 			return logicObj, logicObj.ImportExcel(req)

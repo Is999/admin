@@ -1994,6 +1994,38 @@ func TestSchedulerEnabledRespectsConfigSwitch(t *testing.T) {
 	}
 }
 
+// TestSchedulerEnabledRequiresConfigSwitch 确保未配置 scheduler.enabled 时不会隐式启动调度器。
+func TestSchedulerEnabledRequiresConfigSwitch(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	manager.UpdateConfig(config.TaskQueueConfig{
+		Enabled: true,
+		AppID:   "1",
+		Periodic: []config.TaskPeriodicConfig{
+			enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
+				Name:     "default-enabled-periodic",
+				Cron:     "*/5 * * * *",
+				Workflow: "first.workflow",
+			}),
+		},
+	})
+
+	if manager.schedulerEnabled() {
+		t.Fatal("期望未配置 scheduler.enabled 时不启动调度器，实际返回 true")
+	}
+	status := manager.schedulerStatusSnapshot()
+	if status == nil {
+		t.Fatal("期望调度器状态快照存在，实际为 nil")
+	}
+	if status.Enabled {
+		t.Fatal("期望调度器状态中的 enabled=false，实际为 true")
+	}
+	if status.PeriodicTaskCount != 1 {
+		t.Fatalf("期望周期任务数量为 1，实际为 %d", status.PeriodicTaskCount)
+	}
+}
+
 // TestListQueuesReturnsSchedulerStatus 确保任务队列概览接口会附带调度器运行状态。
 func TestListQueuesReturnsSchedulerStatus(t *testing.T) {
 	manager, cleanup := newTestManager(t)

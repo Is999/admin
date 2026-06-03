@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>前台 API 文档</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/api/docs/vendor/docsify/vue.css">
+  <style>
+    .markdown-section {
+      max-width: 980px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    window.$docsify = {
+      name: '前台 API 文档',
+      repo: '',
+      homepage: '接口文档/前台系统/系统接口.md',
+      basePath: '/api/docs/api/',
+      relativePath: false,
+      alias: {
+        '/.*/_sidebar.md': '/_sidebar.md'
+      },
+      loadSidebar: true,
+      loadNavbar: false,
+      maxLevel: 3,
+      subMaxLevel: 2,
+      auto2top: true,
+      routerMode: 'hash',
+      notFoundPage: false,
+      search: false,
+      coverpage: false,
+      onlyCover: false
+    };
+  </script>
+  <script src="/api/docs/vendor/docsify/docsify.min.js"></script>
+</body>
+</html>

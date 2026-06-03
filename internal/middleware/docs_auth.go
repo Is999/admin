@@ -155,6 +155,7 @@ var docsPermissionRules = []docsPermissionRule{
 	{Prefix: "功能模块/用户标签", Alias: routealias.DocsFeatureUserTag},
 	{Prefix: "api/接口文档/前台系统", Alias: routealias.DocsAPIServiceFront},
 	{Prefix: "api/接口文档", Alias: routealias.DocsAPIServiceIndex},
+	{Prefix: "api", Alias: routealias.DocsAPIServiceIndex},
 	{Prefix: "接口文档/后台系统", Alias: routealias.DocsAPIAdmin},
 	{Prefix: "接口文档/任务系统", Alias: routealias.DocsAPITask},
 	{Prefix: "接口文档/用户标签", Alias: routealias.DocsUserTag},

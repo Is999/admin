@@ -15,7 +15,7 @@ import (
 
 // ListAdminHandler 查询管理员列表。
 func ListAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.AdminListReq](shared.MethodListAdmin,
+	return shared.ActionHandler[types.AdminListReq](shared.AdminList,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminListReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.List(req)
@@ -25,7 +25,7 @@ func ListAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // GetAdminHandler 查询管理员详情。
 func GetAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.IDPathReq](shared.MethodGetAdmin,
+	return shared.ActionHandler[types.IDPathReq](shared.AdminInfo,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.IDPathReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.Get(req)
@@ -35,7 +35,7 @@ func GetAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // UpdateAdminHandler 编辑管理员。
 func UpdateAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.UpdateAdminReq](shared.MethodUpdateAdmin,
+	return shared.ActionHandler[types.UpdateAdminReq](shared.AdminUpdate,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.UpdateAdminReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.Update(req)
@@ -45,7 +45,7 @@ func UpdateAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // DeleteAdminHandler 删除管理员。
 func DeleteAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.IDPathReq](shared.MethodDeleteAdmin,
+	return shared.ActionHandler[types.IDPathReq](shared.AdminDelete,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.IDPathReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.Delete(req)
@@ -55,7 +55,7 @@ func DeleteAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // UpdateAdminStatusHandler 修改管理员状态。
 func UpdateAdminStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.AdminStatusReq](shared.MethodUpdateAdminStatus,
+	return shared.ActionHandler[types.AdminStatusReq](shared.AdminStatusUpdate,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminStatusReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.UpdateStatus(req)
@@ -65,7 +65,7 @@ func UpdateAdminStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ResetAdminPasswordHandler 重置管理员密码。
 func ResetAdminPasswordHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ResetAdminPasswordReq](shared.MethodResetAdminPassword,
+	return shared.ActionHandler[types.ResetAdminPasswordReq](shared.AdminPasswordReset,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ResetAdminPasswordReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.ResetPassword(req)
@@ -75,7 +75,7 @@ func ResetAdminPasswordHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ResetAdminInitialStateHandler 重置管理员到首次登录前状态。
 func ResetAdminInitialStateHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ResetAdminInitialStateReq](shared.MethodResetAdminInitialState,
+	return shared.ActionHandler[types.ResetAdminInitialStateReq](shared.AdminResetInitialState,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ResetAdminInitialStateReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.ResetInitialState(req)
@@ -85,7 +85,7 @@ func ResetAdminInitialStateHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ListAdminRolesHandler 查询管理员已绑定角色。
 func ListAdminRolesHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.IDPathReq](shared.MethodListAdminRoles,
+	return shared.ActionHandler[types.IDPathReq](shared.AdminRoleList,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.IDPathReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.ListRoles(req)
@@ -95,7 +95,7 @@ func ListAdminRolesHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // TriggerAdminExportHandler 提交管理员列表异步导出任务。
 func TriggerAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.AdminExportReq](shared.MethodTriggerAdminExport,
+	return shared.ActionHandler[types.AdminExportReq](shared.AdminExportTrigger,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminExportReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminExportLogic(r, svcCtx)
 			return logicObj, logicObj.Trigger(req)
@@ -105,7 +105,7 @@ func TriggerAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // GetAdminExportStatusHandler 查询管理员列表异步导出进度。
 func GetAdminExportStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.AdminExportJobReq](shared.MethodGetAdminExportStatus,
+	return shared.ActionHandler[types.AdminExportJobReq](shared.AdminExportStatus,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminExportJobReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminExportLogic(r, svcCtx)
 			return logicObj, logicObj.GetStatus(req)
@@ -118,7 +118,7 @@ func DownloadAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.AdminExportJobReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(0, err), nil, "")
+			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
 			return
 		}
 
@@ -127,12 +127,12 @@ func DownloadAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		status, resp := logicObj.PrepareDownload(&req)
 		if resp != nil {
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodDownloadAdminExport)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
 			return
 		}
 
 		if logMeta != nil {
-			logicObj.AddAdminLog(logMeta.Action, logMeta.Route, string(shared.MethodDownloadAdminExport), logMeta.Describe, &req)
+			logicObj.AddAdminLog(logMeta.Action, logMeta.Route, logMeta.Method, logMeta.Describe, &req)
 		}
 
 		objectStream, err := logicObj.OpenDownloadObject(status, r.Header.Get("Range"))
@@ -140,7 +140,7 @@ func DownloadAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"DownloadAdminExportHandler 打开管理员导出对象失败").ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodDownloadAdminExport)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
 			return
 		}
 		defer objectStream.Reader.Close()
@@ -159,14 +159,14 @@ func DownloadAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"DownloadAdminExportHandler 输出管理员导出文件[%s]失败", status.FileName).ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, logMeta, shared.MethodDownloadAdminExport)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
 		}
 	}
 }
 
 // UpdateAdminRolesHandler 替换管理员角色。
 func UpdateAdminRolesHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.AdminRoleAssignReq](shared.MethodUpdateAdminRoles,
+	return shared.ActionHandler[types.AdminRoleAssignReq](shared.AdminRoleUpdate,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminRoleAssignReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := adminlogic.NewAdminManageLogic(r, svcCtx)
 			return logicObj, logicObj.ReplaceRoles(req)

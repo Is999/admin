@@ -35,7 +35,7 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 		var req types.LoginReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(0, err), nil, "")
+			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
 			return
 		}
 		req.Ip = utils.ClientIP(r)
@@ -51,7 +51,7 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 				UserName: req.Username,
 				IP:       req.Ip,
 			}, captchaResp, http.StatusOK, message)
-			shared.WriteBizResponse(w, r, logicObj, captchaResp.WithReq(&req), nil, "")
+			shared.WriteBizResponse(w, r, logicObj, captchaResp.WithReq(&req), nil)
 			return
 		}
 		resp := logicObj.Login(&req).WithReq(&req)
@@ -75,7 +75,7 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			IP:       req.Ip,
 		}, resp, http.StatusOK, message)
 
-		shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+		shared.WriteBizResponse(w, r, logicObj, resp, nil)
 	}
 }
 
@@ -88,7 +88,7 @@ func LogoutHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		logicObj := adminlogic.NewAdminLogic(r, sCtx)
 		ctxAdmin := logicObj.GetCtxAdmin()
 		if ctxAdmin == nil || ctxAdmin.ID == 0 {
-			shared.WriteBizResponse(w, r, logicObj, types.Unauthorized(i18n.MsgKeyNeedLogin).ToBizResult(), nil, "")
+			shared.WriteBizResponse(w, r, logicObj, types.Unauthorized(i18n.MsgKeyNeedLogin).ToBizResult(), nil)
 			return
 		}
 
@@ -105,7 +105,7 @@ func LogoutHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			IP:       ctxAdmin.IP,
 		}, resp, http.StatusOK, message)
 
-		shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+		shared.WriteBizResponse(w, r, logicObj, resp, nil)
 	}
 }
 

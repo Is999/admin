@@ -10,7 +10,7 @@ PROMTOOL_IMAGE ?= prom/prometheus:v2.55.1
 PROMETHEUS_RULES := $(wildcard docs/prometheus/*.yml)
 PROMETHEUS_RULES_IN_CONTAINER := $(patsubst docs/prometheus/%,/rules/%,$(PROMETHEUS_RULES))
 
-.PHONY: fmt fmt-check test build build-tools package check ci diff-check secret-scan promtool-check govulncheck security-scan integration-env-up integration-env-down integration-test migrate-status migrate-dry-run migrate-up migrate-bootstrap clean
+.PHONY: fmt fmt-check test build build-tools package check ci diff-check update-route-security-manifest secret-scan promtool-check govulncheck security-scan integration-env-up integration-env-down integration-test migrate-status migrate-dry-run migrate-up migrate-bootstrap clean
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -46,6 +46,9 @@ security-scan: secret-scan govulncheck
 
 diff-check:
 	git diff --check
+
+update-route-security-manifest:
+	UPDATE_ROUTE_SECURITY_MANIFEST=1 go test -run TestDefaultRouteSecurityManifestMatchesSnapshots ./internal/handler
 
 check: fmt-check test build build-tools secret-scan promtool-check diff-check
 

@@ -133,6 +133,20 @@ const (
 	maxPageSize = 100
 )
 
+// normalizePage 归一化页码和每页数量，调用方可按业务场景指定默认每页数量。
+func normalizePage(page, pageSize, defaultSize int) (int, int) {
+	if page < 1 {
+		page = defaultPageNumber
+	}
+	if pageSize < 1 {
+		pageSize = defaultSize
+	}
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
+	return page, pageSize
+}
+
 // GetPageReq 表示通用 GET 分页请求参数。
 type GetPageReq struct {
 	Page     int `form:"page,default=1"`      // 页码
@@ -141,15 +155,7 @@ type GetPageReq struct {
 
 // Validate 校验并归一化分页参数。
 func (r *GetPageReq) Validate() error {
-	if r.Page < 1 {
-		r.Page = defaultPageNumber
-	}
-	if r.PageSize < 1 {
-		r.PageSize = defaultPageSize
-	}
-	if r.PageSize > maxPageSize {
-		r.PageSize = maxPageSize
-	}
+	r.Page, r.PageSize = normalizePage(r.Page, r.PageSize, defaultPageSize)
 	return nil
 }
 
@@ -161,15 +167,7 @@ type PostPageReq struct {
 
 // Validate 校验并归一化分页参数。
 func (r *PostPageReq) Validate() error {
-	if r.Page < 1 {
-		r.Page = defaultPageNumber
-	}
-	if r.PageSize < 1 {
-		r.PageSize = defaultPageSize
-	}
-	if r.PageSize > maxPageSize {
-		r.PageSize = maxPageSize
-	}
+	r.Page, r.PageSize = normalizePage(r.Page, r.PageSize, defaultPageSize)
 	return nil
 }
 

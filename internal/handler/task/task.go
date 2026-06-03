@@ -21,7 +21,7 @@ const (
 
 // TriggerTaskWorkflowHandler 手动触发工作流执行。
 func TriggerTaskWorkflowHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.TriggerTaskWorkflowReq](shared.MethodTriggerTaskWorkflow,
+	return shared.ActionHandler[types.TriggerTaskWorkflowReq](shared.TaskWorkflowTrigger,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.TriggerTaskWorkflowReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.TriggerWorkflow(req)
@@ -31,10 +31,10 @@ func TriggerTaskWorkflowHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // EnqueueTaskHandler 手动投递一个已注册的通用任务。
 func EnqueueTaskHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionLogHandler(shared.MethodEnqueueTask, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionLogHandler(shared.TaskEnqueue, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		var req types.EnqueueTaskReq
 		if err := parseEnqueueTaskReq(r, &req); err != nil {
-			return nil, shared.ParamErrorResult(codes.ParamError, err)
+			return nil, shared.ParamErrorResult(err)
 		}
 		logicObj := tasklogic.NewTaskLogic(r, sCtx)
 		resp := logicObj.EnqueueTask(&req)
@@ -60,7 +60,7 @@ func parseEnqueueTaskReq(r *http.Request, req *types.EnqueueTaskReq) error {
 
 // GetTaskWorkflowStatusHandler 查询工作流实例状态。
 func GetTaskWorkflowStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.GetTaskWorkflowReq](shared.MethodGetTaskWorkflowStatus,
+	return shared.ActionHandler[types.GetTaskWorkflowReq](shared.TaskWorkflowStatus,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.GetTaskWorkflowReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.GetWorkflowStatus(req)
@@ -70,7 +70,7 @@ func GetTaskWorkflowStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // GetTaskInfoHandler 查询单个任务详情。
 func GetTaskInfoHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.GetTaskInfoReq](shared.MethodGetTaskInfo,
+	return shared.ActionHandler[types.GetTaskInfoReq](shared.TaskInfoGet,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.GetTaskInfoReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.GetTaskInfo(req)
@@ -80,7 +80,7 @@ func GetTaskInfoHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ListTaskItemsHandler 按队列和状态查询任务列表。
 func ListTaskItemsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ListTaskItemsReq](shared.MethodListTaskItems,
+	return shared.ActionHandler[types.ListTaskItemsReq](shared.TaskItemsList,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ListTaskItemsReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.ListTasks(req)
@@ -90,7 +90,7 @@ func ListTaskItemsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ListTaskItemsOverviewHandler 按“总览聚合 + 按需查询”模式查询任务列表。
 func ListTaskItemsOverviewHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ListTaskItemsOverviewReq](shared.MethodListTaskItems,
+	return shared.ActionHandler[types.ListTaskItemsOverviewReq](shared.TaskItemsList,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ListTaskItemsOverviewReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.ListTasksOverview(req)
@@ -101,7 +101,7 @@ func ListTaskItemsOverviewHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 // ListTaskQueuesHandler 查询任务队列与 worker 概览。
 func ListTaskQueuesHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	// 该接口需要记录管理员查看任务队列的审计日志，因此走 actionLogHandler。
-	return shared.ActionLogHandler(shared.MethodListTaskQueues, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionLogHandler(shared.TaskQueueList, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := tasklogic.NewTaskLogic(r, sCtx)
 		return logicObj, logicObj.ListQueues().WithReq(shared.ActionReq("list_task_queues"))
 	})
@@ -128,7 +128,7 @@ func ListTaskRegistryWorkflowsHandler(sCtx *svc.ServiceContext) http.HandlerFunc
 // GetConfigReloadStatusHandler 查询 config.yaml 热加载运行状态。
 func GetConfigReloadStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	// 该接口属于后台运维能力，需要保留审计日志，因此统一走 actionLogHandler。
-	return shared.ActionLogHandler(shared.MethodGetConfigReloadStatus, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionLogHandler(shared.TaskConfigReload, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := tasklogic.NewTaskLogic(r, sCtx)
 		return logicObj, logicObj.GetConfigReloadStatus().WithReq(shared.ActionReq("get_config_reload_status"))
 	})
@@ -136,7 +136,7 @@ func GetConfigReloadStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // GetConfigReloadItemsHandler 查询当前运行态配置快照中的配置项。
 func GetConfigReloadItemsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.TaskConfigItemQueryReq](shared.MethodGetConfigReloadItems,
+	return shared.ActionHandler[types.TaskConfigItemQueryReq](shared.TaskConfigItems,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.TaskConfigItemQueryReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.GetConfigReloadItems(req)
@@ -147,7 +147,7 @@ func GetConfigReloadItemsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 // RunConfigReloadHandler 手动触发一次 config.yaml 重载，并返回最新运行状态。
 func RunConfigReloadHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	// 手动执行配置重载属于显式运维操作，需要统一落管理员审计日志。
-	return shared.ActionLogHandler(shared.MethodRunConfigReload, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionLogHandler(shared.TaskConfigReloadRun, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := tasklogic.NewTaskLogic(r, sCtx)
 		return logicObj, logicObj.RunConfigReload().WithReq(shared.ActionReq("run_config_reload"))
 	})
@@ -155,7 +155,7 @@ func RunConfigReloadHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // RunTaskHandler 让指定任务立即转为 pending 状态执行。
 func RunTaskHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.OperateTaskReq](shared.MethodRunTask,
+	return shared.ActionHandler[types.OperateTaskReq](shared.TaskRun,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.OperateTaskReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.RunTask(req)
@@ -165,7 +165,7 @@ func RunTaskHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // DeleteTaskHandler 删除指定任务。
 func DeleteTaskHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.OperateTaskReq](shared.MethodDeleteTask,
+	return shared.ActionHandler[types.OperateTaskReq](shared.TaskDelete,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.OperateTaskReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.DeleteTask(req)
@@ -175,7 +175,7 @@ func DeleteTaskHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // PauseTaskQueueHandler 暂停指定队列消费。
 func PauseTaskQueueHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.OperateTaskQueueReq](shared.MethodPauseTaskQueue,
+	return shared.ActionHandler[types.OperateTaskQueueReq](shared.TaskQueuePause,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.OperateTaskQueueReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.PauseQueue(req)
@@ -185,7 +185,7 @@ func PauseTaskQueueHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ResumeTaskQueueHandler 恢复指定队列消费。
 func ResumeTaskQueueHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.OperateTaskQueueReq](shared.MethodResumeTaskQueue,
+	return shared.ActionHandler[types.OperateTaskQueueReq](shared.TaskQueueResume,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.OperateTaskQueueReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
 			return logicObj, logicObj.ResumeQueue(req)

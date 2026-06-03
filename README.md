@@ -150,6 +150,8 @@ admin
 
 详细注册表见 [组件注册清单](docs/site/角色文档/后端开发/组件注册清单.md)。
 
+路由、RouteMeta 或安全策略变更后，执行 `make update-route-security-manifest` 同步后端文档与 `admin-vue` 前端运行清单。
+
 ## 本地启动
 
 准备 MySQL、Redis 后，复制样例配置并调整连接信息、`app_id`、`jwt_secret`、安全秘钥、运维令牌和文件存储路径：

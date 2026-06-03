@@ -1,9 +1,12 @@
 package docs
 
 import (
+	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
 	pathpkg "path"
+	"path/filepath"
 	"strings"
 
 	codes "admin/common/codes"
@@ -21,8 +24,8 @@ const (
 	docsSessionMaxAgeSeconds = 3600
 	// apiDocsProxyPathPrefix 表示 Admin 文档站内的 API 文档代理前缀。
 	apiDocsProxyPathPrefix = "/api/docs/api"
-	// apiDocsProxyDefaultPath 表示访问 API 文档代理根路径时返回的默认文档。
-	apiDocsProxyDefaultPath = "/接口文档/前台系统/系统接口.md"
+	// apiDocsIndexAssetPath 表示前台 API 独立文档站壳层静态资源。
+	apiDocsIndexAssetPath = "api/index.html"
 )
 
 // DocsSessionResp 表示文档访问会话创建结果。
@@ -57,6 +60,11 @@ func DocsSessionHandler() http.HandlerFunc {
 func DocsSiteHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	localDocs := sitedocs.Handler()
 	return func(w http.ResponseWriter, r *http.Request) {
+		switch cleanDocsRequestPath(r.URL.Path) {
+		case apiDocsProxyPathPrefix:
+			serveAPIDocsIndex(w)
+			return
+		}
 		if docsPath, ok := apiDocsProxyPath(r.URL.Path); ok {
 			serveAPIDocsProxy(w, r, svcCtx, docsPath)
 			return
@@ -91,17 +99,43 @@ func docsSessionSecure(r *http.Request) bool {
 
 // apiDocsProxyPath 将 /api/docs/api 下的路径转换为 API 内网文档资源路径。
 func apiDocsProxyPath(requestPath string) (string, bool) {
-	if text, err := url.PathUnescape(strings.TrimSpace(requestPath)); err == nil {
-		requestPath = text
-	}
-	cleanPath := pathpkg.Clean("/" + strings.TrimLeft(strings.TrimSpace(requestPath), "/"))
-	if cleanPath == apiDocsProxyPathPrefix || cleanPath == apiDocsProxyPathPrefix+"/" {
-		return apiDocsProxyDefaultPath, true
+	cleanPath := cleanDocsRequestPath(requestPath)
+	if cleanPath == apiDocsProxyPathPrefix {
+		return "", false
 	}
 	if !strings.HasPrefix(cleanPath, apiDocsProxyPathPrefix+"/") {
 		return "", false
 	}
 	return "/" + strings.TrimPrefix(cleanPath, apiDocsProxyPathPrefix+"/"), true
+}
+
+// cleanDocsRequestPath 统一清洗文档站请求路径，避免编码路径和穿越路径绕过判断。
+func cleanDocsRequestPath(requestPath string) string {
+	if text, err := url.PathUnescape(strings.TrimSpace(requestPath)); err == nil {
+		requestPath = text
+	}
+	return pathpkg.Clean("/" + strings.TrimLeft(strings.TrimSpace(requestPath), "/"))
+}
+
+// serveAPIDocsIndex 返回前台 API 独立文档站壳层，避免复用 Admin 文档导航。
+func serveAPIDocsIndex(w http.ResponseWriter) {
+	content, err := readAPIDocsIndex()
+	if err != nil {
+		http.Error(w, "前台API文档入口不可用", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(content)
+}
+
+// readAPIDocsIndex 读取前台 API 文档入口页面；开发环境优先本地文件，生产环境回退内嵌资源。
+func readAPIDocsIndex() ([]byte, error) {
+	localPath := filepath.Join("docs", "site", apiDocsIndexAssetPath)
+	if content, err := os.ReadFile(localPath); err == nil {
+		return content, nil
+	}
+	return fs.ReadFile(sitedocs.FS, pathpkg.Join("site", apiDocsIndexAssetPath))
 }
 
 // serveAPIDocsProxy 通过 Admin 后端内网读取 API 文档资源，避免浏览器直连 API 服务。

@@ -39,13 +39,13 @@ func CompleteFileUploadHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		req, err := parseFileUploadCompleteReq(r)
 		if err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(0, err), nil, "")
+			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)
 		resp := logicObj.CompleteUpload(req)
 		resp.WithReq(req)
-		shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+		shared.WriteBizResponse(w, r, logicObj, resp, nil)
 	}
 }
 
@@ -54,13 +54,13 @@ func UploadFileChunkHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		req, err := parseFileUploadChunkReq(r)
 		if err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(0, err), nil, "")
+			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)
 		resp := logicObj.UploadChunk(req, r.Body)
 		resp.WithReq(req)
-		shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+		shared.WriteBizResponse(w, r, logicObj, resp, nil)
 	}
 }
 
@@ -69,7 +69,7 @@ func DownloadUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.FileUploadStatusReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(0, err), nil, "")
+			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)
@@ -77,7 +77,7 @@ func DownloadUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		if err != nil {
 			resp := buildFileTransferAccessResp(err, "DownloadUploadedFileHandler 准备下载上传会话失败")
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 			return
 		}
 		objectStream, err := logicObj.OpenSessionObject(session, r.Header.Get("Range"))
@@ -85,7 +85,7 @@ func DownloadUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"DownloadUploadedFileHandler 打开上传会话[%s]对象失败", req.UploadID).ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 			return
 		}
 		defer objectStream.Reader.Close()
@@ -103,7 +103,7 @@ func DownloadUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"DownloadUploadedFileHandler 输出上传会话[%s]文件失败", req.UploadID).ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 		}
 	}
 }
@@ -113,7 +113,7 @@ func AccessUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.FileUploadStatusReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(0, err), nil, "")
+			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)
@@ -121,7 +121,7 @@ func AccessUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		if err != nil {
 			resp := buildFileTransferAccessResp(err, "AccessUploadedFileHandler 访问上传会话失败")
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 			return
 		}
 		objectStream, err := logicObj.OpenSessionObject(session, r.Header.Get("Range"))
@@ -129,7 +129,7 @@ func AccessUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"AccessUploadedFileHandler 打开上传会话[%s]对象失败", req.UploadID).ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 			return
 		}
 		defer objectStream.Reader.Close()
@@ -147,7 +147,7 @@ func AccessUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 				"AccessUploadedFileHandler 输出上传会话[%s]文件失败", req.UploadID).ToBizResult()
 			resp.WithReq(&req)
-			shared.WriteBizResponse(w, r, logicObj, resp, nil, "")
+			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 		}
 	}
 }

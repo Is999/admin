@@ -11,7 +11,7 @@ import (
 
 // GetCollectorOverviewHandler 查询 Collector 概览。
 func GetCollectorOverviewHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.CollectorOverviewReq](shared.MethodGetCollectorOverview,
+	return shared.ActionHandler[types.CollectorOverviewReq](shared.CollectorOverview,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.CollectorOverviewReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := collectorlogic.NewCollectorLogic(r, svcCtx)
 			return logicObj, logicObj.Overview()
@@ -21,7 +21,7 @@ func GetCollectorOverviewHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ListCollectorTasksHandler 查询 Collector 任务列表。
 func ListCollectorTasksHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ListCollectorTasksReq](shared.MethodListCollectorTasks,
+	return shared.ActionHandler[types.ListCollectorTasksReq](shared.CollectorTaskList,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ListCollectorTasksReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := collectorlogic.NewCollectorLogic(r, svcCtx)
 			return logicObj, logicObj.ListTasks(req)
@@ -31,7 +31,7 @@ func ListCollectorTasksHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // RunCollectorHandler 手动触发执行一轮 Collector 任务。
 func RunCollectorHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.RunCollectorReq](shared.MethodRunCollector,
+	return shared.ActionHandler[types.RunCollectorReq](shared.CollectorRun,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.RunCollectorReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := collectorlogic.NewCollectorLogic(r, svcCtx)
 			return logicObj, logicObj.RunNow(req)
@@ -41,7 +41,7 @@ func RunCollectorHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // RetryCollectorTasksHandler 对指定 Collector 任务发起人工重试/延迟重试。
 func RetryCollectorTasksHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.RetryCollectorTasksReq](shared.MethodRetryCollectorTasks,
+	return shared.ActionHandler[types.RetryCollectorTasksReq](shared.CollectorRetry,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.RetryCollectorTasksReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := collectorlogic.NewCollectorLogic(r, svcCtx)
 			return logicObj, logicObj.RetryTasks(req)

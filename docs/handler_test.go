@@ -49,6 +49,20 @@ func TestIndexKeepsFastDocsConfig(t *testing.T) {
 	}
 }
 
+// TestDocsifyCSSUsesLocalAssets 校验 docsify 样式不再运行时请求外部字体资源。
+func TestDocsifyCSSUsesLocalAssets(t *testing.T) {
+	content, err := fs.ReadFile(FS, "site/vendor/docsify/vue.css")
+	if err != nil {
+		t.Fatalf("读取 docsify 样式失败: %v", err)
+	}
+	css := string(content)
+	for _, text := range []string{"fonts.googleapis.com", "fonts.gstatic.com", "@import url(\"https://"} {
+		if strings.Contains(css, text) {
+			t.Fatalf("docsify css must not depend on external font asset %q", text)
+		}
+	}
+}
+
 // TestHandlerServesRootIndex 校验文档首页能正常输出，避免文档入口漂移。
 func TestHandlerServesRootIndex(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/docs", nil)

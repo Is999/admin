@@ -21,7 +21,7 @@ func AuthVerifyAccountHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ProfileMineHandler 返回当前登录管理员资料。
 func ProfileMineHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionLogHandler(shared.MethodProfileMine, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionLogHandler(shared.ProfileMine, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := profilelogic.NewProfileLogic(r, sCtx)
 		return logicObj, logicObj.Mine().WithReq(shared.ActionReq("profile_mine"))
 	})
@@ -49,7 +49,7 @@ func ProfileCheckMFAHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ProfileUpdatePasswordHandler 个人中心修改密码。
 func ProfileUpdatePasswordHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ProfilePasswordReq](shared.MethodProfileUpdatePassword,
+	return shared.ActionHandler[types.ProfilePasswordReq](shared.ProfileUpdatePassword,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ProfilePasswordReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
 			return logicObj, logicObj.UpdatePassword(req)
@@ -59,7 +59,7 @@ func ProfileUpdatePasswordHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ProfileUpdateMineHandler 个人中心修改资料。
 func ProfileUpdateMineHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ProfileUpdateReq](shared.MethodProfileUpdateMine,
+	return shared.ActionHandler[types.ProfileUpdateReq](shared.ProfileUpdateMine,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ProfileUpdateReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
 			return logicObj, logicObj.UpdateMine(req)
@@ -69,7 +69,7 @@ func ProfileUpdateMineHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ProfileUpdateMFAStatusHandler 个人中心修改 MFA 状态。
 func ProfileUpdateMFAStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ProfileMFAStatusReq](shared.MethodProfileUpdateMFAStatus,
+	return shared.ActionHandler[types.ProfileMFAStatusReq](shared.ProfileUpdateMFA,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ProfileMFAStatusReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
 			return logicObj, logicObj.UpdateMFAStatus(req)
@@ -79,7 +79,7 @@ func ProfileUpdateMFAStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ProfileUpdateMFASecureKeyHandler 个人中心修改 MFA 秘钥。
 func ProfileUpdateMFASecureKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ProfileMFASecretReq](shared.MethodProfileUpdateMFASecret,
+	return shared.ActionHandler[types.ProfileMFASecretReq](shared.ProfileUpdateMFAKey,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ProfileMFASecretReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
 			return logicObj, logicObj.UpdateMFASecureKey(req)
@@ -89,7 +89,7 @@ func ProfileUpdateMFASecureKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc
 
 // ProfileRefreshMFASecretKeyHandler 个人中心重新生成 MFA 秘钥。
 func ProfileRefreshMFASecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ProfileMFASecretRefreshReq](shared.MethodProfileRefreshMFASecret,
+	return shared.ActionHandler[types.ProfileMFASecretRefreshReq](shared.ProfileRefreshMFAKey,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ProfileMFASecretRefreshReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
 			return logicObj, logicObj.RefreshMFASecretKey(req)
@@ -99,7 +99,7 @@ func ProfileRefreshMFASecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFun
 
 // ProfileUpdateAvatarHandler 个人中心修改头像。
 func ProfileUpdateAvatarHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.ProfileAvatarReq](shared.MethodProfileUpdateAvatar,
+	return shared.ActionHandler[types.ProfileAvatarReq](shared.ProfileUpdateAvatar,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ProfileAvatarReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
 			return logicObj, logicObj.UpdateAvatar(req)
@@ -109,7 +109,7 @@ func ProfileUpdateAvatarHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // AdminBuildMFASecretKeyURLHandler 生成指定管理员 MFA 绑定地址。
 func AdminBuildMFASecretKeyURLHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.IDPathReq](shared.MethodAdminBuildMFAURL,
+	return shared.ActionHandler[types.IDPathReq](shared.AdminBuildMFAURL,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.IDPathReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
 			return logicObj, logicObj.BuildMFASecretKeyURL(req)
@@ -119,7 +119,7 @@ func AdminBuildMFASecretKeyURLHandler(sCtx *svc.ServiceContext) http.HandlerFunc
 
 // AdminMFAStatusHandler 修改指定管理员 MFA 状态。
 func AdminMFAStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.AdminMFAStatusReq](shared.MethodAdminMFAStatus,
+	return shared.ActionHandler[types.AdminMFAStatusReq](shared.AdminMFAStatus,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminMFAStatusReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
 			return logicObj, logicObj.UpdateAccountMFAStatus(req)

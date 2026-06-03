@@ -15,6 +15,13 @@ const (
 	TableNameAdminMessageReceiver = "admin_message_receiver"
 )
 
+const (
+	// AdminMessageReadStatusUnread 表示消息收件状态为未读。
+	AdminMessageReadStatusUnread = 0
+	// AdminMessageReadStatusRead 表示消息收件状态为已读。
+	AdminMessageReadStatusRead = 1
+)
+
 // AdminMessageLevel 定义消息等级枚举。
 type AdminMessageLevel int
 
@@ -204,7 +211,7 @@ func ListAdminMessageInbox(
 			HandledStatus:      it.HandledStatus,
 			HandledByAdminName: it.HandledByAdminName,
 			HandledAt:          handledAt,
-			IsRead:             it.ReadStatus == 1,
+			IsRead:             it.ReadStatus == AdminMessageReadStatusRead,
 			ReadAt:             readAt,
 			CreatedAt:          it.CreatedAt.Format(time.DateTime),
 		})
@@ -433,7 +440,7 @@ func CountAdminMessageUnread(db *gorm.DB, receiverAdminID int) (int64, error) {
 	if err := db.Model(&AdminMessageReceiver{}).
 		Where("receiver_admin_id = ?", receiverAdminID).
 		Where("delete_status = 0").
-		Where("read_status = 0").
+		Where("read_status = ?", AdminMessageReadStatusUnread).
 		Count(&total).Error; err != nil {
 		return 0, errors.Tag(err)
 	}
@@ -445,7 +452,19 @@ func ListAdminMessageNotifications(db *gorm.DB, receiverAdminID int, limit int) 
 	if limit <= 0 {
 		limit = 10
 	}
-	items, _, err := ListAdminMessageInbox(db, receiverAdminID, 1, limit, "", nil, nil, "", nil, nil)
+	readStatus := AdminMessageReadStatusUnread
+	items, _, err := ListAdminMessageInbox(
+		db,
+		receiverAdminID,
+		1,
+		limit,
+		"",
+		nil,
+		&readStatus,
+		"",
+		nil,
+		nil,
+	)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -460,10 +479,10 @@ func MarkAdminMessagesRead(db *gorm.DB, receiverAdminID int, messageIDs []int64)
 	res := db.Model(&AdminMessageReceiver{}).
 		Where("receiver_admin_id = ?", receiverAdminID).
 		Where("delete_status = 0").
-		Where("read_status = 0").
+		Where("read_status = ?", AdminMessageReadStatusUnread).
 		Where("message_id IN ?", messageIDs).
 		Updates(map[string]any{
-			"read_status": 1,
+			"read_status": AdminMessageReadStatusRead,
 			"read_at":     new(time.Now()),
 		})
 	if res.Error != nil {
@@ -477,9 +496,9 @@ func MarkAdminMessagesReadAll(db *gorm.DB, receiverAdminID int) (int64, error) {
 	res := db.Model(&AdminMessageReceiver{}).
 		Where("receiver_admin_id = ?", receiverAdminID).
 		Where("delete_status = 0").
-		Where("read_status = 0").
+		Where("read_status = ?", AdminMessageReadStatusUnread).
 		Updates(map[string]any{
-			"read_status": 1,
+			"read_status": AdminMessageReadStatusRead,
 			"read_at":     new(time.Now()),
 		})
 	if res.Error != nil {
@@ -512,7 +531,7 @@ func DeleteAdminMessagesAllRead(db *gorm.DB, receiverAdminID int) (int64, error)
 	res := db.Model(&AdminMessageReceiver{}).
 		Where("receiver_admin_id = ?", receiverAdminID).
 		Where("delete_status = 0").
-		Where("read_status = 1").
+		Where("read_status = ?", AdminMessageReadStatusRead).
 		Updates(map[string]any{
 			"delete_status": 1,
 			"deleted_at":    new(time.Now()),

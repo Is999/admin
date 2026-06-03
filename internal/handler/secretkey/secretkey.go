@@ -11,7 +11,7 @@ import (
 
 // ListSecretKeyHandler 查询秘钥配置列表。
 func ListSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SecretKeyListReq](shared.MethodListSecretKey,
+	return shared.ActionHandler[types.SecretKeyListReq](shared.SecretKeyList,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SecretKeyListReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := secretkeylogic.NewSecretKeyManageLogic(r, svcCtx)
 			return logicObj, logicObj.List(req)
@@ -21,7 +21,7 @@ func ListSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // GetSecretKeyHandler 查询单个秘钥详情。
 func GetSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SecretKeyDetailReq](shared.MethodGetSecretKey,
+	return shared.ActionHandler[types.SecretKeyDetailReq](shared.SecretKeyGet,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SecretKeyDetailReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := secretkeylogic.NewSecretKeyManageLogic(r, svcCtx)
 			return logicObj, logicObj.Get(req)
@@ -31,7 +31,7 @@ func GetSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // AddSecretKeyHandler 新增秘钥配置。
 func AddSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.CreateSecretKeyReq](shared.MethodAddSecretKey,
+	return shared.ActionHandler[types.CreateSecretKeyReq](shared.SecretKeyAdd,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.CreateSecretKeyReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := secretkeylogic.NewSecretKeyManageLogic(r, svcCtx)
 			return logicObj, logicObj.Create(req.ToSaveSecretKeyReq())
@@ -41,7 +41,7 @@ func AddSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // UpdateSecretKeyHandler 编辑秘钥配置。
 func UpdateSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SaveSecretKeyReq](shared.MethodUpdateSecretKey,
+	return shared.ActionHandler[types.SaveSecretKeyReq](shared.SecretKeyUpdate,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SaveSecretKeyReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := secretkeylogic.NewSecretKeyManageLogic(r, svcCtx)
 			return logicObj, logicObj.Update(req)
@@ -51,7 +51,7 @@ func UpdateSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // UpdateSecretKeyStatusHandler 修改秘钥启用状态。
 func UpdateSecretKeyStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SecretKeyStatusReq](shared.MethodUpdateSecretKeyStatus,
+	return shared.ActionHandler[types.SecretKeyStatusReq](shared.SecretKeyStatus,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SecretKeyStatusReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := secretkeylogic.NewSecretKeyManageLogic(r, svcCtx)
 			return logicObj, logicObj.UpdateStatus(req)
@@ -61,7 +61,7 @@ func UpdateSecretKeyStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // RenewSecretKeyHandler 刷新指定 AppID 的秘钥缓存。
 func RenewSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SecretKeyRenewReq](shared.MethodRenewSecretKey,
+	return shared.ActionHandler[types.SecretKeyRenewReq](shared.SecretKeyRenew,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SecretKeyRenewReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := secretkeylogic.NewSecretKeyManageLogic(r, svcCtx)
 			return logicObj, logicObj.Renew(req)
@@ -71,7 +71,7 @@ func RenewSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // ValidateSecretKeyHandler 对待保存的秘钥路径执行静态预检。
 func ValidateSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SecretKeyValidateReq](shared.MethodValidateSecretKey,
+	return shared.ActionHandler[types.SecretKeyValidateReq](shared.SecretKeyValidate,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SecretKeyValidateReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := secretkeylogic.NewSecretKeyManageLogic(r, svcCtx)
 			return logicObj, logicObj.ValidatePaths(req)
@@ -81,7 +81,7 @@ func ValidateSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // SelfCheckSecretKeyHandler 对已落库的秘钥执行运行态自检。
 func SelfCheckSecretKeyHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SecretKeySelfCheckReq](shared.MethodSelfCheckSecretKey,
+	return shared.ActionHandler[types.SecretKeySelfCheckReq](shared.SecretKeySelfCheck,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SecretKeySelfCheckReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := secretkeylogic.NewSecretKeyManageLogic(r, svcCtx)
 			return logicObj, logicObj.SelfCheck(req)

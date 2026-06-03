@@ -24,25 +24,18 @@ func TestDefaultRouteMetasValid(t *testing.T) {
 	}
 }
 
-// TestActionLogRegistryUsesRouteMetas 确保方法注册表绑定完整路由元数据，并按 Action 决定是否写审计。
-func TestActionLogRegistryUsesRouteMetas(t *testing.T) {
-	registry := ActionLogRegistry()
-	if len(registry) == 0 {
-		t.Fatal("ActionLogRegistry() must not be empty")
-	}
-	for method, meta := range registry {
-		if method == "" {
-			t.Fatalf("action log registry has empty method: %+v", meta)
-		}
-		if meta.Alias == "" || meta.Describe == "" {
-			t.Fatalf("action log registry has incomplete meta method=%s meta=%+v", method, meta)
-		}
-		param := ActionLogMap(method)
+// TestActionLogParamFromMeta 确保审计参数直接由 RouteMeta 派生，不再维护额外方法映射。
+func TestActionLogParamFromMeta(t *testing.T) {
+	for _, meta := range DefaultRouteMetas() {
+		param := ActionLogParamFromMeta(meta)
 		if meta.Action == "" && param != nil {
-			t.Fatalf("ActionLogMap(%s) should skip non-audit route meta=%+v", method, meta)
+			t.Fatalf("ActionLogParamFromMeta should skip non-audit route meta=%+v", meta)
 		}
 		if meta.Action != "" && param == nil {
-			t.Fatalf("ActionLogMap(%s) returned nil", method)
+			t.Fatalf("ActionLogParamFromMeta returned nil: %+v", meta)
+		}
+		if param != nil && (param.Route != string(meta.Alias) || param.Method != string(meta.Alias) || param.Describe != meta.Describe) {
+			t.Fatalf("ActionLogParamFromMeta returned mismatched param=%+v meta=%+v", param, meta)
 		}
 	}
 }

@@ -147,15 +147,7 @@ func (r *ListTaskItemsReq) Validate() error {
 	if err := validateTaskListTimeRange(r.StartTime, r.EndTime); err != nil {
 		return errors.Tag(err)
 	}
-	if r.Page <= 0 {
-		r.Page = 1
-	}
-	if r.PageSize <= 0 {
-		r.PageSize = 20
-	}
-	if r.PageSize > 100 {
-		r.PageSize = 100
-	}
+	r.Page, r.PageSize = normalizePage(r.Page, r.PageSize, 20)
 	return nil
 }
 
@@ -191,15 +183,7 @@ func (r *ListTaskItemsOverviewReq) Validate() error {
 	if err := validateTaskListTimeRange(r.StartTime, r.EndTime); err != nil {
 		return errors.Tag(err)
 	}
-	if r.Page <= 0 {
-		r.Page = 1
-	}
-	if r.PageSize <= 0 {
-		r.PageSize = 20
-	}
-	if r.PageSize > 100 {
-		r.PageSize = 100
-	}
+	r.Page, r.PageSize = normalizePage(r.Page, r.PageSize, 20)
 	return nil
 }
 
@@ -318,15 +302,7 @@ func (r *TaskConfigItemQueryReq) Validate() error {
 	if len([]rune(r.Keyword)) > 128 {
 		return errors.Errorf("keyword 不能超过 128 个字符")
 	}
-	if r.Page <= 0 {
-		r.Page = 1
-	}
-	if r.PageSize <= 0 {
-		r.PageSize = 20
-	}
-	if r.PageSize > 100 {
-		r.PageSize = 100
-	}
+	r.Page, r.PageSize = normalizePage(r.Page, r.PageSize, 20)
 	return nil
 }
 

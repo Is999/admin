@@ -15,11 +15,11 @@ import (
 
 // AddAdminHandler 处理新增管理员请求，并在写审计前对敏感字段做脱敏。
 func AddAdminHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionLogHandler(shared.MethodAddAdmin, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionLogHandler(shared.AdminAdd, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		// 解析请求参数
 		var req types.AddAdminReq
 		if err := httpx.Parse(r, &req); err != nil {
-			return nil, shared.ParamErrorResult(codes.ParamError, err)
+			return nil, shared.ParamErrorResult(err)
 		}
 
 		// 业务逻辑处理

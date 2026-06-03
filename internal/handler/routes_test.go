@@ -192,8 +192,8 @@ func TestDefaultRouteContractsSkipAccessLog(t *testing.T) {
 	}
 }
 
-// TestActionLogRegistryAliasesAreContracted 确保审计动作绑定到已公开的路由契约。
-func TestActionLogRegistryAliasesAreContracted(t *testing.T) {
+// TestAuditRouteMetasAreContracted 确保带审计动作的路由元数据已进入公开路由契约。
+func TestAuditRouteMetasAreContracted(t *testing.T) {
 	aliases := make(map[string]struct{}, len(DefaultRouteContracts()))
 	for _, contract := range DefaultRouteContracts() {
 		if contract.Alias == "" || contract.Alias == string(middleware.Ignore) {
@@ -201,13 +201,13 @@ func TestActionLogRegistryAliasesAreContracted(t *testing.T) {
 		}
 		aliases[contract.Alias] = struct{}{}
 	}
-	for name, meta := range shared.ActionLogRegistry() {
+	for _, meta := range shared.DefaultRouteMetas() {
 		if meta.Action == "" {
 			continue
 		}
 		alias := string(meta.Alias)
 		if _, ok := aliases[alias]; !ok {
-			t.Fatalf("审计方法 %s 的路由别名未进入契约清单: %s", name, alias)
+			t.Fatalf("审计路由元数据未进入契约清单: %s", alias)
 		}
 	}
 }

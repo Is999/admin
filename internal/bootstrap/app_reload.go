@@ -426,14 +426,14 @@ func normalizeHotReloadCheckInterval(seconds int) time.Duration {
 // hotReloadRestartChanged 判断一个配置边界是否发生变化。
 type hotReloadRestartChanged func(before, after config.Config) bool
 
-// hotReloadRestartPreserve 保留当前进程仍在使用的旧配置。
+// hotReloadRestartPreserve 保留当前进程仍在使用的上一版配置。
 type hotReloadRestartPreserve func(effective *config.Config, before config.Config, after config.Config)
 
 // hotReloadRestartSpec 描述一个热加载后仍需重启才能完全生效的配置边界。
 type hotReloadRestartSpec struct {
 	Reason   string                   // 展示给管理接口和日志的重启原因
 	Changed  hotReloadRestartChanged  // 判断该边界是否发生变化
-	Preserve hotReloadRestartPreserve // 保留当前进程仍在使用的旧配置
+	Preserve hotReloadRestartPreserve // 保留当前进程仍在使用的上一版配置
 }
 
 // hotReloadRestartSpecs 返回热加载不可在线重建的配置边界，顺序即 restartReason 展示顺序。

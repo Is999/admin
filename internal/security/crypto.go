@@ -54,7 +54,7 @@ func (s MD5Signer) Verify(data, sign string) (bool, error) {
 	return expected == sign, nil
 }
 
-// AESCipher 实现 AES-256-CBC 兼容的加解密与签名能力。
+// AESCipher 实现 AES-256-CBC 加解密与签名能力。
 type AESCipher struct {
 	cipher *utils.Cipher // cipher 是 go-utils AES-CBC 加解密器
 }

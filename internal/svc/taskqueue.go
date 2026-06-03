@@ -88,7 +88,7 @@ type TaskQueue interface {
 	// 该接口适合业务层做最小封装后复用，避免直接依赖底层任务引擎细节。
 	EnqueueTask(ctx context.Context, taskType string, payload []byte, opts ...TaskOption) error
 
-	// EnqueueCacheRefresh 投递缓存刷新任务，兼容现有缓存管理链路。
+	// EnqueueCacheRefresh 投递缓存刷新任务，服务缓存管理链路。
 	// 后续新业务优先通过 EnqueueTask 自行封装，避免持续扩展特化接口。
 	EnqueueCacheRefresh(ctx context.Context, operation string, cacheKeys []string) error
 

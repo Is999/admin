@@ -122,12 +122,12 @@ func (s *ServiceContext) UploadMode() string {
 	return storage.NormalizeUploadMode(s.CurrentConfig().FileStorage)
 }
 
-// storageRuntime 返回 ServiceContext 的文件存储运行时，兼容测试中直接构造 ServiceContext 的场景。
+// storageRuntime 返回 ServiceContext 的文件存储运行时，支持测试直接构造 ServiceContext。
 func (s *ServiceContext) storageRuntime() *StorageRuntime {
 	if s == nil {
 		return NewStorageRuntime()
 	}
-	// 正常启动路径会在 NewServiceContext 中初始化；这里兜底兼容单元测试直接构造 ServiceContext。
+	// 正常启动路径会在 NewServiceContext 中初始化；这里为单元测试直接构造 ServiceContext 提供默认运行时。
 	if runtime, ok := s.storageValue.Load().(*StorageRuntime); ok && runtime != nil {
 		return runtime
 	}

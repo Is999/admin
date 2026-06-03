@@ -48,10 +48,10 @@ type ReleaseSnapshot struct {
 
 // StateCache 是 table-cache 中运行配置 active 版本状态。
 type StateCache struct {
-	ActiveReleaseID uint64 `json:"active_release_id,string"` // 当前发布 ID，兼容 Redis Hash 字符串值
-	ActiveVersion   uint64 `json:"active_version,string"`    // 当前版本号，兼容 Redis Hash 字符串值
+	ActiveReleaseID uint64 `json:"active_release_id,string"` // 当前发布 ID，按 Redis Hash 字符串读取
+	ActiveVersion   uint64 `json:"active_version,string"`    // 当前版本号，按 Redis Hash 字符串读取
 	ActiveChecksum  string `json:"active_checksum"`          // 当前快照 SHA256
-	PublishedAtUnix int64  `json:"published_at_unix,string"` // 最近发布时间戳，兼容 Redis Hash 字符串值
+	PublishedAtUnix int64  `json:"published_at_unix,string"` // 最近发布时间戳，按 Redis Hash 字符串读取
 }
 
 // ActiveRelease 保存一次 active 版本和对应快照。

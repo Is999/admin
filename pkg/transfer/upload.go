@@ -708,7 +708,7 @@ func (m *LocalUploadManager) loadReusableSession(ctx context.Context, fingerprin
 	return session, nil
 }
 
-// restoreSessionDerivedFields 为旧会话或裁剪后的会话恢复临时路径等派生字段，保证续传链路兼容。
+// restoreSessionDerivedFields 为已存在或裁剪后的会话恢复临时路径等派生字段，保证续传链路完整。
 func (m *LocalUploadManager) restoreSessionDerivedFields(session *UploadSession) {
 	if session == nil {
 		return

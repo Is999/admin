@@ -930,7 +930,7 @@ func (r *CacheKeyReq) Validate() error {
 // CacheRenewReq 表示缓存刷新请求。
 type CacheRenewReq struct {
 	Key  string `json:"key,optional" form:"key,optional"`   // Redis 缓存键或缓存目标
-	Type string `json:"type,optional" form:"type,optional"` // Redis 类型，兼容 laravel-admin 字段
+	Type string `json:"type,optional" form:"type,optional"` // Redis 类型，用于选择刷新处理方式
 }
 
 // Validate 校验缓存刷新请求。

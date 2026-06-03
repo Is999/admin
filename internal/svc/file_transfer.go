@@ -113,12 +113,12 @@ func fileTransferUploadSessionTTL(cfg config.FileStorageConfig) time.Duration {
 	return time.Duration(cfg.UploadSession.TTLSeconds) * time.Second
 }
 
-// fileTransferRuntime 返回文件上传运行时，兼容测试中直接构造 ServiceContext 的场景。
+// fileTransferRuntime 返回文件上传运行时，支持测试直接构造 ServiceContext。
 func (s *ServiceContext) fileTransferRuntime() *FileTransferRuntime {
 	if s == nil {
 		return NewFileTransferRuntime()
 	}
-	// 正常启动路径会在 NewServiceContext 中初始化；这里兜底兼容单元测试直接构造 ServiceContext。
+	// 正常启动路径会在 NewServiceContext 中初始化；这里为单元测试直接构造 ServiceContext 提供默认运行时。
 	if runtime, ok := s.uploadValue.Load().(*FileTransferRuntime); ok && runtime != nil {
 		return runtime
 	}

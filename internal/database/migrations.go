@@ -150,7 +150,7 @@ func sha256Hex(text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// stripMigrationSQLHeader 剥离 SQL 资产文件头，兼容现有 Navicat 块注释和新模板行注释。
+// stripMigrationSQLHeader 剥离 SQL 资产文件头，支持块注释和模板行注释。
 func stripMigrationSQLHeader(sqlText string) string {
 	sqlText = strings.TrimSpace(sqlText)
 	sqlText = strings.TrimSpace(embedasset.StripLeadingLineComments(sqlText, "--"))

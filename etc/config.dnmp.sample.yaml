@@ -276,14 +276,6 @@ cdc:
   max_retry_times: 8
   # 死信 Topic；为空时失败消息不提交。
   dead_letter_topic: "admin_cdc_dead_letter"
-  # admin_log 真实链路测试。
-  admin_log_test:
-    # 推送审核日志到 Lark，需配置 alert.lark。
-    lark_enabled: false
-    # 写入 Collector 批量链路，需启用 collector。
-    collector_enabled: false
-    # 仅处理指定 trace_id 前缀；为空不过滤。
-    trace_id_prefix: "codex-cdc-"
   # Topic 规则。
   topics:
     # admin_log 操作日志。

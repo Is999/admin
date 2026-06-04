@@ -205,15 +205,22 @@ type CDCConfig struct {
 	RetryBackoffSeconds int              `json:"retry_backoff_seconds,optional"` // 处理失败后的重试间隔秒数
 	MaxRetryTimes       int              `json:"max_retry_times,optional"`       // 单条消息最大处理失败次数
 	DeadLetterTopic     string           `json:"dead_letter_topic,optional"`     // 死信 Topic；为空时失败消息不提交
-	AdminLogTest        CDCAdminLogTest  `json:"admin_log_test,optional"`        // admin_log 真实链路测试开关
 	Topics              []CDCTopicConfig `json:"topics,optional"`                // Debezium Topic 消费规则
 }
 
-// CDCAdminLogTest 定义 admin_log CDC 真实链路测试开关。
-type CDCAdminLogTest struct {
-	LarkEnabled      bool   `json:"lark_enabled,optional"`      // 是否把审核日志推送到 Lark
-	CollectorEnabled bool   `json:"collector_enabled,optional"` // 是否把审核日志写入 Collector 批量链路
-	TraceIDPrefix    string `json:"trace_id_prefix,optional"`   // 测试 trace_id 前缀；为空不过滤
+// TestScenariosConfig 定义本地验证场景开关；未配置时不启用任何测试输出。
+type TestScenariosConfig struct {
+	AdminLogAudit AdminLogAuditTestScenario `json:"admin_log_audit,optional"` // admin_log 审核日志验证
+}
+
+// AdminLogAuditTestScenario 定义 admin_log 审核日志验证输出。
+type AdminLogAuditTestScenario struct {
+	LarkEnabled      bool     `json:"lark_enabled,optional"`      // 是否把审核日志推送到 Lark
+	CollectorEnabled bool     `json:"collector_enabled,optional"` // 是否写入 Collector outbox 并批量消费
+	TraceIDPrefix    string   `json:"trace_id_prefix,optional"`   // 测试 trace_id 前缀；为空不过滤
+	Actions          []string `json:"actions,optional"`           // 允许处理的审计动作；为空不过滤
+	Routes           []string `json:"routes,optional"`            // 允许处理的路由别名；为空不过滤
+	OutputFile       string   `json:"output_file,optional"`       // 批处理观察文件；为空只打印日志
 }
 
 // UserTagConfig 定义用户标签重构任务的运行参数。
@@ -414,6 +421,7 @@ type Config struct {
 	Alert         AlertConfig               `json:"alert,optional"`                        // 外部告警通道配置
 	Collector     CollectorConfig           `json:"collector,optional"`                    // 通用收集器配置
 	CDC           CDCConfig                 `json:"cdc,optional"`                          // Debezium CDC 消费器配置
+	TestScenarios TestScenariosConfig       `json:"test_scenarios,optional"`               // 本地验证场景配置
 	MySQL         MySQLConfig               `json:"mysql,optional"`                        // 默认主库 MySQL 配置
 	SiteMySQL     SiteMySQLConfig           `json:"site_mysql,optional"`                   // 可选命名扩展库配置
 	Redis         RedisConfig               `json:"redis"`                                 // Redis 连接与连接池配置

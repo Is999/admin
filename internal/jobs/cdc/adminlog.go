@@ -3,8 +3,12 @@ package cdc
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"admin/internal/config"
 	"admin/internal/infra/cdcx"
@@ -29,9 +33,9 @@ func RegisterProcessors(svcCtx *svc.ServiceContext, consumer *cdcx.Consumer) err
 	if consumer == nil {
 		return nil
 	}
-	cfg := config.CDCAdminLogTest{}
+	cfg := config.AdminLogAuditTestScenario{}
 	if svcCtx != nil {
-		cfg = svcCtx.CurrentConfig().CDC.AdminLogTest
+		cfg = svcCtx.CurrentConfig().TestScenarios.AdminLogAudit
 	}
 	var notifier *larkx.Notifier
 	var err error
@@ -54,7 +58,7 @@ func RegisterProcessors(svcCtx *svc.ServiceContext, consumer *cdcx.Consumer) err
 		if !svcCtx.CurrentConfig().Collector.Enabled {
 			return errors.Errorf("admin_log CDC Collector 测试已启用但 collector.enabled=false")
 		}
-		if err = svcCtx.Collector.RegisterProcessor(adminLogCollectorBizType, AdminLogBatchProcessor{}); err != nil {
+		if err = svcCtx.Collector.RegisterProcessor(adminLogCollectorBizType, &AdminLogBatchProcessor{outputFile: cfg.OutputFile}); err != nil {
 			return errors.Tag(err)
 		}
 	}
@@ -67,9 +71,9 @@ func RegisterProcessors(svcCtx *svc.ServiceContext, consumer *cdcx.Consumer) err
 
 // AdminLogProcessor 处理 admin_log 的 Debezium 增量事件。
 type AdminLogProcessor struct {
-	cfg       config.CDCAdminLogTest // admin_log CDC 测试开关
-	notifier  *larkx.Notifier        // Lark 通知器
-	collector collectorEnqueuer      // Collector 批量写入入口
+	cfg       config.AdminLogAuditTestScenario // admin_log 验证场景开关
+	notifier  *larkx.Notifier                  // Lark 通知器
+	collector collectorEnqueuer                // Collector 批量写入入口
 }
 
 // collectorEnqueuer 约束 CDC 写入 Collector 的最小能力。
@@ -79,6 +83,9 @@ type collectorEnqueuer interface {
 
 // ProcessCDC 将 admin_log CDC 事件清洗成轻量统计字段。
 func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) error {
+	if !adminLogTestEnabled(p.cfg) {
+		return nil
+	}
 	row, err := adminLogRowFromEvent(event)
 	if err != nil {
 		return errors.Tag(err)
@@ -90,6 +97,8 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 		loggerx.Infow(ctx, "CDC admin_log 测试事件已跳过",
 			logx.Field("event_key", event.EventKey()),
 			logx.Field("id", row.ID),
+			logx.Field("action", row.Action),
+			logx.Field("route", row.Route),
 			logx.Field("trace_id", row.TraceID),
 			logx.Field("trace_id_prefix", strings.TrimSpace(p.cfg.TraceIDPrefix)),
 		)
@@ -147,29 +156,62 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 }
 
 // adminLogTestMatched 判断当前 admin_log 是否命中测试过滤条件。
-func adminLogTestMatched(cfg config.CDCAdminLogTest, row adminLogRow) bool {
+func adminLogTestMatched(cfg config.AdminLogAuditTestScenario, row adminLogRow) bool {
 	prefix := strings.TrimSpace(cfg.TraceIDPrefix)
-	if prefix == "" {
-		return true
+	if prefix != "" && !strings.HasPrefix(row.TraceID, prefix) {
+		return false
 	}
-	return strings.HasPrefix(row.TraceID, prefix)
+	if !adminLogValueAllowed(cfg.Actions, row.Action) {
+		return false
+	}
+	return adminLogValueAllowed(cfg.Routes, row.Route)
 }
 
-// AdminLogBatchProcessor 批量消费 admin_log CDC 测试事件。
-type AdminLogBatchProcessor struct{}
+// adminLogTestEnabled 判断 admin_log 验证输出是否启用。
+func adminLogTestEnabled(cfg config.AdminLogAuditTestScenario) bool {
+	return cfg.LarkEnabled || cfg.CollectorEnabled
+}
 
-// ProcessBatch 批量处理 admin_log CDC 测试事件。
-func (AdminLogBatchProcessor) ProcessBatch(ctx context.Context, events []collectorx.Event) ([]collectorx.ProcessResult, error) {
+// adminLogValueAllowed 判断字段值是否命中白名单，空白名单表示允许全部。
+func adminLogValueAllowed(values []string, current string) bool {
+	if len(values) == 0 {
+		return true
+	}
+	current = strings.TrimSpace(current)
+	for _, value := range values {
+		if strings.TrimSpace(value) == current {
+			return true
+		}
+	}
+	return false
+}
+
+// AdminLogBatchProcessor 批量消费 admin_log CDC 审核日志事件。
+type AdminLogBatchProcessor struct {
+	outputFile string     // 批处理观察文件；为空只打印日志
+	mu         sync.Mutex // 保护上一批写入时间
+	lastWrite  time.Time  // 上一批观察文件写入时间
+}
+
+// ProcessBatch 批量处理 admin_log CDC 审核日志事件。
+func (p *AdminLogBatchProcessor) ProcessBatch(ctx context.Context, events []collectorx.Event) ([]collectorx.ProcessResult, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
 	results := make([]collectorx.ProcessResult, 0, len(events))
+	lines := make([][]byte, 0, len(events))
 	for _, event := range events {
 		var row adminLogCollectorPayload
 		if err := json.Unmarshal(event.Payload, &row); err != nil {
 			results = append(results, collectorx.ProcessResult{EventID: event.EventID, Success: false, Error: "解析 admin_log 批量事件失败"})
 			continue
 		}
+		line, err := adminLogBatchOutputLine(event.EventID, row)
+		if err != nil {
+			results = append(results, collectorx.ProcessResult{EventID: event.EventID, Success: false, Error: "编码 admin_log 批量观察数据失败"})
+			continue
+		}
+		lines = append(lines, line)
 		loggerx.Infow(ctx, "CDC admin_log 批量事件已消费",
 			logx.Field("event_id", event.EventID),
 			logx.Field("admin_log_id", row.ID),
@@ -179,7 +221,101 @@ func (AdminLogBatchProcessor) ProcessBatch(ctx context.Context, events []collect
 		)
 		results = append(results, collectorx.ProcessResult{EventID: event.EventID, Success: true})
 	}
+	if len(lines) > 0 && strings.TrimSpace(p.outputFile) != "" {
+		if err := p.appendOutput(lines); err != nil {
+			return nil, errors.Tag(err)
+		}
+		loggerx.Infow(ctx, "CDC admin_log 批量观察文件已写入",
+			logx.Field("file", strings.TrimSpace(p.outputFile)),
+			logx.Field("count", len(lines)),
+		)
+	}
 	return results, nil
+}
+
+// appendOutput 追加写入批次头和事件明细。
+func (p *AdminLogBatchProcessor) appendOutput(lines [][]byte) error {
+	now := time.Now()
+	p.mu.Lock()
+	previous := p.lastWrite
+	p.lastWrite = now
+	p.mu.Unlock()
+	header, err := adminLogBatchHeaderLine(now, previous, len(lines))
+	if err != nil {
+		return errors.Tag(err)
+	}
+	body := make([][]byte, 0, len(lines)+1)
+	body = append(body, header)
+	body = append(body, lines...)
+	return errors.Tag(appendAdminLogBatchOutput(p.outputFile, body))
+}
+
+// adminLogBatchHeaderLine 构造批处理观察文件的批次头。
+func adminLogBatchHeaderLine(now, previous time.Time, count int) ([]byte, error) {
+	intervalMS := int64(0)
+	previousText := ""
+	if !previous.IsZero() {
+		intervalMS = now.Sub(previous).Milliseconds()
+		previousText = previous.Format(time.RFC3339Nano)
+	}
+	body, err := json.Marshal(struct {
+		Type           string `json:"type"`            // 记录类型
+		BatchTime      string `json:"batch_time"`      // 本批写入时间
+		PreviousTime   string `json:"previous_time"`   // 上批写入时间
+		IntervalMS     int64  `json:"interval_ms"`     // 距上批间隔毫秒
+		CollectedCount int    `json:"collected_count"` // 本批收集条数
+	}{
+		Type:           "batch",
+		BatchTime:      now.Format(time.RFC3339Nano),
+		PreviousTime:   previousText,
+		IntervalMS:     intervalMS,
+		CollectedCount: count,
+	})
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return append(body, '\n'), nil
+}
+
+// adminLogBatchOutputLine 构造单条批处理观察 JSONL。
+func adminLogBatchOutputLine(eventID string, row adminLogCollectorPayload) ([]byte, error) {
+	body, err := json.Marshal(struct {
+		Type    string                   `json:"type"`     // 记录类型
+		EventID string                   `json:"event_id"` // Collector 事件 ID
+		Payload adminLogCollectorPayload `json:"payload"`  // admin_log CDC 负载
+	}{
+		Type:    "event",
+		EventID: eventID,
+		Payload: row,
+	})
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return append(body, '\n'), nil
+}
+
+// appendAdminLogBatchOutput 追加写入批处理观察文件。
+func appendAdminLogBatchOutput(path string, lines [][]byte) error {
+	path = strings.TrimSpace(path)
+	if path == "" || len(lines) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return errors.Wrap(err, "创建 admin_log CDC 批量观察目录失败")
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return errors.Wrap(err, "打开 admin_log CDC 批量观察文件失败")
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	for _, line := range lines {
+		if _, err = file.Write(line); err != nil {
+			return errors.Wrap(err, "写入 admin_log CDC 批量观察文件失败")
+		}
+	}
+	return nil
 }
 
 // adminLogRow 表示 admin_log 统计需要的最小字段集。

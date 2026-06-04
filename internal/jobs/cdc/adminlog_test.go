@@ -3,6 +3,8 @@ package cdc
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -114,7 +116,7 @@ func TestAdminLogCollectorEvent(t *testing.T) {
 
 func TestAdminLogBatchProcessor(t *testing.T) {
 	payload, _ := json.Marshal(adminLogCollectorPayload{ID: 11, Action: "login", Route: "/api/login", TraceID: "trace-1"})
-	results, err := (AdminLogBatchProcessor{}).ProcessBatch(context.Background(), []collectorx.Event{
+	results, err := (&AdminLogBatchProcessor{}).ProcessBatch(context.Background(), []collectorx.Event{
 		{EventID: "ok", BizType: adminLogCollectorBizType, Payload: payload},
 		{EventID: "bad", BizType: adminLogCollectorBizType, Payload: []byte(`{`)},
 	})
@@ -126,16 +128,102 @@ func TestAdminLogBatchProcessor(t *testing.T) {
 	}
 }
 
+func TestAdminLogBatchProcessorWritesOutputFile(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "cdc_admin_log_audit.jsonl")
+	payload, _ := json.Marshal(adminLogCollectorPayload{
+		EventKey: "topic:0:9",
+		ID:       11,
+		Action:   "管理员登录",
+		Route:    "auth.login",
+		TraceID:  "trace-1",
+	})
+	processor := &AdminLogBatchProcessor{outputFile: outputFile}
+	results, err := processor.ProcessBatch(context.Background(), []collectorx.Event{
+		{EventID: "event-1", BizType: adminLogCollectorBizType, Payload: payload},
+	})
+	if err != nil {
+		t.Fatalf("ProcessBatch() error = %v", err)
+	}
+	if len(results) != 1 || !results[0].Success {
+		t.Fatalf("ProcessBatch() results = %+v", results)
+	}
+	body, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("读取批处理观察文件失败: %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{`"type":"batch"`, `"collected_count":1`, `"type":"event"`, "event-1", "管理员登录", "auth.login", "trace-1"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("观察文件缺少 %q: %s", want, text)
+		}
+	}
+}
+
+func TestAdminLogBatchProcessorOutputKeepsInterval(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "cdc_admin_log_audit.jsonl")
+	payload, _ := json.Marshal(adminLogCollectorPayload{ID: 11, Action: "login"})
+	processor := &AdminLogBatchProcessor{outputFile: outputFile}
+	if _, err := processor.ProcessBatch(context.Background(), []collectorx.Event{{EventID: "event-1", Payload: payload}}); err != nil {
+		t.Fatalf("first ProcessBatch() error = %v", err)
+	}
+	if _, err := processor.ProcessBatch(context.Background(), []collectorx.Event{{EventID: "event-2", Payload: payload}}); err != nil {
+		t.Fatalf("second ProcessBatch() error = %v", err)
+	}
+	body, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("读取批处理观察文件失败: %v", err)
+	}
+	text := string(body)
+	if strings.Count(text, `"type":"batch"`) != 2 || !strings.Contains(text, `"previous_time":"`) {
+		t.Fatalf("批次头缺少上批时间: %s", text)
+	}
+}
+
+func TestAdminLogProcessorNoopWhenTestDisabled(t *testing.T) {
+	err := (AdminLogProcessor{}).ProcessCDC(context.Background(), cdcx.Event{
+		Operation: cdcx.OperationCreate,
+		After:     []byte(`{`),
+	})
+	if err != nil {
+		t.Fatalf("测试配置未启用时不应处理事件: %v", err)
+	}
+}
+
 func TestAdminLogTestMatchedByTraceIDPrefix(t *testing.T) {
-	cfg := config.CDCAdminLogTest{TraceIDPrefix: "codex-cdc-"}
+	cfg := config.AdminLogAuditTestScenario{TraceIDPrefix: "codex-cdc-"}
 	if !adminLogTestMatched(cfg, adminLogRow{TraceID: "codex-cdc-demo"}) {
 		t.Fatal("期望匹配测试 trace_id 前缀")
 	}
 	if adminLogTestMatched(cfg, adminLogRow{TraceID: "normal-request"}) {
 		t.Fatal("普通 trace_id 不应触发测试链路")
 	}
-	if !adminLogTestMatched(config.CDCAdminLogTest{}, adminLogRow{TraceID: "normal-request"}) {
+	if !adminLogTestMatched(config.AdminLogAuditTestScenario{}, adminLogRow{TraceID: "normal-request"}) {
 		t.Fatal("未配置前缀时应保持不过滤")
+	}
+}
+
+func TestAdminLogTestMatchedByActionAndRoute(t *testing.T) {
+	cfg := config.AdminLogAuditTestScenario{
+		Actions: []string{"管理员登录"},
+		Routes:  []string{"auth.login"},
+	}
+	if !adminLogTestMatched(cfg, adminLogRow{Action: "管理员登录", Route: "auth.login"}) {
+		t.Fatal("期望登录日志命中测试链路")
+	}
+	if adminLogTestMatched(cfg, adminLogRow{Action: "查询管理员列表", Route: "admin.list"}) {
+		t.Fatal("普通查询日志不应命中登录测试链路")
+	}
+}
+
+func TestAdminLogTestEnabled(t *testing.T) {
+	if adminLogTestEnabled(config.AdminLogAuditTestScenario{}) {
+		t.Fatal("未配置测试输出时不应启用 admin_log 测试")
+	}
+	if !adminLogTestEnabled(config.AdminLogAuditTestScenario{LarkEnabled: true}) {
+		t.Fatal("启用 Lark 时应启用 admin_log 测试")
+	}
+	if !adminLogTestEnabled(config.AdminLogAuditTestScenario{CollectorEnabled: true}) {
+		t.Fatal("启用 Collector 时应启用 admin_log 测试")
 	}
 }
 
@@ -145,7 +233,7 @@ func TestRegisterProcessorsRejectsMissingLarkConfig(t *testing.T) {
 		t.Fatalf("cdcx.New() error = %v", err)
 	}
 	svcCtx := svc.NewServiceContext(config.Config{
-		CDC: config.CDCConfig{AdminLogTest: config.CDCAdminLogTest{LarkEnabled: true}},
+		TestScenarios: config.TestScenariosConfig{AdminLogAudit: config.AdminLogAuditTestScenario{LarkEnabled: true}},
 	}, svc.Dependencies{})
 	if err := RegisterProcessors(svcCtx, consumer); err == nil {
 		t.Fatal("期望 Lark 测试开关缺少 alert.lark 时注册失败")
@@ -158,8 +246,8 @@ func TestRegisterProcessorsRejectsDisabledCollector(t *testing.T) {
 		t.Fatalf("cdcx.New() error = %v", err)
 	}
 	svcCtx := svc.NewServiceContext(config.Config{
-		CDC:       config.CDCConfig{AdminLogTest: config.CDCAdminLogTest{CollectorEnabled: true}},
-		Collector: config.CollectorConfig{Enabled: false},
+		TestScenarios: config.TestScenariosConfig{AdminLogAudit: config.AdminLogAuditTestScenario{CollectorEnabled: true}},
+		Collector:     config.CollectorConfig{Enabled: false},
 	}, svc.Dependencies{})
 	if err := RegisterProcessors(svcCtx, consumer); err == nil {
 		t.Fatal("期望 Collector 测试开关未启用 collector 时注册失败")

@@ -188,6 +188,34 @@ type CollectorConfig struct {
 	DB        CollectorDBConfig    `json:"db,optional"`        // DB outbox 消费和重试配置
 }
 
+// CDCTopicConfig 定义单个 Debezium CDC Topic 的消费规则。
+type CDCTopicConfig struct {
+	Enabled bool   `json:"enabled,optional"` // 是否启用该 Topic
+	Topic   string `json:"topic,optional"`   // Kafka Topic 名称
+	Table   string `json:"table,optional"`   // 业务表名，格式 db.table
+}
+
+// CDCConfig 定义本地轻量 CDC 消费器配置。
+type CDCConfig struct {
+	Enabled             bool             `json:"enabled,optional"`               // 是否启用 CDC 消费器
+	Brokers             []string         `json:"brokers,optional"`               // Kafka broker 地址；为空时继承顶层 kafka.brokers
+	GroupID             string           `json:"group_id,optional"`              // Kafka 消费组 ID
+	ConsumerName        string           `json:"consumer_name,optional"`         // 当前进程消费者名称前缀
+	ReadTimeoutSeconds  int              `json:"read_timeout_seconds,optional"`  // 单次读取超时秒数
+	RetryBackoffSeconds int              `json:"retry_backoff_seconds,optional"` // 处理失败后的重试间隔秒数
+	MaxRetryTimes       int              `json:"max_retry_times,optional"`       // 单条消息最大处理失败次数
+	DeadLetterTopic     string           `json:"dead_letter_topic,optional"`     // 死信 Topic；为空时失败消息不提交
+	AdminLogTest        CDCAdminLogTest  `json:"admin_log_test,optional"`        // admin_log 真实链路测试开关
+	Topics              []CDCTopicConfig `json:"topics,optional"`                // Debezium Topic 消费规则
+}
+
+// CDCAdminLogTest 定义 admin_log CDC 真实链路测试开关。
+type CDCAdminLogTest struct {
+	LarkEnabled      bool   `json:"lark_enabled,optional"`      // 是否把审核日志推送到 Lark
+	CollectorEnabled bool   `json:"collector_enabled,optional"` // 是否把审核日志写入 Collector 批量链路
+	TraceIDPrefix    string `json:"trace_id_prefix,optional"`   // 测试 trace_id 前缀；为空不过滤
+}
+
 // UserTagConfig 定义用户标签重构任务的运行参数。
 type UserTagConfig struct {
 	Enabled            bool `json:"enabled,optional"`              // 是否启用用户标签工作流插件
@@ -385,6 +413,7 @@ type Config struct {
 	Observability ObservabilityConfig       `json:"observability,optional"`                // 日志、审计、追踪等可观测性配置
 	Alert         AlertConfig               `json:"alert,optional"`                        // 外部告警通道配置
 	Collector     CollectorConfig           `json:"collector,optional"`                    // 通用收集器配置
+	CDC           CDCConfig                 `json:"cdc,optional"`                          // Debezium CDC 消费器配置
 	MySQL         MySQLConfig               `json:"mysql,optional"`                        // 默认主库 MySQL 配置
 	SiteMySQL     SiteMySQLConfig           `json:"site_mysql,optional"`                   // 可选命名扩展库配置
 	Redis         RedisConfig               `json:"redis"`                                 // Redis 连接与连接池配置

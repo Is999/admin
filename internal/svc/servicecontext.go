@@ -7,6 +7,7 @@ import (
 
 	"admin/internal/audit"
 	"admin/internal/config"
+	"admin/internal/infra/cdcx"
 	"admin/internal/infra/collectorx"
 	"admin/internal/infra/kafkax"
 
@@ -44,6 +45,13 @@ type ServiceContext struct {
 	Task         TaskQueue             // 任务系统接口（支持调度、DAG、队列管理）
 	ConfigReload ConfigReloadExecutor  // 配置热加载执行器，供管理接口手动触发重载
 	Collector    *collectorx.Manager   // 通用收集器（Kafka/Redis/DB outbox 回退与重试）
+	CDC          CDCConsumer           // CDC 消费器状态接口，未启用时为空
+}
+
+// CDCConsumer 约束 CDC 消费器对业务层暴露的最小能力。
+type CDCConsumer interface {
+	Snapshot() cdcx.ConsumerStatus
+	RegisteredTables() []string
 }
 
 // ConfigReloadExecutor 约束配置重载执行能力，避免 logic 层直接依赖 bootstrap 实现。
@@ -115,6 +123,7 @@ func (s *ServiceContext) ScopedWithContext(ctx context.Context) *ServiceContext 
 	scoped.Task = s.Task
 	scoped.ConfigReload = s.ConfigReload
 	scoped.Collector = s.Collector
+	scoped.CDC = s.CDC
 	if storageRuntime, ok := s.storageValue.Load().(*StorageRuntime); ok && storageRuntime != nil {
 		scoped.storageValue.Store(storageRuntime)
 	}

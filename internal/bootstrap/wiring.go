@@ -62,6 +62,7 @@ func normalizeBootstrapConfig(c *config.Config) {
 		return
 	}
 	inheritCollectorKafkaCommon(c)
+	inheritCDCKafkaCommon(c)
 	if c.User.RouteShardCount <= 0 {
 		c.User.RouteShardCount = defaultUserRouteShardCount
 	}
@@ -77,6 +78,13 @@ func inheritCollectorKafkaCommon(c *config.Config) {
 	}
 	if c.Collector.Kafka.WriteTimeout <= 0 {
 		c.Collector.Kafka.WriteTimeout = c.Kafka.WriteTimeout
+	}
+}
+
+// inheritCDCKafkaCommon 让 CDC 消费器复用顶层 Kafka broker，减少本地配置重复。
+func inheritCDCKafkaCommon(c *config.Config) {
+	if len(c.CDC.Brokers) == 0 && len(c.Kafka.Brokers) > 0 {
+		c.CDC.Brokers = append([]string(nil), c.Kafka.Brokers...)
 	}
 }
 

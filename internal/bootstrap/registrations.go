@@ -22,6 +22,8 @@ const (
 
 	// componentNameCollector 表示通用收集器启动组件名称。
 	componentNameCollector = "collector"
+	// componentNameCDCConsumer 表示 Debezium CDC 消费启动组件名称。
+	componentNameCDCConsumer = "cdc_consumer"
 	// componentNameTaskRuntime 表示任务运行时启动组件名称。
 	componentNameTaskRuntime = "task_runtime"
 	// componentNameHTTPServer 表示 HTTP 服务启动组件名称。
@@ -149,6 +151,13 @@ func defaultComponentSpecs() []componentSpec {
 			Method:      "newCollectorComponent",
 			Description: "注册通用收集器启动组件",
 			Build:       newCollectorComponent,
+		},
+		{
+			Name:        componentNameCDCConsumer,
+			File:        "internal/bootstrap/component_builtin.go",
+			Method:      "newCDCConsumerComponent",
+			Description: "注册 Debezium CDC 消费组件",
+			Build:       newCDCConsumerComponent,
 		},
 		{
 			Name:        componentNameTaskRuntime,

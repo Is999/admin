@@ -117,6 +117,43 @@ func TestSendTaskFailureRejectsLarkBusinessError(t *testing.T) {
 	}
 }
 
+// TestSendTextSendsPlainText 验证通用文本消息发送链路。
+func TestSendTextSendsPlainText(t *testing.T) {
+	payloadCh := make(chan messagePayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload messagePayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("解析 Lark 请求失败: %v", err)
+		}
+		payloadCh <- payload
+		_, _ = w.Write([]byte(`{"code":0,"msg":"ok"}`))
+	}))
+	defer server.Close()
+
+	notifier, err := New(config.LarkAlertConfig{
+		Enabled:    true,
+		WebhookURL: server.URL,
+		Secret:     "secret",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	notifier.now = func() time.Time {
+		return time.Unix(1700000000, 0)
+	}
+
+	if err = notifier.SendText(context.Background(), "CDC 审核日志"); err != nil {
+		t.Fatalf("SendText() error = %v", err)
+	}
+	payload := <-payloadCh
+	if payload.MsgType != "text" || payload.Content.Text != "CDC 审核日志" {
+		t.Fatalf("Lark payload 不符合预期: %+v", payload)
+	}
+	if payload.Timestamp == "" || payload.Sign == "" {
+		t.Fatalf("期望签名字段不为空: %+v", payload)
+	}
+}
+
 // TestNewRejectsInvalidWebhookURL 验证启用告警时会拒绝非法 webhook URL。
 func TestNewRejectsInvalidWebhookURL(t *testing.T) {
 	_, err := New(config.LarkAlertConfig{

@@ -4,6 +4,9 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"admin/internal/config"
+	"admin/internal/svc"
 )
 
 // TestComponentRegistryRegistersInOrder 确保启动组件注册中心按声明顺序执行组件。
@@ -91,6 +94,62 @@ func TestSnapshotComponentRuntimeCopiesLifecycleHooks(t *testing.T) {
 	}
 	if snapshot.stopHooks[0].name != "stop-a" {
 		t.Fatalf("期望运行态停止钩子保留原值，实际为 %q", snapshot.stopHooks[0].name)
+	}
+}
+
+// TestCDCConsumerComponentExposesStatus 确保 CDC 组件挂到 ServiceContext 供后续管理入口读取。
+func TestCDCConsumerComponentExposesStatus(t *testing.T) {
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	state := &ComponentState{
+		Config: config.Config{
+			CDC: config.CDCConfig{
+				Enabled: false,
+				Topics: []config.CDCTopicConfig{{
+					Enabled: true,
+					Topic:   "dnmp-admin.admin.admin_log",
+					Table:   "admin.admin_log",
+				}},
+			},
+		},
+		ServiceContext: svcCtx,
+		Mode:           ModeWorker,
+	}
+	if err := newCDCConsumerComponent().Register(context.Background(), state); err != nil {
+		t.Fatalf("注册 CDC 组件失败: %v", err)
+	}
+	if svcCtx.CDC == nil {
+		t.Fatal("期望 ServiceContext.CDC 已挂载")
+	}
+	tables := svcCtx.CDC.RegisteredTables()
+	if len(tables) != 1 || tables[0] != "admin.admin_log" {
+		t.Fatalf("CDC 注册表不符合预期: %v", tables)
+	}
+	if scoped := svcCtx.ScopedWithContext(context.Background()); scoped == nil || scoped.CDC == nil {
+		t.Fatal("期望请求作用域 ServiceContext 保留 CDC 状态接口")
+	}
+}
+
+// TestCDCConsumerComponentRejectsMissingProcessor 确保启用 CDC 时未知表处理器会在启动期失败。
+func TestCDCConsumerComponentRejectsMissingProcessor(t *testing.T) {
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	state := &ComponentState{
+		Config: config.Config{
+			CDC: config.CDCConfig{
+				Enabled: true,
+				Brokers: []string{"127.0.0.1:9092"},
+				GroupID: "admin-cdc-test",
+				Topics: []config.CDCTopicConfig{{
+					Enabled: true,
+					Topic:   "dnmp-admin.unknown.table",
+					Table:   "admin.unknown_table",
+				}},
+			},
+		},
+		ServiceContext: svcCtx,
+		Mode:           ModeWorker,
+	}
+	if err := newCDCConsumerComponent().Register(context.Background(), state); err == nil {
+		t.Fatal("期望未知 CDC 表处理器启动校验失败")
 	}
 }
 

@@ -124,7 +124,26 @@ func (n *Notifier) SendTaskFailure(ctx context.Context, alert TaskFailureAlert) 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	text := n.formatTaskFailureText(alert)
+	return n.sendText(ctx, n.formatTaskFailureText(alert))
+}
+
+// SendText 发送一条通用文本消息。
+func (n *Notifier) SendText(ctx context.Context, text string) error {
+	if n == nil {
+		return nil
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return errors.Errorf("Lark 文本消息为空")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return n.sendText(ctx, text)
+}
+
+// sendText 复用 Lark 文本消息协议发送内容。
+func (n *Notifier) sendText(ctx context.Context, text string) error {
 	payload := messagePayload{
 		MsgType: "text",
 		Content: messageContent{Text: text},
@@ -148,7 +167,6 @@ func (n *Notifier) SendTaskFailure(ctx context.Context, alert TaskFailureAlert) 
 		return errors.Tag(err)
 	}
 	defer resp.Body.Close()
-	// 响应体只保留小段内容用于错误排查，避免异常网关返回超大页面拖慢任务收尾。
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return checkResponse(resp.StatusCode, respBody)
 }

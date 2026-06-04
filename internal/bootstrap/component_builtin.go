@@ -8,9 +8,11 @@ import (
 	keys "admin/common/rediskeys"
 	"admin/internal/config"
 	"admin/internal/handler"
+	"admin/internal/infra/cdcx"
 	"admin/internal/infra/collectorx"
 	"admin/internal/infra/larkx"
 	"admin/internal/infra/redisx"
+	cdcjobs "admin/internal/jobs/cdc"
 	"admin/internal/requestctx"
 	"admin/internal/svc"
 	"admin/internal/task/queue"
@@ -41,6 +43,39 @@ func newCollectorComponent() Component {
 				return nil
 			}, func(ctx context.Context) error {
 				return errors.Tag(manager.Stop(ctx))
+			}); err != nil {
+				return errors.Tag(err)
+			}
+		}
+		return nil
+	})
+}
+
+// newCDCConsumerComponent 创建 Debezium CDC 消费启动组件。
+func newCDCConsumerComponent() Component {
+	return NewComponentFunc(componentNameCDCConsumer, func(ctx context.Context, state *ComponentState) error {
+		_ = ctx
+		if state == nil || state.ServiceContext == nil {
+			return errors.Errorf("CDC 消费组件缺少服务上下文")
+		}
+		consumer, err := cdcx.New(state.Config.CDC)
+		if err != nil {
+			return errors.Tag(err)
+		}
+		if err = cdcjobs.RegisterProcessors(state.ServiceContext, consumer); err != nil {
+			return errors.Tag(err)
+		}
+		if err = consumer.ValidateProcessors(); err != nil {
+			return errors.Tag(err)
+		}
+		state.ServiceContext.CDC = consumer
+		// CDC 消费循环属于 Worker 职责，API-only 不启动后台消费。
+		if state.Config.CDC.Enabled && shouldStartWorkerLifecycle(state.Mode) {
+			if err := state.AddLifecycleHooks(componentNameCDCConsumer, func(context.Context) error {
+				consumer.Start()
+				return nil
+			}, func(ctx context.Context) error {
+				return errors.Tag(consumer.Stop(ctx))
 			}); err != nil {
 				return errors.Tag(err)
 			}

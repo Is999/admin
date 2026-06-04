@@ -197,12 +197,13 @@ redis:
 
 # Kafka 公共配置。
 # Collector 未配置 broker、批次和写超时时会继承这里。
+# 本地 CDC 扩展宿主机访问使用 127.0.0.1:29092；容器内访问使用 kafka:9092。
 kafka:
   # 是否启用用户标签 Kafka 生产者。
   enabled: false
   # Kafka broker 地址列表。
   brokers:
-    - "127.0.0.1:9092"
+    - "127.0.0.1:29092"
   # 单批次最大发送消息数。
   batch_size: 500
   # 写超时时间，单位秒。
@@ -256,6 +257,39 @@ collector:
     running_lease_seconds: 600
     # 最大失败重试次数。
     max_retry_times: 8
+
+# Debezium CDC 消费器，仅 worker 模式启动。
+cdc:
+  # 是否启用。
+  enabled: false
+  # Kafka broker 地址；为空继承 kafka.brokers。
+  brokers: []
+  # 消费组 ID。
+  group_id: "admin_cdc"
+  # 消费者名称。
+  consumer_name: "admin-cdc"
+  # 读取超时秒数。
+  read_timeout_seconds: 10
+  # 失败重试间隔秒数。
+  retry_backoff_seconds: 1
+  # 单条消息最大失败次数。
+  max_retry_times: 8
+  # 死信 Topic；为空时失败消息不提交。
+  dead_letter_topic: "admin_cdc_dead_letter"
+  # admin_log 真实链路测试。
+  admin_log_test:
+    # 推送审核日志到 Lark，需配置 alert.lark。
+    lark_enabled: false
+    # 写入 Collector 批量链路，需启用 collector。
+    collector_enabled: false
+    # 仅处理指定 trace_id 前缀；为空不过滤。
+    trace_id_prefix: "codex-cdc-"
+  # Topic 规则。
+  topics:
+    # admin_log 操作日志。
+    - enabled: true
+      topic: "dnmp-admin.admin.admin_log"
+      table: "admin.admin_log"
 
 # 任务系统与调度器配置。
 # 角色由 -mode 位掩码控制：1=api，2=worker，4=scheduler。
@@ -341,6 +375,12 @@ archive:
 
 # 可观测性配置。
 # trace_enabled=true 时上报 OTLP。
+# 本地启用 docker-compose.observability.yml 后，宿主机运行 admin 使用 127.0.0.1:4317；
+# 容器内运行 admin 使用 jaeger:4317。启用时 sample_ratio 可设为 1。
+# otlp_endpoint 为启动期连接配置，变更后需重启。
+# go-zero 内置 Telemetry；默认交给 observability 接管。
+Telemetry:
+  Disabled: true
 observability:
   # 可观测性服务名。
   service_name: "admin"

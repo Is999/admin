@@ -117,13 +117,13 @@ func WriteBizResponse(w http.ResponseWriter, r *http.Request, logicObj LogicObj,
 				logicObj.Errorf("%s", loggerx.ErrorChain(resp.Error))
 			}
 		}
-		jsonResp := helper.NewJsonResp(r.Context(), w).SetCode(resp.Code)
+		jsonResp := helper.NewJSONResp(r.Context(), w).SetCode(resp.Code)
 		if resp.Error != nil && !errors.Is(resp.Error, types.Nil) {
 			jsonResp = jsonResp.SetError(resp.Error)
 		}
 		jsonResp.Fail(message)
 	} else {
-		helper.NewJsonResp(r.Context(), w).SetCode(resp.Code).SetMessage(message).Success(resp.Data)
+		helper.NewJSONResp(r.Context(), w).SetCode(resp.Code).SetMessage(message).Success(resp.Data)
 	}
 
 	// 统一在响应写出后补充审计日志，成功和失败都保留，便于链路回溯。

@@ -280,11 +280,6 @@ const (
 	// `%d` 位置填充管理员 ID，避免同一管理员并发导入覆盖变更。
 	SysConfigExcelImportLock = "sys_config:excel:import:%d"
 
-	// CacheRebuildLock 表示缓存回源重建互斥锁 key 模板。
-	// Redis 类型：String（由 redsync 管理），TTL 过期规则：由 redsync 锁 TTL 控制，到期自动释放。
-	// `%s` 位置填充真实缓存 key 的业务段，实际 Redis key 通过 WithPrefix 追加 app_id 前缀。
-	CacheRebuildLock = "cache:rebuild:lock:%s"
-
 	// AdminExportJob 表示管理员列表导出任务状态缓存键模板。
 	// Redis 类型：String（JSON 文本），TTL 过期规则：按管理员导出任务状态 TTL 自动过期。
 	// `%s` 位置填充导出任务 jobId。

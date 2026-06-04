@@ -54,7 +54,7 @@ func (l *ProfileLogic) login(req *types.ProfileLoginReq, requireCaptcha bool) *t
 		Key:        req.Key,
 		Password:   req.Password,
 		SecureCode: req.SecureCode,
-		Ip:         l.ClientIP(),
+		IP:         l.ClientIP(),
 	}
 	adminLogic := &adminlogic.AdminLogic{BaseLogic: l.BaseLogic}
 	if requireCaptcha {
@@ -581,7 +581,7 @@ func (l *ProfileLogic) resolveEnableMFASecret(admin *model.Admin, requestSecret 
 	}
 }
 
-// buildProfileInfo 构造前端用户资料。
+// BuildProfileInfo 构造前端用户资料。
 func (l *ProfileLogic) BuildProfileInfo(admin *model.Admin, token string) (*types.ProfileInfo, error) {
 	return securitylogic.NewSecurityLogic(l.Ctx, l.Svc).BuildProfileInfo(admin, token)
 }

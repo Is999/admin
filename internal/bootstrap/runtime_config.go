@@ -11,8 +11,3 @@ func publishRuntimeConfig(c config.Config) runtimecfg.Snapshot {
 	runtimecfg.Set(c)
 	return previous
 }
-
-// restoreRuntimeConfig 恢复发布前的进程级运行配置快照。
-func restoreRuntimeConfig(snapshot runtimecfg.Snapshot) {
-	runtimecfg.Restore(snapshot)
-}

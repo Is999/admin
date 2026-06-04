@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -71,39 +72,6 @@ func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 	}
 }
 
-// TestSyncUserRuntimeAcceptsNumericUserID 验证滚动发布期间可兼容旧 API 数字 userId。
-func TestSyncUserRuntimeAcceptsNumericUserID(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":  true,
-			"code":    200,
-			"message": "ok",
-			"data": map[string]any{
-				"userId":                  testRuntimeSyncUserID,
-				"profileCacheInvalidated": false,
-				"sessionsInvalidated":     true,
-				"message":                 "done",
-			},
-		})
-	}))
-	defer server.Close()
-
-	client, err := NewClient(config.APIServiceConfig{
-		InternalBaseURL: server.URL,
-		OpsToken:        "ops-token",
-	})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	resp, err := client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, false, true, "")
-	if err != nil {
-		t.Fatalf("SyncUserRuntime() error = %v", err)
-	}
-	if resp.UserID != testRuntimeSyncUserID || resp.ProfileCacheInvalidated || !resp.SessionsInvalidated || resp.Message != "done" {
-		t.Fatalf("response = %+v, want numeric userId compatibility", resp)
-	}
-}
-
 // TestSyncUserRuntimeRejectsMismatchedUserID 验证 API 返回用户 ID 不一致时拒绝成功回执。
 func TestSyncUserRuntimeRejectsMismatchedUserID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +80,7 @@ func TestSyncUserRuntimeRejectsMismatchedUserID(t *testing.T) {
 			"code":    200,
 			"message": "ok",
 			"data": map[string]any{
-				"userId": testRuntimeSyncUserID + 1,
+				"userId": strconv.FormatInt(testRuntimeSyncUserID+1, 10),
 			},
 		})
 	}))

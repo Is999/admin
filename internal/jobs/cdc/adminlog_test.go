@@ -3,6 +3,7 @@ package cdc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,8 +103,11 @@ func TestAdminLogCollectorEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adminLogCollectorEvent() error = %v", err)
 	}
-	if got.EventID != adminLogCollectorPrefix+event.EventKey() || got.BizType != adminLogCollectorBizType || got.PartitionKey != "/api/login" {
+	if got.EventID != adminLogCollectorEventID(event) || got.BizType != adminLogCollectorBizType || got.PartitionKey != "/api/login" {
 		t.Fatalf("collector event 不符合预期: %+v", got)
+	}
+	if len(got.EventID) > 64 || !strings.HasPrefix(got.EventID, adminLogCollectorPrefix) {
+		t.Fatalf("collector event_id 长度或前缀不符合预期: %q", got.EventID)
 	}
 	var payload adminLogCollectorPayload
 	if err := json.Unmarshal(got.Payload, &payload); err != nil {
@@ -111,6 +115,21 @@ func TestAdminLogCollectorEvent(t *testing.T) {
 	}
 	if payload.ID != 11 || payload.EventKey != event.EventKey() || payload.SourcePos != 128 {
 		t.Fatalf("payload 不符合预期: %+v", payload)
+	}
+}
+
+func TestAdminLogCollectorEventIDStableAndBounded(t *testing.T) {
+	event := cdcx.Event{Topic: "dnmp-admin.admin.admin_log.with.extra.long.topic", Partition: 12, Offset: 9223372036854775807}
+	got := adminLogCollectorEventID(event)
+	if got != adminLogCollectorEventID(event) {
+		t.Fatal("collector event_id 应保持稳定")
+	}
+	if len(got) > 64 {
+		t.Fatalf("collector event_id 不能超过 DB 字段长度，实际=%d id=%s", len(got), got)
+	}
+	next := adminLogCollectorEventID(cdcx.Event{Topic: event.Topic, Partition: event.Partition, Offset: event.Offset - 1})
+	if got == next {
+		t.Fatalf("不同 Kafka 位点不应生成相同 event_id: %s", got)
 	}
 }
 
@@ -179,51 +198,138 @@ func TestAdminLogBatchProcessorOutputKeepsInterval(t *testing.T) {
 	}
 }
 
+func TestAdminLogBatchProcessorRecordsSummaryWithoutOutputFile(t *testing.T) {
+	processor := &AdminLogBatchProcessor{}
+	summary, err := processor.recordOutput([][]byte{[]byte(`{"type":"event"}` + "\n")})
+	if err != nil {
+		t.Fatalf("recordOutput() error = %v", err)
+	}
+	if summary.CollectedCount != 1 || summary.BatchTime == "" || summary.PreviousTime != "" {
+		t.Fatalf("首次批次摘要不符合预期: %+v", summary)
+	}
+	next, err := processor.recordOutput([][]byte{[]byte(`{"type":"event"}` + "\n")})
+	if err != nil {
+		t.Fatalf("second recordOutput() error = %v", err)
+	}
+	if next.PreviousTime == "" {
+		t.Fatalf("第二批次应带上批时间: %+v", next)
+	}
+}
+
 func TestAdminLogProcessorNoopWhenTestDisabled(t *testing.T) {
 	err := (AdminLogProcessor{}).ProcessCDC(context.Background(), cdcx.Event{
 		Operation: cdcx.OperationCreate,
 		After:     []byte(`{`),
 	})
 	if err != nil {
-		t.Fatalf("测试配置未启用时不应处理事件: %v", err)
+		t.Fatalf("验证配置未启用时不应处理事件: %v", err)
 	}
 }
 
-func TestAdminLogTestMatchedByTraceIDPrefix(t *testing.T) {
+func TestAdminLogProcessorSkipsNonCreateOperation(t *testing.T) {
+	err := (AdminLogProcessor{cfg: config.AdminLogAuditTestScenario{LarkEnabled: true}}).ProcessCDC(context.Background(), cdcx.Event{
+		Operation: cdcx.OperationRead,
+		After:     []byte(`{`),
+	})
+	if err != nil {
+		t.Fatalf("非新增审计日志不应进入验证处理: %v", err)
+	}
+}
+
+func TestAdminLogProcessorEnqueuesCollectorBeforeLark(t *testing.T) {
+	notifier := &fakeAdminLogNotifier{}
+	collector := &fakeCollectorEnqueuer{err: errors.New("collector failed")}
+	processor := AdminLogProcessor{
+		cfg:       config.AdminLogAuditTestScenario{LarkEnabled: true, CollectorEnabled: true},
+		notifier:  notifier,
+		collector: collector,
+	}
+	err := processor.ProcessCDC(context.Background(), cdcx.Event{
+		Topic:     "dnmp-admin.admin.admin_log",
+		Partition: 0,
+		Offset:    11,
+		Operation: cdcx.OperationCreate,
+		After:     []byte(`{"id":11,"user_id":7,"user_name":"admin","action":"管理员登录","route":"auth.login","http_status":200,"biz_code":200,"success":1}`),
+	})
+	if err == nil {
+		t.Fatal("Collector 失败应返回错误")
+	}
+	if len(collector.events) != 1 {
+		t.Fatalf("Collector 应先收到事件，实际=%d", len(collector.events))
+	}
+	if len(notifier.texts) != 0 {
+		t.Fatalf("Collector 失败时不应发送 Lark，实际=%d", len(notifier.texts))
+	}
+}
+
+func TestAdminLogProcessorSendsLarkAfterCollectorSuccess(t *testing.T) {
+	notifier := &fakeAdminLogNotifier{}
+	collector := &fakeCollectorEnqueuer{}
+	processor := AdminLogProcessor{
+		cfg:       config.AdminLogAuditTestScenario{LarkEnabled: true, CollectorEnabled: true},
+		notifier:  notifier,
+		collector: collector,
+	}
+	err := processor.ProcessCDC(context.Background(), cdcx.Event{
+		Topic:     "dnmp-admin.admin.admin_log",
+		Partition: 0,
+		Offset:    12,
+		Operation: cdcx.OperationCreate,
+		After:     []byte(`{"id":12,"user_id":7,"user_name":"admin","action":"管理员登录","route":"auth.login","http_status":200,"biz_code":200,"success":1}`),
+	})
+	if err != nil {
+		t.Fatalf("ProcessCDC() error = %v", err)
+	}
+	if len(collector.events) != 1 || len(notifier.texts) != 1 {
+		t.Fatalf("输出链路不符合预期 collector=%d lark=%d", len(collector.events), len(notifier.texts))
+	}
+}
+
+func TestAdminLogAuditMatchedByTraceIDPrefix(t *testing.T) {
 	cfg := config.AdminLogAuditTestScenario{TraceIDPrefix: "codex-cdc-"}
-	if !adminLogTestMatched(cfg, adminLogRow{TraceID: "codex-cdc-demo"}) {
-		t.Fatal("期望匹配测试 trace_id 前缀")
+	if !adminLogAuditMatched(cfg, adminLogRow{TraceID: "codex-cdc-demo"}) {
+		t.Fatal("期望匹配验证 trace_id 前缀")
 	}
-	if adminLogTestMatched(cfg, adminLogRow{TraceID: "normal-request"}) {
-		t.Fatal("普通 trace_id 不应触发测试链路")
+	if adminLogAuditMatched(cfg, adminLogRow{TraceID: "normal-request"}) {
+		t.Fatal("普通 trace_id 不应触发验证链路")
 	}
-	if !adminLogTestMatched(config.AdminLogAuditTestScenario{}, adminLogRow{TraceID: "normal-request"}) {
+	if !adminLogAuditMatched(config.AdminLogAuditTestScenario{}, adminLogRow{TraceID: "normal-request"}) {
 		t.Fatal("未配置前缀时应保持不过滤")
 	}
 }
 
-func TestAdminLogTestMatchedByActionAndRoute(t *testing.T) {
+func TestAdminLogAuditMatchedByActionAndRoute(t *testing.T) {
 	cfg := config.AdminLogAuditTestScenario{
 		Actions: []string{"管理员登录"},
 		Routes:  []string{"auth.login"},
 	}
-	if !adminLogTestMatched(cfg, adminLogRow{Action: "管理员登录", Route: "auth.login"}) {
-		t.Fatal("期望登录日志命中测试链路")
+	if !adminLogAuditMatched(cfg, adminLogRow{Action: "管理员登录", Route: "auth.login"}) {
+		t.Fatal("期望登录日志命中验证链路")
 	}
-	if adminLogTestMatched(cfg, adminLogRow{Action: "查询管理员列表", Route: "admin.list"}) {
-		t.Fatal("普通查询日志不应命中登录测试链路")
+	if adminLogAuditMatched(cfg, adminLogRow{Action: "查询管理员列表", Route: "admin.list"}) {
+		t.Fatal("普通查询日志不应命中登录验证链路")
 	}
 }
 
-func TestAdminLogTestEnabled(t *testing.T) {
-	if adminLogTestEnabled(config.AdminLogAuditTestScenario{}) {
-		t.Fatal("未配置测试输出时不应启用 admin_log 测试")
+func TestAdminLogAuditMatchedIgnoresBlankFilters(t *testing.T) {
+	cfg := config.AdminLogAuditTestScenario{
+		Actions: []string{" "},
+		Routes:  []string{""},
 	}
-	if !adminLogTestEnabled(config.AdminLogAuditTestScenario{LarkEnabled: true}) {
-		t.Fatal("启用 Lark 时应启用 admin_log 测试")
+	if !adminLogAuditMatched(cfg, adminLogRow{Action: "查询管理员列表", Route: "admin.list"}) {
+		t.Fatal("空白过滤项应按未配置处理")
 	}
-	if !adminLogTestEnabled(config.AdminLogAuditTestScenario{CollectorEnabled: true}) {
-		t.Fatal("启用 Collector 时应启用 admin_log 测试")
+}
+
+func TestAdminLogAuditEnabled(t *testing.T) {
+	if adminLogAuditEnabled(config.AdminLogAuditTestScenario{}) {
+		t.Fatal("未配置验证输出时不应启用 admin_log 验证")
+	}
+	if !adminLogAuditEnabled(config.AdminLogAuditTestScenario{LarkEnabled: true}) {
+		t.Fatal("启用 Lark 时应启用 admin_log 验证")
+	}
+	if !adminLogAuditEnabled(config.AdminLogAuditTestScenario{CollectorEnabled: true}) {
+		t.Fatal("启用 Collector 时应启用 admin_log 验证")
 	}
 }
 
@@ -236,7 +342,7 @@ func TestRegisterProcessorsRejectsMissingLarkConfig(t *testing.T) {
 		TestScenarios: config.TestScenariosConfig{AdminLogAudit: config.AdminLogAuditTestScenario{LarkEnabled: true}},
 	}, svc.Dependencies{})
 	if err := RegisterProcessors(svcCtx, consumer); err == nil {
-		t.Fatal("期望 Lark 测试开关缺少 alert.lark 时注册失败")
+		t.Fatal("期望 Lark 验证开关缺少 alert.lark 时注册失败")
 	}
 }
 
@@ -250,6 +356,29 @@ func TestRegisterProcessorsRejectsDisabledCollector(t *testing.T) {
 		Collector:     config.CollectorConfig{Enabled: false},
 	}, svc.Dependencies{})
 	if err := RegisterProcessors(svcCtx, consumer); err == nil {
-		t.Fatal("期望 Collector 测试开关未启用 collector 时注册失败")
+		t.Fatal("期望 Collector 验证开关未启用 collector 时注册失败")
 	}
+}
+
+type fakeAdminLogNotifier struct {
+	texts []string // 已发送文本
+	err   error    // 固定返回错误
+}
+
+func (n *fakeAdminLogNotifier) SendText(_ context.Context, text string) error {
+	n.texts = append(n.texts, text)
+	return n.err
+}
+
+type fakeCollectorEnqueuer struct {
+	events []collectorx.Event // 已入队事件
+	err    error              // 固定返回错误
+}
+
+func (c *fakeCollectorEnqueuer) Enqueue(_ context.Context, event collectorx.Event) (string, error) {
+	c.events = append(c.events, event)
+	if c.err != nil {
+		return "", c.err
+	}
+	return event.EventID, nil
 }

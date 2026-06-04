@@ -79,7 +79,7 @@ func (s *periodicTaskScheduler) Start(ctx context.Context) error {
 				// 配置同步失败只记录日志，不终止 leader，避免一次异常导致调度器整体退出。
 				if err := s.syncConfigs(); err != nil {
 					s.manager.markSchedulerSyncFailure(err.Error())
-					loggerx.Errorw(nil, "周期任务 同步失败", err)
+					loggerx.Errorw(context.Background(), "周期任务 同步失败", err)
 				}
 				timer.Reset(s.manager.schedulerSyncInterval())
 			}
@@ -157,7 +157,7 @@ func (s *periodicTaskScheduler) syncConfigs() error {
 			}
 		}(item))
 		if err != nil {
-			loggerx.Errorw(nil, "周期任务 调度配置无效", err,
+			loggerx.Errorw(context.Background(), "周期任务 调度配置无效", err,
 				logx.Field("cron", item.Cronspec),
 				logx.Field("task_type", item.Task.Type()),
 			)
@@ -179,14 +179,14 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 	defer cancel()
 	if ok, err := s.manager.schedulerLeaderStillHeld(guardCtx); err != nil {
 		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), err.Error())
-		loggerx.Errorw(nil, "周期任务 leader 校验失败", err,
+		loggerx.Errorw(context.Background(), "周期任务 leader 校验失败", err,
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),
 			logx.Field("task_name", taskName),
 		)
 		return
 	} else if !ok {
-		loggerx.Infow(nil, "周期任务 跳过非 leader 投递",
+		loggerx.Infow(context.Background(), "周期任务 跳过非 leader 投递",
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),
 			logx.Field("task_name", taskName),
@@ -195,7 +195,7 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 	}
 	if ok, queueName, backlog, limit, err := s.manager.periodicQueueBackpressureOK(guardCtx, cfg); err != nil {
 		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), err.Error())
-		loggerx.Errorw(nil, "周期任务 队列背压检查失败", err,
+		loggerx.Errorw(context.Background(), "周期任务 队列背压检查失败", err,
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),
 			logx.Field("task_name", taskName),
@@ -204,7 +204,7 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 		return
 	} else if !ok {
 		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), "queue backlog exceeded")
-		loggerx.Infow(nil, "周期任务 队列积压过高跳过本轮",
+		loggerx.Infow(context.Background(), "周期任务 队列积压过高跳过本轮",
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),
 			logx.Field("task_name", taskName),
@@ -218,7 +218,7 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 	defer enqueueCancel()
 	if _, err := s.manager.client.EnqueueContext(enqueueCtx, cfg.Task, cfg.Opts...); err != nil {
 		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), err.Error())
-		loggerx.Errorw(nil, "周期任务 入队失败", err,
+		loggerx.Errorw(context.Background(), "周期任务 入队失败", err,
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),
 			logx.Field("task_name", taskName),

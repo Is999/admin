@@ -195,7 +195,7 @@ var archiveCreateHistoryTableTemplate string
 // Service 封装通用归档控制面、批处理执行链路和查询侧元数据读取能力。
 type Service struct {
 	svcCtx          *svc.ServiceContext // 服务上下文，提供数据库、Redis 与运行期配置
-	controlDatabase svc.DbName          // 归档控制表归属库名
+	controlDatabase svc.DBName          // 归档控制表归属库名
 }
 
 // AdminLogQueryMeta 是管理员日志查询返回给接口层的元信息。
@@ -206,7 +206,7 @@ type Option func(s *Service)
 
 // WithControlDatabase 指定 archive_segment/archive_watermark 控制表归属库。
 // 归档热表和历史表库由 archive_jobs[].database 显式指定，避免按表名隐式路由带来的歧义。
-func WithControlDatabase(database svc.DbName) Option {
+func WithControlDatabase(database svc.DBName) Option {
 	return func(s *Service) {
 		s.controlDatabase = database
 	}
@@ -1839,11 +1839,11 @@ func (s *Service) jobControlWriteDB() *gorm.DB {
 }
 
 // controlDatabaseName 返回归档控制表所在数据库，未指定时回退主库。
-func (s *Service) controlDatabaseName() svc.DbName {
+func (s *Service) controlDatabaseName() svc.DBName {
 	if s == nil || strings.TrimSpace(string(s.controlDatabase)) == "" {
 		return svc.DatabaseMain
 	}
-	return svc.NormalizeDbName(s.controlDatabase)
+	return svc.NormalizeDBName(s.controlDatabase)
 }
 
 // redisClient 返回归档服务使用的 Redis 客户端，用于规划和推进阶段的分布式锁。

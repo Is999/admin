@@ -129,22 +129,22 @@ func newGoUtilsLogger(fields []any) *goUtilsLogger {
 
 // Debug 输出调试日志。
 func (l *goUtilsLogger) Debug(msg string, args ...any) {
-	DebugwSkip(nil, goUtilsCallerSkip, msg, l.logFields(args...)...)
+	DebugwSkip(context.Background(), goUtilsCallerSkip, msg, l.logFields(args...)...)
 }
 
 // Info 输出信息日志。
 func (l *goUtilsLogger) Info(msg string, args ...any) {
-	InfowSkip(nil, goUtilsCallerSkip, msg, l.logFields(args...)...)
+	InfowSkip(context.Background(), goUtilsCallerSkip, msg, l.logFields(args...)...)
 }
 
 // Warn 输出警告日志。
 func (l *goUtilsLogger) Warn(msg string, args ...any) {
-	SlowwSkip(nil, goUtilsCallerSkip, msg, l.logFields(args...)...)
+	SlowwSkip(context.Background(), goUtilsCallerSkip, msg, l.logFields(args...)...)
 }
 
 // Error 输出错误日志。
 func (l *goUtilsLogger) Error(msg string, args ...any) {
-	ErrorTextwSkip(nil, goUtilsCallerSkip, msg, msg, l.logFields(args...)...)
+	ErrorTextwSkip(context.Background(), goUtilsCallerSkip, msg, msg, l.logFields(args...)...)
 }
 
 // With 创建携带固定字段的新日志对象。

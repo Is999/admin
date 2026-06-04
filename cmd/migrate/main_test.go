@@ -88,7 +88,7 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			name:   "skip unrelated migration",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Name: "repair_runtime_archive_job_seed", Status: database.MigrationStatusExecuted},
+				{Name: "bootstrap_admin_table", Status: database.MigrationStatusExecuted},
 			},
 		},
 		{

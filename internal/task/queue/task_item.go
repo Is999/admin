@@ -272,7 +272,7 @@ func (m *Manager) periodicNextRuns(now time.Time) []periodicNextRun {
 	return result
 }
 
-// periodicNextProcessAtForTaskItem 从周期任务配置中为历史任务补齐下一次触发时间。
+// periodicNextProcessAtForTaskItem 从周期任务配置中为任务列表项补齐下一次触发时间。
 func periodicNextProcessAtForTaskItem(item types.TaskItem, periodicNextRuns []periodicNextRun) string {
 	if len(periodicNextRuns) == 0 || !taskItemHasPeriodicSource(item) {
 		return ""

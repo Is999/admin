@@ -72,7 +72,7 @@ func (l *AdminLogic) Login(req *types.LoginReq) *types.BizResult {
 	}
 
 	// 更新最后登录时间和 IP
-	admin.LastLoginIP = req.Ip
+	admin.LastLoginIP = req.IP
 	admin.LastLoginTime = time.Now()
 	admin.UpdatedAt = time.Now()
 

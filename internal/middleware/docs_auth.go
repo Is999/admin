@@ -46,8 +46,8 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 				if errors.Is(err, errTokenExpired) {
 					message = i18n.MsgKeyTokenExpired
 				}
-				helper.NewJsonResp(ctx, w).
-					SetHttpStatus(http.StatusUnauthorized).
+				helper.NewJSONResp(ctx, w).
+					SetHTTPStatus(http.StatusUnauthorized).
 					SetCode(codes.Unauthorized).
 					Fail(message)
 				return
@@ -57,36 +57,36 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 			if err = securitylogic.NewSecurityLogic(ctx, svcCtx).CheckAdminAccess(identity.UserID, string(docsAlias), ip, identity.LoginIP); err != nil {
 				switch {
 				case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
-					helper.NewJsonResp(ctx, w).
-						SetHttpStatus(http.StatusForbidden).
+					helper.NewJSONResp(ctx, w).
+						SetHTTPStatus(http.StatusForbidden).
 						SetCode(codes.Forbidden).
 						Fail(i18n.MsgKeyForbidden)
 				case errors.Is(err, securitylogic.ErrAdminDisabled):
-					helper.NewJsonResp(ctx, w).
-						SetHttpStatus(http.StatusUnauthorized).
+					helper.NewJSONResp(ctx, w).
+						SetHTTPStatus(http.StatusUnauthorized).
 						SetCode(codes.Unauthorized).
 						Fail(i18n.MsgKeyUserDisabled)
 				case errors.Is(err, securitylogic.ErrAdminIPChanged):
-					helper.NewJsonResp(ctx, w).
-						SetHttpStatus(http.StatusUnauthorized).
+					helper.NewJSONResp(ctx, w).
+						SetHTTPStatus(http.StatusUnauthorized).
 						SetCode(codes.Unauthorized).
 						SetError(err).
 						Fail(i18n.MsgKeyAdminLoginIPChanged)
 				case errors.Is(err, securitylogic.ErrAdminIPNotAllowed):
-					helper.NewJsonResp(ctx, w).
-						SetHttpStatus(http.StatusUnauthorized).
+					helper.NewJSONResp(ctx, w).
+						SetHTTPStatus(http.StatusUnauthorized).
 						SetCode(codes.Unauthorized).
 						SetError(err).
 						Fail(i18n.MsgKeyAdminIPNotAllowed)
 				case errors.Is(err, securitylogic.ErrAdminMFARequired):
-					helper.NewJsonResp(ctx, w).
-						SetHttpStatus(http.StatusOK).
+					helper.NewJSONResp(ctx, w).
+						SetHTTPStatus(http.StatusOK).
 						SetCode(codes.CheckMFACode).
 						SetError(err).
 						Fail(i18n.MsgKeyCheckMFA)
 				default:
-					helper.NewJsonResp(ctx, w).
-						SetHttpStatus(http.StatusUnauthorized).
+					helper.NewJSONResp(ctx, w).
+						SetHTTPStatus(http.StatusUnauthorized).
 						SetCode(codes.Unauthorized).
 						Fail(i18n.MsgKeyTokenInvalid)
 				}

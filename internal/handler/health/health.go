@@ -14,7 +14,7 @@ import (
 func LiveHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resp := healthlogic.NewHealthLogic(r.Context(), svcCtx).Liveness()
-		helper.NewJsonResp(r.Context(), w).SetCode(codes.OK).Success(resp)
+		helper.NewJSONResp(r.Context(), w).SetCode(codes.OK).Success(resp)
 	}
 }
 
@@ -24,13 +24,13 @@ func ReadyHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 		resp, err := healthlogic.NewHealthLogic(r.Context(), svcCtx).Readiness(r.Context())
 		if err != nil {
 			loggerx.Errorw(r.Context(), "健康检查 依赖未就绪", err)
-			helper.NewJsonResp(r.Context(), w).
-				SetHttpStatus(http.StatusServiceUnavailable).
+			helper.NewJSONResp(r.Context(), w).
+				SetHTTPStatus(http.StatusServiceUnavailable).
 				SetCode(codes.DependencyUnavailable).
 				SetError(err).
 				Fail("", resp)
 			return
 		}
-		helper.NewJsonResp(r.Context(), w).SetCode(codes.OK).Success(resp)
+		helper.NewJSONResp(r.Context(), w).SetCode(codes.OK).Success(resp)
 	}
 }

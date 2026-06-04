@@ -15,8 +15,6 @@ const (
 	// MsgKeyCheckPasswordReset 表示账号需要先修改登录密码的标准提示 key。
 	MsgKeyCheckPasswordReset = "common.check_password_reset"
 
-	// MsgKeyContinue 表示 HTTP Continue 语义的文案 key。
-	MsgKeyContinue = "http.continue"
 	// MsgKeyOK 表示 HTTP OK 语义的文案 key。
 	MsgKeyOK = "http.ok"
 	// MsgKeyBadRequest 表示请求参数或格式错误的 HTTP 文案 key。
@@ -142,7 +140,6 @@ var defaultCodeSpecs = []codeSpec{
 	{code: CheckMFACode, httpStatus: OK, messageKey: MsgKeyCheckMFA},                                               // 需要校验 MFA 设备验证码时返回业务成功链路。
 	{code: CheckPasswordReset, httpStatus: OK, messageKey: MsgKeyCheckPasswordReset},                               // 需要先修改登录密码时返回业务成功链路。
 	{code: CheckMFAAgain, httpStatus: BadRequest, messageKey: MsgKeyMFAExpired},                                    // MFA 校验过期按客户端参数错误处理。
-	{code: Continue, httpStatus: ServerError, messageKey: MsgKeyContinue},                                          // Continue 码保留历史未知失败 HTTP 行为。
 	{code: OK, httpStatus: OK, success: true, messageKey: MsgKeyOK},                                                // HTTP OK 语义按成功响应处理。
 	{code: BadRequest, httpStatus: BadRequest, messageKey: MsgKeyBadRequest},                                       // 错误请求返回 HTTP 400。
 	{code: Unauthorized, httpStatus: Unauthorized, messageKey: MsgKeyUnauthorized},                                 // 未授权返回 HTTP 401。
@@ -157,22 +154,22 @@ var defaultCodeSpecs = []codeSpec{
 	{code: InternalError, httpStatus: ServerError, messageKey: MsgKeyInternalError},                                // 内部错误返回 HTTP 500。
 	{code: DBError, httpStatus: ServerError, messageKey: MsgKeyDBError},                                            // 数据库错误返回 HTTP 500。
 	{code: CreateSuccess, httpStatus: OK, success: true, messageKey: MsgKeyCreateSuccess},                          // 创建成功按成功响应处理。
-	{code: CreateFail, httpStatus: ServerError, messageKey: MsgKeyCreateFail},                                      // 创建失败保持历史 HTTP 500 行为。
+	{code: CreateFail, httpStatus: ServerError, messageKey: MsgKeyCreateFail},                                      // 创建失败返回 HTTP 500。
 	{code: AddSuccess, httpStatus: OK, success: true, messageKey: MsgKeyAddSuccess},                                // 添加成功按成功响应处理。
-	{code: AddFail, httpStatus: ServerError, messageKey: MsgKeyAddFail},                                            // 添加失败保持历史 HTTP 500 行为。
+	{code: AddFail, httpStatus: ServerError, messageKey: MsgKeyAddFail},                                            // 添加失败返回 HTTP 500。
 	{code: SaveSuccess, httpStatus: OK, success: true, messageKey: MsgKeySaveSuccess},                              // 保存成功按成功响应处理。
-	{code: SaveFail, httpStatus: ServerError, messageKey: MsgKeySaveFail},                                          // 保存失败保持历史 HTTP 500 行为。
+	{code: SaveFail, httpStatus: ServerError, messageKey: MsgKeySaveFail},                                          // 保存失败返回 HTTP 500。
 	{code: UpdateSuccess, httpStatus: OK, success: true, messageKey: MsgKeyUpdateSuccess},                          // 更新成功按成功响应处理。
-	{code: UpdateFail, httpStatus: ServerError, messageKey: MsgKeyUpdateFail},                                      // 更新失败保持历史 HTTP 500 行为。
+	{code: UpdateFail, httpStatus: ServerError, messageKey: MsgKeyUpdateFail},                                      // 更新失败返回 HTTP 500。
 	{code: DeleteSuccess, httpStatus: OK, success: true, messageKey: MsgKeyDeleteSuccess},                          // 删除成功按成功响应处理。
-	{code: DeleteFail, httpStatus: ServerError, messageKey: MsgKeyDeleteFail},                                      // 删除失败保持历史 HTTP 500 行为。
+	{code: DeleteFail, httpStatus: ServerError, messageKey: MsgKeyDeleteFail},                                      // 删除失败返回 HTTP 500。
 	{code: FetchSuccess, httpStatus: OK, success: true, messageKey: MsgKeyFetchSuccess},                            // 获取成功按成功响应处理。
-	{code: FetchFail, httpStatus: ServerError, messageKey: MsgKeyFetchFail},                                        // 获取失败保持历史 HTTP 500 行为。
-	{code: UserNotFound, httpStatus: ServerError, messageKey: MsgKeyUserNotFound},                                  // 用户不存在保持历史 HTTP 500 行为。
+	{code: FetchFail, httpStatus: ServerError, messageKey: MsgKeyFetchFail},                                        // 获取失败返回 HTTP 500。
+	{code: UserNotFound, httpStatus: NotFound, messageKey: MsgKeyUserNotFound},                                     // 用户不存在返回 HTTP 404。
 	{code: InvalidPassword, httpStatus: BadRequest, messageKey: MsgKeyInvalidPassword},                             // 密码错误返回 HTTP 400。
 	{code: UserAlreadyExists, httpStatus: BadRequest, messageKey: MsgKeyUserAlreadyExists},                         // 用户已存在返回 HTTP 400。
-	{code: UserDisabled, httpStatus: ServerError, messageKey: MsgKeyUserDisabled},                                  // 账号禁用保持历史 HTTP 500 行为。
-	{code: InvalidCaptcha, httpStatus: ServerError, messageKey: MsgKeyInvalidCaptcha},                              // 验证码错误保持历史 HTTP 500 行为。
+	{code: UserDisabled, httpStatus: Unauthorized, messageKey: MsgKeyUserDisabled},                                 // 账号禁用返回 HTTP 401。
+	{code: InvalidCaptcha, httpStatus: BadRequest, messageKey: MsgKeyInvalidCaptcha},                               // 验证码错误返回 HTTP 400。
 	{code: InvalidMFACode, httpStatus: BadRequest, messageKey: MsgKeyMFACodeInvalid},                               // MFA 动态验证码错误返回 HTTP 400。
 	{code: AdminRoleAlreadyExists, httpStatus: BadRequest, messageKey: MsgKeyRoleAlreadyExists},                    // 后台角色名称已存在返回 HTTP 400。
 	{code: AdminPermissionAlreadyExists, httpStatus: BadRequest, messageKey: MsgKeyPermissionAlreadyExists},        // 后台权限标识已存在返回 HTTP 400。

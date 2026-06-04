@@ -18,5 +18,8 @@ CREATE TABLE IF NOT EXISTS `collector_outbox` (
   KEY `idx_biz_state_next` (`biz_type`,`state`,`next_run_at`),
   KEY `idx_state_next` (`state`,`next_run_at`),
   KEY `idx_state_started` (`state`,`started_at`),
+  KEY `idx_state_finished` (`state`,`finished_at`),
+  KEY `idx_state_updated` (`state`,`updated_at`),
+  KEY `idx_transport_state` (`transport`,`state`),
   KEY `idx_partition_state_next` (`partition_key`,`state`,`next_run_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='通用收集器Outbox(兜底重试/死信)';

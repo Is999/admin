@@ -83,7 +83,7 @@ func (e Event) RowData() json.RawMessage {
 // DecodeDebeziumEvent 把 Debezium envelope 解析为本地 CDC 事件。
 func DecodeDebeziumEvent(topic string, partition int, offset int64, key []byte, value []byte) (Event, error) {
 	if len(value) == 0 {
-		return Event{}, errors.Errorf("CDC 消息为空 topic=%s partition=%d offset=%d", topic, partition, offset)
+		return Event{}, Skip("CDC tombstone 消息")
 	}
 	var envelope debeziumEnvelope
 	if err := json.Unmarshal(value, &envelope); err != nil {
@@ -162,7 +162,7 @@ func decodePrimaryKey(key []byte) (json.RawMessage, error) {
 		return nil, nil
 	}
 	var wrapper struct {
-		Payload json.RawMessage `json:"payload"`
+		Payload json.RawMessage `json:"payload"` // Debezium key 包装后的主键 JSON
 	}
 	if err := json.Unmarshal(key, &wrapper); err == nil && len(wrapper.Payload) > 0 && string(wrapper.Payload) != "null" {
 		return cloneRaw(wrapper.Payload), nil

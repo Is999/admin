@@ -197,6 +197,47 @@ func TestConsumerSkipFetchedMessage(t *testing.T) {
 	}
 }
 
+func TestConsumerSkipsTombstoneMessage(t *testing.T) {
+	consumer, err := New(config.CDCConfig{
+		Enabled:             true,
+		Brokers:             []string{"127.0.0.1:9092"},
+		GroupID:             "admin-cdc-test",
+		MaxRetryTimes:       2,
+		DeadLetterTopic:     "admin_cdc_dead_letter",
+		RetryBackoffSeconds: 1,
+		Topics: []config.CDCTopicConfig{{
+			Enabled: true,
+			Topic:   "dnmp-admin.admin.admin_log",
+			Table:   "admin.admin_log",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	consumer.ctx = context.Background()
+	processor := &flakyProcessor{}
+	if err := consumer.RegisterProcessor("admin.admin_log", processor); err != nil {
+		t.Fatalf("RegisterProcessor() error = %v", err)
+	}
+
+	msg := kafka.Message{
+		Topic:     "dnmp-admin.admin.admin_log",
+		Partition: 0,
+		Offset:    10,
+		Value:     nil,
+	}
+	if ok := consumer.processFetchedMessage(consumer.cfg.Topics[0], msg); !ok {
+		t.Fatal("processFetchedMessage() = false")
+	}
+	if processor.calls != 0 {
+		t.Fatalf("tombstone 不应分发给 processor，实际调用=%d", processor.calls)
+	}
+	stat := consumer.Snapshot().Topics[msg.Topic]
+	if stat.Skipped != 1 || stat.Failed != 0 || stat.DeadLettered != 0 {
+		t.Fatalf("tombstone 状态不符合预期: %+v", stat)
+	}
+}
+
 func TestConsumerKeepsFailedMessageWithoutDeadLetterTopic(t *testing.T) {
 	consumer, err := New(config.CDCConfig{
 		Enabled:       true,

@@ -2,6 +2,8 @@ package cdc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -22,10 +24,11 @@ import (
 )
 
 const (
-	adminLogTable            = "admin.admin_log"      // admin 操作日志表 CDC 路由键
-	adminLogCollectorBizType = "cdc.admin_log.audit"  // admin_log CDC 批量测试业务类型
-	adminLogCollectorPrefix  = "cdc:admin_log:audit:" // admin_log CDC 批量测试事件前缀
-	adminLogLarkTitle        = "【CDC 审核日志】"           // admin_log CDC Lark 消息标题
+	adminLogTable                = "admin.admin_log"      // admin 操作日志表 CDC 路由键
+	adminLogCollectorBizType     = "cdc.admin_log.audit"  // admin_log CDC 批量验证业务类型
+	adminLogCollectorPrefix      = "cdc:admin_log:audit:" // admin_log CDC 批量验证事件前缀
+	adminLogCollectorIDHashBytes = 16                     // Collector event_id 哈希字节数，控制总长小于 64
+	adminLogLarkTitle            = "【CDC 审核日志】"           // admin_log CDC Lark 消息标题
 )
 
 // RegisterProcessors 注册内置 CDC 表处理器。
@@ -41,22 +44,22 @@ func RegisterProcessors(svcCtx *svc.ServiceContext, consumer *cdcx.Consumer) err
 	var err error
 	if cfg.LarkEnabled {
 		if svcCtx == nil {
-			return errors.Errorf("admin_log CDC Lark 测试缺少服务上下文")
+			return errors.Errorf("admin_log CDC Lark 验证缺少服务上下文")
 		}
 		notifier, err = larkx.New(svcCtx.CurrentConfig().Alert.Lark)
 		if err != nil {
-			return errors.Wrap(err, "初始化 admin_log CDC Lark 测试通知器失败")
+			return errors.Wrap(err, "初始化 admin_log CDC Lark 验证通知器失败")
 		}
 		if notifier == nil {
-			return errors.Errorf("admin_log CDC Lark 测试已启用但 alert.lark 未启用")
+			return errors.Errorf("admin_log CDC Lark 验证已启用但 alert.lark 未启用")
 		}
 	}
 	if cfg.CollectorEnabled {
 		if svcCtx == nil || svcCtx.Collector == nil {
-			return errors.Errorf("admin_log CDC Collector 测试已启用但 Collector 未初始化")
+			return errors.Errorf("admin_log CDC Collector 验证已启用但 Collector 未初始化")
 		}
 		if !svcCtx.CurrentConfig().Collector.Enabled {
-			return errors.Errorf("admin_log CDC Collector 测试已启用但 collector.enabled=false")
+			return errors.Errorf("admin_log CDC Collector 验证已启用但 collector.enabled=false")
 		}
 		if err = svcCtx.Collector.RegisterProcessor(adminLogCollectorBizType, &AdminLogBatchProcessor{outputFile: cfg.OutputFile}); err != nil {
 			return errors.Tag(err)
@@ -72,8 +75,13 @@ func RegisterProcessors(svcCtx *svc.ServiceContext, consumer *cdcx.Consumer) err
 // AdminLogProcessor 处理 admin_log 的 Debezium 增量事件。
 type AdminLogProcessor struct {
 	cfg       config.AdminLogAuditTestScenario // admin_log 验证场景开关
-	notifier  *larkx.Notifier                  // Lark 通知器
+	notifier  adminLogNotifier                 // Lark 通知器
 	collector collectorEnqueuer                // Collector 批量写入入口
+}
+
+// adminLogNotifier 约束 admin_log 验证链路发送 Lark 文本消息的最小能力。
+type adminLogNotifier interface {
+	SendText(context.Context, string) error
 }
 
 // collectorEnqueuer 约束 CDC 写入 Collector 的最小能力。
@@ -83,7 +91,10 @@ type collectorEnqueuer interface {
 
 // ProcessCDC 将 admin_log CDC 事件清洗成轻量统计字段。
 func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) error {
-	if !adminLogTestEnabled(p.cfg) {
+	if !adminLogAuditEnabled(p.cfg) {
+		return nil
+	}
+	if !adminLogAuditOperationAllowed(event.Operation) {
 		return nil
 	}
 	row, err := adminLogRowFromEvent(event)
@@ -93,8 +104,8 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 	if row.ID == 0 {
 		return errors.Errorf("admin_log CDC 事件缺少 id op=%s topic=%s offset=%d", event.Operation, event.Topic, event.Offset)
 	}
-	if !adminLogTestMatched(p.cfg, row) {
-		loggerx.Infow(ctx, "CDC admin_log 测试事件已跳过",
+	if !adminLogAuditMatched(p.cfg, row) {
+		loggerx.Infow(ctx, "CDC admin_log 验证事件已跳过",
 			logx.Field("event_key", event.EventKey()),
 			logx.Field("id", row.ID),
 			logx.Field("action", row.Action),
@@ -103,36 +114,6 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 			logx.Field("trace_id_prefix", strings.TrimSpace(p.cfg.TraceIDPrefix)),
 		)
 		return nil
-	}
-	loggerx.Infow(ctx, "CDC admin_log 已处理",
-		logx.Field("table", event.TableKey()),
-		logx.Field("event_key", event.EventKey()),
-		logx.Field("op", string(event.Operation)),
-		logx.Field("id", row.ID),
-		logx.Field("user_id", row.UserID),
-		logx.Field("user_name", row.UserName),
-		logx.Field("action", row.Action),
-		logx.Field("route", row.Route),
-		logx.Field("success", row.Success.Bool()),
-		logx.Field("http_status", row.HTTPStatus),
-		logx.Field("biz_code", row.BizCode),
-		logx.Field("latency_ms", row.LatencyMS),
-		logx.Field("trace_id", row.TraceID),
-		logx.Field("source_file", event.Source.File),
-		logx.Field("source_pos", event.Source.Position),
-	)
-	if p.cfg.LarkEnabled {
-		if p.notifier == nil {
-			return errors.Errorf("admin_log CDC Lark 通知器未初始化")
-		}
-		if err = p.notifier.SendText(ctx, adminLogLarkText(event, row)); err != nil {
-			return errors.Wrap(err, "发送 admin_log CDC Lark 消息失败")
-		}
-		loggerx.Infow(ctx, "CDC admin_log Lark 已推送",
-			logx.Field("event_key", event.EventKey()),
-			logx.Field("id", row.ID),
-			logx.Field("trace_id", row.TraceID),
-		)
 	}
 	if p.cfg.CollectorEnabled {
 		if p.collector == nil {
@@ -152,11 +133,41 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 			logx.Field("trace_id", row.TraceID),
 		)
 	}
+	if p.cfg.LarkEnabled {
+		if p.notifier == nil {
+			return errors.Errorf("admin_log CDC Lark 通知器未初始化")
+		}
+		if err = p.notifier.SendText(ctx, adminLogLarkText(event, row)); err != nil {
+			return errors.Wrap(err, "发送 admin_log CDC Lark 消息失败")
+		}
+		loggerx.Infow(ctx, "CDC admin_log Lark 已推送",
+			logx.Field("event_key", event.EventKey()),
+			logx.Field("id", row.ID),
+			logx.Field("trace_id", row.TraceID),
+		)
+	}
+	loggerx.Infow(ctx, "CDC admin_log 已处理",
+		logx.Field("table", event.TableKey()),
+		logx.Field("event_key", event.EventKey()),
+		logx.Field("op", string(event.Operation)),
+		logx.Field("id", row.ID),
+		logx.Field("user_id", row.UserID),
+		logx.Field("user_name", row.UserName),
+		logx.Field("action", row.Action),
+		logx.Field("route", row.Route),
+		logx.Field("success", row.Success.Bool()),
+		logx.Field("http_status", row.HTTPStatus),
+		logx.Field("biz_code", row.BizCode),
+		logx.Field("latency_ms", row.LatencyMS),
+		logx.Field("trace_id", row.TraceID),
+		logx.Field("source_file", event.Source.File),
+		logx.Field("source_pos", event.Source.Position),
+	)
 	return nil
 }
 
-// adminLogTestMatched 判断当前 admin_log 是否命中测试过滤条件。
-func adminLogTestMatched(cfg config.AdminLogAuditTestScenario, row adminLogRow) bool {
+// adminLogAuditMatched 判断当前 admin_log 是否命中验证过滤条件。
+func adminLogAuditMatched(cfg config.AdminLogAuditTestScenario, row adminLogRow) bool {
 	prefix := strings.TrimSpace(cfg.TraceIDPrefix)
 	if prefix != "" && !strings.HasPrefix(row.TraceID, prefix) {
 		return false
@@ -167,9 +178,14 @@ func adminLogTestMatched(cfg config.AdminLogAuditTestScenario, row adminLogRow) 
 	return adminLogValueAllowed(cfg.Routes, row.Route)
 }
 
-// adminLogTestEnabled 判断 admin_log 验证输出是否启用。
-func adminLogTestEnabled(cfg config.AdminLogAuditTestScenario) bool {
+// adminLogAuditEnabled 判断 admin_log 验证输出是否启用。
+func adminLogAuditEnabled(cfg config.AdminLogAuditTestScenario) bool {
 	return cfg.LarkEnabled || cfg.CollectorEnabled
+}
+
+// adminLogAuditOperationAllowed 只处理接口新产生的审计日志。
+func adminLogAuditOperationAllowed(op cdcx.Operation) bool {
+	return op == cdcx.OperationCreate
 }
 
 // adminLogValueAllowed 判断字段值是否命中白名单，空白名单表示允许全部。
@@ -178,12 +194,18 @@ func adminLogValueAllowed(values []string, current string) bool {
 		return true
 	}
 	current = strings.TrimSpace(current)
+	hasValue := false
 	for _, value := range values {
-		if strings.TrimSpace(value) == current {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		hasValue = true
+		if value == current {
 			return true
 		}
 	}
-	return false
+	return !hasValue
 }
 
 // AdminLogBatchProcessor 批量消费 admin_log CDC 审核日志事件。
@@ -191,6 +213,15 @@ type AdminLogBatchProcessor struct {
 	outputFile string     // 批处理观察文件；为空只打印日志
 	mu         sync.Mutex // 保护上一批写入时间
 	lastWrite  time.Time  // 上一批观察文件写入时间
+}
+
+// adminLogBatchSummary 表示一次批量验证输出的批次信息。
+type adminLogBatchSummary struct {
+	Type           string `json:"type"`            // 记录类型
+	BatchTime      string `json:"batch_time"`      // 本批写入时间
+	PreviousTime   string `json:"previous_time"`   // 上批写入时间
+	IntervalMS     int64  `json:"interval_ms"`     // 距上批间隔毫秒
+	CollectedCount int    `json:"collected_count"` // 本批收集条数
 }
 
 // ProcessBatch 批量处理 admin_log CDC 审核日志事件。
@@ -221,56 +252,70 @@ func (p *AdminLogBatchProcessor) ProcessBatch(ctx context.Context, events []coll
 		)
 		results = append(results, collectorx.ProcessResult{EventID: event.EventID, Success: true})
 	}
-	if len(lines) > 0 && strings.TrimSpace(p.outputFile) != "" {
-		if err := p.appendOutput(lines); err != nil {
+	if len(lines) > 0 {
+		summary, err := p.recordOutput(lines)
+		if err != nil {
 			return nil, errors.Tag(err)
 		}
-		loggerx.Infow(ctx, "CDC admin_log 批量观察文件已写入",
-			logx.Field("file", strings.TrimSpace(p.outputFile)),
-			logx.Field("count", len(lines)),
-		)
+		fields := []logx.LogField{
+			logx.Field("collected_count", summary.CollectedCount),
+			logx.Field("batch_time", summary.BatchTime),
+			logx.Field("previous_time", summary.PreviousTime),
+			logx.Field("interval_ms", summary.IntervalMS),
+		}
+		if file := strings.TrimSpace(p.outputFile); file != "" {
+			fields = append(fields, logx.Field("file", file))
+		}
+		loggerx.Infow(ctx, "CDC admin_log 批量观察批次已记录", fields...)
 	}
 	return results, nil
 }
 
-// appendOutput 追加写入批次头和事件明细。
-func (p *AdminLogBatchProcessor) appendOutput(lines [][]byte) error {
+// recordOutput 记录批次头和事件明细；未配置文件时只维护批次时间并打印日志。
+func (p *AdminLogBatchProcessor) recordOutput(lines [][]byte) (adminLogBatchSummary, error) {
 	now := time.Now()
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	previous := p.lastWrite
-	p.lastWrite = now
-	p.mu.Unlock()
-	header, err := adminLogBatchHeaderLine(now, previous, len(lines))
+	summary := newAdminLogBatchSummary(now, previous, len(lines))
+	if strings.TrimSpace(p.outputFile) == "" {
+		p.lastWrite = now
+		return summary, nil
+	}
+	header, err := adminLogBatchHeaderLine(summary)
 	if err != nil {
-		return errors.Tag(err)
+		return adminLogBatchSummary{}, errors.Tag(err)
 	}
 	body := make([][]byte, 0, len(lines)+1)
 	body = append(body, header)
 	body = append(body, lines...)
-	return errors.Tag(appendAdminLogBatchOutput(p.outputFile, body))
+	if err = appendAdminLogBatchOutput(p.outputFile, body); err != nil {
+		return adminLogBatchSummary{}, errors.Tag(err)
+	}
+	p.lastWrite = now
+	return summary, nil
 }
 
-// adminLogBatchHeaderLine 构造批处理观察文件的批次头。
-func adminLogBatchHeaderLine(now, previous time.Time, count int) ([]byte, error) {
+// newAdminLogBatchSummary 构造批处理观察批次信息。
+func newAdminLogBatchSummary(now, previous time.Time, count int) adminLogBatchSummary {
 	intervalMS := int64(0)
 	previousText := ""
 	if !previous.IsZero() {
 		intervalMS = now.Sub(previous).Milliseconds()
 		previousText = previous.Format(time.RFC3339Nano)
 	}
-	body, err := json.Marshal(struct {
-		Type           string `json:"type"`            // 记录类型
-		BatchTime      string `json:"batch_time"`      // 本批写入时间
-		PreviousTime   string `json:"previous_time"`   // 上批写入时间
-		IntervalMS     int64  `json:"interval_ms"`     // 距上批间隔毫秒
-		CollectedCount int    `json:"collected_count"` // 本批收集条数
-	}{
+	return adminLogBatchSummary{
 		Type:           "batch",
 		BatchTime:      now.Format(time.RFC3339Nano),
 		PreviousTime:   previousText,
 		IntervalMS:     intervalMS,
 		CollectedCount: count,
-	})
+	}
+}
+
+// adminLogBatchHeaderLine 构造批处理观察文件的批次头。
+func adminLogBatchHeaderLine(summary adminLogBatchSummary) ([]byte, error) {
+	body, err := json.Marshal(summary)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -332,7 +377,7 @@ type adminLogRow struct {
 	Success    cdcBool `json:"success"`     // 是否成功，兼容 Debezium tinyint 数字
 }
 
-// adminLogCollectorPayload 表示写入 Collector 的 admin_log 测试负载。
+// adminLogCollectorPayload 表示写入 Collector 的 admin_log 验证负载。
 type adminLogCollectorPayload struct {
 	EventKey   string `json:"event_key"`   // CDC 幂等键
 	ID         int64  `json:"id"`          // 日志 ID
@@ -367,7 +412,7 @@ func adminLogRowFromEvent(event cdcx.Event) (adminLogRow, error) {
 	return row, nil
 }
 
-// adminLogLarkText 构造审核日志 Lark 测试消息。
+// adminLogLarkText 构造审核日志 Lark 验证消息。
 func adminLogLarkText(event cdcx.Event, row adminLogRow) string {
 	lines := []string{
 		adminLogLarkTitle,
@@ -388,7 +433,7 @@ func adminLogLarkText(event cdcx.Event, row adminLogRow) string {
 	return strings.Join(lines, "\n")
 }
 
-// adminLogCollectorEvent 构造写入 Collector 的批量测试事件。
+// adminLogCollectorEvent 构造写入 Collector 的批量验证事件。
 func adminLogCollectorEvent(event cdcx.Event, row adminLogRow) (collectorx.Event, error) {
 	payload := adminLogCollectorPayload{
 		EventKey:   event.EventKey(),
@@ -411,11 +456,17 @@ func adminLogCollectorEvent(event cdcx.Event, row adminLogRow) (collectorx.Event
 		return collectorx.Event{}, errors.Tag(err)
 	}
 	return collectorx.Event{
-		EventID:      adminLogCollectorPrefix + event.EventKey(),
+		EventID:      adminLogCollectorEventID(event),
 		BizType:      adminLogCollectorBizType,
 		PartitionKey: row.Route,
 		Payload:      body,
 	}, nil
+}
+
+// adminLogCollectorEventID 生成固定长度 Collector 幂等键，原始 Kafka 位点保留在 payload.EventKey。
+func adminLogCollectorEventID(event cdcx.Event) string {
+	sum := sha256.Sum256([]byte(event.EventKey()))
+	return adminLogCollectorPrefix + hex.EncodeToString(sum[:adminLogCollectorIDHashBytes])
 }
 
 // collectorFromService 返回 ServiceContext 中的 Collector。

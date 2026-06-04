@@ -10,9 +10,6 @@ const (
 	CheckPasswordReset = 7 // 需要先修改登录密码
 	CheckMFAAgain      = 8 // MFA 校验已过期，需要重新验证
 
-	// 通用响应码 100 - 199 为信息性状态码
-	Continue = 100 // 继续
-
 	// 通用响应码 200 - 299 为成功状态码
 	OK = 200 // 请求成功
 
@@ -47,16 +44,13 @@ const (
 	FetchSuccess  = 1110 // 获取成功
 	FetchFail     = 1111 // 获取失败
 
-	// 你可以根据需要添加更多的响应码，备注自己使用的范围，其它人勿用，避免冲突
-	// 100000 - 102000 已被使用，请勿使用
+	// 后台账号和登录业务码。
 	UserNotFound      = 100000 // 用户不存在
 	InvalidPassword   = 100001 // 密码错误
 	UserAlreadyExists = 100002 // 用户已存在
 	UserDisabled      = 100003 // 账号被禁用
 	InvalidCaptcha    = 100004 // 登录验证码错误或已过期
 	InvalidMFACode    = 100005 // MFA动态验证码错误
-	// 100000 - 102000 已被使用，请勿使用
-	// 你可以根据需要添加更多的响应码，备注自己使用的范围，其它人勿用，避免冲突
 )
 
 const (

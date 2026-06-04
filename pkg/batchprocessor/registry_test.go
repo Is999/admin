@@ -46,7 +46,7 @@ func TestRegistryIsStarted(t *testing.T) {
 		t.Fatal("Start 后注册中心应处于启动状态")
 	}
 
-	if err := registry.Stop(nil); err != nil {
+	if err := registry.Stop(context.Background()); err != nil {
 		t.Fatalf("停止注册中心失败: %v", err)
 	}
 	if registry.IsStarted() {

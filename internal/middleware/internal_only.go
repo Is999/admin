@@ -31,8 +31,8 @@ func (m *InternalOnlyMiddleware) Handle(next http.HandlerFunc, alias RouteAlias)
 			requestctx.SetRoute(ctx, string(alias))
 		}
 		if !isPrivateClientIP(clientIP) {
-			helper.NewJsonResp(ctx, w).
-				SetHttpStatus(http.StatusUnauthorized).
+			helper.NewJSONResp(ctx, w).
+				SetHTTPStatus(http.StatusUnauthorized).
 				SetCode(codes.Unauthorized).
 				Fail(i18n.MsgKeyUnauthorizedText)
 			return

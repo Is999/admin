@@ -106,7 +106,7 @@ func TableCachePhysicalKeys(base *corelogic.BaseLogic, cacheKeys ...string) []st
 }
 
 // tableCacheReadDB 统一获取表缓存回源所需的读库连接，缺失时返回明确错误，避免直接触发 GORM 空指针。
-func tableCacheReadDB(base *corelogic.BaseLogic, database svc.DbName, databaseLabel string) (*gorm.DB, error) {
+func tableCacheReadDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
 	if base == nil || base.Svc == nil {
 		return nil, errors.Errorf("服务上下文未初始化")
 	}
@@ -118,12 +118,12 @@ func tableCacheReadDB(base *corelogic.BaseLogic, database svc.DbName, databaseLa
 }
 
 // TableCacheReadDB 获取表缓存回源读库连接。
-func TableCacheReadDB(base *corelogic.BaseLogic, database svc.DbName, databaseLabel string) (*gorm.DB, error) {
+func TableCacheReadDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
 	return tableCacheReadDB(base, database, databaseLabel)
 }
 
 // tableCacheWriteDB 统一获取表缓存回源所需的主库连接，缺失时返回明确错误，避免直接触发 GORM 空指针。
-func tableCacheWriteDB(base *corelogic.BaseLogic, database svc.DbName, databaseLabel string) (*gorm.DB, error) {
+func tableCacheWriteDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
 	if base == nil || base.Svc == nil {
 		return nil, errors.Errorf("服务上下文未初始化")
 	}
@@ -135,7 +135,7 @@ func tableCacheWriteDB(base *corelogic.BaseLogic, database svc.DbName, databaseL
 }
 
 // TableCacheWriteDB 获取表缓存回源主库连接。
-func TableCacheWriteDB(base *corelogic.BaseLogic, database svc.DbName, databaseLabel string) (*gorm.DB, error) {
+func TableCacheWriteDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
 	return tableCacheWriteDB(base, database, databaseLabel)
 }
 

@@ -1,6 +1,7 @@
 dist
 logs
 /etc/config.yaml
+/etc/config.*.local.yaml
 /etc/config.d/runtime.yaml
 /etc/config.*.runtime.yaml
 /etc/values.*.local.yaml

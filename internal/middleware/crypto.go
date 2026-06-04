@@ -460,8 +460,8 @@ func (m *CryptoMiddleware) requestAppID(r *http.Request) (string, error) {
 
 // fail 写出加密中间件失败响应，响应文案直接由业务码解析，错误详情只进入日志链路。
 func (m *CryptoMiddleware) fail(w http.ResponseWriter, r *http.Request, code int, err error) {
-	helper.NewJsonResp(r.Context(), w).
-		SetHttpStatus(http.StatusOK).
+	helper.NewJSONResp(r.Context(), w).
+		SetHTTPStatus(http.StatusOK).
 		SetCode(code).
 		SetError(err).
 		Fail("")

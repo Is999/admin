@@ -23,7 +23,7 @@ import (
 
 const (
 	// userDatabase 表示 user 业务用户表固定使用后台默认主库。
-	userDatabase svc.DbName = svc.DatabaseMain
+	userDatabase svc.DBName = svc.DatabaseMain
 	// userIDNamespace 表示后台新增业务用户使用的雪花 ID 命名空间。
 	userIDNamespace = "admin.user"
 )

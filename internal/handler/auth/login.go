@@ -38,7 +38,7 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
 			return
 		}
-		req.Ip = utils.ClientIP(r)
+		req.IP = utils.ClientIP(r)
 		logicObj := adminlogic.NewAdminLogic(r, sCtx)
 		if captchaResp := logicObj.VerifyLoginCaptcha(req.Key, req.Captcha); captchaResp.IsFailure() {
 			message := captchaResp.ResolveMessage(r.Context())
@@ -49,7 +49,7 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 				Describe: shared.AuthLogin.Describe,
 				Data:     req,
 				UserName: req.Username,
-				IP:       req.Ip,
+				IP:       req.IP,
 			}, captchaResp, http.StatusOK, message)
 			shared.WriteBizResponse(w, r, logicObj, captchaResp.WithReq(&req), nil)
 			return
@@ -60,9 +60,9 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		if resp.IsSuccess() {
 			// 登录成功后把用户信息写回 request meta，保证本次请求的访问日志也能带上 user_id。
 			if loginUser, ok := resp.Data.(*types.ProfileLoginResp); ok && loginUser.User != nil {
-				requestctx.SetUser(r.Context(), loginUser.User.ID, req.Username, req.Ip)
+				requestctx.SetUser(r.Context(), loginUser.User.ID, req.Username, req.IP)
 				// 登录成功后异步投递“管理员登录”消息，通知超级管理员与登录本人，便于安全审计与排障回溯。
-				go messagelogic.EmitAdminLoginMessage(r.Context(), sCtx, loginUser.User.ID, req.Username, req.Ip)
+				go messagelogic.EmitAdminLoginMessage(r.Context(), sCtx, loginUser.User.ID, req.Username, req.IP)
 			}
 		}
 		recordAuthAudit(logicObj.Audit(), r.Context(), audit.Event{
@@ -72,7 +72,7 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			Describe: shared.AuthLogin.Describe,
 			Data:     req,
 			UserName: req.Username,
-			IP:       req.Ip,
+			IP:       req.IP,
 		}, resp, http.StatusOK, message)
 
 		shared.WriteBizResponse(w, r, logicObj, resp, nil)

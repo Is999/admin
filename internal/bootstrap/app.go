@@ -135,13 +135,13 @@ func buildSiteDatabases(ctx context.Context, c config.Config) (svc.SiteDatabases
 	}
 	dbs := svc.SiteDatabases{
 		MainDB:   mainDB,
-		NamedDBs: make(map[svc.DbName]*gorm.DB),
+		NamedDBs: make(map[svc.DBName]*gorm.DB),
 	}
 	for name, dbCfg := range c.SiteMySQL {
 		if !hasMySQLDataSource(dbCfg) {
 			continue
 		}
-		dbName := svc.DbName(strings.TrimSpace(name))
+		dbName := svc.DBName(strings.TrimSpace(name))
 		db, err := openSiteDatabase(ctx, "site_mysql."+string(dbName), dbCfg, c.Observability)
 		if err != nil {
 			_ = closeSiteDatabases(dbs)

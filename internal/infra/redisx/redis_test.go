@@ -120,43 +120,9 @@ func TestPingConfiguredAddrsUsesClusterAddrMap(t *testing.T) {
 		config.RedisConfig{Type: "cluster"},
 		[]string{"redis-cluster-7001:7001"},
 		map[string]string{"redis-cluster-7001:7001": server.Addr()},
-		config.ObservabilityConfig{},
 	)
 	if err != nil {
 		t.Fatalf("expected addr_map preflight ping success, got %v", err)
-	}
-}
-
-// TestPingConfiguredAddrsSkipsDevClusterProxyPreflight 确保 dev 单入口代理不会在逐地址预探测阶段提前失败。
-func TestPingConfiguredAddrsSkipsDevClusterProxyPreflight(t *testing.T) {
-	err := pingConfiguredAddrs(
-		context.Background(),
-		config.RedisConfig{Type: "cluster"},
-		[]string{unusedTCPAddr(t)},
-		nil,
-		config.ObservabilityConfig{Environment: "dev"},
-	)
-	if err != nil {
-		t.Fatalf("expected dev cluster proxy preflight skipped, got %v", err)
-	}
-}
-
-// TestApplyDevClusterProxySlotsWithoutTLS 确保 dev 单入口代理不依赖 TLS 配置也能启用虚拟 slot。
-func TestApplyDevClusterProxySlotsWithoutTLS(t *testing.T) {
-	option := &redis.ClusterOptions{Addrs: []string{"redis-cluster:6379"}}
-	applyDevClusterProxySlots(option, map[string]string{"redis-cluster": "127.0.0.1"}, config.ObservabilityConfig{Environment: "dev"})
-	if option.ClusterSlots == nil {
-		t.Fatal("expected dev cluster proxy slots configured")
-	}
-	slots, err := option.ClusterSlots(context.Background())
-	if err != nil {
-		t.Fatalf("expected ClusterSlots success, got %v", err)
-	}
-	if len(slots) != 1 || slots[0].Start != 0 || slots[0].End != 16383 || len(slots[0].Nodes) != 1 {
-		t.Fatalf("unexpected slots: %+v", slots)
-	}
-	if got := slots[0].Nodes[0].Addr; got != "127.0.0.1:6379" {
-		t.Fatalf("expected rewritten proxy addr, got %q", got)
 	}
 }
 

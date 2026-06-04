@@ -44,7 +44,8 @@ type collector struct {
 // bufferedDataBatchPool 复用 popBatch 的批次数组，降低高吞吐收集场景下的短生命周期切片分配。
 var bufferedDataBatchPool = sync.Pool{
 	New: func() any {
-		return make([]bufferedData, 0, 200)
+		batch := make([]bufferedData, 0, 200)
+		return &batch
 	},
 }
 
@@ -311,8 +312,6 @@ func (c *collector) flushAll(ctx context.Context) error {
 
 			if len(requeue) > 0 {
 				c.requeuePartialBatch(len(requeue), requeue)
-			} else {
-				// 全部都是必达数据时，容量释放交给各自 fallback 完成后处理。
 			}
 			releaseBufferedDataBatch(batch)
 			return errors.Tag(err)
@@ -457,7 +456,8 @@ func acquireBufferedDataBatch(size int) []bufferedData {
 	if size <= 0 {
 		return nil
 	}
-	batch := bufferedDataBatchPool.Get().([]bufferedData)
+	batchPtr := bufferedDataBatchPool.Get().(*[]bufferedData)
+	batch := *batchPtr
 	if cap(batch) < size {
 		batch = make([]bufferedData, size)
 	} else {
@@ -475,7 +475,8 @@ func releaseBufferedDataBatch(batch []bufferedData) {
 	if cap(batch) > maxPolicyBatchSize {
 		return
 	}
-	bufferedDataBatchPool.Put(batch[:0])
+	batch = batch[:0]
+	bufferedDataBatchPool.Put(&batch)
 }
 
 // signalBufferedDataAck 非阻塞回传必达数据结果；调用方超时或已收到兜底错误时不能反向卡住 flush 链路。

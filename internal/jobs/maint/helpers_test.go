@@ -38,7 +38,7 @@ func TestIndexHasPrefix(t *testing.T) {
 	}
 }
 
-// TestSQLHelpers 验证公共 SQL 字面量和标识符工具保持历史行为。
+// TestSQLHelpers 验证公共 SQL 字面量和标识符工具的当前转义规则。
 func TestSQLHelpers(t *testing.T) {
 	if got := QuoteClickHouseIdent("archive_source"); got != "`archive_source`" {
 		t.Fatalf("QuoteClickHouseIdent = %s", got)

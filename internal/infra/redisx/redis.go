@@ -32,7 +32,7 @@ func New(ctx context.Context, cfg config.RedisConfig, obs config.ObservabilityCo
 		return nil, errors.Tag(err)
 	}
 	addrMap := resolveAddrMap(cfg.AddrMap)
-	if err := pingConfiguredAddrs(ctx, cfg, addrs, addrMap, obs); err != nil {
+	if err := pingConfiguredAddrs(ctx, cfg, addrs, addrMap); err != nil {
 		return nil, errors.Tag(err)
 	}
 
@@ -70,7 +70,6 @@ func New(ctx context.Context, cfg config.RedisConfig, obs config.ObservabilityCo
 			},
 		}
 		applyClusterTLSConfig(clusterOpts, cfg, obs)
-		applyDevClusterProxySlots(clusterOpts, addrMap, obs)
 		if len(addrMap) > 0 {
 			clusterOpts.NewClient = func(opt *redis.Options) *redis.Client {
 				cloned := *opt
@@ -118,16 +117,11 @@ func resolveAddrs(addrs []string) ([]string, error) {
 }
 
 // pingConfiguredAddrs 在正式创建 Redis 客户端前逐个探测配置地址。
-func pingConfiguredAddrs(ctx context.Context, cfg config.RedisConfig, addrs []string, addrMap map[string]string, obs config.ObservabilityConfig) error {
+func pingConfiguredAddrs(ctx context.Context, cfg config.RedisConfig, addrs []string, addrMap map[string]string) error {
 	// Cluster 模式不支持按 DB 编号隔离，探测时固定使用 0，保持和正式客户端行为一致。
 	db := cfg.DB
 	if isClusterMode(cfg, addrs) {
 		db = 0
-	}
-	if isClusterMode(cfg, addrs) && shouldUseDevClusterProxySlots(addrs, obs) {
-		// dev 单入口代理的可用性由最终 Cluster 客户端 Ping 校验；预探测如果用单节点客户端访问代理，
-		// 可能被代理层或虚拟 slot 响应提前拒绝，导致真正可用的开发配置无法启动。
-		return nil
 	}
 	for idx, addr := range addrs {
 		pingAddr := addr
@@ -217,32 +211,6 @@ func applyClusterTLSConfig(option *redis.ClusterOptions, cfg config.RedisConfig,
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: insecureSkipVerify,
 	}
-}
-
-// applyDevClusterProxySlots 为 dev 环境的 Redis Cluster 单入口代理配置虚拟 slot。
-// 本地开发常通过一个代理地址访问集群，代理返回的内部节点地址不可达；此时强制 0..16383 都命中入口代理。
-func applyDevClusterProxySlots(option *redis.ClusterOptions, addrMap map[string]string, obs config.ObservabilityConfig) {
-	if option == nil || !shouldUseDevClusterProxySlots(option.Addrs, obs) {
-		return
-	}
-	entryAddr := rewriteClusterAddr(option.Addrs[0], addrMap)
-	option.ClusterSlots = func(context.Context) ([]redis.ClusterSlot, error) {
-		return []redis.ClusterSlot{
-			{
-				Start: 0,
-				End:   16383,
-				Nodes: []redis.ClusterNode{
-					{Addr: entryAddr},
-				},
-			},
-		}, nil
-	}
-}
-
-// shouldUseDevClusterProxySlots 判断是否启用 dev Redis Cluster 单入口代理模式。
-// 仅在 dev 且配置单个集群入口时开启，避免影响多节点本地集群或生产真实 slot 拓扑。
-func shouldUseDevClusterProxySlots(addrs []string, obs config.ObservabilityConfig) bool {
-	return isDevEnvironment(obs) && len(addrs) == 1 && strings.TrimSpace(addrs[0]) != ""
 }
 
 // isDevEnvironment 判断当前是否为开发环境。

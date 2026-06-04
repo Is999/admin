@@ -21,7 +21,7 @@ func TestJsonRespFailSeparatesUserMessageAndInternalError(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	internalErr := errors.Wrap(stderrors.New("boom"), "TaskLogic.ListQueues 查询任务队列失败")
-	NewJsonResp(ctx, recorder).
+	NewJSONResp(ctx, recorder).
 		SetCode(1005).
 		SetError(internalErr).
 		Fail(i18n.MsgKeyQueryFail)

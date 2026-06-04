@@ -45,15 +45,15 @@ func DocsSessionHandler() http.HandlerFunc {
 			token = strings.TrimSpace(meta.AccessToken)
 		}
 		if token == "" {
-			helper.NewJsonResp(ctx, w).
-				SetHttpStatus(http.StatusUnauthorized).
+			helper.NewJSONResp(ctx, w).
+				SetHTTPStatus(http.StatusUnauthorized).
 				SetCode(codes.Unauthorized).
 				Fail(i18n.MsgKeyUnauthorizedText)
 			return
 		}
 
 		http.SetCookie(w, docsSessionCookie(r, token))
-		helper.NewJsonResp(ctx, w).
+		helper.NewJSONResp(ctx, w).
 			SetCode(codes.Success).
 			Success(DocsSessionResp{ExpiresIn: docsSessionMaxAgeSeconds})
 	}

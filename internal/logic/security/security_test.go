@@ -69,7 +69,7 @@ func TestFrontendPermissionCodesAreUnique(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(permission-codes.ts) error = %v", err)
 	}
-	codePattern := regexp.MustCompile("'(\\d{6})'")
+	codePattern := regexp.MustCompile(`'(\d{6})'`)
 	matches := codePattern.FindAllStringSubmatch(string(content), -1)
 	counts := make(map[string]int, len(matches))
 	for _, match := range matches {
@@ -660,7 +660,7 @@ func loadFrontendPermissionCodes() ([]string, error) {
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	codePattern := regexp.MustCompile("'\\d{6}'")
+	codePattern := regexp.MustCompile(`'\d{6}'`)
 	matches := codePattern.FindAllString(string(content), -1)
 	codeSet := map[string]struct{}{}
 	for _, match := range matches {

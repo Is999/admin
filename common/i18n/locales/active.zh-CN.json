@@ -5,7 +5,6 @@
   "common.check_mfa_bind": "需要先绑定并启用MFA",
   "common.check_mfa": "需要校验MFA设备验证码",
   "common.check_password_reset": "需要先修改登录密码",
-  "http.continue": "继续",
   "http.ok": "请求成功",
   "http.bad_request": "错误请求",
   "http.unauthorized": "未授权",

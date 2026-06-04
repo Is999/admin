@@ -81,14 +81,14 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 		}
 
 		failUnauthorized := func(messageKey string) {
-			helper.NewJsonResp(ctx, w).
-				SetHttpStatus(http.StatusUnauthorized).
+			helper.NewJSONResp(ctx, w).
+				SetHTTPStatus(http.StatusUnauthorized).
 				SetCode(codes.Unauthorized).
 				Fail(messageKey)
 		}
 		failForbidden := func(messageKey string) {
-			helper.NewJsonResp(ctx, w).
-				SetHttpStatus(http.StatusForbidden).
+			helper.NewJSONResp(ctx, w).
+				SetHTTPStatus(http.StatusForbidden).
 				SetCode(codes.Forbidden).
 				Fail(messageKey)
 		}
@@ -114,32 +114,32 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 			case errors.Is(err, securitylogic.ErrAdminDisabled):
 				failUnauthorized(i18n.MsgKeyUserDisabled)
 			case errors.Is(err, securitylogic.ErrAdminIPChanged):
-				helper.NewJsonResp(ctx, w).
-					SetHttpStatus(http.StatusUnauthorized).
+				helper.NewJSONResp(ctx, w).
+					SetHTTPStatus(http.StatusUnauthorized).
 					SetCode(codes.Unauthorized).
 					SetError(err).
 					Fail(i18n.MsgKeyAdminLoginIPChanged)
 			case errors.Is(err, securitylogic.ErrAdminIPNotAllowed):
-				helper.NewJsonResp(ctx, w).
-					SetHttpStatus(http.StatusUnauthorized).
+				helper.NewJSONResp(ctx, w).
+					SetHTTPStatus(http.StatusUnauthorized).
 					SetCode(codes.Unauthorized).
 					SetError(err).
 					Fail(i18n.MsgKeyAdminIPNotAllowed)
 			case errors.Is(err, securitylogic.ErrAdminPasswordResetRequired):
-				helper.NewJsonResp(ctx, w).
-					SetHttpStatus(http.StatusOK).
+				helper.NewJSONResp(ctx, w).
+					SetHTTPStatus(http.StatusOK).
 					SetCode(codes.CheckPasswordReset).
 					SetError(err).
 					Fail(i18n.MsgKeyCheckPasswordReset)
 			case errors.Is(err, securitylogic.ErrAdminMFABindRequired):
-				helper.NewJsonResp(ctx, w).
-					SetHttpStatus(http.StatusOK).
+				helper.NewJSONResp(ctx, w).
+					SetHTTPStatus(http.StatusOK).
 					SetCode(codes.CheckMFABind).
 					SetError(err).
 					Fail(i18n.MsgKeyCheckMFABind)
 			case errors.Is(err, securitylogic.ErrAdminMFARequired):
-				helper.NewJsonResp(ctx, w).
-					SetHttpStatus(http.StatusOK).
+				helper.NewJSONResp(ctx, w).
+					SetHTTPStatus(http.StatusOK).
 					SetCode(codes.CheckMFACode).
 					SetError(err).
 					Fail(i18n.MsgKeyCheckMFA)

@@ -107,6 +107,20 @@ func TestUserTagRuntimeMigrationStartsSinglePhysicalShard(t *testing.T) {
 	}
 }
 
+// TestCollectorOutboxBaselineIndexes 确保收集器概览索引内置在基线 DDL。
+func TestCollectorOutboxBaselineIndexes(t *testing.T) {
+	sql := migrationSQLByAsset(t, "collector_outbox.sql")
+	for _, want := range []string{
+		"KEY `idx_state_finished` (`state`,`finished_at`)",
+		"KEY `idx_state_updated` (`state`,`updated_at`)",
+		"KEY `idx_transport_state` (`transport`,`state`)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("collector_outbox baseline missing overview index %q", want)
+		}
+	}
+}
+
 // TestAdminRolePermissionBaselineSkipsSuperRole 确保超级管理员不依赖角色权限关系种子数据。
 func TestAdminRolePermissionBaselineSkipsSuperRole(t *testing.T) {
 	sql := migrationSQLByAsset(t, "admin_role_permission_rel.sql")
@@ -151,22 +165,6 @@ func TestRuntimeConfigBaselineSeedsDefaultRelease(t *testing.T) {
 	}
 	if !strings.Contains(matches[1], `"enabled":false`) {
 		t.Fatalf("default release snapshot should keep user tag periodic tasks disabled: %s", matches[1])
-	}
-}
-
-// TestRuntimeArchiveJobRepairMigration 确保本地运行配置脏草稿修复 SQL 覆盖已知错误形态。
-func TestRuntimeArchiveJobRepairMigration(t *testing.T) {
-	sql := migrationSQLByAsset(t, "runtime_archive_job_repair.sql")
-	for _, want := range []string{
-		"UPDATE `runtime_archive_job` AS bad",
-		"archive-admin-log-hourly",
-		"bad.`name` = 'admin_log'",
-		"bad.`table_name` = 'admin_log'",
-		"CONCAT(bad.`app_id`, ':legacy')",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("runtime archive job repair migration missing %q", want)
-		}
 	}
 }
 

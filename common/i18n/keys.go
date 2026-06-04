@@ -15,8 +15,6 @@ const (
 	MsgKeyCheckMFA = codes.MsgKeyCheckMFA
 	// MsgKeyCheckPasswordReset 表示账号需要先修改登录密码的标准提示 key。
 	MsgKeyCheckPasswordReset = codes.MsgKeyCheckPasswordReset
-	// MsgKeyContinue 表示 HTTP Continue 语义的文案 key。
-	MsgKeyContinue = codes.MsgKeyContinue
 	// MsgKeyOK 表示 HTTP OK 语义的文案 key。
 	MsgKeyOK = codes.MsgKeyOK
 	// MsgKeyBadRequest 表示请求参数或格式错误的 HTTP 文案 key。

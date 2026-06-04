@@ -272,7 +272,7 @@ func (a *App) markHotReloadFailure(message string, err error, fingerprint, sourc
 		logx.Field("source", normalizeHotReloadSource(source)),
 		logx.Field("category", normalizeHotReloadFailureCategory(category)),
 	}
-	loggerx.ErrorTextw(nil, "配置 热加载失败", errText, fields...)
+	loggerx.ErrorTextw(context.Background(), "配置 热加载失败", errText, fields...)
 }
 
 // reloadConfigFile 串行执行一次配置文件重载，供 watcher 和手动接口共用。

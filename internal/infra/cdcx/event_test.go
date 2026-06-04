@@ -39,6 +39,13 @@ func TestDecodeDebeziumEventRejectsMissingOp(t *testing.T) {
 	}
 }
 
+func TestDecodeDebeziumEventSkipsTombstone(t *testing.T) {
+	_, err := DecodeDebeziumEvent("topic", 0, 1, nil, nil)
+	if !IsSkip(err) {
+		t.Fatalf("tombstone 应主动跳过，实际错误: %v", err)
+	}
+}
+
 func TestEventRowData(t *testing.T) {
 	createEvent := Event{Operation: OperationCreate, After: []byte(`{"id":1}`), Before: []byte(`{"id":0}`)}
 	if string(createEvent.RowData()) != `{"id":1}` {

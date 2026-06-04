@@ -1,7 +1,6 @@
 package logic
 
 import (
-	"fmt"
 	"time"
 
 	keys "admin/common/rediskeys"
@@ -17,13 +16,6 @@ var (
 var (
 	// ErrCacheEmptyMarker 表示命中了空值缓存占位。
 	ErrCacheEmptyMarker = errCacheEmptyMarker
-)
-
-const (
-	// cacheRebuildLockTTL 表示缓存重建锁默认持有时间。
-	cacheRebuildLockTTL = 10 * time.Second
-	// cacheWaitStep 表示未抢到重建锁时的单次等待时间。
-	cacheWaitStep = 80 * time.Millisecond
 )
 
 // jitterTTL 为基础过期时间添加抖动，降低同类缓存集中失效导致的雪崩风险。
@@ -61,29 +53,4 @@ func cacheIsEmptyMarker(value string) bool {
 // CacheIsEmptyMarker 判断当前缓存字段是否为统一空值占位符。
 func CacheIsEmptyMarker(value string) bool {
 	return cacheIsEmptyMarker(value)
-}
-
-// cacheLockKey 返回当前 app_id 作用域下的缓存重建锁 Redis 键。
-func (l *BaseLogic) cacheLockKey(cacheKey string) string {
-	cacheKey = keys.TrimPrefix(keys.TrimTableCachePrefix(cacheKey))
-	return l.AppRedisKey(fmt.Sprintf(keys.CacheRebuildLock, cacheKey))
-}
-
-// tryRebuildCacheWithLock 使用轻量级 Redis 锁保护缓存重建，避免热点 key 并发击穿数据库。
-func (l *BaseLogic) tryRebuildCacheWithLock(cacheKey string, rebuild func() error) error {
-	if l == nil || l.Redis() == nil || cacheKey == "" {
-		return rebuild()
-	}
-	lockKey := l.cacheLockKey(cacheKey)
-	locked, err := l.Redis().SetNX(l.Ctx, lockKey, "1", cacheRebuildLockTTL).Result()
-	if err != nil {
-		return errors.Tag(err)
-	}
-	if !locked {
-		return nil
-	}
-	defer func() {
-		_ = l.Redis().Del(l.Ctx, lockKey).Err()
-	}()
-	return rebuild()
 }

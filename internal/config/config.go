@@ -217,7 +217,7 @@ type TestScenariosConfig struct {
 type AdminLogAuditTestScenario struct {
 	LarkEnabled      bool     `json:"lark_enabled,optional"`      // 是否把审核日志推送到 Lark
 	CollectorEnabled bool     `json:"collector_enabled,optional"` // 是否写入 Collector outbox 并批量消费
-	TraceIDPrefix    string   `json:"trace_id_prefix,optional"`   // 测试 trace_id 前缀；为空不过滤
+	TraceIDPrefix    string   `json:"trace_id_prefix,optional"`   // 验证 trace_id 前缀；为空不过滤
 	Actions          []string `json:"actions,optional"`           // 允许处理的审计动作；为空不过滤
 	Routes           []string `json:"routes,optional"`            // 允许处理的路由别名；为空不过滤
 	OutputFile       string   `json:"output_file,optional"`       // 批处理观察文件；为空只打印日志

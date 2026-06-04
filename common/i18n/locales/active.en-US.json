@@ -5,7 +5,6 @@
   "common.check_mfa_bind": "MFA binding and enablement are required",
   "common.check_mfa": "MFA verification is required",
   "common.check_password_reset": "Password must be changed before continuing",
-  "http.continue": "Continue",
   "http.ok": "OK",
   "http.bad_request": "Bad request",
   "http.unauthorized": "Unauthorized",

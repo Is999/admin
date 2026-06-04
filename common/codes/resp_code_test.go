@@ -54,18 +54,18 @@ func TestVerifyFailureHTTPStatus(t *testing.T) {
 	}
 }
 
-// TestLegacyFallbackHTTPStatus 验证未显式定义 HTTP 状态的历史业务码保持 500 行为。
-func TestLegacyFallbackHTTPStatus(t *testing.T) {
-	for _, code := range []int{
-		Continue,
-		CreateFail,
-		AddFail,
-		UserNotFound,
-		UserDisabled,
-		InvalidCaptcha,
-	} {
-		if got := HTTPStatus(code); got != ServerError {
-			t.Fatalf("HTTPStatus(%d) = %d, want %d", code, got, ServerError)
+// TestBusinessHTTPStatus 验证常用业务码返回明确 HTTP 状态，不依赖旧兜底分支。
+func TestBusinessHTTPStatus(t *testing.T) {
+	cases := map[int]int{
+		CreateFail:     ServerError,
+		AddFail:        ServerError,
+		UserNotFound:   NotFound,
+		UserDisabled:   Unauthorized,
+		InvalidCaptcha: BadRequest,
+	}
+	for code, want := range cases {
+		if got := HTTPStatus(code); got != want {
+			t.Fatalf("HTTPStatus(%d) = %d, want %d", code, got, want)
 		}
 	}
 }

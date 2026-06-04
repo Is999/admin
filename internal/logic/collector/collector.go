@@ -29,6 +29,15 @@ const (
 	collectorOverviewCacheTTL                 = 5 * time.Second // Collector 概览短缓存有效期
 )
 
+// collectorOverviewBizTypeExpr 将空业务类型归入 unknown，避免概览误判无数据。
+const collectorOverviewBizTypeExpr = "COALESCE(NULLIF(biz_type, ''), 'unknown')"
+
+// collectorOverviewTransportExpr 将空来源归入 unknown，避免来源分布误判无数据。
+const collectorOverviewTransportExpr = "COALESCE(NULLIF(transport, ''), 'unknown')"
+
+// collectorOverviewDoneAtFilter 兼容历史 finished_at 为空的完成记录。
+const collectorOverviewDoneAtFilter = "(finished_at >= ? OR (finished_at IS NULL AND updated_at >= ?))"
+
 // collectorOverviewCache 概览缓存
 var collectorOverviewCache = struct {
 	mu          sync.RWMutex                 // 保护概览缓存读写，避免并发请求重复打满 MySQL
@@ -229,14 +238,7 @@ func (l *CollectorLogic) fillOverviewWindow(db *gorm.DB, now time.Time, window *
 		AvgCostMs    float64 `gorm:"column:avg_cost_ms"`   // 平均耗时毫秒
 		MaxCostMs    float64 `gorm:"column:max_cost_ms"`   // 最大耗时毫秒
 	}{}
-	if err := db.Model(&model.CollectorOutbox{}).
-		Select(
-			"COUNT(*) AS success_count, "+
-				"COALESCE(AVG(TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0), 0) AS avg_cost_ms, "+
-				"COALESCE(MAX(TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0), 0) AS max_cost_ms",
-		).
-		Where("state = ? AND started_at IS NOT NULL AND finished_at IS NOT NULL AND finished_at >= ?", model.CollectorOutboxStateDone, since).
-		Scan(&successRow).Error; err != nil {
+	if err := buildCollectorWindowSuccessQuery(db, since).Scan(&successRow).Error; err != nil {
 		return errors.Tag(err)
 	}
 	window.SuccessCount = successRow.SuccessCount
@@ -258,33 +260,7 @@ func (l *CollectorLogic) fillOverviewBizTypeTop(db *gorm.DB, now time.Time, resp
 	}
 	since := now.Add(-15 * time.Minute)
 	rows := make([]types.CollectorBizTypeStatResp, 0, defaultCollectorOverviewBizTypeTopLimit)
-	if err := db.Model(&model.CollectorOutbox{}).
-		Select(
-			"biz_type AS biz_type, "+
-				"SUM(CASE WHEN (state = 0 OR state = 3) AND next_run_at <= NOW() THEN 1 ELSE 0 END) AS ready_count, "+
-				"SUM(CASE WHEN state = 1 THEN 1 ELSE 0 END) AS running_count, "+
-				"SUM(CASE WHEN state = 3 THEN 1 ELSE 0 END) AS retry_count, "+
-				"SUM(CASE WHEN state = 4 THEN 1 ELSE 0 END) AS dead_count, "+
-				"SUM(CASE WHEN state = 2 AND finished_at >= ? THEN 1 ELSE 0 END) AS recent_success_count, "+
-				"SUM(CASE WHEN (state = 3 OR state = 4) AND updated_at >= ? THEN 1 ELSE 0 END) AS recent_fail_count, "+
-				"COALESCE(AVG(CASE WHEN state = 2 AND started_at IS NOT NULL AND finished_at IS NOT NULL AND finished_at >= ? THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0 END), 0) AS recent_avg_cost_ms, "+
-				"COALESCE(MAX(CASE WHEN state = 2 AND started_at IS NOT NULL AND finished_at IS NOT NULL AND finished_at >= ? THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0 END), 0) AS recent_max_cost_ms",
-			since,
-			since,
-			since,
-			since,
-		).
-		Where("biz_type <> ''").
-		Group("biz_type").
-		Order(
-			"SUM(CASE WHEN (state = 0 OR state = 3) AND next_run_at <= NOW() THEN 1 ELSE 0 END) DESC, " +
-				"SUM(CASE WHEN state = 3 THEN 1 ELSE 0 END) DESC, " +
-				"SUM(CASE WHEN state = 4 THEN 1 ELSE 0 END) DESC, " +
-				"SUM(CASE WHEN state = 1 THEN 1 ELSE 0 END) DESC, " +
-				"SUM(CASE WHEN state = 2 AND finished_at >= " + db.Dialector.Explain("?", since) + " THEN 1 ELSE 0 END) DESC",
-		).
-		Limit(defaultCollectorOverviewBizTypeTopLimit).
-		Scan(&rows).Error; err != nil {
+	if err := buildCollectorBizTypeOverviewQuery(db, now, since).Scan(&rows).Error; err != nil {
 		return errors.Tag(err)
 	}
 	resp.BizTypeTop15m = rows
@@ -297,25 +273,82 @@ func (l *CollectorLogic) fillOverviewTransportStats(db *gorm.DB, now time.Time, 
 		return nil
 	}
 	rows := make([]types.CollectorTransportStatResp, 0, 4)
-	if err := db.Model(&model.CollectorOutbox{}).
-		Select(
-			"transport AS transport, "+
-				"COUNT(*) AS total_count, "+
-				"SUM(CASE WHEN (state = 0 OR state = 3) AND next_run_at <= ? THEN 1 ELSE 0 END) AS ready_count, "+
-				"SUM(CASE WHEN state = 1 THEN 1 ELSE 0 END) AS running_count, "+
-				"SUM(CASE WHEN state = 3 THEN 1 ELSE 0 END) AS retry_count, "+
-				"SUM(CASE WHEN state = 4 THEN 1 ELSE 0 END) AS dead_count, "+
-				"SUM(CASE WHEN state = 2 THEN 1 ELSE 0 END) AS done_count",
-			now,
-		).
-		Where("transport <> ''").
-		Group("transport").
-		Order("COUNT(*) DESC").
-		Scan(&rows).Error; err != nil {
+	if err := buildCollectorTransportOverviewQuery(db, now).Scan(&rows).Error; err != nil {
 		return errors.Tag(err)
 	}
 	resp.TransportStats = rows
 	return nil
+}
+
+// buildCollectorWindowSuccessQuery 生成窗口成功统计查询，兼容历史 finished_at 为空的完成记录。
+func buildCollectorWindowSuccessQuery(db *gorm.DB, since time.Time) *gorm.DB {
+	return db.Model(&model.CollectorOutbox{}).
+		Select(
+			"COUNT(*) AS success_count, "+
+				"COALESCE(AVG(CASE WHEN started_at IS NOT NULL AND finished_at IS NOT NULL THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0 END), 0) AS avg_cost_ms, "+
+				"COALESCE(MAX(CASE WHEN started_at IS NOT NULL AND finished_at IS NOT NULL THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0 END), 0) AS max_cost_ms",
+		).
+		Where("state = ? AND "+collectorOverviewDoneAtFilter, model.CollectorOutboxStateDone, since, since)
+}
+
+// buildCollectorBizTypeOverviewQuery 生成 biz_type 热点查询，空业务类型统一归入 unknown。
+func buildCollectorBizTypeOverviewQuery(db *gorm.DB, now, since time.Time) *gorm.DB {
+	return db.Model(&model.CollectorOutbox{}).
+		Select(
+			collectorOverviewBizTypeExpr+" AS biz_type, "+
+				"SUM(CASE WHEN (state = ? OR state = ?) AND next_run_at <= ? THEN 1 ELSE 0 END) AS ready_count, "+
+				"SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS running_count, "+
+				"SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS retry_count, "+
+				"SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS dead_count, "+
+				"SUM(CASE WHEN state = ? AND "+collectorOverviewDoneAtFilter+" THEN 1 ELSE 0 END) AS recent_success_count, "+
+				"SUM(CASE WHEN (state = ? OR state = ?) AND updated_at >= ? THEN 1 ELSE 0 END) AS recent_fail_count, "+
+				"COALESCE(AVG(CASE WHEN state = ? AND started_at IS NOT NULL AND finished_at IS NOT NULL AND "+collectorOverviewDoneAtFilter+" THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0 END), 0) AS recent_avg_cost_ms, "+
+				"COALESCE(MAX(CASE WHEN state = ? AND started_at IS NOT NULL AND finished_at IS NOT NULL AND "+collectorOverviewDoneAtFilter+" THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0 END), 0) AS recent_max_cost_ms",
+			model.CollectorOutboxStatePending,
+			model.CollectorOutboxStateRetry,
+			now,
+			model.CollectorOutboxStateRunning,
+			model.CollectorOutboxStateRetry,
+			model.CollectorOutboxStateDead,
+			model.CollectorOutboxStateDone,
+			since,
+			since,
+			model.CollectorOutboxStateRetry,
+			model.CollectorOutboxStateDead,
+			since,
+			model.CollectorOutboxStateDone,
+			since,
+			since,
+			model.CollectorOutboxStateDone,
+			since,
+			since,
+		).
+		Group(collectorOverviewBizTypeExpr).
+		Order("ready_count DESC, retry_count DESC, dead_count DESC, running_count DESC, recent_success_count DESC, recent_fail_count DESC, biz_type ASC").
+		Limit(defaultCollectorOverviewBizTypeTopLimit)
+}
+
+// buildCollectorTransportOverviewQuery 生成 transport 分布查询，空来源统一归入 unknown。
+func buildCollectorTransportOverviewQuery(db *gorm.DB, now time.Time) *gorm.DB {
+	return db.Model(&model.CollectorOutbox{}).
+		Select(
+			collectorOverviewTransportExpr+" AS transport, "+
+				"COUNT(*) AS total_count, "+
+				"SUM(CASE WHEN (state = ? OR state = ?) AND next_run_at <= ? THEN 1 ELSE 0 END) AS ready_count, "+
+				"SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS running_count, "+
+				"SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS retry_count, "+
+				"SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS dead_count, "+
+				"SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS done_count",
+			model.CollectorOutboxStatePending,
+			model.CollectorOutboxStateRetry,
+			now,
+			model.CollectorOutboxStateRunning,
+			model.CollectorOutboxStateRetry,
+			model.CollectorOutboxStateDead,
+			model.CollectorOutboxStateDone,
+		).
+		Group(collectorOverviewTransportExpr).
+		Order("total_count DESC, transport ASC")
 }
 
 // RunNow 手动触发执行一轮 collector outbox 任务。

@@ -39,13 +39,6 @@ var sensitiveKeys = map[string]struct{}{
 	"securekey":                  {}, // 通用安全密钥兼容写法
 }
 
-// maskJSONAPI 是统一的高性能 JSON 序列化入口，用于审计日志脱敏前的原始编码。
-var maskJSONAPI = jsoniter.Config{
-	EscapeHTML:             true,
-	SortMapKeys:            true,
-	ValidateJsonRawMessage: true,
-}.Froze()
-
 // Serialize 把任意数据转成适合落审计日志的字符串，同时完成脱敏和长度截断。
 // 采用 JSON 字节流扫描方案，避免为动态 map key 做多次解析和重建。
 func Serialize(data any, maxBytes int) string {

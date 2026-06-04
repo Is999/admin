@@ -85,41 +85,12 @@ type userRuntimeSyncPayload struct {
 	Reason   string `json:"reason"`   // 同步原因
 }
 
-// apiUserRuntimeSyncResp 表示 API 内网用户运行态同步响应，兼容滚动发布中的数字或字符串 userId。
+// apiUserRuntimeSyncResp 表示 API 内网用户运行态同步响应。
 type apiUserRuntimeSyncResp struct {
-	UserID                  apiSnowflakeID `json:"userId"`                  // 用户雪花 ID，兼容数字和字符串 JSON
-	ProfileCacheInvalidated bool           `json:"profileCacheInvalidated"` // 是否已处理用户资料缓存
-	SessionsInvalidated     bool           `json:"sessionsInvalidated"`     // 是否已处理登录态
-	Message                 string         `json:"message"`                 // 同步结果说明
-}
-
-// apiSnowflakeID 表示 API 内网响应里的用户雪花 ID。
-type apiSnowflakeID int64
-
-// UnmarshalJSON 同时接受字符串和数字形式的用户雪花 ID，便于 admin/API 滚动发布。
-func (id *apiSnowflakeID) UnmarshalJSON(raw []byte) error {
-	text := strings.TrimSpace(string(raw))
-	if text == "" || text == "null" {
-		*id = 0
-		return nil
-	}
-	if strings.HasPrefix(text, "\"") {
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return errors.Wrap(err, "解析 API 用户 ID字符串失败")
-		}
-		text = strings.TrimSpace(value)
-	}
-	if text == "" {
-		*id = 0
-		return nil
-	}
-	value, err := strconv.ParseInt(text, 10, 64)
-	if err != nil {
-		return errors.Wrap(err, "解析 API 用户 ID失败")
-	}
-	*id = apiSnowflakeID(value)
-	return nil
+	UserID                  int64  `json:"userId,string"`           // 用户雪花 ID，API 固定以字符串返回，避免前端精度丢失
+	ProfileCacheInvalidated bool   `json:"profileCacheInvalidated"` // 是否已处理用户资料缓存
+	SessionsInvalidated     bool   `json:"sessionsInvalidated"`     // 是否已处理登录态
+	Message                 string `json:"message"`                 // 同步结果说明
 }
 
 // NewLogic 创建 API 运行态管理逻辑对象。
@@ -268,7 +239,7 @@ func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if int64(data.UserID) != userID {
+	if data.UserID != userID {
 		return nil, errors.Errorf("API 内网同步响应用户 ID不一致 expected=%d actual=%d", userID, data.UserID)
 	}
 	message := data.Message
@@ -278,7 +249,7 @@ func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool
 	return &types.UserRuntimeSyncResp{
 		Enabled:                 true,
 		Success:                 true,
-		UserID:                  int64(data.UserID),
+		UserID:                  data.UserID,
 		ProfileCacheInvalidated: data.ProfileCacheInvalidated,
 		SessionsInvalidated:     data.SessionsInvalidated,
 		Message:                 message,

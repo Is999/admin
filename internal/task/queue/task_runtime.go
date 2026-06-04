@@ -223,7 +223,7 @@ func (m *Manager) readTaskRuntime(ctx context.Context, taskID string) taskRuntim
 	}
 }
 
-// taskDurationFromResult 从成功任务结果中兜底提取历史耗时。
+// taskDurationFromResult 从成功任务结果中提取耗时。
 func taskDurationFromResult(result []byte) int64 {
 	if len(result) == 0 {
 		return 0
@@ -254,7 +254,7 @@ func taskStartedAtFromResult(result []byte) string {
 	return startedAt
 }
 
-// taskExecutionStatsFromJSON 从 JSON 字节中读取任务处理量快照，兼容空值和旧数据。
+// taskExecutionStatsFromJSON 从 JSON 字节中读取任务处理量快照，空值或无效 JSON 返回 nil。
 func taskExecutionStatsFromJSON(raw []byte) *taskstats.Snapshot {
 	if len(raw) == 0 {
 		return nil

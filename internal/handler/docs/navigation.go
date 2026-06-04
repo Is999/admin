@@ -19,16 +19,16 @@ import (
 
 // docsAccessSet 保存当前账号可访问的文档权限别名集合。
 type docsAccessSet struct {
-	all     bool
-	aliases map[routealias.Alias]struct{}
+	all     bool                          // 是否允许查看全部文档
+	aliases map[routealias.Alias]struct{} // 可查看的文档权限别名集合
 }
 
 // docsNavItem 表示 docsify Markdown 导航中的一行及其子级。
 type docsNavItem struct {
-	line     string
-	indent   int
-	allowed  bool
-	children []*docsNavItem
+	line     string         // 原始导航行内容
+	indent   int            // 缩进层级，用于恢复父子关系
+	allowed  bool           // 当前行是否允许输出
+	children []*docsNavItem // 子导航项，按源文件顺序保留
 }
 
 // serveDocsNavigation 按当前账号文档权限输出 docsify 导航资源。
@@ -203,9 +203,7 @@ func docsAssetPathFromHref(href string) (string, bool) {
 	if href == "" || strings.HasPrefix(href, "#") || isExternalDocsHref(href) {
 		return "", false
 	}
-	if strings.HasPrefix(href, "/api/docs#/") {
-		href = strings.TrimPrefix(href, "/api/docs#/")
-	}
+	href = strings.TrimPrefix(href, "/api/docs#/")
 	if anchorIndex := strings.Index(href, "#"); anchorIndex >= 0 {
 		href = href[:anchorIndex]
 	}

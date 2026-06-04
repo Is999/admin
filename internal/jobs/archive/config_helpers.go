@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -191,7 +192,7 @@ func validateArchiveJobConfig(item config.ArchiveJobConfig) error {
 
 // notifyArchiveJobConfigInvalid 记录归档任务配置异常，保证错误配置可被日志检索和告警系统发现。
 func notifyArchiveJobConfigInvalid(index int, item config.ArchiveJobConfig, err error) {
-	loggerx.Errorw(nil, "归档任务 配置无效", err,
+	loggerx.Errorw(context.Background(), "归档任务 配置无效", err,
 		logx.Field("index", index),
 		logx.Field("archive_job_name", strings.TrimSpace(item.Name)),
 		logx.Field("database", strings.TrimSpace(item.Database)),
@@ -207,14 +208,14 @@ func isKnownDatabase(database string) bool {
 }
 
 // normalizeArchiveDatabaseName 规范化归档配置中的数据库名称。
-func normalizeArchiveDatabaseName(database string) svc.DbName {
-	return svc.NormalizeDbName(svc.DbName(strings.TrimSpace(database)))
+func normalizeArchiveDatabaseName(database string) svc.DBName {
+	return svc.NormalizeDBName(svc.DBName(strings.TrimSpace(database)))
 }
 
 // jobConfig 是运行期归一化后的归档任务配置。
 type jobConfig struct {
 	Name                    string        // 归档任务名
-	Database                svc.DbName    // 归属库名
+	Database                svc.DBName    // 归属库名
 	TableName               string        // 热表名
 	TimeColumn              string        // 时间列
 	TimeColumnType          string        // 时间列类型

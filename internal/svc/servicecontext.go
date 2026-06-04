@@ -18,7 +18,7 @@ import (
 // SiteDatabases 保存主库和可选命名扩展库连接。
 type SiteDatabases struct {
 	MainDB   *gorm.DB            // 默认主库连接
-	NamedDBs map[DbName]*gorm.DB // 可选扩展库连接，按 site_mysql.<name> 注册
+	NamedDBs map[DBName]*gorm.DB // 可选扩展库连接，按 site_mysql.<name> 注册
 }
 
 // Dependencies 表示 ServiceContext 运行所需的外部依赖集合。
@@ -173,8 +173,8 @@ func (s *ServiceContext) UpdateHotReloadStatus(status HotReloadStatus) {
 }
 
 // Lookup 根据数据库名称返回连接，空名称和 main 都指向主库。
-func (s SiteDatabases) Lookup(database DbName) *gorm.DB {
-	name := NormalizeDbName(database)
+func (s SiteDatabases) Lookup(database DBName) *gorm.DB {
+	name := NormalizeDBName(database)
 	if name == DatabaseMain {
 		return s.MainDB
 	}
@@ -188,7 +188,7 @@ func (s SiteDatabases) Lookup(database DbName) *gorm.DB {
 func (s SiteDatabases) WithContext(ctx context.Context) SiteDatabases {
 	s.MainDB = withDBContext(s.MainDB, ctx)
 	if len(s.NamedDBs) > 0 {
-		namedDBs := make(map[DbName]*gorm.DB, len(s.NamedDBs))
+		namedDBs := make(map[DBName]*gorm.DB, len(s.NamedDBs))
 		for name, db := range s.NamedDBs {
 			namedDBs[name] = withDBContext(db, ctx)
 		}

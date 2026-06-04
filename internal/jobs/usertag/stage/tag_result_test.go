@@ -1,6 +1,7 @@
 package stage
 
 import (
+	"context"
 	"testing"
 
 	"admin/internal/jobs/usertag/runtimectx"
@@ -9,7 +10,7 @@ import (
 
 // TestSkeletonStageIsNoop 验证默认通用阶段只是可调度骨架。
 func TestSkeletonStageIsNoop(t *testing.T) {
-	result, err := NewCollectScopeStage().Run(runtimectx.New(nil, nil, types.RuntimeOptions{Mode: types.ModeDelta}, types.NodeCollectScope), nil)
+	result, err := NewCollectScopeStage().Run(runtimectx.New(context.Background(), nil, types.RuntimeOptions{Mode: types.ModeDelta}, types.NodeCollectScope), nil)
 	if err != nil {
 		t.Fatalf("skeleton stage should be noop: %v", err)
 	}

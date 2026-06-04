@@ -195,8 +195,8 @@ func (l *BaseLogic) AddAdminLog(action model.AdminLogAction, route, method, desc
 	}
 }
 
-// RdsGetJsonObj 从当前 app_id 命名空间读取 JSON 字符串并反序列化到目标对象。
-func (l *BaseLogic) RdsGetJsonObj(key string, dest any) error {
+// RdsGetJSONObj 从当前 app_id 命名空间读取 JSON 字符串并反序列化到目标对象。
+func (l *BaseLogic) RdsGetJSONObj(key string, dest any) error {
 	if l == nil || l.Svc == nil || l.Svc.Rds == nil {
 		return errors.New("Redis 未初始化")
 	}

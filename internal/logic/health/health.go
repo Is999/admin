@@ -72,7 +72,7 @@ func (l *HealthLogic) Readiness(ctx context.Context) (*types.HealthStatusResp, e
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			db := l.service().SiteDBs.NamedDBs[svc.DbName(name)]
+			db := l.service().SiteDBs.NamedDBs[svc.DBName(name)]
 			appendStatus(l.checkGormDB(ctx, "mysql_"+string(name), db, codes.MySQLUnavailable))
 		}
 	}

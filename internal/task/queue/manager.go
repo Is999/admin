@@ -551,7 +551,7 @@ func (m *Manager) StartWorker() error {
 		ErrorHandler:             asynq.ErrorHandlerFunc(m.handleTaskError),
 		HealthCheckFunc: func(err error) {
 			if err != nil {
-				loggerx.Errorw(nil, "任务队列 健康检查失败", err, logx.Field("app_id", m.appNamespace()))
+				loggerx.Errorw(context.Background(), "任务队列 健康检查失败", err, logx.Field("app_id", m.appNamespace()))
 			}
 		},
 	})
@@ -1604,7 +1604,7 @@ func notifyPeriodicTaskConfigInvalid(index int, item config.TaskPeriodicConfig, 
 		logx.Field("unique_key", strings.TrimSpace(item.UniqueKey)),
 		logx.Field("failure_reason", strings.TrimSpace(reason)),
 	}
-	loggerx.ErrorTextw(nil, "周期任务 配置无效", reason, fields...)
+	loggerx.ErrorTextw(context.Background(), "周期任务 配置无效", reason, fields...)
 }
 
 // workflowMetaKey 返回工作流主记录在 Redis 中的 key。

@@ -10,6 +10,7 @@ import (
 	sitedocs "admin/docs"
 	"admin/internal/middleware"
 	"admin/internal/requestctx"
+	"admin/internal/routealias"
 )
 
 // TestDocsSessionCookieLimitsScope 校验文档会话 cookie 只挂在文档路径下。
@@ -130,5 +131,56 @@ func TestAPIDocsSidebarRequiresAPIProxy(t *testing.T) {
 	DocsSiteHandler(nil)(recorder, req)
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("http status = %d, want %d", recorder.Code, http.StatusBadGateway)
+	}
+}
+
+// TestFilterDocsNavigationByAccess 校验后台文档导航只展示当前账号有权访问的目录。
+func TestFilterDocsNavigationByAccess(t *testing.T) {
+	content, err := fs.ReadFile(sitedocs.FS, "site/"+docsSidebarAssetPath)
+	if err != nil {
+		t.Fatalf("read sidebar asset: %v", err)
+	}
+	access := docsAccessSet{aliases: map[routealias.Alias]struct{}{
+		routealias.DocsIndex:       {},
+		routealias.DocsAPIIndex:    {},
+		routealias.DocsRoleBackend: {},
+	}}
+
+	body := string(filterDocsNavigation(content, "", access))
+	for _, text := range []string{"文档首页", "接口文档统一规范", "AI开发规范"} {
+		if !strings.Contains(body, text) {
+			t.Fatalf("filtered sidebar missing allowed text %q\n%s", text, body)
+		}
+	}
+	for _, text := range []string{"部署发布指南", "任务系统首页", "后台系统接口总览", "用户标签接口总览"} {
+		if strings.Contains(body, text) {
+			t.Fatalf("filtered sidebar contains forbidden text %q\n%s", text, body)
+		}
+	}
+}
+
+// TestFilterAPIDocsNavigationByAccess 校验前台 API 代理文档导航按 API 文档权限裁剪。
+func TestFilterAPIDocsNavigationByAccess(t *testing.T) {
+	content := []byte(`- 前台 API 文档
+  - 接口文档
+    - [接口文档统一规范](接口文档/接口文档统一规范.md)
+    - 前台系统
+      - [系统接口](接口文档/前台系统/系统接口.md)
+  - 角色文档
+    - 后端开发
+      - [AI开发规范](角色文档/后端开发/AI开发规范.md)
+`)
+	access := docsAccessSet{aliases: map[routealias.Alias]struct{}{
+		routealias.DocsAPIServiceIndex: {},
+	}}
+
+	body := string(filterDocsNavigation(content, apiDocsProxyBasePath, access))
+	for _, text := range []string{"接口文档统一规范", "AI开发规范"} {
+		if !strings.Contains(body, text) {
+			t.Fatalf("filtered api sidebar missing allowed text %q\n%s", text, body)
+		}
+	}
+	if strings.Contains(body, "系统接口") {
+		t.Fatalf("filtered api sidebar contains forbidden front api doc\n%s", body)
 	}
 }

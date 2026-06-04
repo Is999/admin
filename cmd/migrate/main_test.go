@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"admin/common/runtimecfg"
+	"admin/internal/config"
 	"admin/internal/database"
 )
 
@@ -64,5 +66,87 @@ func TestPrintResults(t *testing.T) {
 func TestPrintResultsRejectsNilWriter(t *testing.T) {
 	if err := printResults(nil, nil); err == nil {
 		t.Fatal("expected nil output writer to be rejected")
+	}
+}
+
+// TestPermissionCacheRefreshRequired 验证只有 up 模式下的文档权限迁移会触发权限缓存刷新。
+func TestPermissionCacheRefreshRequired(t *testing.T) {
+	tests := []struct {
+		name    string                      // name 表示测试场景。
+		action  string                      // action 表示迁移动作。
+		results []database.MigrationRunItem // results 表示迁移执行结果。
+		want    bool                        // want 表示是否需要刷新权限缓存。
+	}{
+		{
+			name:   "skip dry run",
+			action: actionDryRun,
+			results: []database.MigrationRunItem{
+				{Name: "seed_document_file_permissions", Status: database.MigrationStatusExecuted},
+			},
+		},
+		{
+			name:   "skip unrelated migration",
+			action: actionUp,
+			results: []database.MigrationRunItem{
+				{Name: "repair_runtime_archive_job_seed", Status: database.MigrationStatusExecuted},
+			},
+		},
+		{
+			name:   "refresh executed document permission migration",
+			action: actionUp,
+			results: []database.MigrationRunItem{
+				{Name: "seed_document_file_permissions", Status: database.MigrationStatusExecuted},
+			},
+			want: true,
+		},
+		{
+			name:   "refresh applied document permission migration for retry",
+			action: actionUp,
+			results: []database.MigrationRunItem{
+				{Asset: "document_permission_repair.sql", Status: database.MigrationStatusApplied},
+			},
+			want: true,
+		},
+		{
+			name:   "refresh document entry repair migration",
+			action: actionUp,
+			results: []database.MigrationRunItem{
+				{Asset: "document_entry_permission_repair.sql", Status: database.MigrationStatusExecuted},
+			},
+			want: true,
+		},
+		{
+			name:   "skip pending document permission migration",
+			action: actionUp,
+			results: []database.MigrationRunItem{
+				{Name: "seed_document_file_permissions", Status: database.MigrationStatusPending},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := permissionCacheRefreshRequired(tt.action, tt.results); got != tt.want {
+				t.Fatalf("permissionCacheRefreshRequired() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPublishMigrationRuntimeConfigRestoresPreviousAppID 确保迁移命令刷新缓存时不会丢失 Redis key 的 app_id 前缀。
+func TestPublishMigrationRuntimeConfigRestoresPreviousAppID(t *testing.T) {
+	previous := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "before"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(previous)
+	})
+
+	restore := publishMigrationRuntimeConfig(config.Config{AppID: "after"})
+	if got := runtimecfg.AppID(); got != "after" {
+		t.Fatalf("runtimecfg.AppID() = %q, want after", got)
+	}
+	restore()
+	if got := runtimecfg.AppID(); got != "before" {
+		t.Fatalf("runtimecfg.AppID() after restore = %q, want before", got)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
 	"admin/internal/model"
+	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
 
@@ -59,6 +60,82 @@ func diffPermissionIDs(currentPermissionIDs []int, nextPermissionIDs []int) ([]i
 		removedPermissionIDs = append(removedPermissionIDs, permissionID)
 	}
 	return addedPermissionIDs, removedPermissionIDs
+}
+
+// documentEntryAlias 返回文档子权限对应的入口权限，避免角色只拥有子文档却看不到入口菜单。
+func documentEntryAlias(alias routealias.Alias) routealias.Alias {
+	if docsPath, ok := routealias.DocsFilePathFromAlias(alias); ok {
+		return documentEntryAlias(routealias.DocsParentAliasForPath(docsPath))
+	}
+	switch alias {
+	case routealias.DocsIndex,
+		routealias.DocsAPIServiceIndex:
+		return alias
+	case routealias.DocsRoleOps,
+		routealias.DocsRoleBackend,
+		routealias.DocsRoleFrontend,
+		routealias.DocsFeatureTask,
+		routealias.DocsFeatureUserTag,
+		routealias.DocsAPIIndex,
+		routealias.DocsAPIAdmin,
+		routealias.DocsAPITask,
+		routealias.DocsUserTag:
+		return routealias.DocsIndex
+	case routealias.DocsAPIServiceFront:
+		return routealias.DocsAPIServiceIndex
+	default:
+		return ""
+	}
+}
+
+// expandDocumentEntryPermissionIDs 给已勾选的文档子权限补齐同文档入口权限。
+func expandDocumentEntryPermissionIDs(permissionIDs []int, idAlias map[int]routealias.Alias, aliasID map[routealias.Alias]int) []int {
+	result := types.UniquePositiveInts(permissionIDs)
+	seen := make(map[int]struct{}, len(result))
+	for _, permissionID := range result {
+		seen[permissionID] = struct{}{}
+	}
+	for _, permissionID := range result {
+		entryAlias := documentEntryAlias(idAlias[permissionID])
+		if entryAlias == "" {
+			continue
+		}
+		entryID := aliasID[entryAlias]
+		if entryID <= 0 {
+			continue
+		}
+		if _, ok := seen[entryID]; ok {
+			continue
+		}
+		seen[entryID] = struct{}{}
+		result = append(result, entryID)
+	}
+	return types.UniquePositiveInts(result)
+}
+
+// retainCompleteDocumentPermissionIDs 移除缺少入口权限的文档子权限，避免保存半截文档授权。
+func retainCompleteDocumentPermissionIDs(permissionIDs []int, idAlias map[int]routealias.Alias, aliasID map[routealias.Alias]int) []int {
+	permissionIDs = types.UniquePositiveInts(permissionIDs)
+	permissionSet := make(map[int]struct{}, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		permissionSet[permissionID] = struct{}{}
+	}
+
+	result := make([]int, 0, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		entryAlias := documentEntryAlias(idAlias[permissionID])
+		if entryAlias != "" {
+			entryID := aliasID[entryAlias]
+			if entryID <= 0 {
+				continue
+			}
+			if _, ok := permissionSet[entryID]; !ok {
+				continue
+			}
+		}
+		result = append(result, permissionID)
+	}
+	return types.UniquePositiveInts(result)
 }
 
 // descendantRoleIDs 查询指定角色的全部未删除子孙角色 ID，供父权限收缩时批量清理下级越权权限。
@@ -313,6 +390,56 @@ func (l *AdminRoleLogic) ensureRoleExistsTx(tx *gorm.DB, roleID int) error {
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+// enabledDocumentPermissionMaps 读取启用的文档权限别名和 ID 映射，供角色保存时补齐入口权限。
+func (l *AdminRoleLogic) enabledDocumentPermissionMaps(db *gorm.DB) (map[int]routealias.Alias, map[routealias.Alias]int, error) {
+	aliases := routealias.DocsAliases()
+	modules := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		modules = append(modules, string(alias))
+	}
+	type permissionRow struct {
+		ID     int    `gorm:"column:id"`     // 权限 ID
+		Module string `gorm:"column:module"` // 权限模块别名
+	}
+	rows := make([]permissionRow, 0, len(modules))
+	if err := freshTxStatement(db).Table(model.TableNameAdminPermission).
+		Select("id, module").
+		Where("module IN ?", modules).
+		Where("status = ?", 1).
+		Order("id ASC").
+		Scan(&rows).Error; err != nil {
+		return nil, nil, errors.Wrap(err, "AdminRoleLogic.enabledDocumentPermissionMaps 查询文档权限失败")
+	}
+
+	idAlias := make(map[int]routealias.Alias, len(rows))
+	aliasID := make(map[routealias.Alias]int, len(rows))
+	for _, row := range rows {
+		alias := routealias.Alias(strings.TrimSpace(row.Module))
+		if row.ID <= 0 || alias == "" {
+			continue
+		}
+		idAlias[row.ID] = alias
+		aliasID[alias] = row.ID
+	}
+	return idAlias, aliasID, nil
+}
+
+// normalizeAssignablePermissionIDs 补齐文档入口权限，再按父角色边界裁剪并移除半截文档授权。
+func (l *AdminRoleLogic) normalizeAssignablePermissionIDs(db *gorm.DB, permissionIDs []int, allowedPermissionIDs []int) ([]int, error) {
+	permissionIDs = types.UniquePositiveInts(permissionIDs)
+	if len(permissionIDs) == 0 {
+		return []int{}, nil
+	}
+	idAlias, aliasID, err := l.enabledDocumentPermissionMaps(db)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	permissionIDs = expandDocumentEntryPermissionIDs(permissionIDs, idAlias, aliasID)
+	permissionIDs = retainAssignablePermissionIDs(permissionIDs, allowedPermissionIDs)
+	permissionIDs = retainCompleteDocumentPermissionIDs(permissionIDs, idAlias, aliasID)
+	return permissionIDs, nil
 }
 
 // replaceRolePermissionsTx 在事务内覆盖角色权限关系。

@@ -1,12 +1,9 @@
 package docs
 
 import (
-	"io/fs"
 	"net/http"
 	"net/url"
-	"os"
 	pathpkg "path"
-	"path/filepath"
 	"strings"
 
 	codes "admin/common/codes"
@@ -26,6 +23,12 @@ const (
 	apiDocsProxyPathPrefix = "/api/docs/api"
 	// apiDocsIndexAssetPath 表示前台 API 独立文档站壳层静态资源。
 	apiDocsIndexAssetPath = "api/index.html"
+	// docsSidebarAssetPath 表示 docsify 侧边导航资源。
+	docsSidebarAssetPath = "_sidebar.md"
+	// docsNavbarAssetPath 表示 docsify 顶部导航资源。
+	docsNavbarAssetPath = "_navbar.md"
+	// apiDocsProxyBasePath 表示前台 API 文档在 Admin 文档站内的代理目录。
+	apiDocsProxyBasePath = "api"
 )
 
 // DocsSessionResp 表示文档访问会话创建结果。
@@ -63,6 +66,12 @@ func DocsSiteHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 		switch cleanDocsRequestPath(r.URL.Path) {
 		case apiDocsProxyPathPrefix:
 			serveAPIDocsIndex(w)
+			return
+		case "/api/docs/" + docsSidebarAssetPath:
+			serveDocsNavigation(w, r, svcCtx, docsSidebarAssetPath, "")
+			return
+		case "/api/docs/" + docsNavbarAssetPath:
+			serveDocsNavigation(w, r, svcCtx, docsNavbarAssetPath, "")
 			return
 		}
 		if docsPath, ok := apiDocsProxyPath(r.URL.Path); ok {
@@ -121,7 +130,7 @@ func cleanDocsRequestPath(requestPath string) string {
 func serveAPIDocsIndex(w http.ResponseWriter) {
 	content, err := readAPIDocsIndex()
 	if err != nil {
-		http.Error(w, "前台API文档入口不可用", http.StatusInternalServerError)
+		http.Error(w, "前台 API 文档入口不可用", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -131,11 +140,7 @@ func serveAPIDocsIndex(w http.ResponseWriter) {
 
 // readAPIDocsIndex 读取前台 API 文档入口页面；开发环境优先本地文件，生产环境回退内嵌资源。
 func readAPIDocsIndex() ([]byte, error) {
-	localPath := filepath.Join("docs", "site", apiDocsIndexAssetPath)
-	if content, err := os.ReadFile(localPath); err == nil {
-		return content, nil
-	}
-	return fs.ReadFile(sitedocs.FS, pathpkg.Join("site", apiDocsIndexAssetPath))
+	return readDocsSiteAsset(apiDocsIndexAssetPath)
 }
 
 // serveAPIDocsProxy 通过 Admin 后端内网读取 API 文档资源，避免浏览器直连 API 服务。
@@ -164,6 +169,16 @@ func serveAPIDocsProxy(w http.ResponseWriter, r *http.Request, svcCtx *svc.Servi
 	if asset.CacheControl != "" {
 		w.Header().Set("Cache-Control", asset.CacheControl)
 	}
+	body := asset.Body
+	if docsPath == "/"+docsSidebarAssetPath {
+		access, accessErr := docsAccessForRequest(r, svcCtx)
+		if accessErr != nil {
+			http.Error(w, "文档权限不可用", http.StatusInternalServerError)
+			return
+		}
+		body = filterDocsNavigation(asset.Body, apiDocsProxyBasePath, access)
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 	w.WriteHeader(asset.StatusCode)
-	_, _ = w.Write(asset.Body)
+	_, _ = w.Write(body)
 }

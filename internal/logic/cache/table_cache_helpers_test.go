@@ -217,6 +217,31 @@ func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(
 	}
 }
 
+// TestInvalidateRolePermissionCacheByRoleIDsDeletesOnlyTargetRoles 验证角色权限缓存按角色 ID 精确删除。
+func TestInvalidateRolePermissionCacheByRoleIDsDeletesOnlyTargetRoles(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
+	ctx := context.Background()
+
+	targetKey := tableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 3))
+	untouchedKey := tableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 4))
+	for _, key := range []string{targetKey, untouchedKey} {
+		if err := client.SAdd(ctx, key, "value").Err(); err != nil {
+			t.Fatalf("SAdd(%s) error = %v", key, err)
+		}
+	}
+
+	invalidateRolePermissionCacheByRoleIDs(base, 3, 3, 0)
+
+	if server.Exists(targetKey) {
+		t.Fatalf("invalidateRolePermissionCacheByRoleIDs() target key %s should be deleted", targetKey)
+	}
+	if !server.Exists(untouchedKey) {
+		t.Fatalf("invalidateRolePermissionCacheByRoleIDs() unrelated key %s should be kept", untouchedKey)
+	}
+}
+
 // TestDeleteRedisKeysExactBatchesUsesSingleKeyDeleteCommands 验证精确删除缓存时不会发出跨 slot 多 key DEL。
 func TestDeleteRedisKeysExactBatchesUsesSingleKeyDeleteCommands(t *testing.T) {
 	server := miniredis.RunT(t)

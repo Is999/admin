@@ -7,8 +7,10 @@ import (
 	"time"
 
 	keys "admin/common/rediskeys"
+	"admin/helper"
 	corelogic "admin/internal/logic"
 	"admin/internal/model"
+	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
 
@@ -580,13 +582,22 @@ func loadRoutePermissionIDsForCache(base *corelogic.BaseLogic, routeAlias string
 	if routeAlias == "" {
 		return []int{}, nil
 	}
+	aliases := routealias.DocsCandidateAliases(routealias.Alias(routeAlias))
+	modules := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		module := strings.TrimSpace(string(alias))
+		if module == "" {
+			continue
+		}
+		modules = append(modules, module)
+	}
 	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	var permissionIDs []int
 	if err := readDB.Model(&model.AdminPermission{}).
-		Where("status = 1 AND module = ?", routeAlias).
+		Where("status = 1 AND module IN ?", helper.UniqueNonEmptyStrings(modules)).
 		Order("id ASC").
 		Pluck("id", &permissionIDs).Error; err != nil {
 		return nil, errors.Tag(err)

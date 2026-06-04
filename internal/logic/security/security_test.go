@@ -141,19 +141,10 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 		"runtime.config.publish",
 		"runtime.config.rollback",
 		"runtime.config.import",
-		string(routealias.DocsIndex),
-		string(routealias.DocsRoleOps),
-		string(routealias.DocsRoleBackend),
-		string(routealias.DocsRoleFrontend),
-		string(routealias.DocsFeatureTask),
-		string(routealias.DocsFeatureUserTag),
-		string(routealias.DocsAPIIndex),
-		string(routealias.DocsAPIAdmin),
-		string(routealias.DocsAPITask),
-		string(routealias.DocsUserTag),
-		string(routealias.DocsAPIServiceIndex),
-		string(routealias.DocsAPIServiceFront),
 		"security.debug.index",
+	}
+	for _, alias := range routealias.DocsAliases() {
+		requiredModules = append(requiredModules, string(alias))
 	}
 	var missing []string
 	for _, module := range requiredModules {
@@ -163,6 +154,23 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Fatalf("database permission SQL missing required modules: %v", missing)
+	}
+}
+
+// TestRoutePermissionModulesForDocsFile 验证单篇文档鉴权会兼容所属目录权限。
+func TestRoutePermissionModulesForDocsFile(t *testing.T) {
+	got := routePermissionModules("docs.file.api/接口文档/前台系统/系统接口.md")
+	want := []string{
+		"docs.file.api/接口文档/前台系统/系统接口.md",
+		string(routealias.DocsAPIServiceFront),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("routePermissionModules() len = %d, want %d, got=%v", len(got), len(want), got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("routePermissionModules()[%d] = %q, want %q", index, got[index], want[index])
+		}
 	}
 }
 

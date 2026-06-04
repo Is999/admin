@@ -12,6 +12,13 @@ import (
 	"admin/internal/types"
 )
 
+const (
+	// testRuntimeSyncUserID 表示 API 内网同步测试使用的前台用户雪花 ID。
+	testRuntimeSyncUserID int64 = 778919762005200896
+	// testRuntimeSyncUserIDString 表示 API 内网同步响应中的用户 ID 字符串。
+	testRuntimeSyncUserIDString = "778919762005200896"
+)
+
 // TestSyncUserRuntimeUsesInternalOpsRoute 验证 admin 只调用 API 内网运行态同步接口。
 func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 	var gotPayload userRuntimeSyncPayload
@@ -19,8 +26,8 @@ func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
-		if r.URL.Path != "/internal/users/42/runtime-sync" {
-			t.Fatalf("path = %s, want /internal/users/42/runtime-sync", r.URL.Path)
+		if r.URL.Path != "/internal/users/"+testRuntimeSyncUserIDString+"/runtime-sync" {
+			t.Fatalf("path = %s, want /internal/users/%s/runtime-sync", r.URL.Path, testRuntimeSyncUserIDString)
 		}
 		if got := r.Header.Get(apiRuntimeOpsTokenHeader); got != "ops-token" {
 			t.Fatalf("%s = %q, want ops-token", apiRuntimeOpsTokenHeader, got)
@@ -33,7 +40,7 @@ func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 			"code":    200,
 			"message": "ok",
 			"data": map[string]any{
-				"userId":                  42,
+				"userId":                  testRuntimeSyncUserIDString,
 				"profileCacheInvalidated": true,
 				"sessionsInvalidated":     false,
 				"message":                 "",
@@ -49,18 +56,77 @@ func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	resp, err := client.SyncUserRuntime(context.Background(), 42, false, false, "  manual sync  ")
+	resp, err := client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, false, false, "  manual sync  ")
 	if err != nil {
 		t.Fatalf("SyncUserRuntime() error = %v", err)
 	}
 	if !gotPayload.Profile || gotPayload.Sessions || gotPayload.Reason != "manual sync" {
 		t.Fatalf("payload = %+v, want profile default true and trimmed reason", gotPayload)
 	}
-	if !resp.Enabled || !resp.Success || resp.UserID != 42 || !resp.ProfileCacheInvalidated || resp.SessionsInvalidated {
+	if !resp.Enabled || !resp.Success || resp.UserID != testRuntimeSyncUserID || !resp.ProfileCacheInvalidated || resp.SessionsInvalidated {
 		t.Fatalf("response = %+v, want successful profile-only sync", resp)
 	}
 	if resp.Message != "API 运行态已同步" {
 		t.Fatalf("message = %q, want default sync message", resp.Message)
+	}
+}
+
+// TestSyncUserRuntimeAcceptsNumericUserID 验证滚动发布期间可兼容旧 API 数字 userId。
+func TestSyncUserRuntimeAcceptsNumericUserID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  true,
+			"code":    200,
+			"message": "ok",
+			"data": map[string]any{
+				"userId":                  testRuntimeSyncUserID,
+				"profileCacheInvalidated": false,
+				"sessionsInvalidated":     true,
+				"message":                 "done",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(config.APIServiceConfig{
+		InternalBaseURL: server.URL,
+		OpsToken:        "ops-token",
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	resp, err := client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, false, true, "")
+	if err != nil {
+		t.Fatalf("SyncUserRuntime() error = %v", err)
+	}
+	if resp.UserID != testRuntimeSyncUserID || resp.ProfileCacheInvalidated || !resp.SessionsInvalidated || resp.Message != "done" {
+		t.Fatalf("response = %+v, want numeric userId compatibility", resp)
+	}
+}
+
+// TestSyncUserRuntimeRejectsMismatchedUserID 验证 API 返回用户 ID 不一致时拒绝成功回执。
+func TestSyncUserRuntimeRejectsMismatchedUserID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  true,
+			"code":    200,
+			"message": "ok",
+			"data": map[string]any{
+				"userId": testRuntimeSyncUserID + 1,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(config.APIServiceConfig{
+		InternalBaseURL: server.URL,
+		OpsToken:        "ops-token",
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err = client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, true, false, ""); err == nil {
+		t.Fatalf("SyncUserRuntime() error = nil, want mismatched user ID error")
 	}
 }
 

@@ -21,6 +21,8 @@ import (
 const (
 	// redisExactDeleteBatchSize 表示精确 DEL 时单批 key 数量，避免一次命令过大影响 Redis。
 	redisExactDeleteBatchSize = 200
+	// rolePermissionInvalidateQueryBatchSize 表示权限定义变更后枚举角色 ID 的单批数量。
+	rolePermissionInvalidateQueryBatchSize = 500
 	// adminPermissionInvalidateQueryBatchSize 表示权限定义变更后枚举管理员 ID 的单批数量，避免一次性加载全量管理员。
 	adminPermissionInvalidateQueryBatchSize = 500
 )
@@ -150,6 +152,52 @@ func invalidateAdminPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminID
 	deleteRedisKeysExactBatches(base, "invalidateAdminPermissionCacheByAdminIDs 删除管理员权限缓存", tableCachePhysicalKeys(base, cacheKeys...))
 }
 
+// invalidateRolePermissionCacheByRoleIDs 精确删除指定角色的权限关系缓存。
+func invalidateRolePermissionCacheByRoleIDs(base *corelogic.BaseLogic, roleIDs ...int) {
+	if base == nil {
+		return
+	}
+	cacheKeys := make([]string, 0, len(roleIDs))
+	for _, roleID := range types.UniquePositiveInts(roleIDs) {
+		cacheKeys = append(cacheKeys, fmt.Sprintf(keys.RolePermission, roleID))
+	}
+	deleteRedisKeysExactBatches(base, "invalidateRolePermissionCacheByRoleIDs 删除角色权限缓存", tableCachePhysicalKeys(base, cacheKeys...))
+}
+
+// invalidateAllRolePermissionCache 精确删除全量角色权限关系缓存，适用于权限定义整体变更或迁移补权场景。
+func invalidateAllRolePermissionCache(base *corelogic.BaseLogic) {
+	if base == nil {
+		return
+	}
+	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	if err != nil {
+		corelogic.LogWrappedError(base, err, "invalidateAllRolePermissionCache 获取admin读库失败")
+		return
+	}
+	lastRoleID := 0
+	for {
+		roleIDs := make([]int, 0, rolePermissionInvalidateQueryBatchSize)
+		// 角色权限缓存按 role_id 精确失效，避免 Redis 前缀扫描。
+		if err := readDB.WithContext(base.Ctx).
+			Model(&model.AdminRole{}).
+			Where("id > ?", lastRoleID).
+			Order("id ASC").
+			Limit(rolePermissionInvalidateQueryBatchSize).
+			Pluck("id", &roleIDs).Error; err != nil {
+			corelogic.LogWrappedError(base, err, "invalidateAllRolePermissionCache 查询全量角色ID失败 last_role_id=%d", lastRoleID)
+			return
+		}
+		if len(roleIDs) == 0 {
+			return
+		}
+		invalidateRolePermissionCacheByRoleIDs(base, roleIDs...)
+		lastRoleID = roleIDs[len(roleIDs)-1]
+		if len(roleIDs) < rolePermissionInvalidateQueryBatchSize {
+			return
+		}
+	}
+}
+
 // invalidateAdminRelationCacheWithOptions 按需清理管理员关系缓存。
 func invalidateAdminRelationCacheWithOptions(base *corelogic.BaseLogic, preserveSession bool, adminIDs ...int) {
 	if base == nil {
@@ -267,6 +315,16 @@ func InvalidateAdminRoleAndPermissionCacheByAdminIDs(base *corelogic.BaseLogic, 
 // InvalidateAdminPermissionCacheByAdminIDs 删除指定管理员权限聚合缓存。
 func InvalidateAdminPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminIDs ...int) {
 	invalidateAdminPermissionCacheByAdminIDs(base, adminIDs...)
+}
+
+// InvalidateRolePermissionCacheByRoleIDs 删除指定角色权限关系缓存。
+func InvalidateRolePermissionCacheByRoleIDs(base *corelogic.BaseLogic, roleIDs ...int) {
+	invalidateRolePermissionCacheByRoleIDs(base, roleIDs...)
+}
+
+// InvalidateAllRolePermissionCache 删除所有角色权限关系缓存。
+func InvalidateAllRolePermissionCache(base *corelogic.BaseLogic) {
+	invalidateAllRolePermissionCache(base)
 }
 
 // InvalidateAllAdminPermissionCache 删除所有管理员权限聚合缓存。

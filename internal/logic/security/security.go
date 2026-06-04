@@ -360,12 +360,14 @@ func (l *SecurityLogic) EnabledRoleIDs(userID int) ([]int, error) {
 // routePermissionIDs 查询路由别名对应的启用权限 ID。
 func (l *SecurityLogic) routePermissionIDs(routeAlias string) ([]int, error) {
 	routeAlias = strings.TrimSpace(routeAlias)
+	modules := routePermissionModules(routeAlias)
 	if l.Redis() == nil {
 		var permissionIDs []int
 		err := l.Svc.WriteDB(svc.DatabaseMain).Model(&model.AdminPermission{}).
-			Where("status = 1 AND module = ?", routeAlias).
+			Where("status = 1 AND module IN ?", modules).
+			Order("id ASC").
 			Pluck("id", &permissionIDs).Error
-		return permissionIDs, errors.Tag(err)
+		return types.UniquePositiveInts(permissionIDs), errors.Tag(err)
 	}
 	cacheKey := fmt.Sprintf(keys.RoutePermissionIDs, routeAlias)
 	permissionIDs, found, err := l.readPositiveIntSetCache(cacheKey, "路由候选权限缓存")
@@ -487,6 +489,11 @@ func (l *SecurityLogic) routePermissionIDsFromModuleCache(routeAlias string) ([]
 	if routeAlias == "" || l.Redis() == nil {
 		return []int{}, false, nil
 	}
+	modules := routePermissionModules(routeAlias)
+	moduleSet := make(map[string]struct{}, len(modules))
+	for _, module := range modules {
+		moduleSet[module] = struct{}{}
+	}
 	moduleMap, err := l.Redis().HGetAll(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.PermissionModule)).Result()
 	if err != nil {
 		return nil, false, errors.Tag(err)
@@ -496,7 +503,7 @@ func (l *SecurityLogic) routePermissionIDsFromModuleCache(routeAlias string) ([]
 	}
 	permissionIDs := make([]int, 0)
 	for permissionIDText, module := range moduleMap {
-		if strings.TrimSpace(module) != routeAlias {
+		if _, ok := moduleSet[strings.TrimSpace(module)]; !ok {
 			continue
 		}
 		permissionID, convErr := strconv.Atoi(strings.TrimSpace(permissionIDText))
@@ -667,6 +674,23 @@ var loginMFAAllowlist = map[routealias.Alias]bool{
 // routeAliasKey 归一化外部传入的路由别名，避免白名单判断受空白字符影响。
 func routeAliasKey(routeAlias string) routealias.Alias {
 	return routealias.Alias(strings.TrimSpace(routeAlias))
+}
+
+// routePermissionModules 返回路由权限可匹配的 module；文档路由支持单篇和目录权限兼容。
+func routePermissionModules(routeAlias string) []string {
+	aliases := routealias.DocsCandidateAliases(routeAliasKey(routeAlias))
+	modules := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		module := strings.TrimSpace(string(alias))
+		if module == "" {
+			continue
+		}
+		modules = append(modules, module)
+	}
+	if len(modules) == 0 {
+		return []string{strings.TrimSpace(routeAlias)}
+	}
+	return helper.UniqueNonEmptyStrings(modules)
 }
 
 // checkAdminNeedResetPassword 校验管理员是否处于必须先修改登录密码状态。

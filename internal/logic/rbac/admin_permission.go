@@ -688,10 +688,11 @@ func (l *AdminPermissionLogic) refreshPermissionRelatedCache(routeAliases ...str
 	}
 	cachelogic.DeleteRedisKeysExactBatches(l.BaseLogic, "AdminPermissionLogic.refreshPermissionRelatedCache 删除权限核心缓存", cachelogic.TableCachePhysicalKeys(l.BaseLogic, coreKeys...))
 	l.deleteRoutePermissionCandidateCache(routeAliases...)
+	cachelogic.InvalidateAllRolePermissionCache(l.BaseLogic)
 	cachelogic.InvalidateAllAdminPermissionCache(l.BaseLogic)
 }
 
-// RefreshPermissionRelatedCache 清理权限树、权限码和路由候选权限缓存。
+// RefreshPermissionRelatedCache 清理权限树、角色权限、管理员权限和路由候选权限缓存。
 func (l *AdminPermissionLogic) RefreshPermissionRelatedCache(routeAliases ...string) {
 	l.refreshPermissionRelatedCache(routeAliases...)
 }

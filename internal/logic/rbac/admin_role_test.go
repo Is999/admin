@@ -3,6 +3,7 @@ package rbac
 import (
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
+	"admin/internal/routealias"
 	"context"
 	"fmt"
 	"testing"
@@ -55,6 +56,50 @@ func TestParentRoleUsesFullPermissionScope(t *testing.T) {
 				t.Fatalf("parentRoleUsesFullPermissionScope(%d) = %v, want %v", tt.parentRoleID, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestDocumentPermissionEntryNormalization 验证文档子权限保存时会补齐入口权限，并清理缺少入口的半截授权。
+func TestDocumentPermissionEntryNormalization(t *testing.T) {
+	idAlias := map[int]routealias.Alias{
+		99:  routealias.DocsIndex,
+		160: routealias.DocsAPIIndex,
+		164: routealias.DocsAPIServiceIndex,
+		165: routealias.DocsAPIServiceFront,
+		210: routealias.Alias("docs.file.角色文档/后端开发/AI开发提示词.md"),
+		222: routealias.Alias("docs.file.api/接口文档/前台系统/系统接口.md"),
+	}
+	aliasID := map[routealias.Alias]int{
+		routealias.DocsIndex:           99,
+		routealias.DocsAPIIndex:        160,
+		routealias.DocsAPIServiceIndex: 164,
+		routealias.DocsAPIServiceFront: 165,
+		routealias.Alias("docs.file.角色文档/后端开发/AI开发提示词.md"):  210,
+		routealias.Alias("docs.file.api/接口文档/前台系统/系统接口.md"): 222,
+	}
+
+	expanded := expandDocumentEntryPermissionIDs([]int{160, 165, 210, 222}, idAlias, aliasID)
+	assertIntSetEqual(t, expanded, []int{99, 160, 164, 165, 210, 222})
+
+	retained := retainAssignablePermissionIDs(expanded, []int{99, 160, 165, 210, 222})
+	complete := retainCompleteDocumentPermissionIDs(retained, idAlias, aliasID)
+	assertIntSetEqual(t, complete, []int{99, 160, 210})
+}
+
+// assertIntSetEqual 校验整数集合一致，不要求顺序。
+func assertIntSetEqual(t *testing.T, got []int, want []int) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("int set len = %d, want %d, got=%v", len(got), len(want), got)
+	}
+	gotSet := make(map[int]struct{}, len(got))
+	for _, item := range got {
+		gotSet[item] = struct{}{}
+	}
+	for _, item := range want {
+		if _, ok := gotSet[item]; !ok {
+			t.Fatalf("int set missing %d, got=%v want=%v", item, got, want)
+		}
 	}
 }
 

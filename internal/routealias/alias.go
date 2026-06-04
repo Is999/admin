@@ -18,7 +18,7 @@ const (
 	AuthProfile Alias = "auth.profile"
 	// AuthVerifyAccount 表示登录预校验路由别名。
 	AuthVerifyAccount Alias = "auth.verify_account"
-	// DocsIndex 表示后台文档站入口页面权限路由别名。
+	// DocsIndex 表示后台接口文档入口页面权限路由别名。
 	DocsIndex Alias = "docs.index"
 	// DocsRoleOps 表示运维角色文档目录路由别名。
 	DocsRoleOps Alias = "docs.role.ops"
@@ -38,7 +38,7 @@ const (
 	DocsAPITask Alias = "docs.api.task"
 	// DocsUserTag 表示用户标签接口文档目录路由别名。
 	DocsUserTag Alias = "docs.user_tag"
-	// DocsAPIServiceIndex 表示前台 API 接口文档首页和规范路由别名。
+	// DocsAPIServiceIndex 表示前台 API 文档入口页面、首页和规范路由别名。
 	DocsAPIServiceIndex Alias = "docs.api_service.index"
 	// DocsAPIServiceFront 表示前台 API 前台系统接口文档目录路由别名。
 	DocsAPIServiceFront Alias = "docs.api_service.front"

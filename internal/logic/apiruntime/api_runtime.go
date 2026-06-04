@@ -85,6 +85,43 @@ type userRuntimeSyncPayload struct {
 	Reason   string `json:"reason"`   // 同步原因
 }
 
+// apiUserRuntimeSyncResp 表示 API 内网用户运行态同步响应，兼容滚动发布中的数字或字符串 userId。
+type apiUserRuntimeSyncResp struct {
+	UserID                  apiSnowflakeID `json:"userId"`                  // 用户雪花 ID，兼容数字和字符串 JSON
+	ProfileCacheInvalidated bool           `json:"profileCacheInvalidated"` // 是否已处理用户资料缓存
+	SessionsInvalidated     bool           `json:"sessionsInvalidated"`     // 是否已处理登录态
+	Message                 string         `json:"message"`                 // 同步结果说明
+}
+
+// apiSnowflakeID 表示 API 内网响应里的用户雪花 ID。
+type apiSnowflakeID int64
+
+// UnmarshalJSON 同时接受字符串和数字形式的用户雪花 ID，便于 admin/API 滚动发布。
+func (id *apiSnowflakeID) UnmarshalJSON(raw []byte) error {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		*id = 0
+		return nil
+	}
+	if strings.HasPrefix(text, "\"") {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return errors.Wrap(err, "解析 API 用户 ID字符串失败")
+		}
+		text = strings.TrimSpace(value)
+	}
+	if text == "" {
+		*id = 0
+		return nil
+	}
+	value, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return errors.Wrap(err, "解析 API 用户 ID失败")
+	}
+	*id = apiSnowflakeID(value)
+	return nil
+}
+
 // NewLogic 创建 API 运行态管理逻辑对象。
 func NewLogic(r *http.Request, svcCtx *svc.ServiceContext) *Logic {
 	return &Logic{AdminLogic: adminlogic.NewAdminLogic(r, svcCtx)}
@@ -223,7 +260,7 @@ func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool
 		profile = true
 	}
 	path := "/internal/users/" + strconv.FormatInt(userID, 10) + "/runtime-sync"
-	data, err := requestAPI[types.UserRuntimeSyncResp](ctx, c, http.MethodPost, path, userRuntimeSyncPayload{
+	data, err := requestAPI[apiUserRuntimeSyncResp](ctx, c, http.MethodPost, path, userRuntimeSyncPayload{
 		Profile:  profile,
 		Sessions: sessions,
 		Reason:   strings.TrimSpace(reason),
@@ -231,12 +268,21 @@ func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	data.Enabled = true
-	data.Success = true
-	if data.Message == "" {
-		data.Message = "API 运行态已同步"
+	if int64(data.UserID) != userID {
+		return nil, errors.Errorf("API 内网同步响应用户 ID不一致 expected=%d actual=%d", userID, data.UserID)
 	}
-	return data, nil
+	message := data.Message
+	if message == "" {
+		message = "API 运行态已同步"
+	}
+	return &types.UserRuntimeSyncResp{
+		Enabled:                 true,
+		Success:                 true,
+		UserID:                  int64(data.UserID),
+		ProfileCacheInvalidated: data.ProfileCacheInvalidated,
+		SessionsInvalidated:     data.SessionsInvalidated,
+		Message:                 message,
+	}, nil
 }
 
 // DocsAsset 通过 API 内网接口读取可在后台展示的文档资源。

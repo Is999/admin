@@ -170,6 +170,65 @@ func TestRuntimeArchiveJobRepairMigration(t *testing.T) {
 	}
 }
 
+// TestDocumentPermissionSeedMigration 确保当前可阅读文档都有独立权限种子。
+func TestDocumentPermissionSeedMigration(t *testing.T) {
+	sql := migrationSQLByAsset(t, "document_permission_seed.sql")
+	for _, want := range []string{
+		"INSERT IGNORE INTO `admin_permission`",
+		"'docs.file.文档首页.md'",
+		"'docs.file.角色文档/后端开发/AI开发提示词.md'",
+		"'docs.file.接口文档/后台系统/权限管理接口.md'",
+		"'docs.file.api/接口文档/前台系统/系统接口.md'",
+		"'docs.file.api/角色文档/后端开发/AI开发规范.md'",
+		"'65,164,165'",
+		"'65,164'",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("document permission seed migration missing %q", want)
+		}
+	}
+}
+
+// TestDocumentPermissionRepairMigration 确保历史角色文档权限会补齐单篇文档和对应入口权限。
+func TestDocumentPermissionRepairMigration(t *testing.T) {
+	sql := migrationSQLByAsset(t, "document_permission_repair.sql")
+	for _, want := range []string{
+		"INSERT IGNORE INTO `admin_role_permission_rel`",
+		"parent.`module` = 'docs.api_service.front'",
+		"doc.`module` LIKE 'docs.file.api/接口文档/前台系统/%'",
+		"child.`module` LIKE 'docs.file.api/%'",
+		"child.`module` LIKE 'docs.file.%'",
+		"docs.index",
+		"docs.api_service.index",
+		"docs.api_service.front",
+		"rel.`role_id` <> 1",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("document permission repair migration missing %q", want)
+		}
+	}
+}
+
+// TestDocumentEntryPermissionRepairMigration 确保文档入口权限名称和层级与前端菜单一致。
+func TestDocumentEntryPermissionRepairMigration(t *testing.T) {
+	sql := migrationSQLByAsset(t, "document_entry_permission_repair.sql")
+	for _, want := range []string{
+		"`title` = '后台接口文档'",
+		"`title` = '前台 API 文档'",
+		"`module` = 'docs.index'",
+		"`module` = 'docs.api_service.index'",
+		"`pid` = 65",
+		"`pid` = 164",
+		"`pid` = 165",
+		"`pids` = '65,164,165'",
+		"`module` LIKE 'docs.file.api/接口文档/前台系统/%'",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("document entry permission repair migration missing %q", want)
+		}
+	}
+}
+
 // TestPendingMigrations 确保已登记版本不会再次进入待执行列表。
 func TestPendingMigrations(t *testing.T) {
 	migrations := DefaultMigrations()

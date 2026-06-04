@@ -8,11 +8,18 @@ import (
 	"os"
 	"strings"
 
+	"admin/common/runtimecfg"
 	"admin/internal/bootstrap"
+	"admin/internal/config"
 	"admin/internal/database"
 	mysqlx "admin/internal/infra/mysql"
+	"admin/internal/infra/redisx"
+	corelogic "admin/internal/logic"
+	rbaclogic "admin/internal/logic/rbac"
+	"admin/internal/svc"
 
 	"github.com/Is999/go-utils/errors"
+	"gorm.io/gorm"
 )
 
 const (
@@ -102,7 +109,18 @@ func run(ctx context.Context, options migrationCommandOptions, output io.Writer)
 	if printErr := printResults(output, results); printErr != nil {
 		return errors.Wrap(printErr, "输出迁移结果失败")
 	}
-	return errors.Tag(err)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if permissionCacheRefreshRequired(resolvedAction, results) {
+		if err := refreshPermissionCacheAfterMigration(ctx, cfg, db); err != nil {
+			return errors.Wrap(err, "刷新权限缓存失败")
+		}
+		if _, err := fmt.Fprintln(output, "权限缓存已刷新：document_permission"); err != nil {
+			return errors.Wrap(err, "输出权限缓存刷新结果失败")
+		}
+	}
+	return nil
 }
 
 // resolveMigrationAction 规范化命令行传入的迁移动作。
@@ -135,4 +153,71 @@ func printResults(output io.Writer, results []database.MigrationRunItem) error {
 		}
 	}
 	return nil
+}
+
+// permissionCacheRefreshRequired 判断本轮迁移是否需要刷新权限缓存。
+func permissionCacheRefreshRequired(action string, results []database.MigrationRunItem) bool {
+	if action != actionUp {
+		return false
+	}
+	for _, item := range results {
+		if item.Status != database.MigrationStatusExecuted && item.Status != database.MigrationStatusApplied {
+			continue
+		}
+		if isDocumentPermissionMigration(item) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDocumentPermissionMigration 判断迁移是否会影响文档权限定义或角色授权关系。
+func isDocumentPermissionMigration(item database.MigrationRunItem) bool {
+	switch strings.TrimSpace(item.Name) {
+	case "seed_document_file_permissions", "repair_document_permission_entries", "repair_document_entry_permissions":
+		return true
+	}
+	switch strings.TrimSpace(item.Asset) {
+	case "document_permission_seed.sql", "document_permission_repair.sql", "document_entry_permission_repair.sql":
+		return true
+	}
+	return false
+}
+
+// refreshPermissionCacheAfterMigration 复用权限领域刷新逻辑，避免迁移补权后继续命中旧缓存。
+func refreshPermissionCacheAfterMigration(ctx context.Context, cfg config.Config, db *gorm.DB) (err error) {
+	if db == nil {
+		return errors.Errorf("MySQL 连接不能为空")
+	}
+	restoreRuntimeConfig := publishMigrationRuntimeConfig(cfg)
+	defer restoreRuntimeConfig()
+
+	rdb, err := redisx.New(ctx, cfg.Redis, cfg.Observability)
+	if err != nil {
+		return errors.Wrap(err, "连接 Redis 失败")
+	}
+	defer func() {
+		if closeErr := rdb.Close(); closeErr != nil && err == nil {
+			err = errors.Wrap(closeErr, "关闭 Redis 连接失败")
+		}
+	}()
+
+	svcCtx := svc.NewServiceContext(cfg, svc.Dependencies{
+		SiteDBs: svc.SiteDatabases{MainDB: db},
+		Rds:     rdb,
+	})
+	logicObj := &rbaclogic.AdminPermissionLogic{
+		BaseLogic: corelogic.NewBaseLogicWithContext(ctx, svcCtx),
+	}
+	logicObj.RefreshPermissionRelatedCache()
+	return nil
+}
+
+// publishMigrationRuntimeConfig 发布迁移命令所需的轻量运行配置，并返回恢复函数。
+func publishMigrationRuntimeConfig(cfg config.Config) func() {
+	previous := runtimecfg.Get()
+	runtimecfg.Set(cfg)
+	return func() {
+		runtimecfg.Restore(previous)
+	}
 }

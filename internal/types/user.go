@@ -183,7 +183,7 @@ func (r *SyncUserRuntimeReq) Validate() error {
 
 // UserItem 表示前台用户列表和详情项。
 type UserItem struct {
-	ID          int64  `json:"id"`          // 用户 ID
+	ID          int64  `json:"id,string"`   // 用户 ID，JSON 以字符串返回，避免前端丢失精度
 	ShardNo     int    `json:"shardNo"`     // ID 哈希分片，来源 CRC32(id字符串)%1000，便于分表和分片游标查询
 	Username    string `json:"username"`    // 用户名
 	Nickname    string `json:"nickname"`    // 昵称
@@ -201,7 +201,7 @@ type UserItem struct {
 type UserRuntimeSyncResp struct {
 	Enabled                 bool   `json:"enabled"`                 // 是否已配置 API 内网同步
 	Success                 bool   `json:"success"`                 // 本次同步是否成功
-	UserID                  int64  `json:"userId"`                  // 用户 ID
+	UserID                  int64  `json:"userId,string"`           // 用户 ID，JSON 以字符串返回，避免前端丢失精度
 	ProfileCacheInvalidated bool   `json:"profileCacheInvalidated"` // 是否已处理资料缓存
 	SessionsInvalidated     bool   `json:"sessionsInvalidated"`     // 是否已处理登录态
 	Message                 string `json:"message"`                 // 同步结果说明

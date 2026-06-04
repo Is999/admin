@@ -770,7 +770,7 @@ func (l *AdminRoleLogic) retainRolePermissionsInScope(roleID int, permissionIDs 
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	return retainAssignablePermissionIDs(permissionIDs, allowedPermissionIDs), nil
+	return l.normalizeAssignablePermissionIDs(l.Svc.ReadDB(svc.DatabaseMain), permissionIDs, allowedPermissionIDs)
 }
 
 // retainRolePermissionsWithinParentScope 过滤父角色边界外的权限，供新增/编辑角色时复用。
@@ -783,7 +783,7 @@ func (l *AdminRoleLogic) retainRolePermissionsWithinParentScope(parentRoleID int
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	return retainAssignablePermissionIDs(permissionIDs, allowedPermissionIDs), nil
+	return l.normalizeAssignablePermissionIDs(l.Svc.ReadDB(svc.DatabaseMain), permissionIDs, allowedPermissionIDs)
 }
 
 // allowedPermissionIDsForRole 计算当前登录管理员给目标角色可分配的权限集合。

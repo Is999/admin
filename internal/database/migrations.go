@@ -67,6 +67,9 @@ var defaultMigrationSpecs = []migrationSpec{
 	{version: "202606050022", name: "bootstrap_runtime_task_periodic", asset: "runtime_task_periodic.sql", bootstrapOnly: true},
 	{version: "202606050023", name: "bootstrap_runtime_archive_job", asset: "runtime_archive_job.sql", bootstrapOnly: true},
 	{version: "202606240001", name: "repair_runtime_archive_job_seed", asset: "runtime_archive_job_repair.sql"},
+	{version: "202606240002", name: "seed_document_file_permissions", asset: "document_permission_seed.sql"},
+	{version: "202606240003", name: "repair_document_permission_entries", asset: "document_permission_repair.sql"},
+	{version: "202606240004", name: "repair_document_entry_permissions", asset: "document_entry_permission_repair.sql"},
 }
 
 // SchemaMigrationsSQL 返回剥离文件头说明后的迁移版本表 DDL。

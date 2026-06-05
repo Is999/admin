@@ -18,7 +18,7 @@ func (l *SecurityLogic) BuildProfileInfo(admin *model.Admin, token string) (*typ
 	existMFA := l.HasUsableAdminMFASecret(admin)
 	buildURL := ""
 	needBindMFA := l.NeedBindMFAOnLogin(admin)
-	if admin.MfaStatus != 1 {
+	if admin.MfaStatus != 1 || needBindMFA {
 		var err error
 		buildURL, err = l.BuildFreshAdminMFAURL(admin)
 		if err != nil {
@@ -42,7 +42,7 @@ func (l *SecurityLogic) BuildProfileInfo(admin *model.Admin, token string) (*typ
 		ExistMFA:          existMFA,
 		BuildMFAURL:       buildURL,
 		ForceMFAEnabled:   forceMFAEnabled,
-		MFABindRequired:   forceMFAEnabled && needBindMFA,
+		MFABindRequired:   needBindMFA,
 		Avatar:            admin.Avatar,
 		Description:       admin.Description,
 		LastLoginTime:     corelogic.FormatDateTime(admin.LastLoginTime),

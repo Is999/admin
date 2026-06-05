@@ -151,13 +151,12 @@ func TestBuildProfileInfoRequiresBindWhenForceMFAEnabled(t *testing.T) {
 	}
 }
 
-// TestBuildProfileInfoKeepsEnabledMFAOutOfSelfRebind 验证账号已启用 MFA 时，即使秘钥不可用也不返回自助换绑信息。
-func TestBuildProfileInfoKeepsEnabledMFAOutOfSelfRebind(t *testing.T) {
+// TestBuildProfileInfoRequiresBindWhenEnabledMFASecretMissing 验证账号已启用但秘钥不可用时，登录资料会进入绑定流程。
+func TestBuildProfileInfoRequiresBindWhenEnabledMFASecretMissing(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
-	seedBoolSecurityConfig(t, client, securitylogic.ConfigAdminMFACheckEnable, true)
 
 	userLogic := &ProfileLogic{BaseLogic: securityLogic.BaseLogic}
 	info, err := userLogic.BuildProfileInfo(&model.Admin{
@@ -175,11 +174,11 @@ func TestBuildProfileInfoKeepsEnabledMFAOutOfSelfRebind(t *testing.T) {
 	if info.ExistMFA {
 		t.Fatalf("buildProfileInfo() existMFA = true, want false")
 	}
-	if info.MFABindRequired {
-		t.Fatalf("buildProfileInfo() mfaBindRequired = true, want false")
+	if !info.MFABindRequired {
+		t.Fatalf("buildProfileInfo() mfaBindRequired = false, want true")
 	}
-	if info.BuildMFAURL != "" {
-		t.Fatalf("buildProfileInfo() BuildMFAURL = %q, want empty", info.BuildMFAURL)
+	if info.BuildMFAURL == "" {
+		t.Fatalf("buildProfileInfo() BuildMFAURL empty, want non-empty")
 	}
 	if info.MFACheck != 1 {
 		t.Fatalf("buildProfileInfo() mfaCheck = %d, want 1", info.MFACheck)
@@ -419,6 +418,23 @@ func TestCheckAdminMFARequiresWhenForceMFAEnabledAndDisabled(t *testing.T) {
 		ID:        9,
 		Name:      "admin999",
 		MfaStatus: 0,
+	}
+	if !securityLogic.NeedLoginMFA(admin) {
+		t.Fatalf("NeedLoginMFA() = false, want true")
+	}
+	if !securityLogic.NeedBindMFAOnLogin(admin) {
+		t.Fatalf("NeedBindMFAOnLogin() = false, want true")
+	}
+}
+
+// TestNeedBindMFAOnLoginRequiresEnabledAccountSecret 验证已启用 MFA 但秘钥缺失的账号会进入登录绑定流程。
+func TestNeedBindMFAOnLoginRequiresEnabledAccountSecret(t *testing.T) {
+	securityLogic := newTestProfileSecurityLogic()
+	admin := &model.Admin{
+		ID:           10,
+		Name:         "admin-enabled",
+		MfaSecureKey: "broken-secret",
+		MfaStatus:    1,
 	}
 	if !securityLogic.NeedLoginMFA(admin) {
 		t.Fatalf("NeedLoginMFA() = false, want true")

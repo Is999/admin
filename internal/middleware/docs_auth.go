@@ -78,6 +78,12 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 						SetCode(codes.Unauthorized).
 						SetError(err).
 						Fail(i18n.MsgKeyAdminIPNotAllowed)
+				case errors.Is(err, securitylogic.ErrAdminMFABindRequired):
+					helper.NewJSONResp(ctx, w).
+						SetHTTPStatus(http.StatusOK).
+						SetCode(codes.CheckMFABind).
+						SetError(err).
+						Fail(i18n.MsgKeyCheckMFABind)
 				case errors.Is(err, securitylogic.ErrAdminMFARequired):
 					helper.NewJSONResp(ctx, w).
 						SetHTTPStatus(http.StatusOK).

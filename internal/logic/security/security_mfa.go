@@ -190,7 +190,8 @@ func (l *SecurityLogic) VerifyBindingMFACodeDetail(admin *model.Admin, secret st
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if admin.MfaStatus == 1 {
+	currentSecretUsable := isUsableMFASecret(currentSecret)
+	if admin.MfaStatus == 1 && currentSecretUsable {
 		if err := verifyMFACodeBySecret(currentSecret, code); err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -207,7 +208,7 @@ func (l *SecurityLogic) VerifyBindingMFACodeDetail(admin *model.Admin, secret st
 			}, nil
 		}
 	}
-	if isUsableMFASecret(currentSecret) && currentSecret != requestSecret {
+	if currentSecretUsable && currentSecret != requestSecret {
 		if err := verifyMFACodeBySecret(currentSecret, code); err == nil {
 			return &mfaBindingVerifyResult{
 				SecretSource: mfaTwoStepSecretSourceCurrent,

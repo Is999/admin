@@ -199,6 +199,40 @@ func TestVerifyBindingMFACodeUsesRequestSecret(t *testing.T) {
 	}
 }
 
+// TestVerifyBindingMFACodeAllowsRequestSecretWhenEnabledSecretMissing 验证已启用但库内秘钥不可用时，登录绑定可使用本次新秘钥完成校验。
+func TestVerifyBindingMFACodeAllowsRequestSecretWhenEnabledSecretMissing(t *testing.T) {
+	logicObj := newTestSecurityLogic()
+	requestSecret := "JBSWY3DPEHPK3PXP"
+	code, err := totp.GenerateCodeCustom(requestSecret, time.Now(), totp.ValidateOpts{
+		Period:    30,
+		Skew:      1,
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+	})
+	if err != nil {
+		t.Fatalf("GenerateCodeCustom failed: %v", err)
+	}
+
+	verifyResult, err := logicObj.VerifyBindingMFACodeDetail(&model.Admin{
+		ID:           16,
+		Name:         "admin-enabled-missing-secret",
+		MfaSecureKey: "",
+		MfaStatus:    1,
+	}, requestSecret, code)
+	if err != nil {
+		t.Fatalf("VerifyBindingMFACodeDetail failed: %v", err)
+	}
+	if verifyResult == nil {
+		t.Fatalf("VerifyBindingMFACodeDetail returned nil result")
+	}
+	if verifyResult.SecretSource != mfaTwoStepSecretSourceRequest {
+		t.Fatalf("VerifyBindingMFACodeDetail secret source = %q, want %q", verifyResult.SecretSource, mfaTwoStepSecretSourceRequest)
+	}
+	if verifyResult.SecretDigest != hashMFASecret(requestSecret) {
+		t.Fatalf("VerifyBindingMFACodeDetail secret digest mismatch, got %q", verifyResult.SecretDigest)
+	}
+}
+
 // TestVerifyBindingMFACodeFallsBackToCurrentSecret 验证新秘钥失败后回退当前秘钥。
 func TestVerifyBindingMFACodeFallsBackToCurrentSecret(t *testing.T) {
 	logicObj := newTestSecurityLogic()
@@ -401,12 +435,17 @@ func TestVerifyMFATwoStepTicketSplitsMFASecretAndSecretKeyManage(t *testing.T) {
 func TestCheckAdminMFAToleratesOneSecondSkew(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a", AppKey: "unit-test-app-key"}, svc.Dependencies{Rds: client})
 	logicObj := NewSecurityLogic(context.Background(), svcCtx)
+	cipherText, err := logicObj.encryptAdminMFASecret("JBSWY3DPEHPK3PXP")
+	if err != nil {
+		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+	}
 	lastLoginTime := time.Unix(1_777_613_352, 0)
 	admin := &model.Admin{
 		ID:            1,
 		Name:          "super999",
+		MfaSecureKey:  cipherText,
 		MfaStatus:     1,
 		LastLoginTime: lastLoginTime,
 	}
@@ -419,6 +458,23 @@ func TestCheckAdminMFAToleratesOneSecondSkew(t *testing.T) {
 	}
 	if err := logicObj.checkAdminMFA(admin); err != nil {
 		t.Fatalf("checkAdminMFA() = %v, want nil", err)
+	}
+}
+
+// TestCheckAdminMFARequiresBindWhenEnabledSecretMissing 验证已启用但秘钥缺失时，登录 MFA 前置校验返回绑定业务码。
+func TestCheckAdminMFARequiresBindWhenEnabledSecretMissing(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	logicObj := newTestSecurityLogic()
+	logicObj.Svc.Rds = client
+
+	err := logicObj.checkAdminMFA(&model.Admin{
+		ID:        19,
+		Name:      "admin-enabled-missing-secret",
+		MfaStatus: 1,
+	})
+	if err != ErrAdminMFABindRequired {
+		t.Fatalf("checkAdminMFA() error = %v, want %v", err, ErrAdminMFABindRequired)
 	}
 }
 

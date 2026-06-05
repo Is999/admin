@@ -313,13 +313,13 @@ func (l *SecurityLogic) NeedLoginMFA(admin *model.Admin) bool {
 	return l.ForceLoginMFAEnabled()
 }
 
-// NeedBindMFAOnLogin 判断当前管理员在登录阶段是否需要先完成首次绑定并启用 MFA。
-// 账号自身已经是启用态时，不提供自助换绑；设备异常由后台受控处理。
+// NeedBindMFAOnLogin 判断当前管理员在登录阶段是否需要先完成 MFA 绑定并启用。
+// 账号状态已启用但秘钥不可用时，同样走登录绑定流程，避免账号被卡死在不可登录状态。
 func (l *SecurityLogic) NeedBindMFAOnLogin(admin *model.Admin) bool {
 	if admin == nil || admin.NeedResetPassword == 1 {
 		return false
 	}
-	return admin.MfaStatus != 1
+	return l.NeedLoginMFA(admin) && (admin.MfaStatus != 1 || !l.HasUsableAdminMFASecret(admin))
 }
 
 // checkAdminMFA 校验登录阶段是否已经完成 MFA；系统强制启用时，未开启账号也必须先完成绑定与校验。
@@ -331,7 +331,7 @@ func (l *SecurityLogic) checkAdminMFA(admin *model.Admin) error {
 	if !needMFA || l.Redis() == nil {
 		return nil
 	}
-	if l.ForceLoginMFAEnabled() && admin.MfaStatus != 1 {
+	if l.NeedBindMFAOnLogin(admin) {
 		return ErrAdminMFABindRequired
 	}
 	flag, err := l.Redis().Get(l.Ctx, l.loginMFAFlagKey(admin.ID)).Int64()

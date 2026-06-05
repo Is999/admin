@@ -426,12 +426,12 @@ func (l *ProfileLogic) RefreshMFASecretKey(req *types.ProfileMFASecretRefreshReq
 	if err != nil {
 		return l.adminFetchErrorResult("ProfileLogic.RefreshMFASecretKey", err)
 	}
-	if admin.MfaStatus == 1 {
+	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
+	if admin.MfaStatus == 1 && securityLogic.HasUsableAdminMFASecret(admin) {
 		return types.NewBizResult(codes.Forbidden).
 			SetI18nMessage(i18n.MsgKeyAuthFailed).
 			WithError(errors.Errorf("ProfileLogic.RefreshMFASecretKey 管理员ID[%d]已启用MFA，不允许自助重新生成绑定二维码", admin.ID))
 	}
-	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
 	buildURL, err := securityLogic.BuildFreshAdminMFAURL(admin)
 	if err != nil {
 		return types.NewBizResult(codes.ServerError).
@@ -479,7 +479,7 @@ func (l *ProfileLogic) BuildMFASecretKeyURL(req *types.IDPathReq) *types.BizResu
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
 	buildURL := ""
 	var err error
-	if admin.MfaStatus != 1 {
+	if admin.MfaStatus != 1 || !securityLogic.HasUsableAdminMFASecret(&admin) {
 		buildURL, err = securityLogic.BuildFreshAdminMFAURL(&admin)
 	} else {
 		buildURL, err = securityLogic.BuildAdminMFAURL(&admin)

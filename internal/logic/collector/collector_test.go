@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/plugin/dbresolver"
 )
 
 // TestBuildCollectorWindowSuccessQueryUsesDoneAtFallback 验证近期成功统计兼容历史 finished_at 空值。
@@ -93,6 +94,34 @@ func TestBuildCollectorTransportOverviewQueryKeepsUnknown(t *testing.T) {
 	}
 	if strings.Contains(sqlText, "transport <> ''") {
 		t.Fatalf("unexpected transport filter in SQL: %s", sqlText)
+	}
+}
+
+// TestBuildCollectorOverviewQueriesDoNotShareClauses 验证概览多段聚合不会复用脏 Statement。
+func TestBuildCollectorOverviewQueriesDoNotShareClauses(t *testing.T) {
+	db := newCollectorDryRunDB(t).Clauses(dbresolver.Read)
+	now := time.Date(2026, 6, 25, 11, 15, 0, 0, time.Local)
+	since := now.Add(-15 * time.Minute)
+
+	successRow := struct {
+		SuccessCount int64 `gorm:"column:success_count"` // 成功任务数
+	}{}
+	if err := buildCollectorWindowSuccessQuery(db, since).Find(&successRow).Error; err != nil {
+		t.Fatalf("buildCollectorWindowSuccessQuery Find() error = %v", err)
+	}
+
+	transportRows := make([]struct {
+		Transport string `gorm:"column:transport"` // 来源通道
+	}, 0)
+	tx := buildCollectorTransportOverviewQuery(db, now).Find(&transportRows)
+	if tx.Error != nil {
+		t.Fatalf("buildCollectorTransportOverviewQuery Find() error = %v", tx.Error)
+	}
+	sqlText := tx.Statement.SQL.String()
+	for _, bad := range []string{"finished_at >= ?", "updated_at >= ?", "TIMESTAMPDIFF"} {
+		if strings.Contains(sqlText, bad) {
+			t.Fatalf("transport overview SQL was polluted by previous query %q: %s", bad, sqlText)
+		}
 	}
 }
 

@@ -104,7 +104,9 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 	if row.ID == 0 {
 		return errors.Errorf("admin_log CDC 事件缺少 id op=%s topic=%s offset=%d", event.Operation, event.Topic, event.Offset)
 	}
-	if !adminLogAuditMatched(p.cfg, row) {
+	collectorMatched := p.cfg.CollectorEnabled && adminLogAuditTraceMatched(p.cfg, row)
+	larkMatched := p.cfg.LarkEnabled && adminLogAuditLarkMatched(p.cfg, row)
+	if !collectorMatched && !larkMatched {
 		loggerx.Infow(ctx, "CDC admin_log 验证事件已跳过",
 			logx.Field("event_key", event.EventKey()),
 			logx.Field("id", row.ID),
@@ -115,7 +117,7 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 		)
 		return nil
 	}
-	if p.cfg.CollectorEnabled {
+	if collectorMatched {
 		if p.collector == nil {
 			return errors.Errorf("admin_log CDC Collector 未初始化")
 		}
@@ -133,7 +135,7 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 			logx.Field("trace_id", row.TraceID),
 		)
 	}
-	if p.cfg.LarkEnabled {
+	if larkMatched {
 		if p.notifier == nil {
 			return errors.Errorf("admin_log CDC Lark 通知器未初始化")
 		}
@@ -166,10 +168,15 @@ func (p AdminLogProcessor) ProcessCDC(ctx context.Context, event cdcx.Event) err
 	return nil
 }
 
-// adminLogAuditMatched 判断当前 admin_log 是否命中验证过滤条件。
-func adminLogAuditMatched(cfg config.AdminLogAuditTestScenario, row adminLogRow) bool {
+// adminLogAuditTraceMatched 判断当前 admin_log 是否命中 trace 过滤。
+func adminLogAuditTraceMatched(cfg config.AdminLogAuditTestScenario, row adminLogRow) bool {
 	prefix := strings.TrimSpace(cfg.TraceIDPrefix)
-	if prefix != "" && !strings.HasPrefix(row.TraceID, prefix) {
+	return prefix == "" || strings.HasPrefix(row.TraceID, prefix)
+}
+
+// adminLogAuditLarkMatched 判断当前 admin_log 是否命中 Lark 验证过滤条件。
+func adminLogAuditLarkMatched(cfg config.AdminLogAuditTestScenario, row adminLogRow) bool {
+	if !adminLogAuditTraceMatched(cfg, row) {
 		return false
 	}
 	if !adminLogValueAllowed(cfg.Actions, row.Action) {

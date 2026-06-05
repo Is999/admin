@@ -453,6 +453,7 @@ func permissionModelToItem(permission model.AdminPermission, checked bool, disab
 		Disabled:        disabled,
 		DisableCheckbox: disabled,
 		Selectable:      !disabled,
+		HasChild:        len(children) > 0,
 		Children:        children,
 		CreatedAt:       corelogic.FormatDateTime(permission.CreatedAt),
 		UpdatedAt:       corelogic.FormatDateTime(permission.UpdatedAt),
@@ -489,6 +490,7 @@ func markPermissionTreeManageScope(items []types.AdminPermissionItem, manageable
 		nextItem.DisableCheckbox = nextItem.Disabled
 		nextItem.Selectable = !nextItem.Disabled
 		nextItem.Children = markPermissionTreeManageScope(item.Children, manageable)
+		nextItem.HasChild = len(nextItem.Children) > 0
 		result = append(result, nextItem)
 	}
 	return result
@@ -512,6 +514,7 @@ func markPermissionTreeChecked(items []types.AdminPermissionItem, checked map[in
 		nextItem.DisableCheckbox = nextItem.Disabled
 		nextItem.Selectable = !nextItem.Disabled
 		nextItem.Children = markPermissionTreeChecked(item.Children, checked, assignable, lockAll)
+		nextItem.HasChild = len(nextItem.Children) > 0
 		result = append(result, nextItem)
 	}
 	return result

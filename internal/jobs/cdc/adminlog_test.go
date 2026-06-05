@@ -285,38 +285,90 @@ func TestAdminLogProcessorSendsLarkAfterCollectorSuccess(t *testing.T) {
 	}
 }
 
-func TestAdminLogAuditMatchedByTraceIDPrefix(t *testing.T) {
+func TestAdminLogProcessorCollectorIgnoresLarkFilters(t *testing.T) {
+	notifier := &fakeAdminLogNotifier{}
+	collector := &fakeCollectorEnqueuer{}
+	processor := AdminLogProcessor{
+		cfg: config.AdminLogAuditTestScenario{
+			LarkEnabled:      true,
+			CollectorEnabled: true,
+			Actions:          []string{"管理员登录"},
+			Routes:           []string{"auth.login"},
+		},
+		notifier:  notifier,
+		collector: collector,
+	}
+	err := processor.ProcessCDC(context.Background(), cdcx.Event{
+		Topic:     "dnmp-admin.admin.admin_log",
+		Partition: 0,
+		Offset:    13,
+		Operation: cdcx.OperationCreate,
+		After:     []byte(`{"id":13,"user_id":7,"user_name":"admin","action":"查询Collector概览","route":"collector.overview","trace_id":"trace-1","http_status":200,"biz_code":200,"success":1}`),
+	})
+	if err != nil {
+		t.Fatalf("ProcessCDC() error = %v", err)
+	}
+	if len(collector.events) != 1 {
+		t.Fatalf("Collector 调试应收到非登录审计日志，实际=%d", len(collector.events))
+	}
+	if len(notifier.texts) != 0 {
+		t.Fatalf("Lark 仍应受动作和路由过滤，实际=%d", len(notifier.texts))
+	}
+}
+
+func TestAdminLogProcessorCollectorRespectsTracePrefix(t *testing.T) {
+	collector := &fakeCollectorEnqueuer{}
+	processor := AdminLogProcessor{
+		cfg:       config.AdminLogAuditTestScenario{CollectorEnabled: true, TraceIDPrefix: "login-"},
+		collector: collector,
+	}
+	err := processor.ProcessCDC(context.Background(), cdcx.Event{
+		Topic:     "dnmp-admin.admin.admin_log",
+		Partition: 0,
+		Offset:    14,
+		Operation: cdcx.OperationCreate,
+		After:     []byte(`{"id":14,"action":"查询Collector概览","route":"collector.overview","trace_id":"normal-request","success":1}`),
+	})
+	if err != nil {
+		t.Fatalf("ProcessCDC() error = %v", err)
+	}
+	if len(collector.events) != 0 {
+		t.Fatalf("trace_id 前缀不匹配时不应写入 Collector，实际=%d", len(collector.events))
+	}
+}
+
+func TestAdminLogAuditLarkMatchedByTraceIDPrefix(t *testing.T) {
 	cfg := config.AdminLogAuditTestScenario{TraceIDPrefix: "codex-cdc-"}
-	if !adminLogAuditMatched(cfg, adminLogRow{TraceID: "codex-cdc-demo"}) {
+	if !adminLogAuditLarkMatched(cfg, adminLogRow{TraceID: "codex-cdc-demo"}) {
 		t.Fatal("期望匹配验证 trace_id 前缀")
 	}
-	if adminLogAuditMatched(cfg, adminLogRow{TraceID: "normal-request"}) {
+	if adminLogAuditLarkMatched(cfg, adminLogRow{TraceID: "normal-request"}) {
 		t.Fatal("普通 trace_id 不应触发验证链路")
 	}
-	if !adminLogAuditMatched(config.AdminLogAuditTestScenario{}, adminLogRow{TraceID: "normal-request"}) {
+	if !adminLogAuditLarkMatched(config.AdminLogAuditTestScenario{}, adminLogRow{TraceID: "normal-request"}) {
 		t.Fatal("未配置前缀时应保持不过滤")
 	}
 }
 
-func TestAdminLogAuditMatchedByActionAndRoute(t *testing.T) {
+func TestAdminLogAuditLarkMatchedByActionAndRoute(t *testing.T) {
 	cfg := config.AdminLogAuditTestScenario{
 		Actions: []string{"管理员登录"},
 		Routes:  []string{"auth.login"},
 	}
-	if !adminLogAuditMatched(cfg, adminLogRow{Action: "管理员登录", Route: "auth.login"}) {
+	if !adminLogAuditLarkMatched(cfg, adminLogRow{Action: "管理员登录", Route: "auth.login"}) {
 		t.Fatal("期望登录日志命中验证链路")
 	}
-	if adminLogAuditMatched(cfg, adminLogRow{Action: "查询管理员列表", Route: "admin.list"}) {
+	if adminLogAuditLarkMatched(cfg, adminLogRow{Action: "查询管理员列表", Route: "admin.list"}) {
 		t.Fatal("普通查询日志不应命中登录验证链路")
 	}
 }
 
-func TestAdminLogAuditMatchedIgnoresBlankFilters(t *testing.T) {
+func TestAdminLogAuditLarkMatchedIgnoresBlankFilters(t *testing.T) {
 	cfg := config.AdminLogAuditTestScenario{
 		Actions: []string{" "},
 		Routes:  []string{""},
 	}
-	if !adminLogAuditMatched(cfg, adminLogRow{Action: "查询管理员列表", Route: "admin.list"}) {
+	if !adminLogAuditLarkMatched(cfg, adminLogRow{Action: "查询管理员列表", Route: "admin.list"}) {
 		t.Fatal("空白过滤项应按未配置处理")
 	}
 }

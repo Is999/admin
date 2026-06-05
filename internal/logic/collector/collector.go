@@ -15,6 +15,7 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 	"gorm.io/gorm"
+	"gorm.io/plugin/dbresolver"
 )
 
 // Collector 概览默认参数限制后台聚合批次、缓存时间和展示数量。
@@ -166,7 +167,7 @@ func (l *CollectorLogic) buildOverview(db *gorm.DB) (*types.CollectorOverviewRes
 		State int   `gorm:"column:state"` // Collector 任务状态
 		Total int64 `gorm:"column:total"` // 状态对应任务数
 	}, 0)
-	if err := db.Model(&model.CollectorOutbox{}).
+	if err := freshDB(db).Model(&model.CollectorOutbox{}).
 		Select("state, COUNT(*) AS total").
 		Group("state").
 		Scan(&stateCounts).Error; err != nil {
@@ -187,14 +188,14 @@ func (l *CollectorLogic) buildOverview(db *gorm.DB) (*types.CollectorOverviewRes
 		}
 	}
 
-	if err := db.Model(&model.CollectorOutbox{}).
+	if err := freshDB(db).Model(&model.CollectorOutbox{}).
 		Where("(state = ? OR state = ?) AND next_run_at <= ?", model.CollectorOutboxStatePending, model.CollectorOutboxStateRetry, now).
 		Count(&resp.ReadyCount).Error; err != nil {
 		return nil, errors.Tag(err)
 	}
 
 	leaseCutoff := now.Add(-time.Duration(resp.RunningLeaseSeconds) * time.Second)
-	if err := db.Model(&model.CollectorOutbox{}).
+	if err := freshDB(db).Model(&model.CollectorOutbox{}).
 		Where("state = ? AND started_at IS NOT NULL AND started_at <= ?", model.CollectorOutboxStateRunning, leaseCutoff).
 		Count(&resp.RunningTimeoutCount).Error; err != nil {
 		return nil, errors.Tag(err)
@@ -203,7 +204,7 @@ func (l *CollectorLogic) buildOverview(db *gorm.DB) (*types.CollectorOverviewRes
 	oldestReady := struct {
 		NextRunAt *time.Time `gorm:"column:next_run_at"` // 最早可执行时间
 	}{}
-	if err := db.Model(&model.CollectorOutbox{}).
+	if err := freshDB(db).Model(&model.CollectorOutbox{}).
 		Select("MIN(next_run_at) AS next_run_at").
 		Where("(state = ? OR state = ?) AND next_run_at <= ?", model.CollectorOutboxStatePending, model.CollectorOutboxStateRetry, now).
 		Scan(&oldestReady).Error; err != nil {
@@ -245,7 +246,7 @@ func (l *CollectorLogic) fillOverviewWindow(db *gorm.DB, now time.Time, window *
 	window.AvgCostMs = successRow.AvgCostMs
 	window.MaxCostMs = successRow.MaxCostMs
 
-	if err := db.Model(&model.CollectorOutbox{}).
+	if err := freshDB(db).Model(&model.CollectorOutbox{}).
 		Where("(state = ? OR state = ?) AND updated_at >= ?", model.CollectorOutboxStateRetry, model.CollectorOutboxStateDead, since).
 		Count(&window.FailCount).Error; err != nil {
 		return errors.Tag(err)
@@ -280,9 +281,21 @@ func (l *CollectorLogic) fillOverviewTransportStats(db *gorm.DB, now time.Time, 
 	return nil
 }
 
+// freshDB 为每条概览聚合创建干净查询，避免 GORM Statement 条件串场。
+func freshDB(db *gorm.DB) *gorm.DB {
+	if db == nil {
+		return db
+	}
+	session := &gorm.Session{NewDB: true}
+	if db.Statement != nil && db.Statement.Context != nil {
+		session.Context = db.Statement.Context
+	}
+	return db.Session(session).Clauses(dbresolver.Read)
+}
+
 // buildCollectorWindowSuccessQuery 生成窗口成功统计查询，兼容历史 finished_at 为空的完成记录。
 func buildCollectorWindowSuccessQuery(db *gorm.DB, since time.Time) *gorm.DB {
-	return db.Model(&model.CollectorOutbox{}).
+	return freshDB(db).Model(&model.CollectorOutbox{}).
 		Select(
 			"COUNT(*) AS success_count, "+
 				"COALESCE(AVG(CASE WHEN started_at IS NOT NULL AND finished_at IS NOT NULL THEN TIMESTAMPDIFF(MICROSECOND, started_at, finished_at) / 1000.0 END), 0) AS avg_cost_ms, "+
@@ -293,7 +306,7 @@ func buildCollectorWindowSuccessQuery(db *gorm.DB, since time.Time) *gorm.DB {
 
 // buildCollectorBizTypeOverviewQuery 生成 biz_type 热点查询，空业务类型统一归入 unknown。
 func buildCollectorBizTypeOverviewQuery(db *gorm.DB, now, since time.Time) *gorm.DB {
-	return db.Model(&model.CollectorOutbox{}).
+	return freshDB(db).Model(&model.CollectorOutbox{}).
 		Select(
 			collectorOverviewBizTypeExpr+" AS biz_type, "+
 				"SUM(CASE WHEN (state = ? OR state = ?) AND next_run_at <= ? THEN 1 ELSE 0 END) AS ready_count, "+
@@ -330,7 +343,7 @@ func buildCollectorBizTypeOverviewQuery(db *gorm.DB, now, since time.Time) *gorm
 
 // buildCollectorTransportOverviewQuery 生成 transport 分布查询，空来源统一归入 unknown。
 func buildCollectorTransportOverviewQuery(db *gorm.DB, now time.Time) *gorm.DB {
-	return db.Model(&model.CollectorOutbox{}).
+	return freshDB(db).Model(&model.CollectorOutbox{}).
 		Select(
 			collectorOverviewTransportExpr+" AS transport, "+
 				"COUNT(*) AS total_count, "+

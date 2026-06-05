@@ -324,6 +324,7 @@ type AdminPermissionItem struct {
 	Disabled        bool                  `json:"disabled"`        // 当前节点是否禁用
 	DisableCheckbox bool                  `json:"disableCheckbox"` // 当前节点是否禁止勾选
 	Selectable      bool                  `json:"selectable"`      // 当前节点是否允许选择
+	HasChild        bool                  `json:"hasChild"`        // 是否存在子权限，供前端树表格按需懒加载
 	Children        []AdminPermissionItem `json:"children"`        // 子权限列表
 	CreatedAt       string                `json:"createdAt"`       // 创建时间
 	UpdatedAt       string                `json:"updatedAt"`       // 更新时间

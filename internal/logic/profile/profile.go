@@ -512,6 +512,19 @@ func (l *ProfileLogic) UpdateAccountMFAStatus(req *types.AdminMFAStatusReq) *typ
 	if err != nil {
 		return l.adminFetchErrorResult("ProfileLogic.UpdateAccountMFAStatus", err)
 	}
+	if err := l.ensureAccountMFAStatusManageScope(req.ID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return types.NotFound(i18n.MsgKeyUserNotFound, err,
+				"ProfileLogic.UpdateAccountMFAStatus 管理员ID[%d]不存在", req.ID).ToBizResult()
+		}
+		if errors.Is(err, rbaclogic.ErrRoleManageScopeExceeded) {
+			return types.Forbidden(i18n.MsgKeyForbidden).
+				ToBizResult().
+				WithError(errors.Wrapf(err, "ProfileLogic.UpdateAccountMFAStatus 管理员ID[%d]超出可管理范围", req.ID))
+		}
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"ProfileLogic.UpdateAccountMFAStatus 校验管理员ID[%d]可管理范围失败", req.ID).ToBizResult()
+	}
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
 	if securityLogic.NeedOperateMFATwoStep(securitylogic.MFAScenarioStatus) {
 		if err := securityLogic.VerifyMFATwoStepTicket(currentAdmin.ID, securitylogic.MFAScenarioStatus, req.TwoStepKey, req.TwoStepValue); err != nil {
@@ -530,6 +543,22 @@ func (l *ProfileLogic) UpdateAccountMFAStatus(req *types.AdminMFAStatusReq) *typ
 	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
+}
+
+// ensureAccountMFAStatusManageScope 校验指定管理员是否处于当前登录管理员可管理角色范围内。
+func (l *ProfileLogic) ensureAccountMFAStatusManageScope(adminID int) error {
+	if _, err := (&adminlogic.AdminLogic{BaseLogic: l.BaseLogic}).GetAdminByID(adminID); err != nil {
+		return errors.Wrapf(err, "查询管理员ID[%d]失败", adminID)
+	}
+	roleLogic := &rbaclogic.AdminRoleLogic{BaseLogic: l.BaseLogic}
+	roleIDs, err := roleLogic.UserRoleIDs(adminID)
+	if err != nil {
+		return errors.Wrapf(err, "查询管理员ID[%d]角色失败", adminID)
+	}
+	if err := roleLogic.EnsureRolesWithinManageScope(roleIDs); err != nil {
+		return errors.Wrapf(err, "管理员ID[%d]角色超出当前管理员可管理范围", adminID)
+	}
+	return nil
 }
 
 // currentAdmin 读取当前登录管理员完整模型。

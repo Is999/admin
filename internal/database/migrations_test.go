@@ -227,6 +227,23 @@ func TestDocumentEntryPermissionRepairMigration(t *testing.T) {
 	}
 }
 
+// TestRolePermissionAncestorRepairMigration 确保历史角色权限会补齐缺失的祖先目录和菜单权限。
+func TestRolePermissionAncestorRepairMigration(t *testing.T) {
+	sql := migrationSQLByAsset(t, "role_permission_ancestor_repair.sql")
+	for _, want := range []string{
+		"INSERT IGNORE INTO `admin_role_permission_rel`",
+		"JOIN `admin_permission` AS child",
+		"JOIN `admin_permission` AS parent",
+		"FIND_IN_SET(CAST(parent.`id` AS CHAR), child.`pids`)",
+		"rel.`role_id` <> 1",
+		"child.`pids` <> ''",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("role permission ancestor repair migration missing %q", want)
+		}
+	}
+}
+
 // TestPendingMigrations 确保已登记版本不会再次进入待执行列表。
 func TestPendingMigrations(t *testing.T) {
 	migrations := DefaultMigrations()

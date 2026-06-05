@@ -3,6 +3,7 @@ package rbac
 import (
 	"admin/internal/handler/shared"
 	"net/http"
+	"strings"
 
 	rbaclogic "admin/internal/logic/rbac"
 	"admin/internal/svc"
@@ -31,6 +32,9 @@ func TreeRoleHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 func TreeRoleOptionsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.RespHandlerFunc(func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := rbaclogic.NewAdminRoleLogic(r, sCtx)
+		if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("scope")), "parent") {
+			return logicObj, logicObj.ParentTreeOptions().WithReq(shared.ActionReq("tree_role_parent_options"))
+		}
 		return logicObj, logicObj.TreeList().WithReq(shared.ActionReq("tree_role_options"))
 	})
 }

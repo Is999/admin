@@ -121,6 +121,23 @@ func (l *AdminRoleLogic) TreeList() *types.BizResult {
 		WithData(items)
 }
 
+// ParentTreeOptions 查询角色父级下拉树，普通管理员可选择自身角色来创建下级角色。
+func (l *AdminRoleLogic) ParentTreeOptions() *types.BizResult {
+	items, err := l.loadRoleTreeWithCache()
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminRoleLogic.ParentTreeOptions 查询角色树失败").ToBizResult()
+	}
+	items, err = l.decorateRoleTreeParentScope(items)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminRoleLogic.ParentTreeOptions 计算角色父级可选范围失败").ToBizResult()
+	}
+	return types.NewBizResult(codes.Success).
+		SetI18nMessage(i18n.MsgKeyQuerySuccess).
+		WithData(items)
+}
+
 // Create 新增角色，并在同一事务内绑定权限。
 func (l *AdminRoleLogic) Create(req *types.SaveRoleReq) *types.BizResult {
 	return l.withRolePermissionWriteLock("AdminRoleLogic.Create", func() *types.BizResult {
@@ -696,7 +713,7 @@ func (l *AdminRoleLogic) CurrentOperatorIsSuperRole() (bool, error) {
 }
 
 // manageableRoleIDSet 计算当前登录管理员可管理的角色集合。
-// 超级管理员可管理全部未删除角色；普通管理员可管理自己拥有的角色及其全部后代角色。
+// 超级管理员可管理全部未删除角色；普通管理员只能管理自己角色的后代角色。
 func (l *AdminRoleLogic) manageableRoleIDSet() (map[int]struct{}, error) {
 	roles, err := l.loadAllRoles()
 	if err != nil {
@@ -706,31 +723,47 @@ func (l *AdminRoleLogic) manageableRoleIDSet() (map[int]struct{}, error) {
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	result := make(map[int]struct{}, len(roles))
-	if isSuperRole {
-		for _, role := range roles {
-			result[role.ID] = struct{}{}
-		}
-		return result, nil
-	}
 	roleIDs, err := l.currentOperatorEnabledRoleIDs()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	operatorRoleSet := make(map[int]struct{}, len(roleIDs))
-	for _, roleID := range roleIDs {
+	return manageableRoleSetFrom(roles, roleIDs, isSuperRole), nil
+}
+
+// manageableRoleSetFrom 基于角色树计算可管理范围；普通管理员不能管理自身角色。
+func manageableRoleSetFrom(roles []model.AdminRole, operatorRoleIDs []int, isSuperRole bool) map[int]struct{} {
+	return roleScopeSetFrom(roles, operatorRoleIDs, isSuperRole, false)
+}
+
+// parentRoleSetFrom 计算可作为父级的角色范围；普通管理员可在自身角色下创建后代。
+func parentRoleSetFrom(roles []model.AdminRole, operatorRoleIDs []int, isSuperRole bool) map[int]struct{} {
+	return roleScopeSetFrom(roles, operatorRoleIDs, isSuperRole, true)
+}
+
+// roleScopeSetFrom 基于角色树计算范围，includeOperator 控制是否包含操作者自身角色。
+func roleScopeSetFrom(roles []model.AdminRole, operatorRoleIDs []int, isSuperRole bool, includeOperator bool) map[int]struct{} {
+	result := make(map[int]struct{}, len(roles))
+	if isSuperRole {
+		for _, role := range roles {
+			if role.ID > 0 {
+				result[role.ID] = struct{}{}
+			}
+		}
+		return result
+	}
+	operatorRoleSet := make(map[int]struct{}, len(operatorRoleIDs))
+	for _, roleID := range types.UniquePositiveInts(operatorRoleIDs) {
 		operatorRoleSet[roleID] = struct{}{}
-		result[roleID] = struct{}{}
 	}
 	for _, role := range roles {
 		for roleID := range operatorRoleSet {
-			if role.ID == roleID || corelogic.ContainsTreeID(role.Pids, roleID) {
+			if (includeOperator && role.ID == roleID) || corelogic.ContainsTreeID(role.Pids, roleID) {
 				result[role.ID] = struct{}{}
 				break
 			}
 		}
 	}
-	return result, nil
+	return result
 }
 
 // ensureRolesWithinManageScope 校验目标角色是否都在当前登录管理员可管理范围内。
@@ -799,23 +832,37 @@ func (l *AdminRoleLogic) allowedPermissionIDsForRole(roleID int) ([]int, error) 
 // allowedPermissionIDsForParentRole 根据父级角色计算当前登录管理员可分配的权限集合。
 func (l *AdminRoleLogic) allowedPermissionIDsForParentRole(parentRoleID int) ([]int, error) {
 	// 角色继承边界始终以“目标角色的直接父角色”实际拥有的权限为准；
-	// 即使当前操作人是超级管理员，也不能绕过父角色范围直接给子角色越权授权。
-	if parentRoleUsesFullPermissionScope(parentRoleID) {
+	// 只有当前操作人是超级管理员时，顶级或超级管理员父级才允许使用全量权限范围。
+	isSuperRole, err := l.currentOperatorIsSuperRole()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if parentRoleUsesFullPermissionScope(parentRoleID, isSuperRole) {
 		return l.allEnabledPermissionIDs()
 	}
 	return l.rolePermissionIDsWithCache(parentRoleID)
 }
 
 // parentRoleUsesFullPermissionScope 判断父角色是否使用全部启用权限作为子角色可分配范围。
-func parentRoleUsesFullPermissionScope(parentRoleID int) bool {
-	return parentRoleID <= 0 || parentRoleID == corelogic.AdminSuperRoleID
+func parentRoleUsesFullPermissionScope(parentRoleID int, isSuperRole bool) bool {
+	return isSuperRole && (parentRoleID <= 0 || parentRoleID == corelogic.AdminSuperRoleID)
 }
 
 // permissionTreeAssignScope 计算角色权限树的可操作范围，并支持 isPid 参数语义。
 func (l *AdminRoleLogic) permissionTreeAssignScope(req *types.RolePermissionReq) ([]int, bool, error) {
 	// 沿用 laravel-admin 的父级权限查询语义：isPid=y 时展示当前角色已有权限，供子角色继承参考。
 	if req.IsPid == "y" {
-		if parentRoleUsesFullPermissionScope(req.ID) {
+		if err := l.ensureRoleParentWithinManageScope(req.ID); err != nil {
+			if errors.Is(err, ErrRoleManageScopeExceeded) {
+				return []int{}, true, nil
+			}
+			return nil, false, errors.Tag(err)
+		}
+		isSuperRole, err := l.currentOperatorIsSuperRole()
+		if err != nil {
+			return nil, false, errors.Tag(err)
+		}
+		if parentRoleUsesFullPermissionScope(req.ID, isSuperRole) {
 			assignableIDs, err := l.allEnabledPermissionIDs()
 			return assignableIDs, false, errors.Tag(err)
 		}
@@ -827,6 +874,13 @@ func (l *AdminRoleLogic) permissionTreeAssignScope(req *types.RolePermissionReq)
 	if req.ID == corelogic.AdminSuperRoleID {
 		assignableIDs, err := l.allEnabledPermissionIDs()
 		return assignableIDs, true, errors.Tag(err)
+	}
+
+	if err := l.ensureRolesWithinManageScope([]int{req.ID}); err != nil {
+		if errors.Is(err, ErrRoleManageScopeExceeded) {
+			return []int{}, true, nil
+		}
+		return nil, false, errors.Tag(err)
 	}
 
 	assignableIDs, err := l.allowedPermissionIDsForRole(req.ID)
@@ -854,11 +908,26 @@ func (l *AdminRoleLogic) ensureRoleParentWithinManageScope(parentRoleID int) err
 			return errors.Tag(err)
 		}
 		if !isSuperRole {
-			return errors.Errorf("仅超级管理员允许创建或移动到顶级角色")
+			return errors.Wrap(errRoleManageScopeExceeded, "仅超级管理员允许创建或移动到顶级角色")
 		}
 		return nil
 	}
-	return l.ensureRolesWithinManageScope([]int{parentRoleID})
+	roles, err := l.loadAllRoles()
+	if err != nil {
+		return errors.Tag(err)
+	}
+	isSuperRole, err := l.currentOperatorIsSuperRole()
+	if err != nil {
+		return errors.Tag(err)
+	}
+	roleIDs, err := l.currentOperatorEnabledRoleIDs()
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if _, ok := parentRoleSetFrom(roles, roleIDs, isSuperRole)[parentRoleID]; !ok {
+		return errors.Wrapf(errRoleManageScopeExceeded, "父级角色 ID[%d]超出当前管理员可管理范围", parentRoleID)
+	}
+	return nil
 }
 
 // retainAssignablePermissionIDs 保留仍在允许范围内的权限 ID。
@@ -914,17 +983,34 @@ func (l *AdminRoleLogic) decorateRoleTreeScope(items []types.AdminRoleItem) ([]t
 	return markRoleTreeScope(items, manageableRoleSet), nil
 }
 
+// decorateRoleTreeParentScope 在角色树上补充新增/编辑角色时允许选择的父级范围。
+func (l *AdminRoleLogic) decorateRoleTreeParentScope(items []types.AdminRoleItem) ([]types.AdminRoleItem, error) {
+	roles, err := l.loadAllRoles()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	isSuperRole, err := l.currentOperatorIsSuperRole()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	roleIDs, err := l.currentOperatorEnabledRoleIDs()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return markRoleTreeScope(items, parentRoleSetFrom(roles, roleIDs, isSuperRole)), nil
+}
+
 // markRoleTreeScope 递归写入角色树节点的 disabled/selectable 语义。
-func markRoleTreeScope(items []types.AdminRoleItem, manageableRoleSet map[int]struct{}) []types.AdminRoleItem {
+func markRoleTreeScope(items []types.AdminRoleItem, roleScopeSet map[int]struct{}) []types.AdminRoleItem {
 	result := make([]types.AdminRoleItem, 0, len(items))
 	for _, item := range items {
 		nextItem := item
-		_, inScope := manageableRoleSet[item.ID]
+		_, inScope := roleScopeSet[item.ID]
 		nodeUsable := inScope && item.Status == 1 && item.IsDelete == 0
 		nextItem.Disabled = !nodeUsable
 		nextItem.DisableCheckbox = !nodeUsable
 		nextItem.Selectable = nodeUsable
-		nextItem.Children = markRoleTreeScope(item.Children, manageableRoleSet)
+		nextItem.Children = markRoleTreeScope(item.Children, roleScopeSet)
 		result = append(result, nextItem)
 	}
 	return result
@@ -983,7 +1069,11 @@ func (l *AdminRoleLogic) rolePermissionIDsTx(tx *gorm.DB, roleID int) ([]int, er
 
 // allowedPermissionIDsForParentRoleTx 按角色继承关系计算父角色允许子角色保留的权限范围。
 func (l *AdminRoleLogic) allowedPermissionIDsForParentRoleTx(tx *gorm.DB, parentRoleID int) ([]int, error) {
-	if parentRoleUsesFullPermissionScope(parentRoleID) {
+	isSuperRole, err := l.currentOperatorIsSuperRole()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if parentRoleUsesFullPermissionScope(parentRoleID, isSuperRole) {
 		return l.allEnabledPermissionIDs()
 	}
 	return l.enabledRolePermissionIDsTx(tx, parentRoleID)

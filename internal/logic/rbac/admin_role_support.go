@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,12 @@ import (
 	tablecache "github.com/Is999/table-cache"
 	"gorm.io/gorm"
 )
+
+// permissionPathRow 表示权限节点及其祖先路径，供保存角色权限时补齐菜单父级。
+type permissionPathRow struct {
+	ID   int    `gorm:"column:id"`   // 权限 ID
+	Pids string `gorm:"column:pids"` // 祖先权限 ID 串
+}
 
 // roleIDSetToSliceMap 把角色映射的 key 转成稳定切片，供批量查询角色权限关系。
 func roleIDSetToSliceMap(roleMap map[int]model.AdminRole) []int {
@@ -136,6 +143,75 @@ func retainCompleteDocumentPermissionIDs(permissionIDs []int, idAlias map[int]ro
 		result = append(result, permissionID)
 	}
 	return types.UniquePositiveInts(result)
+}
+
+// permissionPathIDs 解析权限祖先 ID 串。
+func permissionPathIDs(pids string) []int {
+	parts := strings.Split(strings.TrimSpace(pids), ",")
+	result := make([]int, 0, len(parts))
+	for _, part := range parts {
+		permissionID, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || permissionID <= 0 {
+			continue
+		}
+		result = append(result, permissionID)
+	}
+	return types.UniquePositiveInts(result)
+}
+
+// expandPermissionAncestorIDsFromRows 根据权限族谱补齐祖先权限。
+func expandPermissionAncestorIDsFromRows(permissionIDs []int, rows []permissionPathRow) []int {
+	result := types.UniquePositiveInts(permissionIDs)
+	seen := make(map[int]struct{}, len(result))
+	for _, permissionID := range result {
+		seen[permissionID] = struct{}{}
+	}
+	for _, row := range rows {
+		for _, ancestorID := range permissionPathIDs(row.Pids) {
+			if _, ok := seen[ancestorID]; ok {
+				continue
+			}
+			seen[ancestorID] = struct{}{}
+			result = append(result, ancestorID)
+		}
+	}
+	sort.Ints(result)
+	return result
+}
+
+// retainCompletePermissionPathIDsFromRows 移除缺少祖先权限的半截授权。
+func retainCompletePermissionPathIDsFromRows(permissionIDs []int, rows []permissionPathRow) []int {
+	permissionIDs = types.UniquePositiveInts(permissionIDs)
+	permissionSet := make(map[int]struct{}, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		permissionSet[permissionID] = struct{}{}
+	}
+	pidsByID := make(map[int]string, len(rows))
+	for _, row := range rows {
+		if row.ID > 0 {
+			pidsByID[row.ID] = row.Pids
+		}
+	}
+
+	result := make([]int, 0, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		pids, ok := pidsByID[permissionID]
+		if !ok {
+			continue
+		}
+		complete := true
+		for _, ancestorID := range permissionPathIDs(pids) {
+			if _, ok := permissionSet[ancestorID]; !ok {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			result = append(result, permissionID)
+		}
+	}
+	sort.Ints(result)
+	return result
 }
 
 // descendantRoleIDs 查询指定角色的全部未删除子孙角色 ID，供父权限收缩时批量清理下级越权权限。
@@ -426,20 +502,72 @@ func (l *AdminRoleLogic) enabledDocumentPermissionMaps(db *gorm.DB) (map[int]rou
 	return idAlias, aliasID, nil
 }
 
-// normalizeAssignablePermissionIDs 补齐文档入口权限，再按父角色边界裁剪并移除半截文档授权。
+// permissionPathRows 查询启用权限的祖先路径。
+func (l *AdminRoleLogic) permissionPathRows(db *gorm.DB, permissionIDs []int) ([]permissionPathRow, error) {
+	permissionIDs = types.UniquePositiveInts(permissionIDs)
+	if len(permissionIDs) == 0 {
+		return []permissionPathRow{}, nil
+	}
+	rows := make([]permissionPathRow, 0, len(permissionIDs))
+	if err := freshTxStatement(db).Model(&model.AdminPermission{}).
+		Select("id, pids").
+		Where("id IN ? AND status = ?", permissionIDs, 1).
+		Order("id ASC").
+		Scan(&rows).Error; err != nil {
+		return nil, errors.Wrapf(err, "AdminRoleLogic.permissionPathRows 查询权限祖先失败 permissionIDs=%v", permissionIDs)
+	}
+	return rows, nil
+}
+
+// expandPermissionAncestorIDs 补齐已选权限的启用祖先节点，保证菜单路由父级真实授权。
+func (l *AdminRoleLogic) expandPermissionAncestorIDs(db *gorm.DB, permissionIDs []int) ([]int, error) {
+	rows, err := l.permissionPathRows(db, permissionIDs)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return expandPermissionAncestorIDsFromRows(permissionIDs, rows), nil
+}
+
+// retainCompletePermissionPathIDs 移除缺少启用祖先节点的半截授权。
+func (l *AdminRoleLogic) retainCompletePermissionPathIDs(db *gorm.DB, permissionIDs []int) ([]int, error) {
+	rows, err := l.permissionPathRows(db, permissionIDs)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return retainCompletePermissionPathIDsFromRows(permissionIDs, rows), nil
+}
+
+// normalizeAssignablePermissionIDs 补齐菜单祖先和文档入口权限，再按父角色边界裁剪半截授权。
 func (l *AdminRoleLogic) normalizeAssignablePermissionIDs(db *gorm.DB, permissionIDs []int, allowedPermissionIDs []int) ([]int, error) {
 	permissionIDs = types.UniquePositiveInts(permissionIDs)
 	if len(permissionIDs) == 0 {
 		return []int{}, nil
+	}
+	var err error
+	permissionIDs, err = l.expandPermissionAncestorIDs(db, permissionIDs)
+	if err != nil {
+		return nil, errors.Tag(err)
 	}
 	idAlias, aliasID, err := l.enabledDocumentPermissionMaps(db)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	permissionIDs = expandDocumentEntryPermissionIDs(permissionIDs, idAlias, aliasID)
+	permissionIDs, err = l.expandPermissionAncestorIDs(db, permissionIDs)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	allowedPermissionIDs, err = l.expandPermissionAncestorIDs(db, allowedPermissionIDs)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
 	permissionIDs = retainAssignablePermissionIDs(permissionIDs, allowedPermissionIDs)
+	permissionIDs, err = l.retainCompletePermissionPathIDs(db, permissionIDs)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
 	permissionIDs = retainCompleteDocumentPermissionIDs(permissionIDs, idAlias, aliasID)
-	return permissionIDs, nil
+	return l.retainCompletePermissionPathIDs(db, permissionIDs)
 }
 
 // replaceRolePermissionsTx 在事务内覆盖角色权限关系。

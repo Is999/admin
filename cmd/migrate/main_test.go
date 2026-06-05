@@ -69,7 +69,7 @@ func TestPrintResultsRejectsNilWriter(t *testing.T) {
 	}
 }
 
-// TestPermissionCacheRefreshRequired 验证只有 up 模式下的文档权限迁移会触发权限缓存刷新。
+// TestPermissionCacheRefreshRequired 验证只有 up 模式下的权限数据迁移会触发权限缓存刷新。
 func TestPermissionCacheRefreshRequired(t *testing.T) {
 	tests := []struct {
 		name    string                      // name 表示测试场景。
@@ -112,6 +112,14 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			action: actionUp,
 			results: []database.MigrationRunItem{
 				{Asset: "document_entry_permission_repair.sql", Status: database.MigrationStatusExecuted},
+			},
+			want: true,
+		},
+		{
+			name:   "refresh role permission ancestor repair migration",
+			action: actionUp,
+			results: []database.MigrationRunItem{
+				{Asset: "role_permission_ancestor_repair.sql", Status: database.MigrationStatusExecuted},
 			},
 			want: true,
 		},

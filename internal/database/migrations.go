@@ -69,6 +69,7 @@ var defaultMigrationSpecs = []migrationSpec{
 	{version: "202606240002", name: "seed_document_file_permissions", asset: "document_permission_seed.sql"},
 	{version: "202606240003", name: "repair_document_permission_entries", asset: "document_permission_repair.sql"},
 	{version: "202606240004", name: "repair_document_entry_permissions", asset: "document_entry_permission_repair.sql"},
+	{version: "202606250001", name: "repair_role_permission_ancestors", asset: "role_permission_ancestor_repair.sql"},
 }
 
 // SchemaMigrationsSQL 返回剥离文件头说明后的迁移版本表 DDL。

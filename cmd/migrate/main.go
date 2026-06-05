@@ -116,7 +116,7 @@ func run(ctx context.Context, options migrationCommandOptions, output io.Writer)
 		if err := refreshPermissionCacheAfterMigration(ctx, cfg, db); err != nil {
 			return errors.Wrap(err, "刷新权限缓存失败")
 		}
-		if _, err := fmt.Fprintln(output, "权限缓存已刷新：document_permission"); err != nil {
+		if _, err := fmt.Fprintln(output, "权限缓存已刷新：permission_related"); err != nil {
 			return errors.Wrap(err, "输出权限缓存刷新结果失败")
 		}
 	}
@@ -164,21 +164,21 @@ func permissionCacheRefreshRequired(action string, results []database.MigrationR
 		if item.Status != database.MigrationStatusExecuted && item.Status != database.MigrationStatusApplied {
 			continue
 		}
-		if isDocumentPermissionMigration(item) {
+		if isPermissionDataMigration(item) {
 			return true
 		}
 	}
 	return false
 }
 
-// isDocumentPermissionMigration 判断迁移是否会影响文档权限定义或角色授权关系。
-func isDocumentPermissionMigration(item database.MigrationRunItem) bool {
+// isPermissionDataMigration 判断迁移是否会影响权限定义或角色授权关系。
+func isPermissionDataMigration(item database.MigrationRunItem) bool {
 	switch strings.TrimSpace(item.Name) {
-	case "seed_document_file_permissions", "repair_document_permission_entries", "repair_document_entry_permissions":
+	case "seed_document_file_permissions", "repair_document_permission_entries", "repair_document_entry_permissions", "repair_role_permission_ancestors":
 		return true
 	}
 	switch strings.TrimSpace(item.Asset) {
-	case "document_permission_seed.sql", "document_permission_repair.sql", "document_entry_permission_repair.sql":
+	case "document_permission_seed.sql", "document_permission_repair.sql", "document_entry_permission_repair.sql", "role_permission_ancestor_repair.sql":
 		return true
 	}
 	return false

@@ -211,6 +211,9 @@ func TestPermissionAncestorNormalization(t *testing.T) {
 
 	complete = retainCompletePermissionPathIDsFromRows([]int{1, 52}, rows)
 	assertIntSetEqual(t, complete, []int{1, 52})
+
+	complete = retainCompletePermissionPathIDsFromRows([]int{1, 52}, []permissionPathRow{{ID: 52, Pids: "1"}})
+	assertIntSetEqual(t, complete, []int{})
 }
 
 // assertIntSetEqual 校验整数集合一致，不要求顺序。

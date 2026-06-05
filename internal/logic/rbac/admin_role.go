@@ -494,8 +494,9 @@ func (l *AdminRoleLogic) SavePermissions(req *types.RolePermissionSaveReq) *type
 				"AdminRoleLogic.SavePermissions 计算角色 ID[%d]可分配权限失败", req.ID).ToBizResult()
 		}
 
-		writeDB := l.Svc.WriteDB(svc.DatabaseMain)
-		err = l.syncRolePermissionDelta(writeDB, req.ID, filteredPermissionIDs, affectedRoleSet)
+		err = l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
+			return l.syncRolePermissionDelta(tx, req.ID, filteredPermissionIDs, affectedRoleSet)
+		})
 		if err != nil {
 			if errors.Is(err, errRolePermissionUnusable) {
 				return types.ServerError(i18n.MsgKeyUpdateFail, err,

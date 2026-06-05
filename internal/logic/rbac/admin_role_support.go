@@ -182,14 +182,18 @@ func expandPermissionAncestorIDsFromRows(permissionIDs []int, rows []permissionP
 // retainCompletePermissionPathIDsFromRows 移除缺少祖先权限的半截授权。
 func retainCompletePermissionPathIDsFromRows(permissionIDs []int, rows []permissionPathRow) []int {
 	permissionIDs = types.UniquePositiveInts(permissionIDs)
-	permissionSet := make(map[int]struct{}, len(permissionIDs))
+	requestedSet := make(map[int]struct{}, len(permissionIDs))
 	for _, permissionID := range permissionIDs {
-		permissionSet[permissionID] = struct{}{}
+		requestedSet[permissionID] = struct{}{}
 	}
+	enabledSet := make(map[int]struct{}, len(rows))
 	pidsByID := make(map[int]string, len(rows))
 	for _, row := range rows {
 		if row.ID > 0 {
 			pidsByID[row.ID] = row.Pids
+			if _, requested := requestedSet[row.ID]; requested {
+				enabledSet[row.ID] = struct{}{}
+			}
 		}
 	}
 
@@ -201,7 +205,7 @@ func retainCompletePermissionPathIDsFromRows(permissionIDs []int, rows []permiss
 		}
 		complete := true
 		for _, ancestorID := range permissionPathIDs(pids) {
-			if _, ok := permissionSet[ancestorID]; !ok {
+			if _, ok := enabledSet[ancestorID]; !ok {
 				complete = false
 				break
 			}

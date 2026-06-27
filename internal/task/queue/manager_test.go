@@ -2260,6 +2260,48 @@ func TestListTasksFiltersByTaskName(t *testing.T) {
 	}
 }
 
+// TestListTasksFiltersByTaskID 验证任务列表支持按任务 ID 关键字筛选。
+func TestListTasksFiltersByTaskID(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if err := manager.RegisterHandler("demo:task-id-filter", asynq.HandlerFunc(func(context.Context, *asynq.Task) error { return nil })); err != nil {
+		t.Fatalf("注册任务 ID 筛选测试处理器失败: %v", err)
+	}
+	firstResp, err := manager.EnqueueRegisteredTask(context.Background(), &types.EnqueueTaskReq{
+		TaskType:  "demo:task-id-filter",
+		Payload:   json.RawMessage(`{"name":"first"}`),
+		ProcessAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("投递第一个任务失败: %v", err)
+	}
+	if _, err := manager.EnqueueRegisteredTask(context.Background(), &types.EnqueueTaskReq{
+		TaskType:  "demo:task-id-filter",
+		Payload:   json.RawMessage(`{"name":"second"}`),
+		ProcessAt: time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("投递第二个任务失败: %v", err)
+	}
+
+	listResp, err := manager.ListTasks(context.Background(), &types.ListTaskItemsReq{
+		Queue:    QueueDefault,
+		State:    "scheduled",
+		TaskID:   firstResp.TaskID[:8],
+		Page:     1,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("按任务 ID 查询任务列表失败: %v", err)
+	}
+	if listResp.Total != 1 || len(listResp.Tasks) != 1 {
+		t.Fatalf("期望按任务 ID 命中 1 条任务，实际 total=%d tasks=%d", listResp.Total, len(listResp.Tasks))
+	}
+	if listResp.Tasks[0].ID != firstResp.TaskID {
+		t.Fatalf("按任务 ID 命中的任务不符合预期: got=%s want=%s", listResp.Tasks[0].ID, firstResp.TaskID)
+	}
+}
+
 // TestListTasksFiltersPeriodicTaskByWorkflowName 验证周期入口任务可以用 workflow 名称反查。
 func TestListTasksFiltersPeriodicTaskByWorkflowName(t *testing.T) {
 	manager, cleanup := newTestManager(t)

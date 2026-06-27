@@ -231,8 +231,8 @@ func TestListTasksOverviewWithFiltersScansOncePerState(t *testing.T) {
 	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
 	svcCtx.Task = fakeQueue
 
-	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?taskName=workflow&page=1&pageSize=20", nil), svcCtx)
-	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{TaskName: "workflow", Page: 1, PageSize: 20})
+	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?taskId=retry&page=1&pageSize=20", nil), svcCtx)
+	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{TaskID: "retry", Page: 1, PageSize: 20})
 	if resp == nil || !resp.IsSuccess() {
 		t.Fatalf("期望任务总览筛选查询成功，实际: %+v", resp)
 	}
@@ -242,6 +242,9 @@ func TestListTasksOverviewWithFiltersScansOncePerState(t *testing.T) {
 	for _, call := range fakeQueue.listCalls {
 		if call.Page != 1 || call.PageSize != taskListScanPageSize*taskListScanMaxPages {
 			t.Fatalf("期望筛选聚合使用单次大页受控查询，实际调用=%+v", call)
+		}
+		if call.TaskID != "retry" {
+			t.Fatalf("期望总览聚合透传任务 ID 筛选，实际调用=%+v", call)
 		}
 	}
 }

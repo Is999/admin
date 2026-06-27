@@ -119,11 +119,15 @@ func taskItemPrimaryTimeCandidates(item types.TaskItem) []string {
 	}
 }
 
-// taskItemMatchesListFilters 判断任务是否命中任务列表的链路筛选条件。
+// taskItemMatchesListFilters 判断任务是否命中任务列表筛选条件。
 // taskName 覆盖展示名、任务类型、工作流元数据、任务头和载荷摘要。
-func taskItemMatchesListFilters(item types.TaskItem, workflowID string, taskName string) bool {
+func taskItemMatchesListFilters(item types.TaskItem, taskID string, workflowID string, taskName string) bool {
+	taskID = strings.TrimSpace(taskID)
 	workflowID = strings.TrimSpace(workflowID)
 	taskName = strings.TrimSpace(taskName)
+	if taskID != "" && !taskItemMatchesTaskID(item, taskID) {
+		return false
+	}
 	if workflowID != "" && !taskItemMatchesWorkflowID(item, workflowID) {
 		return false
 	}
@@ -137,6 +141,18 @@ func taskItemMatchesListFilters(item types.TaskItem, workflowID string, taskName
 		}
 	}
 	return false
+}
+
+// taskItemMatchesTaskID 判断任务 ID 是否命中输入关键字，支持复制完整 ID 或输入前缀片段定位。
+func taskItemMatchesTaskID(item types.TaskItem, taskID string) bool {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return true
+	}
+	return strings.Contains(
+		strings.ToLower(strings.TrimSpace(item.ID)),
+		strings.ToLower(taskID),
+	)
 }
 
 // taskItemMatchesWorkflowID 判断任务是否属于指定工作流实例。

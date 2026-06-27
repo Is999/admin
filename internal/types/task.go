@@ -119,6 +119,7 @@ type ListTaskItemsReq struct {
 	Queue      string `json:"queue,optional" form:"queue"`                    // 队列名称
 	State      string `json:"state,optional" form:"state"`                    // 任务状态：pending/active/scheduled/retry/archived/completed/aggregating
 	Group      string `json:"group,optional" form:"group,optional"`           // 聚合组名称，仅 aggregating 状态使用
+	TaskID     string `json:"taskId,optional" form:"taskId,optional"`         // 任务 ID 关键字；填写后按任务 ID 片段筛选
 	WorkflowID string `json:"workflowId,optional" form:"workflowId,optional"` // 工作流实例 ID；填写后仅返回该链路下的任务
 	TaskName   string `json:"taskName,optional" form:"taskName,optional"`     // 任务名称关键字；支持按周期任务名或展示名包含匹配
 	StartTime  string `json:"startTime,optional" form:"startTime,optional"`   // 任务活动时间开始，RFC3339；scheduled 按 nextProcessAt 过滤
@@ -141,6 +142,9 @@ func (r *ListTaskItemsReq) Validate() error {
 	if state == "aggregating" && strings.TrimSpace(r.Group) == "" {
 		return errors.Errorf("aggregating 状态必须提供 group")
 	}
+	if len([]rune(strings.TrimSpace(r.TaskID))) > 128 {
+		return errors.Errorf("taskId 不能超过 128 个字符")
+	}
 	if len([]rune(strings.TrimSpace(r.TaskName))) > 128 {
 		return errors.Errorf("taskName 不能超过 128 个字符")
 	}
@@ -157,6 +161,7 @@ type ListTaskItemsOverviewReq struct {
 	Queue              string `json:"queue,optional" form:"queue,optional"`                  // 队列名称；为空时按全部可见队列聚合
 	State              string `json:"state,optional" form:"state,optional"`                  // 指定任务状态；为空时聚合常用状态并按任务时间倒序返回
 	Group              string `json:"group,optional" form:"group,optional"`                  // 聚合组名称，仅 aggregating 使用
+	TaskID             string `json:"taskId,optional" form:"taskId,optional"`                // 任务 ID 关键字；填写后按任务 ID 片段筛选
 	WorkflowID         string `json:"workflowId,optional" form:"workflowId,optional"`        // 工作流实例 ID；填写后仅返回该链路下的任务
 	TaskName           string `json:"taskName,optional" form:"taskName,optional"`            // 任务名称关键字；支持按周期任务名或展示名包含匹配
 	StartTime          string `json:"startTime,optional" form:"startTime,optional"`          // 任务活动时间开始，RFC3339；scheduled 按 nextProcessAt 过滤
@@ -176,6 +181,9 @@ func (r *ListTaskItemsOverviewReq) Validate() error {
 	}
 	if state == "aggregating" && strings.TrimSpace(r.Group) == "" {
 		return errors.Errorf("aggregating 状态必须提供 group")
+	}
+	if len([]rune(strings.TrimSpace(r.TaskID))) > 128 {
+		return errors.Errorf("taskId 不能超过 128 个字符")
 	}
 	if len([]rune(strings.TrimSpace(r.TaskName))) > 128 {
 		return errors.Errorf("taskName 不能超过 128 个字符")
@@ -354,6 +362,7 @@ type TaskListResp struct {
 	Queue      string     `json:"queue"`                // 查询队列
 	State      string     `json:"state"`                // 查询状态
 	Group      string     `json:"group,omitempty"`      // 聚合分组
+	TaskID     string     `json:"taskId,omitempty"`     // 任务 ID 筛选条件
 	WorkflowID string     `json:"workflowId,omitempty"` // 工作流实例 ID 筛选条件
 	TaskName   string     `json:"taskName,omitempty"`   // 任务名称关键字筛选条件
 	StartTime  string     `json:"startTime,omitempty"`  // 时间范围开始
@@ -370,6 +379,7 @@ type TaskListOverviewResp struct {
 	State          string           `json:"state,omitempty"`          // 前端主动指定的状态；为空表示本次为多状态聚合
 	EffectiveState string           `json:"effectiveState,omitempty"` // 指定状态时本次真正命中的任务状态
 	Group          string           `json:"group,omitempty"`          // 聚合分组
+	TaskID         string           `json:"taskId,omitempty"`         // 任务 ID 筛选条件
 	WorkflowID     string           `json:"workflowId,omitempty"`     // 工作流实例 ID 筛选条件
 	TaskName       string           `json:"taskName,omitempty"`       // 任务名称关键字筛选条件
 	StartTime      string           `json:"startTime,omitempty"`      // 时间范围开始

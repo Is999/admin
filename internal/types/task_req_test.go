@@ -43,3 +43,16 @@ func TestListTaskItemsOverviewReqParse_AllowEmptyQueue(t *testing.T) {
 		t.Fatalf("期望未传 queue 时保持空字符串，实际为: %q", bindReq.Queue)
 	}
 }
+
+// TestListTaskItemsOverviewReqParse_TaskID 确保任务 ID 筛选参数可通过 GET 查询串绑定。
+func TestListTaskItemsOverviewReqParse_TaskID(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/tasks/overview?taskId=task-fragment&includeAggregating=false&page=1&pageSize=20", nil)
+
+	var bindReq ListTaskItemsOverviewReq
+	if err := httpx.Parse(req, &bindReq); err != nil {
+		t.Fatalf("期望 httpx.Parse 支持 taskId 筛选，实际错误: %v", err)
+	}
+	if bindReq.TaskID != "task-fragment" {
+		t.Fatalf("期望 taskId 正确绑定，实际为: %q", bindReq.TaskID)
+	}
+}

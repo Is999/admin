@@ -29,6 +29,7 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 	queue := strings.TrimSpace(req.Queue)
 	state := strings.TrimSpace(req.State)
 	group := strings.TrimSpace(req.Group)
+	taskID := strings.TrimSpace(req.TaskID)
 	workflowID := strings.TrimSpace(req.WorkflowID)
 	// taskName 是任务名称关键字筛选条件，空值时保留 Asynq 原生分页路径。
 	taskName := strings.TrimSpace(req.TaskName)
@@ -44,6 +45,7 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 		Queue:      queue,
 		State:      state,
 		Group:      group,
+		TaskID:     taskID,
 		WorkflowID: workflowID,
 		TaskName:   taskName,
 		StartTime:  startTime,
@@ -52,7 +54,7 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 		PageSize:   req.PageSize,
 		Tasks:      make([]types.TaskItem, 0),
 	}
-	needsItemScan := workflowID != "" || taskName != "" || taskTimeRangeNeedsItemScan(state, timeRange)
+	needsItemScan := taskID != "" || workflowID != "" || taskName != "" || taskTimeRangeNeedsItemScan(state, timeRange)
 	periodicNextRuns := m.periodicNextRuns(time.Now())
 	if !needsItemScan {
 		items, total, err := m.listTaskInfoPage(ctx, internalQueue, internalGroup, state, req.Page, req.PageSize, timeRange)
@@ -66,7 +68,7 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 		}
 		return resp, nil
 	}
-	filteredTasks, total, err := m.listTaskItemsByFilters(ctx, internalQueue, internalGroup, state, workflowID, taskName, req.Page, req.PageSize, timeRange, periodicNextRuns)
+	filteredTasks, total, err := m.listTaskItemsByFilters(ctx, internalQueue, internalGroup, state, taskID, workflowID, taskName, req.Page, req.PageSize, timeRange, periodicNextRuns)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -319,8 +321,9 @@ func taskListPageRange(page int, pageSize int) (int64, int64) {
 
 // listTaskItemsByFilters 在指定队列和状态下扫描任务，并按时间倒序过滤后分页。
 // 管理接口层补充倒序和时间段过滤，保证列表排序稳定。
-func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue string, internalGroup string, state string, workflowID string, taskName string, page int, pageSize int, timeRange taskListTimeRange, periodicNextRuns []periodicNextRun) ([]types.TaskItem, int64, error) {
+func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue string, internalGroup string, state string, taskID string, workflowID string, taskName string, page int, pageSize int, timeRange taskListTimeRange, periodicNextRuns []periodicNextRun) ([]types.TaskItem, int64, error) {
 	matchedTasks := make([]types.TaskItem, 0)
+	taskID = strings.TrimSpace(taskID)
 	workflowID = strings.TrimSpace(workflowID)
 	taskName = strings.TrimSpace(taskName)
 	for currentPage := 1; currentPage <= taskListFilterMaxPages; currentPage++ {
@@ -333,7 +336,7 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 		}
 		for _, item := range items {
 			taskItem := m.toTaskItemWithPeriodicNextRuns(ctx, item, periodicNextRuns)
-			if !taskItemMatchesListFilters(taskItem, workflowID, taskName) {
+			if !taskItemMatchesListFilters(taskItem, taskID, workflowID, taskName) {
 				continue
 			}
 			if !timeRange.Contains(taskItem) {

@@ -235,6 +235,7 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 		Queue:         strings.TrimSpace(req.Queue),
 		State:         strings.TrimSpace(req.State),
 		Group:         strings.TrimSpace(req.Group),
+		TaskID:        strings.TrimSpace(req.TaskID),
 		WorkflowID:    strings.TrimSpace(req.WorkflowID),
 		TaskName:      strings.TrimSpace(req.TaskName),
 		StartTime:     startTime,
@@ -247,7 +248,7 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 		Tasks:         make([]types.TaskItem, 0),
 	}
 	if taskOverviewHasTimeRange(req) && strings.TrimSpace(req.State) == "" {
-		currentResp, err := l.aggregateTasksByStates(queueNames, taskExecutedStateKeys, strings.TrimSpace(req.Group), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
+		currentResp, err := l.aggregateTasksByStates(queueNames, taskExecutedStateKeys, strings.TrimSpace(req.Group), strings.TrimSpace(req.TaskID), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -256,7 +257,7 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 		return resp, nil
 	}
 	if strings.TrimSpace(req.State) == "" {
-		currentResp, err := l.aggregateTasksByStates(queueNames, stateCandidates, strings.TrimSpace(req.Group), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
+		currentResp, err := l.aggregateTasksByStates(queueNames, stateCandidates, strings.TrimSpace(req.Group), strings.TrimSpace(req.TaskID), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -265,7 +266,7 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 		return resp, nil
 	}
 	for _, state := range stateCandidates {
-		currentResp, err := l.aggregateTasksByState(queueNames, state, strings.TrimSpace(req.Group), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
+		currentResp, err := l.aggregateTasksByState(queueNames, state, strings.TrimSpace(req.Group), strings.TrimSpace(req.TaskID), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -360,12 +361,13 @@ func (l *TaskLogic) resolveOverviewQueueNames(queue string) ([]string, error) {
 }
 
 // aggregateTasksByState 对指定状态执行单次队列聚合，并统一排序与分页。
-func (l *TaskLogic) aggregateTasksByState(queueNames []string, state string, group string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) (*types.TaskListResp, error) {
+func (l *TaskLogic) aggregateTasksByState(queueNames []string, state string, group string, taskID string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) (*types.TaskListResp, error) {
 	if len(queueNames) == 1 {
 		return l.Svc.Task.ListTasks(l.Ctx, &types.ListTaskItemsReq{
 			Queue:      queueNames[0],
 			State:      state,
 			Group:      group,
+			TaskID:     taskID,
 			WorkflowID: workflowID,
 			TaskName:   taskName,
 			StartTime:  startTime,
@@ -382,6 +384,7 @@ func (l *TaskLogic) aggregateTasksByState(queueNames []string, state string, gro
 			Queue:      queueName,
 			State:      state,
 			Group:      group,
+			TaskID:     taskID,
 			WorkflowID: workflowID,
 			TaskName:   taskName,
 			StartTime:  startTime,
@@ -416,6 +419,7 @@ func (l *TaskLogic) aggregateTasksByState(queueNames []string, state string, gro
 	return &types.TaskListResp{
 		State:     state,
 		Group:     group,
+		TaskID:    taskID,
 		TaskName:  taskName,
 		StartTime: startTime,
 		EndTime:   endTime,
@@ -427,12 +431,12 @@ func (l *TaskLogic) aggregateTasksByState(queueNames []string, state string, gro
 }
 
 // aggregateTasksByStates 聚合多个任务状态，并按任务活动时间统一排序分页。
-func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string, group string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) (*types.TaskListResp, error) {
+func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string, group string, taskID string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) (*types.TaskListResp, error) {
 	mergedTasks := make([]types.TaskItem, 0)
 	var total int64
 	page, pageSize = normalizeTaskListPage(page, pageSize)
-	needsWidePage := taskListAggregateNeedsWidePage(workflowID, taskName, startTime, endTime)
-	maxPages := taskListAggregateMaxPages(workflowID, taskName, startTime, endTime, page, pageSize)
+	needsWidePage := taskListAggregateNeedsWidePage(taskID, workflowID, taskName, startTime, endTime)
+	maxPages := taskListAggregateMaxPages(taskID, workflowID, taskName, startTime, endTime, page, pageSize)
 	for _, state := range states {
 		for _, queueName := range queueNames {
 			if needsWidePage {
@@ -440,6 +444,7 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 					Queue:      queueName,
 					State:      state,
 					Group:      group,
+					TaskID:     taskID,
 					WorkflowID: workflowID,
 					TaskName:   taskName,
 					StartTime:  startTime,
@@ -459,6 +464,7 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 					Queue:      queueName,
 					State:      state,
 					Group:      group,
+					TaskID:     taskID,
 					WorkflowID: workflowID,
 					TaskName:   taskName,
 					StartTime:  startTime,
@@ -494,6 +500,7 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 	}
 	return &types.TaskListResp{
 		Group:     group,
+		TaskID:    taskID,
 		TaskName:  taskName,
 		StartTime: startTime,
 		EndTime:   endTime,
@@ -505,8 +512,8 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 }
 
 // taskListAggregateMaxPages 返回多状态聚合需要扫描的页数上限。
-func taskListAggregateMaxPages(workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) int {
-	if taskListAggregateNeedsWidePage(workflowID, taskName, startTime, endTime) {
+func taskListAggregateMaxPages(taskID string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) int {
+	if taskListAggregateNeedsWidePage(taskID, workflowID, taskName, startTime, endTime) {
 		return taskListScanMaxPages
 	}
 	page, pageSize = normalizeTaskListPage(page, pageSize)
@@ -519,8 +526,9 @@ func taskListAggregateMaxPages(workflowID string, taskName string, startTime str
 }
 
 // taskListAggregateNeedsWidePage 判断多状态聚合是否需要让队列层一次完成受控扫描。
-func taskListAggregateNeedsWidePage(workflowID string, taskName string, startTime string, endTime string) bool {
-	return strings.TrimSpace(workflowID) != "" ||
+func taskListAggregateNeedsWidePage(taskID string, workflowID string, taskName string, startTime string, endTime string) bool {
+	return strings.TrimSpace(taskID) != "" ||
+		strings.TrimSpace(workflowID) != "" ||
 		strings.TrimSpace(taskName) != "" ||
 		strings.TrimSpace(startTime) != "" ||
 		strings.TrimSpace(endTime) != ""

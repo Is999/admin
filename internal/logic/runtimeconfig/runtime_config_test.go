@@ -80,7 +80,7 @@ func TestArchiveConfigToModelDefaultsDelayDays(t *testing.T) {
 		DeleteBatchSize:   1000,
 		MaxHistoryTables:  12,
 		ArchiveWindowMode: "auto",
-	}, "1", "dev", 0, 0)
+	}, 0, 0)
 	if row.ArchiveDelayDays != 2 {
 		t.Fatalf("ArchiveDelayDays=%d want 2", row.ArchiveDelayDays)
 	}
@@ -143,7 +143,7 @@ func TestPeriodicConfigToModelDefaultsEnabled(t *testing.T) {
 		Name:     "archive-admin-log-hourly",
 		Cron:     "5 * * * *",
 		Workflow: "archive.run",
-	}, "1", "dev", 7, 0)
+	}, 7, 0)
 	if !row.Enabled {
 		t.Fatal("期望缺省 enabled 的周期任务导入草稿时默认启用")
 	}
@@ -155,7 +155,7 @@ func TestArchiveReqToModelDefaultsDelayDays(t *testing.T) {
 		Name:        "admin_log",
 		TableName:   "admin_log",
 		HotKeepDays: 45,
-	}, "1", "dev", 7)
+	}, 7)
 	if row.ArchiveDelayDays != 45 {
 		t.Fatalf("ArchiveDelayDays=%d want 45", row.ArchiveDelayDays)
 	}

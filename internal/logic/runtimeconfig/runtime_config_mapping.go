@@ -10,10 +10,8 @@ import (
 )
 
 // periodicReqToModel 把周期任务保存请求转换为草稿表模型。
-func periodicReqToModel(req *types.SaveRuntimeTaskPeriodicReq, appID, env string, adminID int) model.RuntimeTaskPeriodic {
+func periodicReqToModel(req *types.SaveRuntimeTaskPeriodicReq, adminID int) model.RuntimeTaskPeriodic {
 	return model.RuntimeTaskPeriodic{
-		AppID:            appID,
-		Env:              env,
 		Name:             req.Name,
 		Enabled:          req.Enabled,
 		Cron:             req.Cron,
@@ -80,10 +78,8 @@ func periodicModelToConfig(row model.RuntimeTaskPeriodic) config.TaskPeriodicCon
 }
 
 // periodicConfigToModel 把运行配置项导入为周期任务草稿模型。
-func periodicConfigToModel(item config.TaskPeriodicConfig, appID, env string, adminID int, index int) model.RuntimeTaskPeriodic {
+func periodicConfigToModel(item config.TaskPeriodicConfig, adminID int, index int) model.RuntimeTaskPeriodic {
 	return model.RuntimeTaskPeriodic{
-		AppID:            appID,
-		Env:              env,
 		Name:             strings.TrimSpace(item.Name),
 		Enabled:          item.EnabledOrDefault(),
 		Cron:             strings.TrimSpace(item.Cron),
@@ -130,12 +126,10 @@ func periodicModelToItem(row model.RuntimeTaskPeriodic) types.RuntimeTaskPeriodi
 }
 
 // archiveReqToModel 把归档任务保存请求转换为草稿表模型。
-func archiveReqToModel(req *types.SaveRuntimeArchiveJobReq, appID, env string, adminID int) model.RuntimeArchiveJob {
+func archiveReqToModel(req *types.SaveRuntimeArchiveJobReq, adminID int) model.RuntimeArchiveJob {
 	archiveDelayDays := archiveDelayWithHotKeepDefault(req.HotKeepDays, req.ArchiveDelayDays)
 	deleteDelayDays := archiveDelayWithHotKeepDefault(req.HotKeepDays, req.DeleteDelayDays)
 	return model.RuntimeArchiveJob{
-		AppID:                   appID,
-		Env:                     env,
 		Name:                    req.Name,
 		Enabled:                 req.Enabled,
 		Database:                req.Database,
@@ -255,15 +249,13 @@ func archiveModelToConfig(row model.RuntimeArchiveJob) config.ArchiveJobConfig {
 }
 
 // archiveConfigToModel 把运行配置项导入为归档任务草稿模型。
-func archiveConfigToModel(item config.ArchiveJobConfig, appID, env string, adminID int, index int) model.RuntimeArchiveJob {
+func archiveConfigToModel(item config.ArchiveJobConfig, adminID int, index int) model.RuntimeArchiveJob {
 	item = normalizeArchiveConfigDefaults(item)
 	database := strings.TrimSpace(item.Database)
 	if database == "" {
 		database = "main"
 	}
 	return model.RuntimeArchiveJob{
-		AppID:                   appID,
-		Env:                     env,
 		Name:                    strings.TrimSpace(item.Name),
 		Enabled:                 item.Enabled,
 		Database:                database,
@@ -415,10 +407,10 @@ func snapshotToResp(snapshot ReleaseSnapshot) types.RuntimeConfigSnapshot {
 		TaskPeriodic: make([]types.RuntimeTaskPeriodicItem, 0, len(snapshot.TaskPeriodic)),
 	}
 	for index, item := range snapshot.ArchiveJobs {
-		resp.ArchiveJobs = append(resp.ArchiveJobs, archiveModelToItem(archiveConfigToModel(item, "", "", 0, index)))
+		resp.ArchiveJobs = append(resp.ArchiveJobs, archiveModelToItem(archiveConfigToModel(item, 0, index)))
 	}
 	for index, item := range snapshot.TaskPeriodic {
-		resp.TaskPeriodic = append(resp.TaskPeriodic, periodicModelToItem(periodicConfigToModel(item, "", "", 0, index)))
+		resp.TaskPeriodic = append(resp.TaskPeriodic, periodicModelToItem(periodicConfigToModel(item, 0, index)))
 	}
 	return resp
 }

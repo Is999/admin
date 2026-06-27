@@ -208,7 +208,7 @@ const (
 
 	// RuntimeConfigStatePattern 是运行配置 active 版本状态缓存模板。
 	// Redis 类型：Hash 模板，TTL 过期规则：不直接写入 Redis，由 table-cache 目标配置控制。
-	RuntimeConfigStatePattern = "runtime_config:state:{env}"
+	RuntimeConfigStatePattern = "runtime_config:state"
 
 	// RuntimeConfigReleasePattern 是运行配置发布快照缓存模板。
 	// Redis 类型：String 模板，TTL 过期规则：不直接写入 Redis，由 table-cache 目标配置控制。

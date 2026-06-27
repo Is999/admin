@@ -317,7 +317,6 @@ type ConfigFilesConfig struct {
 // 仅 task_periodic 和 archive_jobs 支持 DB 发布快照，基础设施配置仍来自启动 YAML。
 type RuntimeConfigSourceConfig struct {
 	Source              string `json:"source,optional"`                // 来源：file 或 database，默认 file
-	Env                 string `json:"env,optional"`                   // 运行配置环境，默认取 mode，仍为空时使用 default
 	PollIntervalSeconds int    `json:"poll_interval_seconds,optional"` // DB 模式版本轮询间隔秒数，默认 30
 }
 

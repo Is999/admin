@@ -562,7 +562,7 @@ func TestHotReloadRestartSpecsValid(t *testing.T) {
 		"site_mysql",
 		"redis",
 		"task.runtime",
-		"runtime_config.source_env",
+		"runtime_config.source",
 		"kafka",
 		"observability",
 		"workflows.user_tag.enabled",

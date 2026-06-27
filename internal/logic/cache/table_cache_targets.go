@@ -745,19 +745,15 @@ func loadSysConfigTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 	}
 }
 
-// loadRuntimeConfigStateTableCache 加载指定环境的运行配置 active 版本状态。
+// loadRuntimeConfigStateTableCache 加载当前 MySQL 库的运行配置 active 版本状态。
 func loadRuntimeConfigStateTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 	return func(ctx context.Context, params tablecache.LoadParams) ([]tablecache.Entry, error) {
-		env, err := tableCacheFirstStringPart(params, "运行环境")
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
 		writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
 		var state model.RuntimeConfigState
-		if err = writeDB.Where("app_id = ? AND env = ?", base.AppID(), env).First(&state).Error; err != nil {
+		if err = writeDB.First(&state).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil, nil
 			}
@@ -788,7 +784,7 @@ func loadRuntimeConfigReleaseTableCache(base *corelogic.BaseLogic) tablecache.Lo
 			return nil, errors.Tag(err)
 		}
 		var release model.RuntimeConfigRelease
-		if err = writeDB.Where("id = ? AND app_id = ?", releaseID, base.AppID()).First(&release).Error; err != nil {
+		if err = writeDB.Where("id = ?", releaseID).First(&release).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil, nil
 			}

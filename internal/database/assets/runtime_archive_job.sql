@@ -2,8 +2,6 @@
 
 CREATE TABLE IF NOT EXISTS `runtime_archive_job` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `app_id` varchar(64) NOT NULL COMMENT '应用ID',
-  `env` varchar(64) NOT NULL COMMENT '运行环境',
   `name` varchar(128) NOT NULL COMMENT '归档任务名称',
   `enabled` tinyint(1) NOT NULL DEFAULT '1' COMMENT '是否启用',
   `database_name` varchar(64) NOT NULL DEFAULT 'main' COMMENT '热表数据库',
@@ -43,22 +41,8 @@ CREATE TABLE IF NOT EXISTS `runtime_archive_job` (
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_app_env_name` (`app_id`,`env`,`name`),
-  KEY `idx_archive_table` (`app_id`,`env`,`database_name`,`table_name`)
+  UNIQUE KEY `uk_name` (`name`),
+  KEY `idx_archive_table` (`database_name`,`table_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='归档任务运行配置草稿';
 
-INSERT IGNORE INTO `runtime_archive_job` (
-  `id`, `app_id`, `env`, `name`, `enabled`, `database_name`, `table_name`, `time_column`,
-  `time_column_type`, `time_column_format`, `time_column_unix_unit`, `primary_key`,
-  `archive_condition`, `delete_condition`, `split_unit`, `custom_days`, `hot_keep_days`,
-  `archive_delay_days`, `archive_window_seconds`, `archive_window_mode`,
-  `archive_max_windows_per_run`, `archive_auto_max_windows`, `archive_auto_light_rows`,
-  `archive_auto_light_ms`, `delete_disabled`, `delete_delay_days`, `delete_window_seconds`,
-  `delete_max_windows_per_run`, `batch_size`, `delete_batch_size`, `max_history_tables`,
-  `history_table_prefix`, `history_table_name_rule`, `start_at`, `query_write_db`,
-  `sort_order`, `remark`, `created_by_admin_id`, `updated_by_admin_id`, `created_at`, `updated_at`
-) VALUES (
-  1, '1', 'dev', 'admin_log', 1, 'main', 'admin_log', '', '', '', '', '', '', '', '',
-  0, 32, 2, 3600, 'auto', 2, 200, 20000, 3000, 0, 32, 0, 2, 3000, 1000, 12,
-  '', '', '', 0, 1, '', 0, 0, '2026-06-16 00:00:00', '2026-06-16 00:00:00'
-);
+INSERT IGNORE INTO `runtime_archive_job` (`id`, `name`, `enabled`, `database_name`, `table_name`, `time_column`, `time_column_type`, `time_column_format`, `time_column_unix_unit`, `primary_key`, `archive_condition`, `delete_condition`, `split_unit`, `custom_days`, `hot_keep_days`, `archive_delay_days`, `archive_window_seconds`, `archive_window_mode`, `archive_max_windows_per_run`, `archive_auto_max_windows`, `archive_auto_light_rows`, `archive_auto_light_ms`, `delete_disabled`, `delete_delay_days`, `delete_window_seconds`, `delete_max_windows_per_run`, `batch_size`, `delete_batch_size`, `max_history_tables`, `history_table_prefix`, `history_table_name_rule`, `start_at`, `query_write_db`, `sort_order`, `remark`, `created_by_admin_id`, `updated_by_admin_id`, `created_at`, `updated_at`) VALUES (1, 'admin_log', 1, 'main', 'admin_log', '', '', '', '', '', '', '', '', 0, 32, 2, 3600, 'auto', 2, 200, 20000, 3000, 0, 32, 0, 2, 3000, 1000, 12, '', '', '', 0, 1, '', 0, 0, '2026-06-16 00:00:00', '2026-06-16 00:00:00');

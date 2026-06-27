@@ -28,7 +28,7 @@ type Migration struct {
 	Asset         string // SQL 资产文件名
 	SQL           string // 剥离说明后的 SQL 文本
 	Checksum      string // SQL 文本 SHA256
-	BootstrapOnly bool   // 是否仅允许新库初始化时人工执行
+	BootstrapOnly bool   // 是否需要显式 bootstrap 授权执行
 	Destructive   bool   // 是否包含 DROP/种子数据等不适合在线执行的语句
 }
 
@@ -37,7 +37,7 @@ type migrationSpec struct {
 	version       string // 迁移版本号
 	name          string // 迁移名称
 	asset         string // SQL 文件名
-	bootstrapOnly bool   // 是否仅用于新库初始化
+	bootstrapOnly bool   // 是否需要显式 bootstrap 授权执行
 	destructive   bool   // 是否含破坏性或种子数据语句
 }
 
@@ -66,10 +66,7 @@ var defaultMigrationSpecs = []migrationSpec{
 	{version: "202606050021", name: "bootstrap_runtime_config_state", asset: "runtime_config_state.sql", bootstrapOnly: true},
 	{version: "202606050022", name: "bootstrap_runtime_task_periodic", asset: "runtime_task_periodic.sql", bootstrapOnly: true},
 	{version: "202606050023", name: "bootstrap_runtime_archive_job", asset: "runtime_archive_job.sql", bootstrapOnly: true},
-	{version: "202606240002", name: "seed_document_file_permissions", asset: "document_permission_seed.sql"},
-	{version: "202606240003", name: "repair_document_permission_entries", asset: "document_permission_repair.sql"},
-	{version: "202606240004", name: "repair_document_entry_permissions", asset: "document_entry_permission_repair.sql"},
-	{version: "202606250001", name: "repair_role_permission_ancestors", asset: "role_permission_ancestor_repair.sql"},
+	{version: "202606240002", name: "sync_document_permissions", asset: "document_permission_seed.sql"},
 }
 
 // SchemaMigrationsSQL 返回剥离文件头说明后的迁移版本表 DDL。

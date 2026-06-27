@@ -12,7 +12,6 @@ import (
 // RuntimeConfigOverviewResp 返回运行配置当前来源、active 版本和草稿统计。
 type RuntimeConfigOverviewResp struct {
 	Source              string                  `json:"source"`              // 配置来源：file 或 database
-	Env                 string                  `json:"env"`                 // 当前运行环境
 	PollIntervalSeconds int                     `json:"pollIntervalSeconds"` // DB 模式轻量轮询间隔秒数
 	State               RuntimeConfigStateItem  `json:"state"`               // 当前 active 版本状态
 	Draft               RuntimeConfigDraftCount `json:"draft"`               // 草稿配置数量

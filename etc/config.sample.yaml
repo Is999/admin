@@ -73,8 +73,6 @@ config_files:
 runtime_config:
   # database=使用发布快照覆盖周期任务和归档任务；首次无 active release 时会导入当前运行期文件作为初始版本。
   source: "database"
-  # DB 模式运行环境；为空时取 Mode。
-  env: ""
   # DB 模式只轮询版本状态，版本变化才读取发布快照。
   poll_interval_seconds: 30
 

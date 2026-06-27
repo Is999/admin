@@ -532,10 +532,9 @@ func hotReloadRestartSpecs() []hotReloadRestartSpec {
 			},
 		},
 		{
-			Reason: "runtime_config.source_env",
+			Reason: "runtime_config.source",
 			Changed: func(before, after config.Config) bool {
-				return runtimeconfig.NormalizeSource(before.RuntimeConfig.Source) != runtimeconfig.NormalizeSource(after.RuntimeConfig.Source) ||
-					runtimeconfig.RuntimeEnv(before) != runtimeconfig.RuntimeEnv(after)
+				return runtimeconfig.NormalizeSource(before.RuntimeConfig.Source) != runtimeconfig.NormalizeSource(after.RuntimeConfig.Source)
 			},
 			Preserve: func(effective *config.Config, before config.Config, after config.Config) {
 				pollInterval := after.RuntimeConfig.PollIntervalSeconds

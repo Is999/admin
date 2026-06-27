@@ -174,11 +174,11 @@ func permissionCacheRefreshRequired(action string, results []database.MigrationR
 // isPermissionDataMigration 判断迁移是否会影响权限定义或角色授权关系。
 func isPermissionDataMigration(item database.MigrationRunItem) bool {
 	switch strings.TrimSpace(item.Name) {
-	case "seed_document_file_permissions", "repair_document_permission_entries", "repair_document_entry_permissions", "repair_role_permission_ancestors":
+	case "sync_document_permissions":
 		return true
 	}
 	switch strings.TrimSpace(item.Asset) {
-	case "document_permission_seed.sql", "document_permission_repair.sql", "document_entry_permission_repair.sql", "role_permission_ancestor_repair.sql":
+	case "document_permission_seed.sql":
 		return true
 	}
 	return false

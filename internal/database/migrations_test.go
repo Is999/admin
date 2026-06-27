@@ -129,8 +129,8 @@ func TestAdminRolePermissionBaselineSkipsSuperRole(t *testing.T) {
 	}
 }
 
-// TestRuntimeConfigBaselineSeedsDefaultRelease 确保运行配置默认发布数据不会从基线 SQL 丢失。
-func TestRuntimeConfigBaselineSeedsDefaultRelease(t *testing.T) {
+// TestRuntimeConfigBaselineSeedsDraftRows 确保运行配置基线只逐条种草稿明细，不写默认发布快照。
+func TestRuntimeConfigBaselineSeedsDraftRows(t *testing.T) {
 	sql := migrationSQLByAssets(t,
 		"runtime_config_release.sql",
 		"runtime_config_state.sql",
@@ -138,38 +138,47 @@ func TestRuntimeConfigBaselineSeedsDefaultRelease(t *testing.T) {
 		"runtime_archive_job.sql",
 	)
 	for _, want := range []string{
-		"INSERT IGNORE INTO `runtime_config_release`",
 		"INSERT IGNORE INTO `runtime_config_state`",
 		"INSERT IGNORE INTO `runtime_task_periodic`",
 		"INSERT IGNORE INTO `runtime_archive_job`",
 		"archive-admin-log-hourly",
 		"user-tag-delta-daily",
-		"baseline local runtime config seed",
+		"active_release_id",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("runtime config migration assets missing seed fragment %q", want)
 		}
 	}
-	for _, forbidden := range []string{"admin_role_permission_rel", "(1, 139"} {
+	releaseSQL := migrationSQLByAsset(t, "runtime_config_release.sql")
+	if strings.Contains(releaseSQL, "INSERT IGNORE INTO `runtime_config_release`") || strings.Contains(releaseSQL, "snapshot_json") && strings.Contains(releaseSQL, "baseline local runtime config seed") {
+		t.Fatal("runtime_config_release.sql should not seed default snapshot rows")
+	}
+	periodicSQL := migrationSQLByAsset(t, "runtime_task_periodic.sql")
+	if got := strings.Count(periodicSQL, "INSERT IGNORE INTO `runtime_task_periodic`"); got != 4 {
+		t.Fatalf("runtime_task_periodic seed count = %d, want 4", got)
+	}
+	archiveSQL := migrationSQLByAsset(t, "runtime_archive_job.sql")
+	if got := strings.Count(archiveSQL, "INSERT IGNORE INTO `runtime_archive_job`"); got != 1 {
+		t.Fatalf("runtime_archive_job seed count = %d, want 1", got)
+	}
+	stateSQL := migrationSQLByAsset(t, "runtime_config_state.sql")
+	if !strings.Contains(stateSQL, "VALUES (1, 0, 0, ''") {
+		t.Fatalf("runtime_config_state should start without active release: %s", stateSQL)
+	}
+	for _, forbidden := range []string{"admin_role_permission_rel", "(1, 139", "baseline local runtime config seed"} {
 		if strings.Contains(sql, forbidden) {
 			t.Fatalf("runtime config migration assets should not seed super role permissions: %q", forbidden)
 		}
 	}
-	re := regexp.MustCompile(`(?s)INSERT IGNORE INTO ` + "`runtime_config_release`" + `.*?VALUES \(\s*1, '1', 'dev', 1,\s*'(\{.*?\})',`)
-	matches := re.FindStringSubmatch(sql)
-	if len(matches) != 2 {
-		t.Fatal("runtime config migration assets missing default release snapshot JSON")
-	}
-	if got := sha256Hex(matches[1]); got != "a7c2508fdc7b46830b31ee7f7d82ea1946db7f5a5a974fe588f72fa7442d74af" {
-		t.Fatalf("default release snapshot checksum = %s", got)
-	}
-	if !strings.Contains(matches[1], `"enabled":false`) {
-		t.Fatalf("default release snapshot should keep user tag periodic tasks disabled: %s", matches[1])
+	for _, forbidden := range []string{"`app_id`", "`env`", "'1', 'dev'"} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("runtime config migration assets should not keep DB scope fragment %q", forbidden)
+		}
 	}
 }
 
-// TestDocumentPermissionSeedMigration 确保当前可阅读文档都有独立权限种子。
-func TestDocumentPermissionSeedMigration(t *testing.T) {
+// TestDocumentPermissionMigration 确保文档权限增量收口在单一 SQL 资产中。
+func TestDocumentPermissionMigration(t *testing.T) {
 	sql := migrationSQLByAsset(t, "document_permission_seed.sql")
 	for _, want := range []string{
 		"INSERT IGNORE INTO `admin_permission`",
@@ -182,65 +191,54 @@ func TestDocumentPermissionSeedMigration(t *testing.T) {
 		"'65,164'",
 	} {
 		if !strings.Contains(sql, want) {
-			t.Fatalf("document permission seed migration missing %q", want)
+			t.Fatalf("document permission migration missing %q", want)
+		}
+	}
+	if got := strings.Count(sql, "INSERT IGNORE INTO `admin_permission`"); got != 64 {
+		t.Fatalf("document permission seed count = %d, want 64", got)
+	}
+	for _, forbidden := range []string{"admin_role_permission_rel", " SELECT ", " JOIN "} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("document permission migration should only seed permission rows, found %q", forbidden)
 		}
 	}
 }
 
-// TestDocumentPermissionRepairMigration 确保历史角色文档权限会补齐单篇文档和对应入口权限。
-func TestDocumentPermissionRepairMigration(t *testing.T) {
-	sql := migrationSQLByAsset(t, "document_permission_repair.sql")
-	for _, want := range []string{
-		"INSERT IGNORE INTO `admin_role_permission_rel`",
-		"parent.`module` = 'docs.api_service.front'",
-		"doc.`module` LIKE 'docs.file.api/接口文档/前台系统/%'",
-		"child.`module` LIKE 'docs.file.api/%'",
-		"child.`module` LIKE 'docs.file.%'",
-		"docs.index",
-		"docs.api_service.index",
-		"docs.api_service.front",
-		"rel.`role_id` <> 1",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("document permission repair migration missing %q", want)
+// TestMigrationAssetsDMLStyle 确保迁移 DML 不使用 UPDATE，且每条 DML SQL 保持单行。
+func TestMigrationAssetsDMLStyle(t *testing.T) {
+	dmlStartRe := regexp.MustCompile(`(?i)^(INSERT|UPDATE|DELETE|SELECT)\b`)
+	for _, item := range DefaultMigrations() {
+		for lineNo, line := range strings.Split(item.SQL, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+				continue
+			}
+			if strings.HasPrefix(strings.ToUpper(trimmed), "UPDATE ") {
+				t.Fatalf("%s contains UPDATE at line %d", item.Asset, lineNo+1)
+			}
+			if dmlStartRe.MatchString(trimmed) && !strings.HasSuffix(trimmed, ";") {
+				t.Fatalf("%s DML statement should be one line at line %d: %s", item.Asset, lineNo+1, trimmed)
+			}
 		}
 	}
 }
 
-// TestDocumentEntryPermissionRepairMigration 确保文档入口权限名称和层级与前端菜单一致。
-func TestDocumentEntryPermissionRepairMigration(t *testing.T) {
-	sql := migrationSQLByAsset(t, "document_entry_permission_repair.sql")
-	for _, want := range []string{
-		"`title` = '后台接口文档'",
-		"`title` = '前台 API 文档'",
-		"`module` = 'docs.index'",
-		"`module` = 'docs.api_service.index'",
-		"`pid` = 65",
-		"`pid` = 164",
-		"`pid` = 165",
-		"`pids` = '65,164,165'",
-		"`module` LIKE 'docs.file.api/接口文档/前台系统/%'",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("document entry permission repair migration missing %q", want)
+// TestPermissionMigrationAssetsConsolidated 确保权限增量不再散落到多个 SQL 文件。
+func TestPermissionMigrationAssetsConsolidated(t *testing.T) {
+	documentPermissionAssets := 0
+	for _, item := range DefaultMigrations() {
+		if strings.HasPrefix(item.Asset, "document_permission") {
+			documentPermissionAssets++
+			if item.Asset != "document_permission_seed.sql" || item.Name != "sync_document_permissions" {
+				t.Fatalf("document permission migration must use consolidated asset: %+v", item)
+			}
+		}
+		if strings.Contains(item.Asset, "drop_scope") {
+			t.Fatalf("runtime config scope DDL should not be a standalone migration asset: %s", item.Asset)
 		}
 	}
-}
-
-// TestRolePermissionAncestorRepairMigration 确保历史角色权限会补齐缺失的祖先目录和菜单权限。
-func TestRolePermissionAncestorRepairMigration(t *testing.T) {
-	sql := migrationSQLByAsset(t, "role_permission_ancestor_repair.sql")
-	for _, want := range []string{
-		"INSERT IGNORE INTO `admin_role_permission_rel`",
-		"JOIN `admin_permission` AS child",
-		"JOIN `admin_permission` AS parent",
-		"FIND_IN_SET(CAST(parent.`id` AS CHAR), child.`pids`)",
-		"rel.`role_id` <> 1",
-		"child.`pids` <> ''",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Fatalf("role permission ancestor repair migration missing %q", want)
-		}
+	if documentPermissionAssets != 1 {
+		t.Fatalf("document permission migration asset count = %d, want 1", documentPermissionAssets)
 	}
 }
 

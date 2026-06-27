@@ -1,4 +1,4 @@
--- 用途：补齐当前文档站每篇 Markdown 文档的独立访问权限。
+-- 用途：同步文档权限。
 
 INSERT IGNORE INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (169, '200072', '任务系统使用手册', 'docs.file.功能模块/任务系统/任务系统使用手册.md', 158, '65,99,158', 0, '访问文档 功能模块/任务系统/任务系统使用手册.md', 1, '2026-06-24 00:00:00', '2026-06-24 00:00:00');
 INSERT IGNORE INTO `admin_permission` (`id`, `uuid`, `title`, `module`, `pid`, `pids`, `type`, `description`, `status`, `created_at`, `updated_at`) VALUES (170, '200073', '任务系统首页', 'docs.file.功能模块/任务系统/任务系统首页.md', 158, '65,99,158', 0, '访问文档 功能模块/任务系统/任务系统首页.md', 1, '2026-06-24 00:00:00', '2026-06-24 00:00:00');

@@ -32,8 +32,6 @@ const (
 	SourceFile = "file"
 	// SourceDatabase 表示运行期大列表配置来自数据库发布快照。
 	SourceDatabase = "database"
-	// defaultRuntimeConfigEnv 表示未显式声明 env 时使用的默认环境。
-	defaultRuntimeConfigEnv = "default"
 	// defaultPollIntervalSeconds 表示 DB 模式轻量版本轮询默认间隔。
 	defaultPollIntervalSeconds = 30
 	// minPollIntervalSeconds 表示 DB 模式轮询最小间隔，避免配置错误刷 Redis。
@@ -89,18 +87,6 @@ func NormalizeSource(source string) string {
 // IsDatabaseSource 判断当前配置是否启用数据库发布快照。
 func IsDatabaseSource(cfg config.Config) bool {
 	return NormalizeSource(cfg.RuntimeConfig.Source) == SourceDatabase
-}
-
-// RuntimeEnv 返回运行配置环境标识。
-func RuntimeEnv(cfg config.Config) string {
-	env := strings.TrimSpace(cfg.RuntimeConfig.Env)
-	if env == "" {
-		env = strings.TrimSpace(cfg.Mode)
-	}
-	if env == "" {
-		env = defaultRuntimeConfigEnv
-	}
-	return env
 }
 
 // PollIntervalSeconds 返回数据库模式轻量版本轮询间隔秒数。
@@ -178,7 +164,7 @@ func EnsureInitialRelease(ctx context.Context, svcCtx *svc.ServiceContext) (*Act
 	}
 	snapshot := CurrentSnapshotFromConfig(logicObj.currentConfig())
 	if runtimeConfigSnapshotEmpty(snapshot) {
-		return nil, errors.Errorf("运行配置未发布 active release env=%s，且当前文件没有可迁移的 task_periodic/archive_jobs", RuntimeEnv(logicObj.currentConfig()))
+		return nil, errors.Errorf("运行配置未发布 active release，且当前文件没有可迁移的 task_periodic/archive_jobs")
 	}
 	if _, err = ValidateSnapshot(snapshot); err != nil {
 		return nil, errors.Wrap(err, "自动迁移当前文件运行配置失败")
@@ -211,7 +197,6 @@ func (l *RuntimeConfigLogic) Overview() *types.BizResult {
 	}
 	return types.NewBizResult(codes.FetchSuccess).WithData(&types.RuntimeConfigOverviewResp{
 		Source:              NormalizeSource(cfg.RuntimeConfig.Source),
-		Env:                 RuntimeEnv(cfg),
 		PollIntervalSeconds: PollIntervalSeconds(cfg),
 		State:               stateCacheToItem(state),
 		Draft: types.RuntimeConfigDraftCount{
@@ -231,8 +216,7 @@ func (l *RuntimeConfigLogic) ListPeriodicTasks(req *types.RuntimeTaskPeriodicQue
 	if err != nil {
 		return types.DBError(i18n.MsgKeyQueryFail, err, "RuntimeConfigLogic.ListPeriodicTasks DB未初始化").ToBizResult()
 	}
-	appID, env := l.scope()
-	q := db.Model(&model.RuntimeTaskPeriodic{}).Where("app_id = ? AND env = ?", appID, env)
+	q := db.Model(&model.RuntimeTaskPeriodic{})
 	if req.Workflow != "" {
 		q = q.Where("workflow = ?", req.Workflow)
 	}
@@ -273,13 +257,12 @@ func (l *RuntimeConfigLogic) SavePeriodicTask(req *types.SaveRuntimeTaskPeriodic
 		return types.DBError(i18n.MsgKeySaveFail, err, "RuntimeConfigLogic.SavePeriodicTask DB未初始化").ToBizResult()
 	}
 	adminID := l.adminID()
-	appID, env := l.scope()
-	row := periodicReqToModel(req, appID, env, adminID)
+	row := periodicReqToModel(req, adminID)
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if req.ID > 0 {
 			row.ID = req.ID
 			result := tx.Model(&model.RuntimeTaskPeriodic{}).
-				Where("id = ? AND app_id = ? AND env = ?", req.ID, appID, env).
+				Where("id = ?", req.ID).
 				Updates(periodicModelUpdateMap(row))
 			return checkRuntimeConfigUpdated(result, req.ID, "周期任务草稿")
 		}
@@ -311,8 +294,7 @@ func (l *RuntimeConfigLogic) ListArchiveJobs(req *types.RuntimeArchiveJobQueryRe
 	if err != nil {
 		return types.DBError(i18n.MsgKeyQueryFail, err, "RuntimeConfigLogic.ListArchiveJobs DB未初始化").ToBizResult()
 	}
-	appID, env := l.scope()
-	q := db.Model(&model.RuntimeArchiveJob{}).Where("app_id = ? AND env = ?", appID, env)
+	q := db.Model(&model.RuntimeArchiveJob{})
 	if req.Enabled != nil {
 		q = q.Where("enabled = ?", *req.Enabled)
 	}
@@ -353,13 +335,12 @@ func (l *RuntimeConfigLogic) SaveArchiveJob(req *types.SaveRuntimeArchiveJobReq)
 		return types.DBError(i18n.MsgKeySaveFail, err, "RuntimeConfigLogic.SaveArchiveJob DB未初始化").ToBizResult()
 	}
 	adminID := l.adminID()
-	appID, env := l.scope()
-	row := archiveReqToModel(req, appID, env, adminID)
+	row := archiveReqToModel(req, adminID)
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if req.ID > 0 {
 			row.ID = req.ID
 			result := tx.Model(&model.RuntimeArchiveJob{}).
-				Where("id = ? AND app_id = ? AND env = ?", req.ID, appID, env).
+				Where("id = ?", req.ID).
 				Updates(archiveModelUpdateMap(row))
 			return checkRuntimeConfigUpdated(result, req.ID, "归档任务草稿")
 		}
@@ -473,8 +454,7 @@ func (l *RuntimeConfigLogic) ListReleases(req *types.RuntimeConfigReleaseQueryRe
 	if err != nil {
 		return types.DBError(i18n.MsgKeyQueryFail, err, "RuntimeConfigLogic.ListReleases DB未初始化").ToBizResult()
 	}
-	appID, env := l.scope()
-	q := db.Model(&model.RuntimeConfigRelease{}).Where("app_id = ? AND env = ?", appID, env)
+	q := db.Model(&model.RuntimeConfigRelease{})
 	var total int64
 	if err = q.Count(&total).Error; err != nil {
 		return types.DBError(i18n.MsgKeyQueryFail, err, "RuntimeConfigLogic.ListReleases Count失败").ToBizResult()
@@ -529,7 +509,6 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	appID, env := l.scope()
 	admin := l.GetCtxAdmin()
 	jsonText, yamlText, checksum, err := EncodeSnapshot(snapshot)
 	if err != nil {
@@ -542,15 +521,13 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 	var release model.RuntimeConfigRelease
 	var previousReleaseID uint64
 	err = db.Transaction(func(tx *gorm.DB) error {
-		state, lockErr := l.loadStateForUpdate(tx, appID, env)
+		state, lockErr := l.loadStateForUpdate(tx)
 		if lockErr != nil {
 			return errors.Tag(lockErr)
 		}
 		version := state.ActiveVersion + 1
 		now := time.Now()
 		release = model.RuntimeConfigRelease{
-			AppID:              appID,
-			Env:                env,
 			VersionNo:          version,
 			SnapshotJSON:       jsonText,
 			SnapshotYAML:       yamlText,
@@ -570,8 +547,6 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 		state.ActiveChecksum = checksum
 		state.PublishedAt = now
 		if state.ID == 0 {
-			state.AppID = appID
-			state.Env = env
 			if err = tx.Create(&state).Error; err != nil {
 				return errors.Tag(err)
 			}
@@ -582,7 +557,7 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if err = l.invalidateRuntimeConfigCache(env, release.ID, previousReleaseID); err != nil {
+	if err = l.invalidateRuntimeConfigCache(release.ID, previousReleaseID); err != nil {
 		return nil, errors.Tag(err)
 	}
 	reload := svc.RuntimeConfigReloadResult{}
@@ -607,21 +582,20 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 	}, nil
 }
 
-// buildDraftSnapshot 从当前环境草稿表组装可发布快照。
+// buildDraftSnapshot 从当前草稿表组装可发布快照。
 func (l *RuntimeConfigLogic) buildDraftSnapshot() (ReleaseSnapshot, error) {
 	db, err := l.writeDB()
 	if err != nil {
 		return ReleaseSnapshot{}, errors.Tag(err)
 	}
-	appID, env := l.scope()
 	var periodicRows []model.RuntimeTaskPeriodic
 	// writeDB 带路由 clause，跨模型查询必须新开 Session，避免沿用上一个 Statement。
-	if err = db.Session(&gorm.Session{NewDB: true}).Where("app_id = ? AND env = ?", appID, env).
+	if err = db.Session(&gorm.Session{NewDB: true}).
 		Order("sort_order ASC").Order("id ASC").Find(&periodicRows).Error; err != nil {
 		return ReleaseSnapshot{}, errors.Tag(err)
 	}
 	var archiveRows []model.RuntimeArchiveJob
-	if err = db.Session(&gorm.Session{NewDB: true}).Where("app_id = ? AND env = ?", appID, env).
+	if err = db.Session(&gorm.Session{NewDB: true}).
 		Order("sort_order ASC").Order("id ASC").Find(&archiveRows).Error; err != nil {
 		return ReleaseSnapshot{}, errors.Tag(err)
 	}
@@ -638,30 +612,29 @@ func (l *RuntimeConfigLogic) buildDraftSnapshot() (ReleaseSnapshot, error) {
 	return snapshot, nil
 }
 
-// replaceDraft 用快照内容覆盖当前环境草稿表。
+// replaceDraft 用快照内容覆盖当前草稿表。
 func (l *RuntimeConfigLogic) replaceDraft(snapshot ReleaseSnapshot) error {
 	db, err := l.writeDB()
 	if err != nil {
 		return errors.Tag(err)
 	}
-	appID, env := l.scope()
 	adminID := l.adminID()
 	return db.Transaction(func(tx *gorm.DB) error {
-		// 同一事务内跨模型操作也要清理 Statement，事务连接仍由 tx 保持。
-		if err := tx.Session(&gorm.Session{NewDB: true}).Where("app_id = ? AND env = ?", appID, env).Delete(&model.RuntimeTaskPeriodic{}).Error; err != nil {
+		// 覆盖单库草稿表；同一事务内跨模型操作也要清理 Statement，事务连接仍由 tx 保持。
+		if err := tx.Session(&gorm.Session{NewDB: true, AllowGlobalUpdate: true}).Delete(&model.RuntimeTaskPeriodic{}).Error; err != nil {
 			return errors.Tag(err)
 		}
-		if err := tx.Session(&gorm.Session{NewDB: true}).Where("app_id = ? AND env = ?", appID, env).Delete(&model.RuntimeArchiveJob{}).Error; err != nil {
+		if err := tx.Session(&gorm.Session{NewDB: true, AllowGlobalUpdate: true}).Delete(&model.RuntimeArchiveJob{}).Error; err != nil {
 			return errors.Tag(err)
 		}
 		for index, item := range snapshot.TaskPeriodic {
-			row := periodicConfigToModel(item, appID, env, adminID, index)
+			row := periodicConfigToModel(item, adminID, index)
 			if err := tx.Session(&gorm.Session{NewDB: true}).Create(&row).Error; err != nil {
 				return errors.Tag(err)
 			}
 		}
 		for index, item := range snapshot.ArchiveJobs {
-			row := archiveConfigToModel(item, appID, env, adminID, index)
+			row := archiveConfigToModel(item, adminID, index)
 			if err := tx.Session(&gorm.Session{NewDB: true}).Create(&row).Error; err != nil {
 				return errors.Tag(err)
 			}
@@ -677,7 +650,7 @@ func (l *RuntimeConfigLogic) loadActiveSnapshotCached() (*ActiveRelease, error) 
 		return nil, errors.Tag(err)
 	}
 	if state.ActiveReleaseID == 0 {
-		return nil, errors.Errorf("运行配置未发布 active release env=%s", RuntimeEnv(l.currentConfig()))
+		return nil, errors.Errorf("运行配置未发布 active release")
 	}
 	var snapshotJSON string
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
@@ -710,8 +683,7 @@ func (l *RuntimeConfigLogic) loadActiveStateCached() (StateCache, error) {
 	if err != nil {
 		return StateCache{}, errors.Tag(err)
 	}
-	env := RuntimeEnv(l.currentConfig())
-	stateKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RuntimeConfigStateKey(env))
+	stateKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RuntimeConfigStateKey())
 	var state StateCache
 	result, err := manager.LoadThrough(l.Ctx, stateKey, &state, nil)
 	if err != nil {
@@ -724,10 +696,10 @@ func (l *RuntimeConfigLogic) loadActiveStateCached() (StateCache, error) {
 }
 
 // loadStateForUpdate 在事务内锁定运行配置状态行。
-func (l *RuntimeConfigLogic) loadStateForUpdate(tx *gorm.DB, appID string, env string) (model.RuntimeConfigState, error) {
+func (l *RuntimeConfigLogic) loadStateForUpdate(tx *gorm.DB) (model.RuntimeConfigState, error) {
 	var state model.RuntimeConfigState
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("app_id = ? AND env = ?", appID, env).First(&state).Error
+		First(&state).Error
 	if err == nil {
 		return state, nil
 	}
@@ -737,15 +709,14 @@ func (l *RuntimeConfigLogic) loadStateForUpdate(tx *gorm.DB, appID string, env s
 	return model.RuntimeConfigState{}, errors.Tag(err)
 }
 
-// loadReleaseByID 按发布 ID 读取当前环境的发布记录和快照。
+// loadReleaseByID 按发布 ID 读取发布记录和快照。
 func (l *RuntimeConfigLogic) loadReleaseByID(releaseID uint64) (model.RuntimeConfigRelease, ReleaseSnapshot, error) {
 	db, err := l.writeDB()
 	if err != nil {
 		return model.RuntimeConfigRelease{}, ReleaseSnapshot{}, errors.Tag(err)
 	}
-	appID, env := l.scope()
 	var row model.RuntimeConfigRelease
-	if err = db.Where("id = ? AND app_id = ? AND env = ?", releaseID, appID, env).First(&row).Error; err != nil {
+	if err = db.Where("id = ?", releaseID).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return row, ReleaseSnapshot{}, errors.Errorf("发布快照不存在: %d", releaseID)
 		}
@@ -755,14 +726,13 @@ func (l *RuntimeConfigLogic) loadReleaseByID(releaseID uint64) (model.RuntimeCon
 	return row, snapshot, errors.Tag(err)
 }
 
-// deleteByID 按 ID 删除当前环境草稿记录，并校验记录真实存在。
+// deleteByID 按 ID 删除草稿记录，并校验记录真实存在。
 func (l *RuntimeConfigLogic) deleteByID(modelPtr any, id uint64) error {
 	db, err := l.writeDB()
 	if err != nil {
 		return errors.Tag(err)
 	}
-	appID, env := l.scope()
-	result := db.Where("id = ? AND app_id = ? AND env = ?", id, appID, env).Delete(modelPtr)
+	result := db.Where("id = ?", id).Delete(modelPtr)
 	if result.Error != nil {
 		return errors.Tag(result.Error)
 	}
@@ -787,16 +757,12 @@ func checkRuntimeConfigUpdated(result *gorm.DB, id uint64, subject string) error
 }
 
 // invalidateRuntimeConfigCache 删除运行配置状态和指定发布快照缓存。
-func (l *RuntimeConfigLogic) invalidateRuntimeConfigCache(env string, releaseIDs ...uint64) error {
+func (l *RuntimeConfigLogic) invalidateRuntimeConfigCache(releaseIDs ...uint64) error {
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
 		return errors.Tag(err)
 	}
-	env = strings.TrimSpace(env)
-	if env == "" {
-		env = RuntimeEnv(l.currentConfig())
-	}
-	cacheKeys := []string{cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RuntimeConfigStateKey(env))}
+	cacheKeys := []string{cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RuntimeConfigStateKey())}
 	for _, releaseID := range releaseIDs {
 		if releaseID == 0 {
 			continue
@@ -819,20 +785,19 @@ func (l *RuntimeConfigLogic) requireMFA(twoStepKey string, twoStepValue string) 
 	return (&adminlogic.AdminLogic{BaseLogic: l.BaseLogic}).RequireOperateMFATwoStep(securitylogic.MFAScenarioRuntimeConfigManage, twoStepKey, twoStepValue)
 }
 
-// draftCounts 统计当前环境周期任务和归档任务草稿数量。
+// draftCounts 统计周期任务和归档任务草稿数量。
 func (l *RuntimeConfigLogic) draftCounts() (int64, int64, error) {
 	db, err := l.writeDB()
 	if err != nil {
 		return 0, 0, errors.Tag(err)
 	}
-	appID, env := l.scope()
 	var periodicCount int64
 	// 统计两个草稿表时不复用 Statement，避免表名被上一条 Count 污染。
-	if err = db.Session(&gorm.Session{NewDB: true}).Model(&model.RuntimeTaskPeriodic{}).Where("app_id = ? AND env = ?", appID, env).Count(&periodicCount).Error; err != nil {
+	if err = db.Session(&gorm.Session{NewDB: true}).Model(&model.RuntimeTaskPeriodic{}).Count(&periodicCount).Error; err != nil {
 		return 0, 0, errors.Tag(err)
 	}
 	var archiveCount int64
-	if err = db.Session(&gorm.Session{NewDB: true}).Model(&model.RuntimeArchiveJob{}).Where("app_id = ? AND env = ?", appID, env).Count(&archiveCount).Error; err != nil {
+	if err = db.Session(&gorm.Session{NewDB: true}).Model(&model.RuntimeArchiveJob{}).Count(&archiveCount).Error; err != nil {
 		return 0, 0, errors.Tag(err)
 	}
 	return periodicCount, archiveCount, nil
@@ -856,12 +821,6 @@ func (l *RuntimeConfigLogic) currentConfig() config.Config {
 		return config.Config{}
 	}
 	return l.Svc.CurrentConfig()
-}
-
-// scope 返回运行配置的 appID 和环境边界。
-func (l *RuntimeConfigLogic) scope() (string, string) {
-	cfg := l.currentConfig()
-	return strings.TrimSpace(cfg.AppID), RuntimeEnv(cfg)
 }
 
 // adminID 返回当前操作管理员 ID，缺失时返回 0。

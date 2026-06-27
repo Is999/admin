@@ -81,7 +81,7 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			name:   "skip dry run",
 			action: actionDryRun,
 			results: []database.MigrationRunItem{
-				{Name: "seed_document_file_permissions", Status: database.MigrationStatusExecuted},
+				{Name: "sync_document_permissions", Status: database.MigrationStatusExecuted},
 			},
 		},
 		{
@@ -95,31 +95,15 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			name:   "refresh executed document permission migration",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Name: "seed_document_file_permissions", Status: database.MigrationStatusExecuted},
+				{Name: "sync_document_permissions", Status: database.MigrationStatusExecuted},
 			},
 			want: true,
 		},
 		{
-			name:   "refresh applied document permission migration for retry",
+			name:   "refresh applied document permission migration by asset",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Asset: "document_permission_repair.sql", Status: database.MigrationStatusApplied},
-			},
-			want: true,
-		},
-		{
-			name:   "refresh document entry repair migration",
-			action: actionUp,
-			results: []database.MigrationRunItem{
-				{Asset: "document_entry_permission_repair.sql", Status: database.MigrationStatusExecuted},
-			},
-			want: true,
-		},
-		{
-			name:   "refresh role permission ancestor repair migration",
-			action: actionUp,
-			results: []database.MigrationRunItem{
-				{Asset: "role_permission_ancestor_repair.sql", Status: database.MigrationStatusExecuted},
+				{Asset: "document_permission_seed.sql", Status: database.MigrationStatusApplied},
 			},
 			want: true,
 		},
@@ -127,7 +111,7 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			name:   "skip pending document permission migration",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Name: "seed_document_file_permissions", Status: database.MigrationStatusPending},
+				{Name: "sync_document_permissions", Status: database.MigrationStatusPending},
 			},
 		},
 	}

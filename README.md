@@ -53,8 +53,8 @@ cmd/admin
 | --- | --- |
 | `1` | 仅启动 API |
 | `2` | 仅启动 Worker |
-| `4` | 仅启动 Scheduler |
 | `3` | 启动 API + Worker |
+| `4` | 仅启动 Scheduler |
 | `5` | 启动 API + Scheduler |
 | `6` | 启动 Worker + Scheduler |
 | `7` | 启动 API + Worker + Scheduler |
@@ -169,7 +169,7 @@ make migrate-status MIGRATE_CONFIG=./etc/config.yaml
 make migrate-dry-run MIGRATE_CONFIG=./etc/config.yaml
 ```
 
-空库初始化才允许执行 bootstrap-only 基线迁移：
+空库初始化或已初始化库补齐基线登记时执行 bootstrap-only 基线迁移：
 
 ```bash
 make migrate-bootstrap MIGRATE_CONFIG=./etc/config.yaml
@@ -219,7 +219,7 @@ go run ./cmd/migrate -version
 
 迁移分两类：
 
-- bootstrap-only 基线迁移：只允许空库初始化时通过 `make migrate-bootstrap` 显式执行。
+- bootstrap-only 基线迁移：通过 `make migrate-bootstrap` 显式执行，用于空库初始化或已初始化库补齐基线登记。
 - 普通迁移：通过 `make migrate-up` 执行，适合已有库增量升级。
 
 迁移治理要求见 [数据库迁移治理](docs/site/角色文档/运维/数据库迁移治理.md)。

@@ -58,7 +58,6 @@ func (a *App) startRuntimeConfigWatcher() {
 	}()
 	cfg := a.CurrentConfig()
 	loggerx.Infow(ctx, "运行配置 DB热加载已启用",
-		logx.Field("env", runtimeconfig.RuntimeEnv(cfg)),
 		logx.Field(loggerx.FieldIntervalSeconds, runtimeconfig.PollIntervalSeconds(cfg)),
 	)
 }
@@ -95,7 +94,6 @@ func (a *App) watchRuntimeConfig(ctx context.Context) {
 			if err := a.reloadRuntimeConfigIfChanged(ctx); err != nil {
 				loggerx.ErrorTextw(ctx, "运行配置 DB热加载失败", err.Error(),
 					logx.Field("source", "watcher"),
-					logx.Field("env", runtimeconfig.RuntimeEnv(a.CurrentConfig())),
 				)
 			}
 			timer.Reset(runtimeConfigPollDelay(a.CurrentConfig()))
@@ -110,7 +108,7 @@ func (a *App) reloadRuntimeConfigIfChanged(ctx context.Context) error {
 		return errors.Tag(err)
 	}
 	if state.ActiveReleaseID == 0 {
-		return errors.Errorf("运行配置未发布 active release env=%s", runtimeconfig.RuntimeEnv(a.CurrentConfig()))
+		return errors.Errorf("运行配置未发布 active release")
 	}
 	if state.ActiveVersion == a.runtimeConfig.lastVersion && state.ActiveChecksum == a.runtimeConfig.lastChecksum {
 		return nil

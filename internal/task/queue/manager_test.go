@@ -2381,6 +2381,164 @@ func TestValidatePeriodicTaskDefinitionsToleratesMissingWorkflow(t *testing.T) {
 	}
 }
 
+// TestPeriodicConfigInvalidHookThrottlesRepeatedAlert 验证同一条周期配置异常不会在同步循环中重复告警。
+func TestPeriodicConfigInvalidHookThrottlesRepeatedAlert(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	if periodicConfigAlertTTL != 5*time.Minute {
+		t.Fatalf("周期配置异常告警限频窗口 = %s, want 5m", periodicConfigAlertTTL)
+	}
+
+	cfg := manager.CurrentConfig()
+	cfg.Periodic = []config.TaskPeriodicConfig{
+		enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
+			Name:      "missing-periodic-workflow",
+			Cron:      "*/10 * * * *",
+			Workflow:  "missing.workflow",
+			Queue:     QueueDefault,
+			UniqueKey: "periodic:missing.workflow",
+		}),
+	}
+	manager.UpdateConfig(cfg)
+
+	var calls atomic.Int32
+	var got PeriodicConfigInvalidReport
+	if err := manager.RegisterPeriodicConfigInvalidHook(func(ctx context.Context, report PeriodicConfigInvalidReport) error {
+		_ = ctx
+		calls.Add(1)
+		got = report
+		return nil
+	}); err != nil {
+		t.Fatalf("注册周期配置异常钩子失败: %v", err)
+	}
+
+	if err := manager.ValidatePeriodicTaskDefinitions(); err != nil {
+		t.Fatalf("校验周期任务定义失败: %v", err)
+	}
+	if err := manager.ValidatePeriodicTaskDefinitions(); err != nil {
+		t.Fatalf("重复校验周期任务定义失败: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("同一异常应只触发 1 次告警钩子，实际=%d", calls.Load())
+	}
+	if got.Task.Name != "missing-periodic-workflow" || got.Reason == "" {
+		t.Fatalf("告警报告不符合预期: %+v", got)
+	}
+	if got.TriggerCount != 1 {
+		t.Fatalf("首次告警触发次数 = %d, want 1", got.TriggerCount)
+	}
+
+	key := periodicConfigInvalidAlertKey(0, cfg.Periodic[0], got.Reason)
+	manager.mu.Lock()
+	state := manager.periodicConfigAlertedMap[key]
+	state.LastSentAt = time.Now().Add(-periodicConfigAlertTTL - time.Second)
+	manager.periodicConfigAlertedMap[key] = state
+	manager.mu.Unlock()
+
+	if err := manager.ValidatePeriodicTaskDefinitions(); err != nil {
+		t.Fatalf("限频窗口后重复校验周期任务定义失败: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("限频窗口后应再次触发告警钩子，实际=%d", calls.Load())
+	}
+	if got.TriggerCount != 2 {
+		t.Fatalf("窗口后告警触发次数 = %d, want 2", got.TriggerCount)
+	}
+}
+
+// TestTaskRuntimeAlertHookThrottlesRepeatedAlert 验证任务系统运行异常按同一指纹限频告警。
+func TestTaskRuntimeAlertHookThrottlesRepeatedAlert(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	if taskRuntimeAlertTTL != 5*time.Minute {
+		t.Fatalf("任务运行异常告警限频窗口 = %s, want 5m", taskRuntimeAlertTTL)
+	}
+
+	alert := TaskRuntimeAlert{
+		Kind:      taskRuntimeAlertKindPeriodicEnqueueFailed,
+		Title:     "【P1 周期任务入队失败】",
+		Component: "scheduler",
+		Operation: "enqueue_periodic_task",
+		TaskName:  "周期任务触发:demo",
+		TaskType:  TypeWorkflowTrigger,
+		Cron:      "*/2 * * * *",
+		TaskQueue: QueueDefault,
+		UniqueKey: "periodic:demo",
+		Reason:    "redis timeout",
+	}
+
+	var calls atomic.Int32
+	var got TaskRuntimeAlert
+	if err := manager.RegisterRuntimeAlertHook(func(ctx context.Context, report TaskRuntimeAlert) error {
+		_ = ctx
+		calls.Add(1)
+		got = report
+		return nil
+	}); err != nil {
+		t.Fatalf("注册任务运行异常钩子失败: %v", err)
+	}
+
+	manager.notifyTaskRuntimeAlert(context.Background(), alert)
+	alert.Reason = "redis timeout again"
+	manager.notifyTaskRuntimeAlert(context.Background(), alert)
+	if calls.Load() != 1 {
+		t.Fatalf("同一运行异常应只触发 1 次告警钩子，实际=%d", calls.Load())
+	}
+	if got.TriggerCount != 1 || got.Reason != "redis timeout" {
+		t.Fatalf("首次运行异常告警不符合预期: %+v", got)
+	}
+
+	key := taskRuntimeAlertKey(alert)
+	manager.mu.Lock()
+	state := manager.runtimeAlertedMap[key]
+	state.LastSentAt = time.Now().Add(-taskRuntimeAlertTTL - time.Second)
+	manager.runtimeAlertedMap[key] = state
+	manager.mu.Unlock()
+
+	manager.notifyTaskRuntimeAlert(context.Background(), alert)
+	if calls.Load() != 2 {
+		t.Fatalf("限频窗口后应再次触发运行异常钩子，实际=%d", calls.Load())
+	}
+	if got.TriggerCount != 2 || got.Reason != "redis timeout again" {
+		t.Fatalf("窗口后运行异常告警不符合预期: %+v", got)
+	}
+}
+
+// TestTaskRuntimeAlertThrottleUsesSendWindow 验证业务上报历史发生时间不会绕过当前发送窗口限频。
+func TestTaskRuntimeAlertThrottleUsesSendWindow(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	var calls atomic.Int32
+	if err := manager.RegisterRuntimeAlertHook(func(ctx context.Context, report TaskRuntimeAlert) error {
+		_ = ctx
+		_ = report
+		calls.Add(1)
+		return nil
+	}); err != nil {
+		t.Fatalf("注册任务运行异常钩子失败: %v", err)
+	}
+
+	alert := TaskRuntimeAlert{
+		Kind:       taskRuntimeAlertKindPeriodicEnqueueFailed,
+		Component:  "scheduler",
+		Operation:  "enqueue_periodic_task",
+		TaskName:   "周期任务触发:demo",
+		TaskType:   TypeWorkflowTrigger,
+		TaskQueue:  QueueDefault,
+		UniqueKey:  "periodic:demo",
+		Reason:     "redis timeout",
+		OccurredAt: time.Now().Add(-time.Hour),
+	}
+	manager.notifyTaskRuntimeAlert(context.Background(), alert)
+	alert.OccurredAt = time.Time{}
+	alert.Reason = "redis timeout again"
+	manager.notifyTaskRuntimeAlert(context.Background(), alert)
+	if calls.Load() != 1 {
+		t.Fatalf("历史发生时间不应绕过当前发送窗口限频，实际告警次数=%d", calls.Load())
+	}
+}
+
 // TestRunTaskMovesScheduledTaskToPending 验证对应场景。
 func TestRunTaskMovesScheduledTaskToPending(t *testing.T) {
 	manager, cleanup := newTestManager(t)

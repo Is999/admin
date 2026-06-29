@@ -69,6 +69,15 @@ func (m *Manager) cleanupExpiredArchivedTasks(ctx context.Context) {
 		deleted, err := m.cleanupExpiredArchivedQueue(cleanupCtx, internalQueue, cutoff, taskArchivedCleanupBatchSize, taskArchivedCleanupMaxBatches)
 		if err != nil {
 			loggerx.Errorw(cleanupCtx, "归档失败任务过期清理失败", err, logx.Field("queue", queue))
+			m.notifyTaskRuntimeAlert(cleanupCtx, TaskRuntimeAlert{
+				Kind:      taskRuntimeAlertKindArchiveCleanupFailed,
+				Title:     "【P1 归档失败任务清理异常】",
+				Status:    "本轮过期 archived 任务清理失败，清理协程继续运行",
+				Component: "archive_cleaner",
+				Operation: "cleanup_expired_archived_tasks",
+				TaskQueue: queue,
+				Reason:    err.Error(),
+			})
 			continue
 		}
 		if deleted > 0 {

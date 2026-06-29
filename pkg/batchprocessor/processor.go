@@ -19,6 +19,7 @@ type processor struct {
 
 	processLimiter chan struct{}                         // 全局 process 并发限制器，避免多个 bizType 同时执行冲击下游
 	randDuration   func(max time.Duration) time.Duration // 随机抖动函数，用于打散周期触发尖峰
+	alertHook      AlertHook                             // 后台运行异常告警钩子
 
 	triggerCh chan struct{}  // 处理触发信号队列（cap=ProcessConcurrency，避免丢弃触发）
 	stopCh    chan struct{}  // 停止信号
@@ -170,9 +171,32 @@ func (p *processor) runWorker() {
 		case <-p.stopCh:
 			return
 		case <-p.triggerCh:
-			_, _ = p.runOnce(p.ctx, p.policy.ProcessBatchSize)
+			_, err := p.runOnce(p.ctx, p.policy.ProcessBatchSize)
+			if err != nil {
+				p.reportRuntimeAlert(p.ctx, RuntimeAlert{
+					Kind:      runtimeAlertKindProcessFailed,
+					Title:     "【P1 批处理后台执行失败】",
+					Status:    "本轮后台 process 失败，后续周期会继续触发",
+					Component: "batchprocessor.processor",
+					Operation: "process_batch",
+					Reason:    err.Error(),
+					Advice:    "请检查业务 Process 的查询范围、下游写入和重试状态机；若失败持续出现，请结合 bizType 手动执行单轮排查死信或卡住数据。",
+				})
+			}
 		}
 	}
+}
+
+// reportRuntimeAlert 上报后台执行异常；未配置 hook 时保持原有行为。
+func (p *processor) reportRuntimeAlert(ctx context.Context, alert RuntimeAlert) {
+	if p == nil || p.alertHook == nil {
+		return
+	}
+	alert.BizType = p.bizType
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	p.alertHook(ctx, normalizeRuntimeAlert(alert))
 }
 
 // triggerN 尽力投递 n 个触发信号（非阻塞）。

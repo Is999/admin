@@ -95,6 +95,7 @@ func (a *App) watchRuntimeConfig(ctx context.Context) {
 				loggerx.ErrorTextw(ctx, "运行配置 DB热加载失败", err.Error(),
 					logx.Field("source", "watcher"),
 				)
+				a.notifyRuntimeConfigReloadFailure(ctx, "watcher", err)
 			}
 			timer.Reset(runtimeConfigPollDelay(a.CurrentConfig()))
 		}

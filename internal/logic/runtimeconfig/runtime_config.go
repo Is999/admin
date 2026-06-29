@@ -152,7 +152,7 @@ func LoadActiveSnapshotCached(ctx context.Context, svcCtx *svc.ServiceContext) (
 }
 
 // EnsureInitialRelease 确保 DB 模式首次启动时已有 active 发布快照。
-// 当 active 为空且当前文件包含运行配置时，会自动导入当前文件快照为首个发布版本。
+// 当 active 为空时优先发布迁移种下的草稿表，草稿为空再回退当前文件种子。
 func EnsureInitialRelease(ctx context.Context, svcCtx *svc.ServiceContext) (*ActiveRelease, error) {
 	logicObj := NewRuntimeConfigLogicWithContext(ctx, svcCtx)
 	state, err := logicObj.loadActiveStateCached()
@@ -162,23 +162,41 @@ func EnsureInitialRelease(ctx context.Context, svcCtx *svc.ServiceContext) (*Act
 	if state.ActiveReleaseID != 0 {
 		return logicObj.loadActiveSnapshotCached()
 	}
-	snapshot := CurrentSnapshotFromConfig(logicObj.currentConfig())
+	draftSnapshot, err := logicObj.buildDraftSnapshot()
+	if err != nil {
+		return nil, errors.Wrap(err, "读取运行配置初始草稿失败")
+	}
+	fileSnapshot := CurrentSnapshotFromConfig(logicObj.currentConfig())
+	snapshot, replaceDraft, remark := initialReleaseSnapshot(draftSnapshot, fileSnapshot)
 	if runtimeConfigSnapshotEmpty(snapshot) {
-		return nil, errors.Errorf("运行配置未发布 active release，且当前文件没有可迁移的 task_periodic/archive_jobs")
+		return nil, errors.Errorf("运行配置未发布 active release，且当前文件和草稿表没有可迁移的 task_periodic/archive_jobs")
 	}
 	if _, err = ValidateSnapshot(snapshot); err != nil {
-		return nil, errors.Wrap(err, "自动迁移当前文件运行配置失败")
+		return nil, errors.Wrap(err, "自动发布运行配置初始版本失败")
 	}
-	if err = logicObj.replaceDraft(snapshot); err != nil {
-		return nil, errors.Wrap(err, "写入运行配置初始草稿失败")
+	if replaceDraft {
+		if err = logicObj.replaceDraft(snapshot); err != nil {
+			return nil, errors.Wrap(err, "写入运行配置初始草稿失败")
+		}
 	}
-	if _, err = logicObj.publishSnapshot(snapshot, "bootstrap import current runtime config", 0); err != nil {
+	if _, err = logicObj.publishSnapshot(snapshot, remark, 0); err != nil {
 		if active, loadErr := logicObj.loadActiveSnapshotCached(); loadErr == nil {
 			return active, nil
 		}
 		return nil, errors.Wrap(err, "发布运行配置初始版本失败")
 	}
 	return logicObj.loadActiveSnapshotCached()
+}
+
+// initialReleaseSnapshot 选择首次发布来源；返回值标记是否需要用文件种子覆盖草稿表。
+func initialReleaseSnapshot(draftSnapshot ReleaseSnapshot, fileSnapshot ReleaseSnapshot) (ReleaseSnapshot, bool, string) {
+	if !runtimeConfigSnapshotEmpty(draftSnapshot) {
+		return draftSnapshot, false, "bootstrap publish runtime config draft"
+	}
+	if !runtimeConfigSnapshotEmpty(fileSnapshot) {
+		return fileSnapshot, true, "bootstrap import current runtime config"
+	}
+	return ReleaseSnapshot{}, false, ""
 }
 
 // LoadActiveStateCached 从 table-cache 读取当前 active 版本状态，不触碰发布快照。

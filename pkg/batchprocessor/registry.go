@@ -14,8 +14,9 @@ import (
 type RegistryConfig struct {
 	Enabled bool // 是否启用批量处理收集器
 
-	MaxConcurrentFlush   int // 全局最大并发 flush 数
-	MaxConcurrentProcess int // 全局最大并发 process 数
+	MaxConcurrentFlush   int       // 全局最大并发 flush 数
+	MaxConcurrentProcess int       // 全局最大并发 process 数
+	AlertHook            AlertHook // 后台运行异常告警钩子；为空时仅返回错误或由业务自行记录
 }
 
 // Registry 提供 Register(bizType, module, policy) 的插件注册入口，并托管每个 bizType 的独立运行时。
@@ -30,6 +31,7 @@ type Registry struct {
 
 	flushLimiter   chan struct{} // flush 全局并发限制器
 	processLimiter chan struct{} // process 全局并发限制器
+	alertHook      AlertHook     // 后台运行异常告警钩子
 
 	rndMu sync.Mutex // 保护 rnd
 	rnd   *rand.Rand // jitter 随机源
@@ -61,6 +63,7 @@ func NewRegistry(cfg RegistryConfig) *Registry {
 		modules:        make(map[string]*bizRuntime),
 		flushLimiter:   make(chan struct{}, cfg.MaxConcurrentFlush),
 		processLimiter: make(chan struct{}, cfg.MaxConcurrentProcess),
+		alertHook:      cfg.AlertHook,
 		rnd:            rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
@@ -90,7 +93,13 @@ func (r *Registry) Register(bizType string, module Module, policy Policy) error 
 		policy:  policy,
 	}
 	runtime.collector = newCollector(bizType, module, policy, r.flushLimiter, r.randDuration)
+	if runtime.collector != nil {
+		runtime.collector.alertHook = r.alertHook
+	}
 	runtime.processor = newProcessor(bizType, module, policy, r.processLimiter, r.randDuration)
+	if runtime.processor != nil {
+		runtime.processor.alertHook = r.alertHook
+	}
 	r.modules[bizType] = runtime
 
 	if r.started {

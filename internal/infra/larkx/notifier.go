@@ -61,6 +61,45 @@ type TaskFailureAlert struct {
 	Err          error     // 原始错误
 }
 
+// PeriodicConfigAlert 描述一次周期任务配置异常告警。
+type PeriodicConfigAlert struct {
+	ServiceName  string    // 服务名
+	Environment  string    // 运行环境
+	AppID        string    // 站点/应用 ID
+	TaskIndex    int       // 周期任务配置序号
+	TaskName     string    // 周期任务名称
+	WorkflowName string    // 引用的工作流名称
+	Cron         string    // Cron 表达式
+	EverySeconds int       // 固定间隔秒数
+	TaskQueue    string    // 投递队列
+	UniqueKey    string    // 幂等键
+	OccurredAt   time.Time // 发现时间
+	Reason       string    // 配置异常原因
+	TriggerCount int       // 当前告警窗口累计触发次数
+}
+
+// TaskRuntimeAlert 描述一次任务系统运行异常告警。
+type TaskRuntimeAlert struct {
+	ServiceName  string    // 服务名
+	Environment  string    // 运行环境
+	AppID        string    // 站点/应用 ID
+	Kind         string    // 异常类型
+	Title        string    // 告警标题
+	Status       string    // 当前处理状态
+	Component    string    // 发生异常的组件
+	Operation    string    // 发生异常的操作
+	TaskName     string    // 关联任务名称
+	TaskType     string    // 关联任务类型
+	WorkflowName string    // 关联工作流名称
+	Cron         string    // 关联周期表达式
+	TaskQueue    string    // 关联队列
+	UniqueKey    string    // 关联幂等键
+	OccurredAt   time.Time // 发现时间
+	Reason       string    // 异常原因
+	Advice       string    // 处理建议
+	TriggerCount int       // 当前告警窗口累计触发次数
+}
+
 // messagePayload 定义 Lark 群机器人 text 消息请求体。
 type messagePayload struct {
 	Timestamp string         `json:"timestamp,omitempty"` // 秒级时间戳，启用签名时必填
@@ -125,6 +164,28 @@ func (n *Notifier) SendTaskFailure(ctx context.Context, alert TaskFailureAlert) 
 		ctx = context.Background()
 	}
 	return n.sendText(ctx, n.formatTaskFailureText(alert))
+}
+
+// SendPeriodicConfigInvalid 发送周期任务配置异常告警。
+func (n *Notifier) SendPeriodicConfigInvalid(ctx context.Context, alert PeriodicConfigAlert) error {
+	if n == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return n.sendText(ctx, n.formatPeriodicConfigText(alert))
+}
+
+// SendTaskRuntimeAlert 发送任务系统运行异常告警。
+func (n *Notifier) SendTaskRuntimeAlert(ctx context.Context, alert TaskRuntimeAlert) error {
+	if n == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return n.sendText(ctx, n.formatTaskRuntimeText(alert))
 }
 
 // SendText 发送一条通用文本消息。
@@ -228,12 +289,139 @@ func (n *Notifier) formatTaskFailureText(alert TaskFailureAlert) string {
 	return strings.Join(lines, "\n")
 }
 
+// formatPeriodicConfigText 构造周期任务配置异常的生产告警文本。
+func (n *Notifier) formatPeriodicConfigText(alert PeriodicConfigAlert) string {
+	occurredAt := alert.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = n.now()
+	}
+	lines := []string{
+		"【P1 周期任务配置异常】",
+		"状态：已跳过该周期任务，调度器继续运行",
+	}
+	appendLine := func(label string, value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			lines = append(lines, "- "+label+"："+value)
+		}
+	}
+	appendSection := func(title string) {
+		if len(lines) > 0 && lines[len(lines)-1] != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, title)
+	}
+	appendLine("服务", alert.ServiceName)
+	appendLine("环境", alert.Environment)
+	appendLine("站点", alert.AppID)
+	lines = append(lines, "- 发现时间："+occurredAt.Format(time.RFC3339))
+
+	appendSection("配置")
+	if alert.TaskIndex >= 0 {
+		lines = append(lines, "- 序号："+strconv.Itoa(alert.TaskIndex))
+	}
+	appendLine("名称", alert.TaskName)
+	appendLine("工作流", alert.WorkflowName)
+	appendLine("Cron", alert.Cron)
+	if alert.EverySeconds > 0 {
+		lines = append(lines, "- Every秒："+strconv.Itoa(alert.EverySeconds))
+	}
+	appendLine("队列", alert.TaskQueue)
+	appendLine("去重键", alert.UniqueKey)
+	if alert.TriggerCount > 1 {
+		lines = append(lines, "- 窗口触发次数："+strconv.Itoa(alert.TriggerCount))
+	}
+
+	if reason := n.truncateText(alert.Reason); reason != "" {
+		appendSection("错误摘要")
+		lines = append(lines, reason)
+	}
+	appendSection("影响与建议")
+	lines = append(lines, "该周期任务不会注册到调度器。请确认 active release/草稿表中的 workflow 名称与当前进程已注册工作流一致；如为新插件需发布代码并重启 scheduler/worker，如为废弃配置请禁用或修正后重新发布。")
+	if n.atAll {
+		lines = append(lines, "")
+		lines = append(lines, `<at user_id="all">所有人</at>`)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// formatTaskRuntimeText 构造任务系统运行异常的生产告警文本。
+func (n *Notifier) formatTaskRuntimeText(alert TaskRuntimeAlert) string {
+	occurredAt := alert.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = n.now()
+	}
+	title := strings.TrimSpace(alert.Title)
+	if title == "" {
+		title = "【P1 任务系统运行异常】"
+	}
+	status := strings.TrimSpace(alert.Status)
+	if status == "" {
+		status = "任务系统外层运行操作失败，需要人工确认"
+	}
+	lines := []string{title, "状态：" + status}
+	appendLine := func(label string, value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			lines = append(lines, "- "+label+"："+value)
+		}
+	}
+	appendSection := func(title string) {
+		if len(lines) > 0 && lines[len(lines)-1] != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, title)
+	}
+	appendLine("服务", alert.ServiceName)
+	appendLine("环境", alert.Environment)
+	appendLine("站点", alert.AppID)
+	lines = append(lines, "- 发现时间："+occurredAt.Format(time.RFC3339))
+
+	appendSection("异常")
+	appendLine("类型", alert.Kind)
+	appendLine("组件", alert.Component)
+	appendLine("动作", alert.Operation)
+	appendLine("任务", alert.TaskName)
+	appendLine("任务类型", alert.TaskType)
+	appendLine("工作流", alert.WorkflowName)
+	appendLine("Cron", alert.Cron)
+	appendLine("队列", alert.TaskQueue)
+	appendLine("去重键", alert.UniqueKey)
+	if alert.TriggerCount > 1 {
+		lines = append(lines, "- 窗口触发次数："+strconv.Itoa(alert.TriggerCount))
+	}
+
+	if reason := n.truncateText(alert.Reason); reason != "" {
+		appendSection("错误摘要")
+		lines = append(lines, reason)
+	}
+	appendSection("处理建议")
+	if advice := n.truncateText(alert.Advice); advice != "" {
+		lines = append(lines, advice)
+	} else {
+		lines = append(lines, "请优先检查任务运行配置 active release、Scheduler leader、task.redis/Asynq 队列状态和当前镜像注册的 workflow/handler 是否一致；恢复后观察任务队列和 Scheduler 状态是否回到成功。")
+	}
+	if n.atAll {
+		lines = append(lines, "")
+		lines = append(lines, `<at user_id="all">所有人</at>`)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // truncateError 规范化错误摘要并按配置限制长度。
 func (n *Notifier) truncateError(err error) string {
 	if err == nil {
 		return ""
 	}
-	msg := strings.Join(strings.Fields(err.Error()), " ")
+	return n.truncateText(err.Error())
+}
+
+// truncateText 规范化文本摘要并按配置限制长度。
+func (n *Notifier) truncateText(text string) string {
+	msg := strings.Join(strings.Fields(text), " ")
+	if msg == "" {
+		return ""
+	}
 	limit := n.maxErrorByte
 	if limit <= 0 {
 		limit = defaultMaxErrorBytes

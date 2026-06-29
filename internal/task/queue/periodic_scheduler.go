@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -60,6 +61,14 @@ func (s *periodicTaskScheduler) Start(ctx context.Context) error {
 	}
 	if err := s.syncConfigs(); err != nil {
 		s.manager.markSchedulerSyncFailure(err.Error())
+		s.manager.notifyTaskRuntimeAlert(ctx, TaskRuntimeAlert{
+			Kind:      taskRuntimeAlertKindPeriodicSyncFailed,
+			Title:     "【P1 周期任务同步失败】",
+			Status:    "调度器启动前同步失败，Scheduler 本次启动会中止",
+			Component: "scheduler",
+			Operation: "sync_periodic_configs",
+			Reason:    err.Error(),
+		})
 		return errors.Tag(err)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
@@ -80,6 +89,14 @@ func (s *periodicTaskScheduler) Start(ctx context.Context) error {
 				if err := s.syncConfigs(); err != nil {
 					s.manager.markSchedulerSyncFailure(err.Error())
 					loggerx.Errorw(context.Background(), "周期任务 同步失败", err)
+					s.manager.notifyTaskRuntimeAlert(context.Background(), TaskRuntimeAlert{
+						Kind:      taskRuntimeAlertKindPeriodicSyncFailed,
+						Title:     "【P1 周期任务同步失败】",
+						Status:    "调度器保留上一轮已同步配置，本轮同步失败",
+						Component: "scheduler",
+						Operation: "sync_periodic_configs",
+						Reason:    err.Error(),
+					})
 				}
 				timer.Reset(s.manager.schedulerSyncInterval())
 			}
@@ -161,6 +178,13 @@ func (s *periodicTaskScheduler) syncConfigs() error {
 				logx.Field("cron", item.Cronspec),
 				logx.Field("task_type", item.Task.Type()),
 			)
+			s.notifyPeriodicRuntimeAlert(context.Background(), item,
+				taskRuntimeAlertKindPeriodicScheduleFailed,
+				"【P1 周期任务调度配置异常】",
+				"已跳过该周期任务，调度器继续运行",
+				"register_periodic_schedule",
+				err,
+			)
 			continue
 		}
 		s.entries[hash] = entryID
@@ -184,6 +208,13 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 			logx.Field("task_type", cfg.Task.Type()),
 			logx.Field("task_name", taskName),
 		)
+		s.notifyPeriodicRuntimeAlert(context.Background(), cfg,
+			taskRuntimeAlertKindPeriodicLeaderFailed,
+			"【P1 周期任务 Leader 校验失败】",
+			"已跳过本轮周期投递，调度器继续运行",
+			"check_scheduler_leader",
+			err,
+		)
 		return
 	} else if !ok {
 		loggerx.Infow(context.Background(), "周期任务 跳过非 leader 投递",
@@ -200,6 +231,13 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 			logx.Field("task_type", cfg.Task.Type()),
 			logx.Field("task_name", taskName),
 			logx.Field("queue", queueName),
+		)
+		s.notifyPeriodicRuntimeAlert(context.Background(), cfg,
+			taskRuntimeAlertKindPeriodicQueueFailed,
+			"【P1 周期任务队列检查失败】",
+			"已跳过本轮周期投递，调度器继续运行",
+			"check_periodic_queue_backpressure",
+			err,
 		)
 		return
 	} else if !ok {
@@ -223,9 +261,54 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 			logx.Field("task_type", cfg.Task.Type()),
 			logx.Field("task_name", taskName),
 		)
+		if !stderrors.Is(err, asynq.ErrDuplicateTask) {
+			s.notifyPeriodicRuntimeAlert(context.Background(), cfg,
+				taskRuntimeAlertKindPeriodicEnqueueFailed,
+				"【P1 周期任务入队失败】",
+				"本轮周期任务未成功投递到队列，调度器继续运行",
+				"enqueue_periodic_task",
+				err,
+			)
+		}
 		return
 	}
 	s.manager.markSchedulerEnqueueSuccess(taskName, cfg.Task.Type())
+}
+
+// notifyPeriodicRuntimeAlert 从周期任务配置中提取字段并触发统一运行异常告警。
+func (s *periodicTaskScheduler) notifyPeriodicRuntimeAlert(ctx context.Context, cfg *asynq.PeriodicTaskConfig, kind, title, status, operation string, runErr error) {
+	if s == nil || s.manager == nil || cfg == nil || cfg.Task == nil || runErr == nil {
+		return
+	}
+	alert := periodicRuntimeAlertFromConfig(s.manager, cfg)
+	alert.Kind = kind
+	alert.Title = title
+	alert.Status = status
+	alert.Component = "scheduler"
+	alert.Operation = operation
+	alert.Reason = runErr.Error()
+	s.manager.notifyTaskRuntimeAlert(ctx, alert)
+}
+
+// periodicRuntimeAlertFromConfig 提取周期任务告警字段，避免 Lark 文本只剩 task_type。
+func periodicRuntimeAlertFromConfig(manager *Manager, cfg *asynq.PeriodicTaskConfig) TaskRuntimeAlert {
+	alert := TaskRuntimeAlert{}
+	if cfg == nil || cfg.Task == nil {
+		return alert
+	}
+	alert.Cron = strings.TrimSpace(cfg.Cronspec)
+	alert.TaskType = strings.TrimSpace(cfg.Task.Type())
+	alert.TaskName = strings.TrimSpace(cfg.Task.Headers()[headerTaskName])
+	var payload WorkflowTriggerPayload
+	if len(cfg.Task.Payload()) > 0 && json.Unmarshal(cfg.Task.Payload(), &payload) == nil {
+		alert.WorkflowName = strings.TrimSpace(payload.WorkflowName)
+		alert.TaskQueue = strings.TrimSpace(payload.Queue)
+		alert.UniqueKey = strings.TrimSpace(payload.UniqueKey)
+	}
+	if manager != nil && alert.TaskQueue == "" {
+		alert.TaskQueue = manager.defaultWorkflowQueue()
+	}
+	return alert
 }
 
 // schedulerLeaderStillHeld 在入队前确认当前调度器仍持有 leader 租约。

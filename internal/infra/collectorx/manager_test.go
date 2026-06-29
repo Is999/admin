@@ -116,6 +116,31 @@ func TestProcessBatchFailsUnregisteredBizType(t *testing.T) {
 	}
 }
 
+// TestProcessBatchReportsMissingProcessor 确保未注册 Processor 的后台失败会触发运行异常 hook。
+func TestProcessBatchReportsMissingProcessor(t *testing.T) {
+	alertCh := make(chan RuntimeAlert, 1)
+	manager := &Manager{processors: make(map[string]Processor)}
+	manager.SetAlertHook(func(_ context.Context, alert RuntimeAlert) {
+		select {
+		case alertCh <- alert:
+		default:
+		}
+	})
+
+	_, failed := manager.processBatch(context.Background(), []Event{{EventID: "e1", BizType: "missing"}})
+	if failed["e1"] == "" {
+		t.Fatalf("未注册 bizType 应返回失败原因，failed=%v", failed)
+	}
+	select {
+	case alert := <-alertCh:
+		if alert.Kind != RuntimeAlertKindWorkerFailed || alert.Operation != "process_missing_processor" || alert.BizType != "missing" {
+			t.Fatalf("Collector 运行异常告警不符合预期: %+v", alert)
+		}
+	default:
+		t.Fatal("期望未注册 Processor 触发 Collector 运行异常告警")
+	}
+}
+
 // TestProcessBatchRecoversProcessorPanic 确保业务 Processor panic 会转成失败结果，不会击穿 DB worker。
 func TestProcessBatchRecoversProcessorPanic(t *testing.T) {
 	manager := &Manager{processors: make(map[string]Processor)}
@@ -187,6 +212,37 @@ func TestPublishRedisUsesConfiguredMaxLen(t *testing.T) {
 	}
 	if length > 2 {
 		t.Fatalf("stream length = %d, want <= 2", length)
+	}
+}
+
+// TestRedisMessagesToDeliveriesReportsInvalidMessage 确保 Redis 坏消息被清理时会触发运行异常 hook。
+func TestRedisMessagesToDeliveriesReportsInvalidMessage(t *testing.T) {
+	alertCh := make(chan RuntimeAlert, 1)
+	manager := &Manager{}
+	manager.SetAlertHook(func(_ context.Context, alert RuntimeAlert) {
+		select {
+		case alertCh <- alert:
+		default:
+		}
+	})
+
+	deliveries := manager.redisMessagesToDeliveries([]redis.XMessage{{
+		ID:     "1-0",
+		Values: map[string]any{"body": "{"},
+	}})
+	if len(deliveries) != 0 {
+		t.Fatalf("坏消息不应转换为待落地事件: %+v", deliveries)
+	}
+	select {
+	case alert := <-alertCh:
+		if alert.Kind != RuntimeAlertKindInvalidEvent || alert.Operation != "redis_decode_message" || alert.UniqueKey != collectorTransportRedis {
+			t.Fatalf("Redis 坏消息告警不符合预期: %+v", alert)
+		}
+		if !strings.Contains(alert.Reason, "messageId=1-0") {
+			t.Fatalf("Redis 坏消息告警应保留样例消息 ID: %+v", alert)
+		}
+	default:
+		t.Fatal("期望 Redis 坏消息触发 Collector 运行异常告警")
 	}
 }
 

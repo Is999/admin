@@ -152,6 +152,45 @@ func TestCollectorSchedulesRequiredFallbackAsync(t *testing.T) {
 	}
 }
 
+// TestCollectorReportsFlushFailure 确保后台 flush 失败会触发运行异常 hook。
+func TestCollectorReportsFlushFailure(t *testing.T) {
+	module := &slowFallbackModule{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	alertCh := make(chan RuntimeAlert, 1)
+	collector := newCollector("demo", module, Policy{
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+	}, nil, nil)
+	collector.alertHook = func(_ context.Context, alert RuntimeAlert) {
+		select {
+		case alertCh <- alert:
+		default:
+		}
+	}
+	if _, err := collector.appendBuffer(context.Background(), bufferedData{data: Data{Action: "insert", Required: true}, ack: make(chan error, 1)}); err != nil {
+		t.Fatalf("写入测试 buffer 失败: %v", err)
+	}
+
+	err := collector.flushAll(context.Background())
+	close(module.release)
+	if waitErr := collector.wait(context.Background()); waitErr != nil {
+		t.Fatalf("等待 fallback 退出失败: %v", waitErr)
+	}
+	if err == nil {
+		t.Fatal("期望 flush 失败返回错误")
+	}
+	select {
+	case alert := <-alertCh:
+		if alert.Kind != runtimeAlertKindFlushFailed || alert.BizType != "demo" {
+			t.Fatalf("运行异常告警不符合预期: %+v", alert)
+		}
+	default:
+		t.Fatal("期望收到 flush 失败运行异常告警")
+	}
+}
+
 // TestCollectorDoesNotBlockWhenAckAlreadySignaled 确保调用方超时或已收到兜底错误后，后续 flush 不会被满 ack 通道卡住。
 func TestCollectorDoesNotBlockWhenAckAlreadySignaled(t *testing.T) {
 	module := &mockModule{}

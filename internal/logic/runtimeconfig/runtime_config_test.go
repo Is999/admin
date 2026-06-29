@@ -49,6 +49,48 @@ func TestRuntimeConfigSnapshotEmpty(t *testing.T) {
 	}
 }
 
+// TestInitialReleaseSnapshotPrefersDraftTables 验证首次启动优先发布迁移种下的草稿表。
+func TestInitialReleaseSnapshotPrefersDraftTables(t *testing.T) {
+	draft := ReleaseSnapshot{TaskPeriodic: []config.TaskPeriodicConfig{{Name: "draft-periodic"}}}
+	file := ReleaseSnapshot{TaskPeriodic: []config.TaskPeriodicConfig{{Name: "file-periodic"}}}
+	got, replaceDraft, remark := initialReleaseSnapshot(draft, file)
+	if replaceDraft {
+		t.Fatal("草稿表已有数据时不应被文件快照覆盖")
+	}
+	if remark != "bootstrap publish runtime config draft" {
+		t.Fatalf("remark = %q, want draft remark", remark)
+	}
+	if len(got.TaskPeriodic) != 1 || got.TaskPeriodic[0].Name != "draft-periodic" {
+		t.Fatalf("initialReleaseSnapshot() = %+v, want draft snapshot", got)
+	}
+}
+
+// TestInitialReleaseSnapshotFallsBackToFileSeed 验证草稿为空时仍兼容旧的文件首次导入。
+func TestInitialReleaseSnapshotFallsBackToFileSeed(t *testing.T) {
+	file := ReleaseSnapshot{ArchiveJobs: []config.ArchiveJobConfig{{Name: "file-archive"}}}
+	got, replaceDraft, remark := initialReleaseSnapshot(ReleaseSnapshot{}, file)
+	if !replaceDraft {
+		t.Fatal("使用文件种子时应先写回草稿表")
+	}
+	if remark != "bootstrap import current runtime config" {
+		t.Fatalf("remark = %q, want file import remark", remark)
+	}
+	if len(got.ArchiveJobs) != 1 || got.ArchiveJobs[0].Name != "file-archive" {
+		t.Fatalf("initialReleaseSnapshot() = %+v, want file snapshot", got)
+	}
+}
+
+// TestInitialReleaseSnapshotEmptySources 验证文件和草稿都为空时保留明确失败分支。
+func TestInitialReleaseSnapshotEmptySources(t *testing.T) {
+	got, replaceDraft, remark := initialReleaseSnapshot(ReleaseSnapshot{}, ReleaseSnapshot{})
+	if !runtimeConfigSnapshotEmpty(got) {
+		t.Fatalf("initialReleaseSnapshot() = %+v, want empty snapshot", got)
+	}
+	if replaceDraft || remark != "" {
+		t.Fatalf("replaceDraft=%v remark=%q, want empty metadata", replaceDraft, remark)
+	}
+}
+
 // TestStateCacheDecodesTableCacheHashStrings 验证 table-cache 字符串哈希值可解码为状态缓存。
 func TestStateCacheDecodesTableCacheHashStrings(t *testing.T) {
 	payload, err := json.Marshal(map[string]string{

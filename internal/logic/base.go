@@ -15,6 +15,7 @@ import (
 	"admin/internal/model"
 	"admin/internal/requestctx"
 	"admin/internal/svc"
+	"admin/internal/task/queue"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"
@@ -309,5 +310,18 @@ func (l *BaseLogic) ReloadCacheAsync(operation, key string) {
 			operation = "BaseLogic.ReloadCacheAsync"
 		}
 		logWrappedError(l, err, "%s enqueue cache reload failed, key=%s", operation, key)
+		svc.NotifyTaskRuntimeAlert(l.Ctx, l.Svc.Task, svc.TaskRuntimeAlert{
+			Kind:      svc.TaskRuntimeAlertKindCacheRefreshEnqueueFailed,
+			Title:     "【P1 缓存异步刷新投递失败】",
+			Status:    "本次缓存刷新请求未进入任务队列，不会自动执行",
+			Component: "cache",
+			Operation: "enqueue_cache_refresh",
+			TaskName:  operation,
+			TaskType:  taskqueue.TypeCacheRefreshRequest,
+			TaskQueue: taskqueue.QueueMaintenance,
+			UniqueKey: operation,
+			Reason:    "key=" + key + "；" + err.Error(),
+			Advice:    "请检查 task.redis/Asynq 客户端、maintenance 队列和任务系统开关；必要时在缓存管理页手动刷新该 key，避免继续读取旧缓存。",
+		})
 	}
 }

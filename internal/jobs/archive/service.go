@@ -1704,7 +1704,7 @@ func (s *Service) normalizedJobs() []jobConfig {
 
 		// 归档配置异常时只跳过当前 job，并输出结构化通知，避免一个坏配置影响其它 job。
 		if err := validateArchiveJobConfig(item); err != nil {
-			notifyArchiveJobConfigInvalid(idx, item, err)
+			s.notifyArchiveJobConfigInvalid(idx, item, err)
 			continue
 		}
 
@@ -1742,7 +1742,7 @@ func (s *Service) normalizedJobs() []jobConfig {
 		if strings.TrimSpace(item.StartAt) != "" {
 			startAt, err := parseArchiveStartAt(item.StartAt)
 			if err != nil {
-				notifyArchiveJobConfigInvalid(idx, item, err)
+				s.notifyArchiveJobConfigInvalid(idx, item, err)
 				continue
 			}
 			job.StartAt = sql.NullTime{Time: startAt, Valid: true}

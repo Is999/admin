@@ -22,6 +22,69 @@ type TaskOptions struct {
 	Group     string        // 聚合分组标识，相同分组的任务可被 Asynq 聚合
 }
 
+// TaskRuntimeAlert 描述业务模块上报给任务系统的运行异常。
+// 任务系统负责限频和外部通知，业务模块只提供排障字段。
+type TaskRuntimeAlert struct {
+	Kind         string    // 异常类型，用于告警指纹和排障归类
+	Title        string    // 告警标题
+	Status       string    // 当前处理状态
+	Component    string    // 发生异常的任务系统组件
+	Operation    string    // 发生异常的运行操作
+	TaskName     string    // 关联任务名称
+	TaskType     string    // 关联任务类型
+	WorkflowName string    // 关联工作流名称
+	Cron         string    // 关联周期表达式
+	TaskQueue    string    // 关联队列
+	UniqueKey    string    // 关联幂等键
+	Reason       string    // 异常原因摘要
+	Advice       string    // 处理建议，留空时由告警发送端使用通用建议
+	OccurredAt   time.Time // 发现异常的时间；为空时由任务系统补齐
+}
+
+const (
+	// TaskRuntimeAlertKindCacheRefreshEnqueueFailed 表示缓存异步刷新请求投递失败。
+	TaskRuntimeAlertKindCacheRefreshEnqueueFailed = "cache_refresh_enqueue_failed"
+	// TaskRuntimeAlertKindAdminExcelExportFailed 表示管理员 Excel 异步导出任务失败。
+	TaskRuntimeAlertKindAdminExcelExportFailed = "admin_excel_export_failed"
+	// TaskRuntimeAlertKindCollectorEnqueueFailed 表示 Collector 事件最终兜底入队失败。
+	TaskRuntimeAlertKindCollectorEnqueueFailed = "collector_enqueue_failed"
+	// TaskRuntimeAlertKindCollectorWorkerFailed 表示 Collector 后台消费链路失败。
+	TaskRuntimeAlertKindCollectorWorkerFailed = "collector_worker_failed"
+	// TaskRuntimeAlertKindCollectorInvalidEvent 表示 Collector 收到不可恢复的无效事件。
+	TaskRuntimeAlertKindCollectorInvalidEvent = "collector_invalid_event"
+	// TaskRuntimeAlertKindCollectorDeadEvent 表示 Collector 事件超过重试次数进入死信。
+	TaskRuntimeAlertKindCollectorDeadEvent = "collector_dead_event"
+	// TaskRuntimeAlertKindBatchProcessorFlushFailed 表示批处理收集器 flush 失败。
+	TaskRuntimeAlertKindBatchProcessorFlushFailed = "batch_processor_flush_failed"
+	// TaskRuntimeAlertKindBatchProcessorFallbackFailed 表示批处理收集器必达兜底失败。
+	TaskRuntimeAlertKindBatchProcessorFallbackFailed = "batch_processor_fallback_failed"
+	// TaskRuntimeAlertKindBatchProcessorProcessFailed 表示批处理后台 process 失败。
+	TaskRuntimeAlertKindBatchProcessorProcessFailed = "batch_processor_process_failed"
+	// TaskRuntimeAlertKindAppLifecycleFailed 表示服务启动或平滑停止生命周期失败。
+	TaskRuntimeAlertKindAppLifecycleFailed = "app_lifecycle_failed"
+	// TaskRuntimeAlertKindConfigReloadFailed 表示 config.yaml 热加载失败。
+	TaskRuntimeAlertKindConfigReloadFailed = "config_reload_failed"
+	// TaskRuntimeAlertKindRuntimeConfigReloadFailed 表示 DB 运行配置热加载失败。
+	TaskRuntimeAlertKindRuntimeConfigReloadFailed = "runtime_config_reload_failed"
+)
+
+// TaskRuntimeAlerter 表示任务系统可选暴露的运行异常告警入口。
+type TaskRuntimeAlerter interface {
+	NotifyRuntimeAlert(ctx context.Context, alert TaskRuntimeAlert)
+}
+
+// NotifyTaskRuntimeAlert 通过任务系统上报运行异常；未启用任务系统时静默降级。
+func NotifyTaskRuntimeAlert(ctx context.Context, task TaskQueue, alert TaskRuntimeAlert) {
+	if task == nil {
+		return
+	}
+	alerter, ok := task.(TaskRuntimeAlerter)
+	if !ok {
+		return
+	}
+	alerter.NotifyRuntimeAlert(ctx, alert)
+}
+
 // WithTaskQueue 指定任务投递队列。
 func WithTaskQueue(queue string) TaskOption {
 	return func(options *TaskOptions) {

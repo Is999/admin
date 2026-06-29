@@ -2,6 +2,7 @@ package batchprocessor
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type collector struct {
 	flushLimiter  chan struct{}                         // 全局 flush 并发限制器，避免多个 bizType 同时 flush 冲击下游
 	fallbackLimit chan struct{}                         // 必达任务 fallback 并发限制器，避免降级落地反向拖垮下游
 	randDuration  func(max time.Duration) time.Duration // 随机抖动函数，用于打散 flush 尖峰
+	alertHook     AlertHook                             // 后台运行异常告警钩子
 
 	mu       sync.Mutex     // 保护 buffer
 	buffer   []bufferedData // 待落地的缓冲数据队列
@@ -292,6 +294,15 @@ func (c *collector) flushAll(ctx context.Context) error {
 		release, err := c.acquireFlushSlot(ctx)
 		if err != nil {
 			c.requeuePoppedBatch(batch)
+			c.reportRuntimeAlert(ctx, RuntimeAlert{
+				Kind:      runtimeAlertKindFlushFailed,
+				Title:     "【P1 批处理收集器 Flush 失败】",
+				Status:    "本批数据已回滚到内存缓冲区，等待后续 flush 重试",
+				Component: "batchprocessor.collector",
+				Operation: "acquire_flush_slot",
+				Reason:    err.Error(),
+				Advice:    "请检查批处理 flush 并发限制、停止超时和下游落地延迟；若缓冲持续积压，请先降低写入流量并确认业务 Flush 是否可恢复。",
+			})
 			return errors.Tag(err)
 		}
 
@@ -301,6 +312,15 @@ func (c *collector) flushAll(ctx context.Context) error {
 		}()
 
 		if err != nil {
+			c.reportRuntimeAlert(ctx, RuntimeAlert{
+				Kind:      runtimeAlertKindFlushFailed,
+				Title:     "【P1 批处理收集器 Flush 失败】",
+				Status:    "非必达数据已回滚到内存缓冲区，必达数据将尝试 fallback",
+				Component: "batchprocessor.collector",
+				Operation: "flush_batch",
+				Reason:    err.Error(),
+				Advice:    "请检查业务 Flush 依赖的数据库、缓存、消息队列或文件系统；恢复后观察缓冲区是否持续下降，必要时手动触发 flush。",
+			})
 			requeue := make([]bufferedData, 0, len(batch))
 			for _, item := range batch {
 				if item.data.Required {
@@ -354,6 +374,15 @@ func (c *collector) scheduleRequiredFallback(ctx context.Context, item bufferedD
 		fallbackErr := errors.Tag(c.runRequiredFallbackWithLimit(ctx, item.data, flushErr))
 		signalBufferedDataAck(item.ack, fallbackErr)
 		if fallbackErr != nil {
+			c.reportRuntimeAlert(ctx, RuntimeAlert{
+				Kind:      runtimeAlertKindFallbackFailed,
+				Title:     "【P1 批处理必达兜底失败】",
+				Status:    "必达数据已回滚到内存缓冲区，等待后续 flush 重试",
+				Component: "batchprocessor.collector",
+				Operation: "required_fallback",
+				Reason:    batchAlertReason("idempotencyKey", item.data.IdempotencyKey, fallbackErr.Error()),
+				Advice:    "请检查必达兜底链路是否与主 Flush 共享同一故障点；优先确认幂等键、降级存储和下游容量，避免必达数据长期留在内存缓冲区。",
+			})
 			item.ack = nil
 			c.requeuePartialBatch(1, []bufferedData{item})
 			return
@@ -376,6 +405,32 @@ func (c *collector) runRequiredFallbackWithLimit(ctx context.Context, data Data,
 		return errors.Wrapf(ctx.Err(), "batchprocessor.RequiredFallback 等待并发令牌失败 bizType=%s", c.bizType)
 	}
 	return errors.Tag(c.requiredFallback(ctx, data, flushErr))
+}
+
+// batchAlertReason 生成批处理告警摘要，样例键只进入文本，不参与上层告警指纹。
+func batchAlertReason(sampleLabel, sampleValue, reason string) string {
+	parts := make([]string, 0, 2)
+	sampleLabel = strings.TrimSpace(sampleLabel)
+	sampleValue = strings.TrimSpace(sampleValue)
+	if sampleLabel != "" && sampleValue != "" {
+		parts = append(parts, sampleLabel+"="+sampleValue)
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		parts = append(parts, reason)
+	}
+	return strings.Join(parts, "；")
+}
+
+// reportRuntimeAlert 上报后台运行异常；未配置 hook 时保持原有行为。
+func (c *collector) reportRuntimeAlert(ctx context.Context, alert RuntimeAlert) {
+	if c == nil || c.alertHook == nil {
+		return
+	}
+	alert.BizType = c.bizType
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.alertHook(ctx, normalizeRuntimeAlert(alert))
 }
 
 // acquireFlushSlot 获取全局 flush 并发令牌，并尊重上下文取消。

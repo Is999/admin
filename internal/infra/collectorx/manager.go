@@ -42,6 +42,7 @@ type Manager struct {
 
 	mu         sync.RWMutex         // 保护 processors 注册表
 	processors map[string]Processor // bizType 到批量处理器的映射
+	alertHook  AlertHook            // 后台运行异常告警钩子
 	instanceID string               // 当前实例唯一 ID，用于 Redis consumer 名称隔离
 
 	ctx    context.Context    // 后台 worker 生命周期上下文
@@ -98,6 +99,16 @@ func New(cfg config.CollectorConfig, outboxDB *gorm.DB, rds redis.UniversalClien
 	}
 
 	return m, nil
+}
+
+// SetAlertHook 设置 Collector 后台运行异常告警钩子。
+func (m *Manager) SetAlertHook(hook AlertHook) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.alertHook = hook
 }
 
 // RegisterProcessor 注册指定 bizType 的批量消费处理器。
@@ -258,6 +269,18 @@ func (m *Manager) Enqueue(ctx context.Context, event Event) (string, error) {
 	}
 
 	if err := m.saveOutbox(ctx, event, collectorTransportDB, model.CollectorOutboxStatePending, 0, time.Now(), ""); err != nil {
+		m.reportRuntimeAlert(ctx, RuntimeAlert{
+			Kind:      RuntimeAlertKindEnqueueFailed,
+			Title:     "【P1 Collector 事件入队失败】",
+			Status:    "Kafka/Redis 降级后 DB outbox 兜底也失败，该事件不会进入后台重试链路",
+			Component: "collector",
+			Operation: "enqueue_save_outbox",
+			BizType:   event.BizType,
+			Transport: collectorTransportDB,
+			UniqueKey: event.BizType,
+			Reason:    collectorAlertReason("eventId", event.EventID, err.Error()),
+			Advice:    "请优先检查 Collector outbox 主库写入、唯一键冲突和磁盘/连接池状态；确认调用方是否有同步重试或补偿队列，避免事件丢失。",
+		})
 		return "", errors.Tag(err)
 	}
 	return event.EventID, nil
@@ -392,6 +415,20 @@ func truncateErr(msg string, limit int) string {
 	return msg[:limit]
 }
 
+// collectorAlertReason 生成 Collector 告警摘要，保留样例 ID 但不让它参与告警指纹。
+func collectorAlertReason(sampleLabel, sampleValue, reason string) string {
+	parts := make([]string, 0, 2)
+	sampleLabel = strings.TrimSpace(sampleLabel)
+	sampleValue = strings.TrimSpace(sampleValue)
+	if sampleLabel != "" && sampleValue != "" {
+		parts = append(parts, sampleLabel+"="+sampleValue)
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		parts = append(parts, reason)
+	}
+	return strings.Join(parts, "；")
+}
+
 // processorFor 根据 bizType 查找已注册的批量处理器。
 func (m *Manager) processorFor(bizType string) (Processor, bool) {
 	m.mu.RLock()
@@ -415,6 +452,19 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 				failed[event.EventID] = "collector 未注册 processor bizType=" + bizType
 			}
 			groupFailCount = len(group)
+			m.reportRuntimeAlert(ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Processor 缺失】",
+				Status:    "该业务类型事件无法消费，已按重试策略回写 outbox",
+				Component: "collector",
+				Operation: "process_missing_processor",
+				BizType:   bizType,
+				Transport: collectorTransportDB,
+				UniqueKey: bizType,
+				Reason:    "collector 未注册 processor bizType=" + bizType,
+				Count:     len(group),
+				Advice:    "请确认当前镜像是否注册了该 bizType 的 Processor，以及 collector.enabled、CDC 场景配置和 worker 部署版本是否一致。",
+			})
 			recordProcessorBatch(bizType, len(group), groupSuccessCount, groupFailCount, time.Since(beginAt))
 			continue
 		}
@@ -424,6 +474,19 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 				failed[event.EventID] = err.Error()
 			}
 			groupFailCount = len(group)
+			m.reportRuntimeAlert(ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector 批量消费失败】",
+				Status:    "本批事件已按重试策略回写 outbox，后续会继续重试",
+				Component: "collector",
+				Operation: "process_batch",
+				BizType:   bizType,
+				Transport: collectorTransportDB,
+				UniqueKey: bizType,
+				Reason:    err.Error(),
+				Count:     len(group),
+				Advice:    "请检查对应 Processor 的业务依赖、数据格式和批量写入状态；若 outbox 重试持续上涨，需要先暂停上游放量再处理死信。",
+			})
 			recordProcessorBatch(bizType, len(group), groupSuccessCount, groupFailCount, time.Since(beginAt))
 			continue
 		}
@@ -464,6 +527,21 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 		for eventID := range pending {
 			failed[eventID] = "collector processor 未返回事件处理结果"
 			groupFailCount++
+		}
+		if groupFailCount > 0 {
+			m.reportRuntimeAlert(ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector 部分事件处理失败】",
+				Status:    "失败事件已按重试策略回写 outbox，成功事件继续完成",
+				Component: "collector",
+				Operation: "process_partial_failed",
+				BizType:   bizType,
+				Transport: collectorTransportDB,
+				UniqueKey: bizType,
+				Reason:    "collector processor 返回部分失败或遗漏结果",
+				Count:     groupFailCount,
+				Advice:    "请检查 Processor 返回结果是否覆盖所有输入事件，并确认失败事件的错误原因；若 retry/dead 数量持续上升，请优先处理该 bizType。",
+			})
 		}
 		recordProcessorBatch(bizType, len(group), groupSuccessCount, groupFailCount, time.Since(beginAt))
 	}
@@ -569,6 +647,18 @@ func (m *Manager) persistDeliveries(ctx context.Context, deliveries []eventDeliv
 			fields = append(fields, logx.Field("message_id", firstInvalidMessageID))
 		}
 		loggerx.ErrorTextw(ctx, "采集器 事件无效", firstInvalidError, fields...)
+		m.reportRuntimeAlert(ctx, RuntimeAlert{
+			Kind:      RuntimeAlertKindInvalidEvent,
+			Title:     "【P1 Collector 事件无效】",
+			Status:    "无效事件不会写入 DB outbox，已跳过以避免阻塞消费位点",
+			Component: "collector",
+			Operation: "persist_invalid_event",
+			Transport: deliveriesTransportLabel(deliveries),
+			UniqueKey: deliveriesTransportLabel(deliveries),
+			Reason:    collectorAlertReason("messageId", firstInvalidMessageID, firstInvalidError),
+			Count:     invalidCount,
+			Advice:    "请检查上游投递的事件 JSON、bizType 和 payload 结构；无效事件已被跳过，必要时从 Kafka/Redis 原始载体或业务日志补偿。",
+		})
 	}
 	if err := m.saveOutboxBatch(ctx, valid, model.CollectorOutboxStatePending, 0, time.Now(), ""); err != nil {
 		return nil, errors.Tag(err)
@@ -594,22 +684,68 @@ func (m *Manager) runKafkaWorker() {
 				return
 			}
 			loggerx.Errorw(m.ctx, "采集器 消息队列拉取失败", err)
+			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Kafka 拉取失败】",
+				Status:    "Kafka worker 暂停本轮拉取，500ms 后继续重试",
+				Component: "collector",
+				Operation: "kafka_fetch_message",
+				Transport: collectorTransportKafka,
+				UniqueKey: m.cfg.Kafka.Topic,
+				Reason:    err.Error(),
+				Advice:    "请检查 Kafka broker、topic、consumer group 和网络连接；若持续失败，Collector 将无法把 Kafka 事件落入 DB outbox。",
+			})
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 		messages, deliveries, err := m.collectKafkaBatch(reader, msg)
 		if err != nil {
 			loggerx.Errorw(m.ctx, "采集器 消息队列批量收集失败", err)
+			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Kafka 批量收集失败】",
+				Status:    "Kafka worker 暂停本轮批量收集，500ms 后继续重试",
+				Component: "collector",
+				Operation: "kafka_collect_batch",
+				Transport: collectorTransportKafka,
+				UniqueKey: m.cfg.Kafka.Topic,
+				Reason:    err.Error(),
+				Advice:    "请检查 Kafka 消息格式、批量拉取超时和 worker 上下文状态；持续失败会导致 Kafka 消费延迟增加。",
+			})
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 		if _, err := m.persistDeliveries(m.ctx, deliveries); err != nil {
 			loggerx.Errorw(m.ctx, "采集器 消息队列落库失败", err)
+			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Kafka 落库失败】",
+				Status:    "Kafka offset 暂不提交，500ms 后继续重试本批消息",
+				Component: "collector",
+				Operation: "kafka_persist_deliveries",
+				Transport: collectorTransportKafka,
+				UniqueKey: m.cfg.Kafka.Topic,
+				Reason:    err.Error(),
+				Count:     len(deliveries),
+				Advice:    "请检查 collector_outbox 主库写入、索引冲突和连接池状态；修复前 Kafka 消费位点会停留在当前批次。",
+			})
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 		if err := reader.CommitMessages(m.ctx, messages...); err != nil {
 			loggerx.Errorw(m.ctx, "采集器 消息队列提交失败", err)
+			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Kafka Offset 提交失败】",
+				Status:    "事件已落 DB outbox，但 Kafka offset 提交失败，可能产生重复消费",
+				Component: "collector",
+				Operation: "kafka_commit_messages",
+				Transport: collectorTransportKafka,
+				UniqueKey: m.cfg.Kafka.Topic,
+				Reason:    err.Error(),
+				Count:     len(messages),
+				Advice:    "请检查 Kafka consumer group 状态和 broker 连接；DB outbox 依赖 event_id 幂等，恢复后关注重复消费和 RowsAffected。",
+			})
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
@@ -659,6 +795,17 @@ func (m *Manager) collectKafkaBatch(reader *kafka.Reader, first kafka.Message) (
 	if decodeFailedCount > 0 {
 		fields := []logx.LogField{logx.Field("count", decodeFailedCount)}
 		loggerx.ErrorTextw(m.ctx, "采集器 消息队列解码失败", firstDecodeError, fields...)
+		m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+			Kind:      RuntimeAlertKindInvalidEvent,
+			Title:     "【P1 Collector Kafka 消息解码失败】",
+			Status:    "解码失败消息不会进入 DB outbox，后续会提交 Kafka offset",
+			Component: "collector",
+			Operation: "kafka_decode_message",
+			Transport: collectorTransportKafka,
+			Reason:    firstDecodeError,
+			Count:     decodeFailedCount,
+			Advice:    "请检查 Kafka 生产方消息格式是否为 Collector Event JSON；如消息已提交 offset，需要按原始 Kafka 日志或业务源头补偿。",
+		})
 	}
 	return messages, deliveries, nil
 }
@@ -701,6 +848,17 @@ func (m *Manager) runRedisWorker() {
 			logx.Field("stream", m.cfg.Redis.Stream),
 			logx.Field("group", m.cfg.Redis.Group),
 		)
+		m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+			Kind:      RuntimeAlertKindWorkerFailed,
+			Title:     "【P1 Collector Redis 消费组初始化失败】",
+			Status:    "Redis Stream worker 未启动，需要人工处理后重启或重新触发",
+			Component: "collector",
+			Operation: "redis_init_group",
+			Transport: collectorTransportRedis,
+			UniqueKey: m.cfg.Redis.Stream + "/" + m.cfg.Redis.Group,
+			Reason:    err.Error(),
+			Advice:    "请检查 Redis Stream 名称、消费组、权限和 Redis 连通性；该 worker 已退出，修复后需要重启 worker 进程。",
+		})
 		return
 	}
 	block := time.Duration(m.cfg.Redis.BlockMs) * time.Millisecond
@@ -728,6 +886,17 @@ func (m *Manager) runRedisWorker() {
 				logx.Field("stream", m.cfg.Redis.Stream),
 				logx.Field("group", m.cfg.Redis.Group),
 			)
+			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Redis Pending 认领失败】",
+				Status:    "本轮 pending 消息认领失败，后续循环会继续重试",
+				Component: "collector",
+				Operation: "redis_auto_claim",
+				Transport: collectorTransportRedis,
+				UniqueKey: m.cfg.Redis.Stream + "/" + m.cfg.Redis.Group,
+				Reason:    claimErr.Error(),
+				Advice:    "请检查 Redis Stream pending 状态、消费者组和 Redis 连接；持续失败会导致超时消息无法回收处理。",
+			})
 			claimStart = "0-0"
 		} else if next != "" {
 			// Redis XAUTOCLAIM 会返回下一次扫描游标，持续沿游标扫描可避免每轮都从 0-0 重扫大量 pending 消息。
@@ -752,6 +921,17 @@ func (m *Manager) runRedisWorker() {
 				logx.Field("stream", m.cfg.Redis.Stream),
 				logx.Field("group", m.cfg.Redis.Group),
 			)
+			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Redis 读取失败】",
+				Status:    "Redis Stream 本轮读取失败，500ms 后继续重试",
+				Component: "collector",
+				Operation: "redis_read_group",
+				Transport: collectorTransportRedis,
+				UniqueKey: m.cfg.Redis.Stream + "/" + m.cfg.Redis.Group,
+				Reason:    err.Error(),
+				Advice:    "请检查 Redis 连接、Stream/Group 配置和实例负载；持续失败会导致 Redis 载体事件积压。",
+			})
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -765,6 +945,18 @@ func (m *Manager) runRedisWorker() {
 				logx.Field("stream", m.cfg.Redis.Stream),
 				logx.Field("group", m.cfg.Redis.Group),
 			)
+			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Redis 落库失败】",
+				Status:    "Redis 消息暂不 ACK，500ms 后继续重试本批消息",
+				Component: "collector",
+				Operation: "redis_persist_deliveries",
+				Transport: collectorTransportRedis,
+				UniqueKey: m.cfg.Redis.Stream + "/" + m.cfg.Redis.Group,
+				Reason:    err.Error(),
+				Count:     len(deliveries),
+				Advice:    "请检查 collector_outbox 主库写入、索引冲突和连接池状态；修复前 Redis Stream pending 会增长。",
+			})
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -773,6 +965,18 @@ func (m *Manager) runRedisWorker() {
 				logx.Field("stream", m.cfg.Redis.Stream),
 				logx.Field("group", m.cfg.Redis.Group),
 			)
+			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+				Kind:      RuntimeAlertKindWorkerFailed,
+				Title:     "【P1 Collector Redis ACK 失败】",
+				Status:    "事件已落 DB outbox，但 Redis ACK/删除失败，可能产生重复消费",
+				Component: "collector",
+				Operation: "redis_ack_deliveries",
+				Transport: collectorTransportRedis,
+				UniqueKey: m.cfg.Redis.Stream + "/" + m.cfg.Redis.Group,
+				Reason:    err.Error(),
+				Count:     len(persisted),
+				Advice:    "请检查 Redis Stream ACK/XDEL 权限和连接状态；DB outbox 依赖 event_id 幂等，恢复后关注重复消费。",
+			})
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
@@ -796,9 +1000,17 @@ func (m *Manager) redisConsumerName() string {
 // redisMessagesToDeliveries 将 Redis 消息转换为待落地事件，并丢弃不可解析消息。
 func (m *Manager) redisMessagesToDeliveries(messages []redis.XMessage) []eventDelivery {
 	deliveries := make([]eventDelivery, 0, len(messages))
+	invalidCount := 0
+	firstInvalidID := ""
+	firstInvalidError := ""
 	for _, msg := range messages {
 		body, ok := msg.Values["body"]
 		if !ok {
+			invalidCount++
+			if firstInvalidID == "" {
+				firstInvalidID = msg.ID
+				firstInvalidError = "Redis Stream 消息缺少 body 字段"
+			}
 			m.ackAndDeleteRedisMessage(msg.ID)
 			continue
 		}
@@ -813,6 +1025,11 @@ func (m *Manager) redisMessagesToDeliveries(messages []redis.XMessage) []eventDe
 		}
 		var event Event
 		if err := json.Unmarshal([]byte(text), &event); err != nil {
+			invalidCount++
+			if firstInvalidID == "" {
+				firstInvalidID = msg.ID
+				firstInvalidError = err.Error()
+			}
 			m.ackAndDeleteRedisMessage(msg.ID)
 			continue
 		}
@@ -820,6 +1037,20 @@ func (m *Manager) redisMessagesToDeliveries(messages []redis.XMessage) []eventDe
 			event:     event,
 			transport: collectorTransportRedis,
 			messageID: msg.ID,
+		})
+	}
+	if invalidCount > 0 {
+		m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+			Kind:      RuntimeAlertKindInvalidEvent,
+			Title:     "【P1 Collector Redis 消息无效】",
+			Status:    "无效 Redis Stream 消息已 ACK 并删除，避免长期阻塞消费组",
+			Component: "collector",
+			Operation: "redis_decode_message",
+			Transport: collectorTransportRedis,
+			UniqueKey: collectorTransportRedis,
+			Reason:    collectorAlertReason("messageId", firstInvalidID, firstInvalidError),
+			Count:     invalidCount,
+			Advice:    "请检查 Redis Stream 生产方是否写入 body 字段且内容为 Collector Event JSON；已删除的坏消息需要从业务源头补偿。",
 		})
 	}
 	return deliveries
@@ -903,6 +1134,19 @@ func (m *Manager) runDBWorker() {
 		case <-ticker.C:
 			if _, err := m.runDBOnce(m.ctx, 0); err != nil {
 				loggerx.Errorw(m.ctx, "采集器 数据库执行失败", err)
+				if strings.Contains(err.Error(), "collector 批量消费存在失败") {
+					continue
+				}
+				m.reportRuntimeAlert(m.ctx, RuntimeAlert{
+					Kind:      RuntimeAlertKindWorkerFailed,
+					Title:     "【P1 Collector DB Worker 执行失败】",
+					Status:    "DB outbox 本轮消费失败，下一轮会继续重试",
+					Component: "collector",
+					Operation: "db_run_once",
+					Transport: collectorTransportDB,
+					Reason:    err.Error(),
+					Advice:    "请检查 collector_outbox 查询、状态回写、Processor 业务依赖和数据库连接池；若失败持续出现，请查看 Collector 管理页积压与死信。",
+				})
 			}
 		}
 	}
@@ -1074,7 +1318,10 @@ func (m *Manager) markFailed(ctx context.Context, rows []model.CollectorOutbox, 
 	if maxRetry <= 0 {
 		maxRetry = defaultDBMaxRetryTimes
 	}
-	return errors.Tag(m.outbox.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	deadCount := 0
+	deadBizType := ""
+	deadEventID := ""
+	err := m.outbox.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, row := range rows {
 			newAttempt := row.Attempt + 1
 			nextState := model.CollectorOutboxStateRetry
@@ -1083,6 +1330,13 @@ func (m *Manager) markFailed(ctx context.Context, rows []model.CollectorOutbox, 
 			if newAttempt >= maxRetry {
 				nextState = model.CollectorOutboxStateDead
 				finishedAt = &now
+				deadCount++
+				if deadBizType == "" {
+					deadBizType = strings.TrimSpace(row.BizType)
+				}
+				if deadEventID == "" {
+					deadEventID = strings.TrimSpace(row.EventID)
+				}
 			} else {
 				nextRunAt = now.Add(nextRetryDelay(newAttempt))
 			}
@@ -1117,7 +1371,30 @@ func (m *Manager) markFailed(ctx context.Context, rows []model.CollectorOutbox, 
 			}
 		}
 		return nil
-	}))
+	})
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if deadCount > 0 {
+		reason := ""
+		if execErr != nil {
+			reason = execErr.Error()
+		}
+		m.reportRuntimeAlert(ctx, RuntimeAlert{
+			Kind:      RuntimeAlertKindDeadEvent,
+			Title:     "【P1 Collector 事件进入死信】",
+			Status:    "事件已达到最大重试次数并进入死信，不会继续自动处理",
+			Component: "collector",
+			Operation: "mark_dead",
+			BizType:   deadBizType,
+			Transport: collectorTransportDB,
+			UniqueKey: deadBizType,
+			Reason:    reason,
+			Count:     deadCount,
+			Advice:    "请在 Collector 管理页按死信状态和 bizType 检索，确认业务影响范围后修复数据或处理器，再人工重试；必要时可用首个事件ID " + deadEventID + " 定位。",
+		})
+	}
+	return nil
 }
 
 // nextRetryDelay 返回指定失败次数对应的下次重试延迟。
@@ -1192,4 +1469,21 @@ func (m *Manager) logSlowBatch(ctx context.Context, stage string, size int, begi
 		logx.Field("batch_size", size),
 		logx.Field("latency_ms", cost.Milliseconds()),
 	)
+}
+
+// reportRuntimeAlert 上报 Collector 后台运行异常；未配置 hook 时保持原有日志行为。
+func (m *Manager) reportRuntimeAlert(ctx context.Context, alert RuntimeAlert) {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	hook := m.alertHook
+	m.mu.RUnlock()
+	if hook == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	hook(ctx, normalizeRuntimeAlert(alert))
 }

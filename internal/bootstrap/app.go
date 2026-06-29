@@ -359,9 +359,11 @@ func (a *App) runStartHooks(ctx context.Context) error {
 			continue
 		}
 		if err := hook.run(ctx); err != nil {
+			a.notifyLifecycleFailure(ctx, "start", hook.name, err)
 			// 已启动的前置组件需要立即回滚，避免 Start 返回错误后后台协程继续运行。
 			stopErr := a.runStopHooks(ctx)
 			if stopErr != nil {
+				a.notifyLifecycleFailure(ctx, "rollback_stop", hook.name, stopErr)
 				return errors.Wrapf(err, "启动生命周期钩子失败: %s; 回滚已启动组件失败: %v", hook.name, stopErr)
 			}
 			return errors.Wrapf(err, "启动生命周期钩子失败: %s", hook.name)
@@ -392,8 +394,11 @@ func (a *App) runStopHooks(ctx context.Context) error {
 		if _, ok := startedHooks[hook.name]; !ok {
 			continue
 		}
-		if err := hook.run(ctx); err != nil && firstErr == nil {
-			firstErr = errors.Wrapf(err, "停止生命周期钩子失败: %s", hook.name)
+		if err := hook.run(ctx); err != nil {
+			a.notifyLifecycleFailure(ctx, "stop", hook.name, err)
+			if firstErr == nil {
+				firstErr = errors.Wrapf(err, "停止生命周期钩子失败: %s", hook.name)
+			}
 		}
 	}
 	return errors.Tag(firstErr)

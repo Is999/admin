@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 
 	"github.com/zeromicro/go-zero/core/logx"
 )
+
+const archiveRuntimeAlertKindConfigInvalid = "archive_config_invalid" // 归档任务配置校验失败的运行异常告警类型
 
 // splitArchiveTarget 解析归档目标及动作后缀。
 // 支持 `job#archive` 和 `job#delete` 分别调度归档、删除；无后缀时按 all 执行。
@@ -191,7 +194,10 @@ func validateArchiveJobConfig(item config.ArchiveJobConfig) error {
 }
 
 // notifyArchiveJobConfigInvalid 记录归档任务配置异常，保证错误配置可被日志检索和告警系统发现。
-func notifyArchiveJobConfigInvalid(index int, item config.ArchiveJobConfig, err error) {
+func (s *Service) notifyArchiveJobConfigInvalid(index int, item config.ArchiveJobConfig, err error) {
+	if err == nil {
+		return
+	}
 	loggerx.Errorw(context.Background(), "归档任务 配置无效", err,
 		logx.Field("index", index),
 		logx.Field("archive_job_name", strings.TrimSpace(item.Name)),
@@ -199,6 +205,37 @@ func notifyArchiveJobConfigInvalid(index int, item config.ArchiveJobConfig, err 
 		logx.Field("table_name", strings.TrimSpace(item.TableName)),
 		logx.Field("failure_reason", strings.TrimSpace(err.Error())),
 	)
+	if s == nil || s.svcCtx == nil || s.svcCtx.Task == nil {
+		return
+	}
+	svc.NotifyTaskRuntimeAlert(context.Background(), s.svcCtx.Task, svc.TaskRuntimeAlert{
+		Kind:         archiveRuntimeAlertKindConfigInvalid,
+		Title:        "【P1 归档任务配置异常】",
+		Status:       "已跳过该归档任务，其它归档任务继续运行",
+		Component:    "archive",
+		Operation:    "normalize_archive_jobs",
+		TaskName:     archiveJobAlertName(index, item),
+		TaskType:     TaskTypeExecute,
+		WorkflowName: WorkflowNameRun,
+		Reason:       err.Error(),
+	})
+}
+
+// archiveJobAlertName 返回归档任务告警展示名，兼顾任务名为空时的表名线索。
+func archiveJobAlertName(index int, item config.ArchiveJobConfig) string {
+	prefix := "归档任务#" + strconv.Itoa(index)
+	name := strings.TrimSpace(item.Name)
+	tableName := strings.TrimSpace(item.TableName)
+	if name != "" && tableName != "" {
+		return prefix + " " + name + " (" + tableName + ")"
+	}
+	if name != "" {
+		return prefix + " " + name
+	}
+	if tableName != "" {
+		return prefix + " " + tableName
+	}
+	return prefix + " 未命名归档任务"
 }
 
 // isKnownDatabase 校验归档任务数据库名称格式是否合法。

@@ -690,7 +690,44 @@ func (l *AdminExportLogic) markFailed(status *types.AdminExportStatusResp, err e
 	if clearErr := l.clearRequestIndex(status.RequestFingerprint); clearErr != nil {
 		corelogic.LogWrappedError(l, clearErr, "AdminExportLogic.markFailed 清理管理员导出复用索引失败")
 	}
-	return l.saveStatus(status)
+	saveErr := l.saveStatus(status)
+	l.notifyExportFailed(status, firstNonNilError(err, saveErr))
+	return saveErr
+}
+
+// notifyExportFailed 上报管理员 Excel 异步导出失败，避免后台任务状态只停留在 Redis 中无人感知。
+func (l *AdminExportLogic) notifyExportFailed(status *types.AdminExportStatusResp, err error) {
+	if l == nil || l.Svc == nil || status == nil || err == nil {
+		return
+	}
+	svc.NotifyTaskRuntimeAlert(l.Ctx, l.Svc.Task, svc.TaskRuntimeAlert{
+		Kind:      svc.TaskRuntimeAlertKindAdminExcelExportFailed,
+		Title:     "【P1 Excel 异步导出失败】",
+		Status:    "导出任务已标记失败，文件不可下载",
+		Component: "excel_export",
+		Operation: "admin_export",
+		TaskName:  "管理员列表导出",
+		TaskType:  types.AdminExportTaskType,
+		TaskQueue: helper.FirstNonEmptyString(status.Queue, taskqueue.QueueMaintenance),
+		UniqueKey: "admin_export",
+		Reason:    adminExportAlertReason(status, err),
+		Advice:    "请在导出任务状态中按 jobId 定位请求条件，并在任务中心按 taskId 查看执行日志；确认查询范围、对象存储和 Redis 状态后再重新触发导出。",
+	})
+}
+
+// adminExportAlertReason 生成导出告警错误摘要，保留 jobId/taskId 但不参与告警指纹。
+func adminExportAlertReason(status *types.AdminExportStatusResp, err error) string {
+	parts := make([]string, 0, 3)
+	if status != nil && strings.TrimSpace(status.JobID) != "" {
+		parts = append(parts, "jobId="+strings.TrimSpace(status.JobID))
+	}
+	if status != nil && strings.TrimSpace(status.TaskID) != "" {
+		parts = append(parts, "taskId="+strings.TrimSpace(status.TaskID))
+	}
+	if err != nil {
+		parts = append(parts, err.Error())
+	}
+	return strings.Join(parts, "；")
 }
 
 // ensureStatusOwner 校验当前管理员只能查看和下载自己发起或被授权复用的导出任务。

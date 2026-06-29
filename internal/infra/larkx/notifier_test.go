@@ -117,6 +117,141 @@ func TestSendTaskFailureRejectsLarkBusinessError(t *testing.T) {
 	}
 }
 
+// TestSendPeriodicConfigInvalidBuildsProfessionalText 验证周期任务配置异常告警文本适合生产排障。
+func TestSendPeriodicConfigInvalidBuildsProfessionalText(t *testing.T) {
+	var got messagePayload
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode payload failed: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+
+	notifier, err := New(config.LarkAlertConfig{
+		Enabled:       true,
+		WebhookURL:    server.URL,
+		MaxErrorBytes: 120,
+		AtAll:         true,
+	})
+	if err != nil {
+		t.Fatalf("new notifier failed: %v", err)
+	}
+	notifier.client = server.Client()
+	notifier.now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
+
+	err = notifier.SendPeriodicConfigInvalid(context.Background(), PeriodicConfigAlert{
+		ServiceName:  "admin",
+		Environment:  "prod",
+		AppID:        "site-1",
+		TaskIndex:    14,
+		TaskName:     "monitorfeishu-feishu-report-2m",
+		WorkflowName: "monitorfeishu.feishu_report",
+		Cron:         "*/2 * * * *",
+		TaskQueue:    "default",
+		UniqueKey:    "periodic:monitorfeishu.feishu_report",
+		OccurredAt:   time.Date(2026, 6, 29, 15, 33, 40, 0, time.FixedZone("CST", 8*3600)),
+		Reason:       "工作流定义不存在",
+		TriggerCount: 3,
+	})
+	if err != nil {
+		t.Fatalf("send periodic config invalid failed: %v", err)
+	}
+	if got.MsgType != "text" {
+		t.Fatalf("msg_type=%s, want text", got.MsgType)
+	}
+	for _, want := range []string{
+		"【P1 周期任务配置异常】",
+		"状态：已跳过该周期任务，调度器继续运行",
+		"配置\n- 序号：14",
+		"- 名称：monitorfeishu-feishu-report-2m",
+		"- 工作流：monitorfeishu.feishu_report",
+		"- Cron：*/2 * * * *",
+		"- 队列：default",
+		"- 去重键：periodic:monitorfeishu.feishu_report",
+		"- 窗口触发次数：3",
+		"错误摘要\n工作流定义不存在",
+		"影响与建议\n该周期任务不会注册到调度器",
+		`<at user_id="all">所有人</at>`,
+	} {
+		if !strings.Contains(got.Content.Text, want) {
+			t.Fatalf("payload text missing %q:\n%s", want, got.Content.Text)
+		}
+	}
+}
+
+// TestSendTaskRuntimeAlertBuildsProfessionalText 验证任务系统运行异常告警文本适合生产排障。
+func TestSendTaskRuntimeAlertBuildsProfessionalText(t *testing.T) {
+	var got messagePayload
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode payload failed: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+
+	notifier, err := New(config.LarkAlertConfig{
+		Enabled:       true,
+		WebhookURL:    server.URL,
+		MaxErrorBytes: 120,
+		AtAll:         true,
+	})
+	if err != nil {
+		t.Fatalf("new notifier failed: %v", err)
+	}
+	notifier.client = server.Client()
+	notifier.now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
+
+	err = notifier.SendTaskRuntimeAlert(context.Background(), TaskRuntimeAlert{
+		ServiceName:  "admin",
+		Environment:  "prod",
+		AppID:        "site-1",
+		Kind:         "periodic_enqueue_failed",
+		Title:        "【P1 周期任务入队失败】",
+		Status:       "本轮周期任务未成功投递到队列，调度器继续运行",
+		Component:    "scheduler",
+		Operation:    "enqueue_periodic_task",
+		TaskName:     "周期任务触发:monitorfeishu-feishu-report-2m",
+		TaskType:     "workflow:trigger",
+		WorkflowName: "monitorfeishu.feishu_report",
+		Cron:         "*/2 * * * *",
+		TaskQueue:    "default",
+		UniqueKey:    "periodic:monitorfeishu.feishu_report",
+		OccurredAt:   time.Date(2026, 6, 29, 15, 40, 0, 0, time.FixedZone("CST", 8*3600)),
+		Reason:       "redis: connection refused",
+		Advice:       "请检查 maintenance 队列和 Redis 连接池。",
+		TriggerCount: 4,
+	})
+	if err != nil {
+		t.Fatalf("send task runtime alert failed: %v", err)
+	}
+	if got.MsgType != "text" {
+		t.Fatalf("msg_type=%s, want text", got.MsgType)
+	}
+	for _, want := range []string{
+		"【P1 周期任务入队失败】",
+		"状态：本轮周期任务未成功投递到队列，调度器继续运行",
+		"异常\n- 类型：periodic_enqueue_failed",
+		"- 组件：scheduler",
+		"- 动作：enqueue_periodic_task",
+		"- 任务：周期任务触发:monitorfeishu-feishu-report-2m",
+		"- 任务类型：workflow:trigger",
+		"- 工作流：monitorfeishu.feishu_report",
+		"- Cron：*/2 * * * *",
+		"- 队列：default",
+		"- 去重键：periodic:monitorfeishu.feishu_report",
+		"- 窗口触发次数：4",
+		"错误摘要\nredis: connection refused",
+		"处理建议\n请检查 maintenance 队列和 Redis 连接池。",
+		`<at user_id="all">所有人</at>`,
+	} {
+		if !strings.Contains(got.Content.Text, want) {
+			t.Fatalf("payload text missing %q:\n%s", want, got.Content.Text)
+		}
+	}
+}
+
 // TestSendTextSendsPlainText 验证通用文本消息发送链路。
 func TestSendTextSendsPlainText(t *testing.T) {
 	payloadCh := make(chan messagePayload, 1)

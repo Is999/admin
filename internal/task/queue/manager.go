@@ -78,10 +78,12 @@ const (
 
 	taskExecutionStatusSuccess = "success" // 普通任务执行结果成功状态
 
-	taskFinalWriteTimeout  = 5 * time.Second // 任务收尾写 Redis 的短超时，避免业务 ctx 超时后失败状态无法落库
-	taskListFilterPageSize = 100             // 任务列表二次过滤单批读取量，和接口最大页大小保持一致
-	taskListFilterMaxPages = 50              // 任务列表二次过滤最大扫描页数，避免无索引历史查询拖垮 Redis
-	taskRecordTTLBuffer    = time.Hour       // 终态任务 hash 额外保留窗口，避免清理边界抖动影响列表查询
+	taskFinalWriteTimeout  = 5 * time.Second     // 任务收尾写 Redis 的短超时，避免业务 ctx 超时后失败状态无法落库
+	taskListFilterPageSize = 100                 // 任务列表二次过滤单批读取量，和接口最大页大小保持一致
+	taskListFilterMaxPages = 50                  // 任务列表二次过滤最大扫描页数，避免无索引历史查询拖垮 Redis
+	taskRecordTTLBuffer    = time.Hour           // 终态任务 hash 额外保留窗口，避免清理边界抖动影响列表查询
+	taskRuntimeAlertTTL    = 5 * time.Minute     // 任务系统同一运行异常的告警限频窗口，避免后台循环刷屏
+	periodicConfigAlertTTL = taskRuntimeAlertTTL // 周期任务同一配置异常复用任务运行异常的告警限频窗口
 )
 
 // WorkflowTriggerPayload 是 workflow:trigger 任务的负载。
@@ -155,6 +157,54 @@ type GroupAggregator func(tasks []*asynq.Task) *asynq.Task
 // 钩子只在任务无自动重试机会后触发，用于释放业务侧资源。
 type TaskFinalFailureHook func(ctx context.Context, task *asynq.Task, meta WorkflowTaskMeta, err error) error
 
+// PeriodicConfigInvalidHook 定义周期任务配置异常后的告警钩子。
+// 钩子只用于外部通知，不改变调度器跳过无效配置的容错语义。
+type PeriodicConfigInvalidHook func(ctx context.Context, report PeriodicConfigInvalidReport) error
+
+// PeriodicConfigInvalidReport 描述一次周期任务配置校验失败。
+type PeriodicConfigInvalidReport struct {
+	Index        int                       // 配置在合并后周期任务列表中的位置
+	Task         config.TaskPeriodicConfig // 失败的周期任务配置
+	Reason       string                    // 配置失败原因
+	OccurredAt   time.Time                 // 发现异常的时间
+	TriggerCount int                       // 当前告警窗口累计触发次数，包含本次触发
+}
+
+// TaskRuntimeAlertHook 定义任务系统运行异常后的告警钩子。
+// 钩子只用于外部通知，不改变调度器和清理任务的容错语义。
+type TaskRuntimeAlertHook func(ctx context.Context, alert TaskRuntimeAlert) error
+
+// TaskRuntimeAlert 描述一次任务系统运行期异常。
+type TaskRuntimeAlert struct {
+	Kind         string    // 异常类型，用于告警指纹和排障归类
+	Title        string    // 告警标题
+	Status       string    // 当前处理状态
+	Component    string    // 发生异常的任务系统组件
+	Operation    string    // 发生异常的运行操作
+	TaskName     string    // 关联任务名称
+	TaskType     string    // 关联任务类型
+	WorkflowName string    // 关联工作流名称
+	Cron         string    // 关联周期表达式
+	TaskQueue    string    // 关联队列
+	UniqueKey    string    // 关联幂等键
+	Reason       string    // 异常原因摘要
+	Advice       string    // 处理建议，留空时使用告警发送端通用建议
+	OccurredAt   time.Time // 发现异常的时间
+	TriggerCount int       // 当前告警窗口累计触发次数，包含本次触发
+}
+
+// periodicConfigAlertState 保存单条周期配置异常的限频状态。
+type periodicConfigAlertState struct {
+	LastSentAt      time.Time // 最近一次发送告警的时间
+	SuppressedCount int       // 限频窗口内被合并的重复触发次数
+}
+
+// taskRuntimeAlertState 保存单条运行异常的限频状态。
+type taskRuntimeAlertState struct {
+	LastSentAt      time.Time // 最近一次发送告警的时间
+	SuppressedCount int       // 限频窗口内被合并的重复触发次数
+}
+
 // Manager 统一承接任务客户端、Worker、调度器和工作流状态管理。
 // 该层只依赖 Redis 与 Asynq，不直接依赖具体业务逻辑。
 type Manager struct {
@@ -172,15 +222,19 @@ type Manager struct {
 	tracer               trace.Tracer          // 任务链路追踪器
 	instance             string                // 当前进程实例 ID，用于 leader 日志和区分多实例
 
-	lifecycleMu       sync.Mutex                     // 保护 Worker / Scheduler 启停状态，避免并发启动或停止产生竞态
-	schedulerStatusMu sync.Mutex                     // 保护调度器状态快照更新，避免多个后台协程并发覆盖
-	archivedCleanStop context.CancelFunc             // 停止归档失败任务过期清理协程
-	mu                sync.RWMutex                   // 保护工作流定义和周期任务配置的并发读写
-	workflows         map[string]*WorkflowDefinition // 已注册的工作流定义集合
-	periodic          []config.TaskPeriodicConfig    // 通过配置或插件补充的周期任务列表
-	handlers          map[string]struct{}            // 已注册的任务类型集合，用于限制通用任务投递
-	aggregates        map[string]GroupAggregator     // 已注册的分组聚合器
-	finalFailureHooks []TaskFinalFailureHook         // 任务终态失败后的业务清理钩子
+	lifecycleMu              sync.Mutex                          // 保护 Worker / Scheduler 启停状态，避免并发启动或停止产生竞态
+	schedulerStatusMu        sync.Mutex                          // 保护调度器状态快照更新，避免多个后台协程并发覆盖
+	archivedCleanStop        context.CancelFunc                  // 停止归档失败任务过期清理协程
+	mu                       sync.RWMutex                        // 保护工作流定义和周期任务配置的并发读写
+	workflows                map[string]*WorkflowDefinition      // 已注册的工作流定义集合
+	periodic                 []config.TaskPeriodicConfig         // 通过配置或插件补充的周期任务列表
+	handlers                 map[string]struct{}                 // 已注册的任务类型集合，用于限制通用任务投递
+	aggregates               map[string]GroupAggregator          // 已注册的分组聚合器
+	finalFailureHooks        []TaskFinalFailureHook              // 任务终态失败后的业务清理钩子
+	periodicConfigHooks      []PeriodicConfigInvalidHook         // 周期任务配置异常后的外部告警钩子
+	runtimeAlertHooks        []TaskRuntimeAlertHook              // 任务系统运行异常后的外部告警钩子
+	periodicConfigAlertedMap map[string]periodicConfigAlertState // 周期任务配置异常限频记录
+	runtimeAlertedMap        map[string]taskRuntimeAlertState    // 任务系统运行异常限频记录
 }
 
 // New 创建任务管理器。
@@ -192,17 +246,19 @@ func New(cfg config.TaskQueueConfig, client redis.UniversalClient) *Manager {
 		return nil
 	}
 	m := &Manager{
-		redis:      client,
-		client:     asynq.NewClientFromRedisClient(client),
-		inspector:  asynq.NewInspectorFromRedisClient(client),
-		mux:        asynq.NewServeMux(),
-		logger:     asynqLogger{},
-		tracer:     otel.Tracer("admin/task"),
-		instance:   uuid.NewString(),
-		workflows:  make(map[string]*WorkflowDefinition),
-		periodic:   make([]config.TaskPeriodicConfig, 0),
-		handlers:   make(map[string]struct{}),
-		aggregates: make(map[string]GroupAggregator),
+		redis:                    client,
+		client:                   asynq.NewClientFromRedisClient(client),
+		inspector:                asynq.NewInspectorFromRedisClient(client),
+		mux:                      asynq.NewServeMux(),
+		logger:                   asynqLogger{},
+		tracer:                   otel.Tracer("admin/task"),
+		instance:                 uuid.NewString(),
+		workflows:                make(map[string]*WorkflowDefinition),
+		periodic:                 make([]config.TaskPeriodicConfig, 0),
+		handlers:                 make(map[string]struct{}),
+		aggregates:               make(map[string]GroupAggregator),
+		periodicConfigAlertedMap: make(map[string]periodicConfigAlertState),
+		runtimeAlertedMap:        make(map[string]taskRuntimeAlertState),
 	}
 	m.UpdateConfig(cfg)
 	m.Use(m.traceAndLogMiddleware())
@@ -398,6 +454,30 @@ func (m *Manager) RegisterFinalFailureHook(hook TaskFinalFailureHook) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.finalFailureHooks = append(m.finalFailureHooks, hook)
+	return nil
+}
+
+// RegisterPeriodicConfigInvalidHook 注册周期任务配置异常告警钩子。
+// 钩子会按配置指纹限频触发，避免调度器周期同步时重复推送同一条异常。
+func (m *Manager) RegisterPeriodicConfigInvalidHook(hook PeriodicConfigInvalidHook) error {
+	if m == nil || hook == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.periodicConfigHooks = append(m.periodicConfigHooks, hook)
+	return nil
+}
+
+// RegisterRuntimeAlertHook 注册任务系统运行异常告警钩子。
+// 钩子会按异常指纹限频触发，用于调度、投递和清理等外层运行错误通知。
+func (m *Manager) RegisterRuntimeAlertHook(hook TaskRuntimeAlertHook) error {
+	if m == nil || hook == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runtimeAlertHooks = append(m.runtimeAlertHooks, hook)
 	return nil
 }
 
@@ -1469,7 +1549,7 @@ func (m *Manager) periodicConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 	for idx, item := range items {
 		item, invalidErr := m.validatePeriodicTaskConfig(item)
 		if invalidErr != nil {
-			notifyPeriodicTaskConfigInvalid(idx, item, invalidErr.Error())
+			m.notifyPeriodicTaskConfigInvalid(idx, item, invalidErr.Error())
 			continue
 		}
 		payload := WorkflowTriggerPayload{
@@ -1538,7 +1618,7 @@ func (m *Manager) ValidatePeriodicTaskDefinitions() error {
 		if invalidErr == nil {
 			continue
 		}
-		notifyPeriodicTaskConfigInvalid(idx, normalized, invalidErr.Error())
+		m.notifyPeriodicTaskConfigInvalid(idx, normalized, invalidErr.Error())
 	}
 	return nil
 }
@@ -1593,7 +1673,7 @@ func (m *Manager) validatePeriodicTaskConfig(item config.TaskPeriodicConfig) (co
 }
 
 // notifyPeriodicTaskConfigInvalid 记录周期任务配置异常，保证错误配置可被日志检索和告警系统发现。
-func notifyPeriodicTaskConfigInvalid(index int, item config.TaskPeriodicConfig, reason string) {
+func (m *Manager) notifyPeriodicTaskConfigInvalid(index int, item config.TaskPeriodicConfig, reason string) {
 	fields := []logx.LogField{
 		logx.Field("index", index),
 		logx.Field("task_name", strings.TrimSpace(item.Name)),
@@ -1605,6 +1685,69 @@ func notifyPeriodicTaskConfigInvalid(index int, item config.TaskPeriodicConfig, 
 		logx.Field("failure_reason", strings.TrimSpace(reason)),
 	}
 	loggerx.ErrorTextw(context.Background(), "周期任务 配置无效", reason, fields...)
+	m.runPeriodicConfigInvalidHooks(index, item, reason, fields)
+}
+
+// runPeriodicConfigInvalidHooks 推送周期任务配置异常告警；同一异常在限频窗口内只通知一次。
+func (m *Manager) runPeriodicConfigInvalidHooks(index int, item config.TaskPeriodicConfig, reason string, fields []logx.LogField) {
+	if m == nil {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return
+	}
+	now := time.Now()
+	key := periodicConfigInvalidAlertKey(index, item, reason)
+	m.mu.Lock()
+	if len(m.periodicConfigHooks) == 0 {
+		m.mu.Unlock()
+		return
+	}
+	if m.periodicConfigAlertedMap == nil {
+		m.periodicConfigAlertedMap = make(map[string]periodicConfigAlertState)
+	}
+	state := m.periodicConfigAlertedMap[key]
+	if !state.LastSentAt.IsZero() && now.Sub(state.LastSentAt) < periodicConfigAlertTTL {
+		state.SuppressedCount++
+		m.periodicConfigAlertedMap[key] = state
+		m.mu.Unlock()
+		return
+	}
+	triggerCount := state.SuppressedCount + 1
+	m.periodicConfigAlertedMap[key] = periodicConfigAlertState{LastSentAt: now}
+	hooks := append([]PeriodicConfigInvalidHook(nil), m.periodicConfigHooks...)
+	m.mu.Unlock()
+
+	report := PeriodicConfigInvalidReport{
+		Index:        index,
+		Task:         item,
+		Reason:       reason,
+		OccurredAt:   now,
+		TriggerCount: triggerCount,
+	}
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook(context.Background(), report); err != nil {
+			loggerx.Errorw(context.Background(), "周期任务配置异常告警钩子执行失败", err, fields...)
+		}
+	}
+}
+
+// periodicConfigInvalidAlertKey 生成周期任务异常告警指纹，用于对重复同步日志限频。
+func periodicConfigInvalidAlertKey(index int, item config.TaskPeriodicConfig, reason string) string {
+	return strings.Join([]string{
+		strconv.Itoa(index),
+		strings.TrimSpace(item.Name),
+		strings.TrimSpace(item.Workflow),
+		strings.TrimSpace(item.Cron),
+		strconv.Itoa(item.EverySeconds),
+		strings.TrimSpace(item.Queue),
+		strings.TrimSpace(item.UniqueKey),
+		strings.TrimSpace(reason),
+	}, "\x00")
 }
 
 // workflowMetaKey 返回工作流主记录在 Redis 中的 key。

@@ -2,10 +2,12 @@ package bootstrap
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
 	keys "admin/common/rediskeys"
+	"admin/helper"
 	"admin/internal/config"
 	"admin/internal/handler"
 	"admin/internal/infra/cdcx"
@@ -36,6 +38,9 @@ func newCollectorComponent() Component {
 			return errors.Tag(err)
 		}
 		state.ServiceContext.Collector = manager
+		manager.SetAlertHook(func(ctx context.Context, alert collectorx.RuntimeAlert) {
+			svc.NotifyTaskRuntimeAlert(ctx, state.ServiceContext.Task, buildCollectorRuntimeAlert(alert))
+		})
 		// 通用收集器的 DB/Kafka/Redis 消费循环属于 Worker 职责，API-only 不启动后台消费。
 		if shouldStartWorkerLifecycle(state.Mode) {
 			if err := state.AddLifecycleHooks(componentNameCollector, func(context.Context) error {
@@ -49,6 +54,69 @@ func newCollectorComponent() Component {
 		}
 		return nil
 	})
+}
+
+// buildCollectorRuntimeAlert 将 Collector 内部告警转换为任务系统统一运行异常。
+func buildCollectorRuntimeAlert(alert collectorx.RuntimeAlert) svc.TaskRuntimeAlert {
+	reason := strings.TrimSpace(alert.Reason)
+	if alert.Count > 0 {
+		countText := "影响数量=" + strconv.Itoa(alert.Count)
+		if reason != "" {
+			reason += "；" + countText
+		} else {
+			reason = countText
+		}
+	}
+	kind := strings.TrimSpace(alert.Kind)
+	switch kind {
+	case collectorx.RuntimeAlertKindEnqueueFailed:
+		kind = svc.TaskRuntimeAlertKindCollectorEnqueueFailed
+	case collectorx.RuntimeAlertKindInvalidEvent:
+		kind = svc.TaskRuntimeAlertKindCollectorInvalidEvent
+	case collectorx.RuntimeAlertKindDeadEvent:
+		kind = svc.TaskRuntimeAlertKindCollectorDeadEvent
+	default:
+		kind = svc.TaskRuntimeAlertKindCollectorWorkerFailed
+	}
+	taskType := ""
+	if transport := strings.TrimSpace(alert.Transport); transport != "" {
+		taskType = "collector:" + transport
+	}
+	uniqueKey := collectorAlertUniqueKey(kind, alert)
+	return svc.TaskRuntimeAlert{
+		Kind:       kind,
+		Title:      strings.TrimSpace(alert.Title),
+		Status:     strings.TrimSpace(alert.Status),
+		Component:  helper.FirstNonEmptyString(strings.TrimSpace(alert.Component), componentNameCollector),
+		Operation:  strings.TrimSpace(alert.Operation),
+		TaskName:   strings.TrimSpace(alert.BizType),
+		TaskType:   taskType,
+		TaskQueue:  "collector",
+		UniqueKey:  uniqueKey,
+		Reason:     reason,
+		Advice:     strings.TrimSpace(alert.Advice),
+		OccurredAt: alert.OccurredAt,
+	}
+}
+
+// collectorAlertUniqueKey 生成低基数告警指纹，避免事件 ID 或消息 ID 导致 Lark 刷屏。
+func collectorAlertUniqueKey(kind string, alert collectorx.RuntimeAlert) string {
+	bizType := strings.TrimSpace(alert.BizType)
+	if bizType != "" {
+		return bizType
+	}
+	operation := strings.TrimSpace(alert.Operation)
+	transport := strings.TrimSpace(alert.Transport)
+	if operation != "" && transport != "" {
+		return operation + ":" + transport
+	}
+	if operation != "" {
+		return operation
+	}
+	if transport != "" {
+		return transport
+	}
+	return strings.TrimSpace(kind)
 }
 
 // newCDCConsumerComponent 创建 Debezium CDC 消费启动组件。
@@ -169,7 +237,7 @@ func newTaskRuntimeComponent() Component {
 	})
 }
 
-// registerTaskFailureLarkAlert 注册后台任务终态失败 Lark 预警。
+// registerTaskFailureLarkAlert 注册后台任务 Lark 预警。
 func registerTaskFailureLarkAlert(cfg config.Config, manager *taskqueue.Manager) error {
 	if manager == nil {
 		return nil
@@ -181,9 +249,25 @@ func registerTaskFailureLarkAlert(cfg config.Config, manager *taskqueue.Manager)
 	if notifier == nil {
 		return nil
 	}
-	return manager.RegisterFinalFailureHook(func(ctx context.Context, task *asynq.Task, meta taskqueue.WorkflowTaskMeta, runErr error) error {
+	if err := manager.RegisterFinalFailureHook(func(ctx context.Context, task *asynq.Task, meta taskqueue.WorkflowTaskMeta, runErr error) error {
 		if err := notifier.SendTaskFailure(taskFailureAlertSendContext(ctx), buildTaskFailureAlert(cfg, ctx, task, meta, runErr)); err != nil {
 			return errors.Wrap(err, "发送任务失败 Lark 告警失败")
+		}
+		return nil
+	}); err != nil {
+		return errors.Tag(err)
+	}
+	if err := manager.RegisterPeriodicConfigInvalidHook(func(ctx context.Context, report taskqueue.PeriodicConfigInvalidReport) error {
+		if err := notifier.SendPeriodicConfigInvalid(taskFailureAlertSendContext(ctx), buildPeriodicConfigAlert(cfg, report)); err != nil {
+			return errors.Wrap(err, "发送周期任务配置异常 Lark 告警失败")
+		}
+		return nil
+	}); err != nil {
+		return errors.Tag(err)
+	}
+	return manager.RegisterRuntimeAlertHook(func(ctx context.Context, alert taskqueue.TaskRuntimeAlert) error {
+		if err := notifier.SendTaskRuntimeAlert(taskFailureAlertSendContext(ctx), buildTaskRuntimeAlert(cfg, alert)); err != nil {
+			return errors.Wrap(err, "发送任务运行异常 Lark 告警失败")
 		}
 		return nil
 	})
@@ -244,6 +328,64 @@ func buildTaskFailureAlert(cfg config.Config, ctx context.Context, task *asynq.T
 			alert.ShardIndex = meta.ShardIndex
 			alert.ShardTotal = meta.ShardTotal
 		}
+	}
+	return alert
+}
+
+// buildPeriodicConfigAlert 从周期任务配置异常中提取 Lark 告警字段。
+func buildPeriodicConfigAlert(cfg config.Config, report taskqueue.PeriodicConfigInvalidReport) larkx.PeriodicConfigAlert {
+	item := report.Task
+	alert := larkx.PeriodicConfigAlert{
+		ServiceName:  strings.TrimSpace(cfg.Observability.ServiceName),
+		Environment:  strings.TrimSpace(cfg.Observability.Environment),
+		AppID:        strings.TrimSpace(cfg.AppID),
+		TaskIndex:    report.Index,
+		TaskName:     strings.TrimSpace(item.Name),
+		WorkflowName: strings.TrimSpace(item.Workflow),
+		Cron:         strings.TrimSpace(item.Cron),
+		EverySeconds: item.EverySeconds,
+		TaskQueue:    strings.TrimSpace(item.Queue),
+		UniqueKey:    strings.TrimSpace(item.UniqueKey),
+		OccurredAt:   report.OccurredAt,
+		Reason:       strings.TrimSpace(report.Reason),
+		TriggerCount: report.TriggerCount,
+	}
+	if alert.ServiceName == "" {
+		alert.ServiceName = strings.TrimSpace(cfg.Name)
+	}
+	if alert.Environment == "" {
+		alert.Environment = strings.TrimSpace(cfg.Mode)
+	}
+	return alert
+}
+
+// buildTaskRuntimeAlert 从任务运行异常中提取 Lark 告警字段。
+func buildTaskRuntimeAlert(cfg config.Config, report taskqueue.TaskRuntimeAlert) larkx.TaskRuntimeAlert {
+	alert := larkx.TaskRuntimeAlert{
+		ServiceName:  strings.TrimSpace(cfg.Observability.ServiceName),
+		Environment:  strings.TrimSpace(cfg.Observability.Environment),
+		AppID:        strings.TrimSpace(cfg.AppID),
+		Kind:         strings.TrimSpace(report.Kind),
+		Title:        strings.TrimSpace(report.Title),
+		Status:       strings.TrimSpace(report.Status),
+		Component:    strings.TrimSpace(report.Component),
+		Operation:    strings.TrimSpace(report.Operation),
+		TaskName:     strings.TrimSpace(report.TaskName),
+		TaskType:     strings.TrimSpace(report.TaskType),
+		WorkflowName: strings.TrimSpace(report.WorkflowName),
+		Cron:         strings.TrimSpace(report.Cron),
+		TaskQueue:    strings.TrimSpace(report.TaskQueue),
+		UniqueKey:    strings.TrimSpace(report.UniqueKey),
+		OccurredAt:   report.OccurredAt,
+		Reason:       strings.TrimSpace(report.Reason),
+		Advice:       strings.TrimSpace(report.Advice),
+		TriggerCount: report.TriggerCount,
+	}
+	if alert.ServiceName == "" {
+		alert.ServiceName = strings.TrimSpace(cfg.Name)
+	}
+	if alert.Environment == "" {
+		alert.Environment = strings.TrimSpace(cfg.Mode)
 	}
 	return alert
 }

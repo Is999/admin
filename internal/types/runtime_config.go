@@ -9,13 +9,16 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
-// RuntimeConfigOverviewResp 返回运行配置当前来源、active 版本和草稿统计。
+// RuntimeConfigOverviewResp 返回运行配置来源、active 版本、草稿统计和快照对比数据。
 type RuntimeConfigOverviewResp struct {
 	Source              string                  `json:"source"`              // 配置来源：file 或 database
 	PollIntervalSeconds int                     `json:"pollIntervalSeconds"` // DB 模式轻量轮询间隔秒数
 	State               RuntimeConfigStateItem  `json:"state"`               // 当前 active 版本状态
 	Draft               RuntimeConfigDraftCount `json:"draft"`               // 草稿配置数量
 	CurrentSnapshot     RuntimeConfigSnapshot   `json:"currentSnapshot"`     // 当前运行态快照，仅包含大列表配置
+	DraftSnapshot       RuntimeConfigSnapshot   `json:"draftSnapshot"`       // 当前全量草稿快照，仅包含大列表配置
+	DraftChecksum       string                  `json:"draftChecksum"`       // 草稿快照 SHA256，与预检和发布口径一致
+	DraftChanged        bool                    `json:"draftChanged"`        // 草稿快照是否不同于当前 active 快照
 }
 
 // RuntimeConfigDraftCount 表示当前草稿配置数量。

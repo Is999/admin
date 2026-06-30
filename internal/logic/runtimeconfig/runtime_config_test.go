@@ -179,6 +179,33 @@ func TestEncodeSnapshotUsesNormalizedArchiveDelayDays(t *testing.T) {
 	}
 }
 
+// TestEncodeReleaseSnapshotNormalizesDefaults 验证概览、预检和发布共用的快照编码会先补齐默认值。
+func TestEncodeReleaseSnapshotNormalizesDefaults(t *testing.T) {
+	snapshot, jsonText, _, checksum, err := encodeReleaseSnapshot(ReleaseSnapshot{
+		ArchiveJobs: []config.ArchiveJobConfig{
+			{Name: "admin_log", TableName: "admin_log", HotKeepDays: 32},
+		},
+		TaskPeriodic: []config.TaskPeriodicConfig{
+			{Name: "archive-admin-log-hourly", Cron: "5 * * * *", Workflow: "archive.run"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encodeReleaseSnapshot() error = %v", err)
+	}
+	if checksum == "" {
+		t.Fatal("checksum 不能为空")
+	}
+	if snapshot.ArchiveJobs[0].ArchiveDelayDays != 32 || snapshot.ArchiveJobs[0].DeleteDelayDays != 32 {
+		t.Fatalf("归档默认值未补齐: %+v", snapshot.ArchiveJobs[0])
+	}
+	if snapshot.TaskPeriodic[0].Enabled == nil || !*snapshot.TaskPeriodic[0].Enabled {
+		t.Fatalf("周期任务默认启用未补齐: %+v", snapshot.TaskPeriodic[0].Enabled)
+	}
+	if !strings.Contains(jsonText, `"archive_delay_days":32`) || !strings.Contains(jsonText, `"enabled":true`) {
+		t.Fatalf("encoded snapshot missing normalized defaults: %s", jsonText)
+	}
+}
+
 // TestPeriodicConfigToModelDefaultsEnabled 验证运行配置首次导入草稿时周期任务默认启用。
 func TestPeriodicConfigToModelDefaultsEnabled(t *testing.T) {
 	row := periodicConfigToModel(config.TaskPeriodicConfig{

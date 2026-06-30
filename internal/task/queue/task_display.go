@@ -12,6 +12,7 @@ import (
 	"admin/helper"
 	"admin/internal/config"
 	"admin/internal/jobs/archive"
+	"admin/internal/jobs/taskreport"
 	"admin/internal/requestctx"
 	taskstats "admin/internal/task/stats"
 
@@ -32,6 +33,8 @@ func taskTypeDescription(taskType string) string {
 		return "缓存批量刷新任务，真正执行缓存刷新逻辑"
 	case taskType == archive.TaskTypeExecute:
 		return "通用归档执行任务，负责按区间批量写历史表、校验并删除热表"
+	case taskType == taskreport.TaskTypeDailySummary:
+		return "周期任务与工作流运行日报任务，汇总昨日 10 点到今日 10 点的执行情况并发送 Lark 通知"
 	case taskType == "admin:export":
 		return "管理员列表异步导出任务，生成 Excel 并回写进度"
 	case strings.HasPrefix(taskType, "user_tag:"):
@@ -63,6 +66,8 @@ func taskTypeUsageHint(taskType string) string {
 		return "该任务通常由聚合器自动生成，不建议人工直接投递。"
 	case taskType == archive.TaskTypeExecute:
 		return "建议通过归档工作流统一触发；单独投递时只适合排障或补跑。"
+	case taskType == taskreport.TaskTypeDailySummary:
+		return "建议由每天 10 点的 task_report.daily_summary 周期任务触发；手工投递可传 windowStart/windowEnd RFC3339 覆盖统计窗口。"
 	case taskType == "admin:export":
 		return "建议优先使用管理员列表页导出入口；手工投递时需提供 jobId、operatorId 和 request。"
 	case strings.HasPrefix(taskType, "user_tag:"):
@@ -84,6 +89,8 @@ func taskTypePayloadExample(taskType string) string {
 			fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1))
 	case taskType == archive.TaskTypeExecute:
 		return "{\n  \"targets\": [\"admin_log\"]\n}"
+	case taskType == taskreport.TaskTypeDailySummary:
+		return "{\n  \"windowStart\": \"2026-06-29T10:00:00+08:00\",\n  \"windowEnd\": \"2026-06-30T10:00:00+08:00\"\n}"
 	case taskType == "admin:export":
 		return "{\n  \"jobId\": \"job-demo-001\",\n  \"operatorId\": 1,\n  \"operatorName\": \"admin\",\n  \"request\": {\n    \"username\": \"demo\"\n  }\n}"
 	case strings.HasPrefix(taskType, "user_tag:"):
@@ -100,6 +107,8 @@ func taskTypeManualRecommended(taskType string) bool {
 		return true
 	case taskType == "admin:export":
 		return true
+	case taskType == taskreport.TaskTypeDailySummary:
+		return true
 	default:
 		return false
 	}
@@ -112,6 +121,8 @@ func workflowUsageHint(name string) string {
 		return "适合按目标列表触发缓存刷新；targets 可填写缓存目标或页面带入的缓存键。"
 	case archive.WorkflowNameRun:
 		return "适合在低峰期批量执行热表归档；targets 可填写 admin_log 等归档任务名。"
+	case taskreport.WorkflowNameDailySummary:
+		return "通常由每天 10 点周期任务触发，发送昨日 10 点到今日 10 点的任务运行日报；手动触发可覆盖统计窗口。"
 	case "user_tag.full.rebuild":
 		return "每日全量重建链路，建议在低峰期执行，避免和日常重算任务叠加。"
 	case "user_tag.delta.refresh":
@@ -136,6 +147,8 @@ func workflowTargetsExample(name string) string {
 		return strings.Join([]string{fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)}, ", ")
 	case archive.WorkflowNameRun:
 		return "admin_log"
+	case taskreport.WorkflowNameDailySummary:
+		return ""
 	case "user_tag.targeted.calc":
 		return "uid:10001, uid:10002"
 	case "user_tag.tag.recalculate":

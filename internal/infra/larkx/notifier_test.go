@@ -15,8 +15,43 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
-// TestSendTaskFailureBuildsProfessionalText 验证告警文本、签名和换行错误摘要符合生产排障要求。
-func TestSendTaskFailureBuildsProfessionalText(t *testing.T) {
+func requirePayloadText(t *testing.T, payload messagePayload) string {
+	t.Helper()
+	if payload.Content == nil {
+		t.Fatalf("payload content is nil: %+v", payload)
+	}
+	return payload.Content.Text
+}
+
+func requireCardText(t *testing.T, payload messagePayload) string {
+	t.Helper()
+	if payload.Card == nil {
+		t.Fatalf("payload card is nil: %+v", payload)
+	}
+	return cardTextContent(*payload.Card)
+}
+
+func cardTextContent(card messageCard) string {
+	parts := make([]string, 0, 8)
+	if card.Header != nil {
+		parts = append(parts, card.Header.Title.Content)
+	}
+	for _, element := range card.Elements {
+		if element.Text != nil {
+			parts = append(parts, element.Text.Content)
+		}
+		for _, field := range element.Fields {
+			parts = append(parts, field.Text.Content)
+		}
+		for _, item := range element.Elements {
+			parts = append(parts, item.Content)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// TestSendTaskFailureBuildsProfessionalCard 验证终态失败告警卡片、签名和换行错误摘要符合生产排障要求。
+func TestSendTaskFailureBuildsProfessionalCard(t *testing.T) {
 	var got messagePayload
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -63,8 +98,8 @@ func TestSendTaskFailureBuildsProfessionalText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send task failure failed: %v", err)
 	}
-	if got.MsgType != "text" {
-		t.Fatalf("msg_type=%s, want text", got.MsgType)
+	if got.MsgType != "interactive" {
+		t.Fatalf("msg_type=%s, want interactive", got.MsgType)
 	}
 	if got.Timestamp != "1700000000" {
 		t.Fatalf("timestamp=%s", got.Timestamp)
@@ -75,23 +110,31 @@ func TestSendTaskFailureBuildsProfessionalText(t *testing.T) {
 	if got.Sign != "fiWS2+gh28DOydAv7hzONH/mDn9+b1Y4Y5ivXWXy8vA=" {
 		t.Fatalf("sign=%s", got.Sign)
 	}
+	if got.Content != nil {
+		t.Fatalf("task failure should use card instead of text: %+v", got.Content)
+	}
+	if got.Card == nil || got.Card.Header == nil || got.Card.Header.Template != "red" {
+		t.Fatalf("unexpected task failure card: %+v", got.Card)
+	}
+	text := requireCardText(t, got)
 	for _, want := range []string{
-		"【P1 后台任务终态失败】",
-		"状态：已归档失败，不会继续自动重试",
-		"任务\n- 名称：工作流触发:user_tag.delta.refresh",
-		"- 来源：periodic",
-		"工作流\n- 名称：user_tag.delta.refresh",
-		"- 工作流ID：wf-1",
-		"- 分片：2/10",
-		"错误摘要\n下游返回失败 code=500",
-		"处理建议\n请在任务中心按任务ID或工作流ID检索执行日志",
+		"P1 后台任务终态失败",
+		"**状态**：已归档失败，不会继续自动重试",
+		"**服务**\nadmin",
+		"**环境 / 站点**\npro / 1",
+		"**任务**\n工作流触发:user_tag.delta.refresh",
+		"**队列 / 来源**\nmaintenance / periodic",
+		"**工作流**\nuser_tag.delta.refresh",
+		"**分片**\n2/10",
+		"**错误摘要**\n下游返回失败 code=500",
+		"**处理建议**\n- 在任务中心按任务ID或工作流ID检索执行日志",
 	} {
-		if !strings.Contains(got.Content.Text, want) {
-			t.Fatalf("payload text missing %q:\n%s", want, got.Content.Text)
+		if !strings.Contains(text, want) {
+			t.Fatalf("card text missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(got.Content.Text, "\ncode=500") {
-		t.Fatalf("error summary should be normalized: %s", got.Content.Text)
+	if strings.Contains(text, "\ncode=500") {
+		t.Fatalf("error summary should be normalized: %s", text)
 	}
 }
 
@@ -117,8 +160,8 @@ func TestSendTaskFailureRejectsLarkBusinessError(t *testing.T) {
 	}
 }
 
-// TestSendPeriodicConfigInvalidBuildsProfessionalText 验证周期任务配置异常告警文本适合生产排障。
-func TestSendPeriodicConfigInvalidBuildsProfessionalText(t *testing.T) {
+// TestSendPeriodicConfigInvalidBuildsProfessionalCard 验证周期任务配置异常告警卡片适合生产排障。
+func TestSendPeriodicConfigInvalidBuildsProfessionalCard(t *testing.T) {
 	var got messagePayload
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
@@ -145,11 +188,11 @@ func TestSendPeriodicConfigInvalidBuildsProfessionalText(t *testing.T) {
 		Environment:  "prod",
 		AppID:        "site-1",
 		TaskIndex:    14,
-		TaskName:     "monitorfeishu-feishu-report-2m",
-		WorkflowName: "monitorfeishu.feishu_report",
-		Cron:         "*/2 * * * *",
-		TaskQueue:    "default",
-		UniqueKey:    "periodic:monitorfeishu.feishu_report",
+		TaskName:     "task-report-daily-summary",
+		WorkflowName: "task_report.daily_summary",
+		Cron:         "0 10 * * *",
+		TaskQueue:    "maintenance",
+		UniqueKey:    "periodic:task_report.daily_summary",
 		OccurredAt:   time.Date(2026, 6, 29, 15, 33, 40, 0, time.FixedZone("CST", 8*3600)),
 		Reason:       "工作流定义不存在",
 		TriggerCount: 3,
@@ -157,31 +200,35 @@ func TestSendPeriodicConfigInvalidBuildsProfessionalText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send periodic config invalid failed: %v", err)
 	}
-	if got.MsgType != "text" {
-		t.Fatalf("msg_type=%s, want text", got.MsgType)
+	if got.MsgType != "interactive" {
+		t.Fatalf("msg_type=%s, want interactive", got.MsgType)
 	}
+	if got.Card == nil || got.Card.Header == nil || got.Card.Header.Template != "red" {
+		t.Fatalf("unexpected periodic config card: %+v", got.Card)
+	}
+	text := requireCardText(t, got)
 	for _, want := range []string{
-		"【P1 周期任务配置异常】",
-		"状态：已跳过该周期任务，调度器继续运行",
-		"配置\n- 序号：14",
-		"- 名称：monitorfeishu-feishu-report-2m",
-		"- 工作流：monitorfeishu.feishu_report",
-		"- Cron：*/2 * * * *",
-		"- 队列：default",
-		"- 去重键：periodic:monitorfeishu.feishu_report",
-		"- 窗口触发次数：3",
-		"错误摘要\n工作流定义不存在",
-		"影响与建议\n该周期任务不会注册到调度器",
-		`<at user_id="all">所有人</at>`,
+		"P1 周期任务配置异常",
+		"**状态**：已跳过该周期任务，调度器继续运行",
+		"**序号**\n14",
+		"**名称**\ntask-report-daily-summary",
+		"**工作流**\ntask_report.daily_summary",
+		"**Cron / Every**\ncron 0 10 * * *",
+		"**队列**\nmaintenance",
+		"**去重键**\nperiodic:task_report.daily_summary",
+		"**窗口触发次数**\n3",
+		"**错误摘要**\n工作流定义不存在",
+		"**影响与建议**\n- 该周期任务不会注册到调度器",
+		`<at id=all></at>`,
 	} {
-		if !strings.Contains(got.Content.Text, want) {
-			t.Fatalf("payload text missing %q:\n%s", want, got.Content.Text)
+		if !strings.Contains(text, want) {
+			t.Fatalf("card text missing %q:\n%s", want, text)
 		}
 	}
 }
 
-// TestSendTaskRuntimeAlertBuildsProfessionalText 验证任务系统运行异常告警文本适合生产排障。
-func TestSendTaskRuntimeAlertBuildsProfessionalText(t *testing.T) {
+// TestSendTaskRuntimeAlertBuildsProfessionalCard 验证任务系统运行异常告警卡片适合生产排障。
+func TestSendTaskRuntimeAlertBuildsProfessionalCard(t *testing.T) {
 	var got messagePayload
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
@@ -212,12 +259,12 @@ func TestSendTaskRuntimeAlertBuildsProfessionalText(t *testing.T) {
 		Status:       "本轮周期任务未成功投递到队列，调度器继续运行",
 		Component:    "scheduler",
 		Operation:    "enqueue_periodic_task",
-		TaskName:     "周期任务触发:monitorfeishu-feishu-report-2m",
+		TaskName:     "周期任务触发:task-report-daily-summary",
 		TaskType:     "workflow:trigger",
-		WorkflowName: "monitorfeishu.feishu_report",
-		Cron:         "*/2 * * * *",
-		TaskQueue:    "default",
-		UniqueKey:    "periodic:monitorfeishu.feishu_report",
+		WorkflowName: "task_report.daily_summary",
+		Cron:         "0 10 * * *",
+		TaskQueue:    "maintenance",
+		UniqueKey:    "periodic:task_report.daily_summary",
 		OccurredAt:   time.Date(2026, 6, 29, 15, 40, 0, 0, time.FixedZone("CST", 8*3600)),
 		Reason:       "redis: connection refused",
 		Advice:       "请检查 maintenance 队列和 Redis 连接池。",
@@ -226,29 +273,199 @@ func TestSendTaskRuntimeAlertBuildsProfessionalText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send task runtime alert failed: %v", err)
 	}
-	if got.MsgType != "text" {
-		t.Fatalf("msg_type=%s, want text", got.MsgType)
+	if got.MsgType != "interactive" {
+		t.Fatalf("msg_type=%s, want interactive", got.MsgType)
 	}
+	if got.Card == nil || got.Card.Header == nil || got.Card.Header.Template != "red" {
+		t.Fatalf("unexpected runtime alert card: %+v", got.Card)
+	}
+	text := requireCardText(t, got)
 	for _, want := range []string{
-		"【P1 周期任务入队失败】",
-		"状态：本轮周期任务未成功投递到队列，调度器继续运行",
-		"异常\n- 类型：periodic_enqueue_failed",
-		"- 组件：scheduler",
-		"- 动作：enqueue_periodic_task",
-		"- 任务：周期任务触发:monitorfeishu-feishu-report-2m",
-		"- 任务类型：workflow:trigger",
-		"- 工作流：monitorfeishu.feishu_report",
-		"- Cron：*/2 * * * *",
-		"- 队列：default",
-		"- 去重键：periodic:monitorfeishu.feishu_report",
-		"- 窗口触发次数：4",
-		"错误摘要\nredis: connection refused",
-		"处理建议\n请检查 maintenance 队列和 Redis 连接池。",
-		`<at user_id="all">所有人</at>`,
+		"P1 周期任务入队失败",
+		"**状态**：本轮周期任务未成功投递到队列，调度器继续运行",
+		"**类型**\nperiodic_enqueue_failed",
+		"**组件 / 动作**\nscheduler / enqueue_periodic_task",
+		"**任务**\n周期任务触发:task-report-daily-summary",
+		"**任务类型**\nworkflow:trigger",
+		"**工作流**\ntask_report.daily_summary",
+		"**Cron**\n0 10 * * *",
+		"**队列**\nmaintenance",
+		"**去重键**\nperiodic:task_report.daily_summary",
+		"**窗口触发次数**\n4",
+		"**错误摘要**\nredis: connection refused",
+		"**处理建议**\n- 请检查 maintenance 队列和 Redis 连接池。",
+		`<at id=all></at>`,
 	} {
-		if !strings.Contains(got.Content.Text, want) {
-			t.Fatalf("payload text missing %q:\n%s", want, got.Content.Text)
+		if !strings.Contains(text, want) {
+			t.Fatalf("card text missing %q:\n%s", want, text)
 		}
+	}
+}
+
+// TestSendTaskDailyReportBuildsReadableCard 验证任务运行日报使用卡片并包含关键汇总分区。
+func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
+	var got messagePayload
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode payload failed: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+
+	notifier, err := New(config.LarkAlertConfig{
+		Enabled:       true,
+		WebhookURL:    server.URL,
+		MaxErrorBytes: 120,
+		AtAll:         true,
+	})
+	if err != nil {
+		t.Fatalf("new notifier failed: %v", err)
+	}
+	notifier.client = server.Client()
+	notifier.now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
+
+	err = notifier.SendTaskDailyReport(context.Background(), TaskDailyReport{
+		ServiceName:           "admin",
+		Environment:           "prod",
+		AppID:                 "203",
+		WindowStart:           time.Date(2026, 6, 29, 10, 0, 0, 0, time.FixedZone("CST", 8*3600)),
+		WindowEnd:             time.Date(2026, 6, 30, 10, 0, 0, 0, time.FixedZone("CST", 8*3600)),
+		GeneratedAt:           time.Date(2026, 6, 30, 10, 0, 5, 0, time.FixedZone("CST", 8*3600)),
+		TotalTaskExecutions:   12,
+		SuccessTaskExecutions: 11,
+		FailedTaskExecutions:  1,
+		PeriodicTriggerTotal:  4,
+		PeriodicTriggerOK:     3,
+		PeriodicTriggerFailed: 1,
+		NodeTaskTotal:         8,
+		WorkflowTotal:         4,
+		WorkflowSuccess:       3,
+		WorkflowFailed:        1,
+		AverageDurationMS:     1200,
+		MaxDurationMS:         3500,
+		Queues: []TaskDailyReportQueue{{
+			Name:           "maintenance",
+			TaskExecutions: 12,
+			Success:        11,
+			Failed:         1,
+			Triggers:       4,
+			NodeTasks:      8,
+			Pending:        1,
+			Active:         2,
+			Retry:          0,
+			Archived:       1,
+		}},
+		PeriodicTasks: []TaskDailyReportItem{{
+			Name:           "user-report-recalc-today",
+			Related:        "user_report.recalc_today",
+			Queue:          "maintenance",
+			TaskExecutions: 4,
+			Triggers:       1,
+			NodeTasks:      3,
+			Success:        3,
+			Failed:         1,
+			AverageMS:      1200,
+			MaxMS:          3500,
+			LastAt:         "2026-06-30T09:58:00+08:00",
+		}},
+		Workflows: []TaskDailyReportItem{{
+			Name:           "user_report.recalc_today",
+			Related:        "user-report-recalc-today",
+			Queue:          "maintenance",
+			TaskExecutions: 1,
+			NodeTasks:      3,
+			Success:        0,
+			Failed:         1,
+		}},
+		FailureTasks: []TaskDailyReportTask{{
+			ID:           "task-1",
+			Name:         "user_report.recalc_today/recalc_today",
+			State:        "archived",
+			Queue:        "maintenance",
+			PeriodicName: "user-report-recalc-today",
+			WorkflowID:   "wf-1",
+			WorkflowName: "user_report.recalc_today",
+			WorkflowNode: "recalc_today",
+			FinishedAt:   "2026-06-30T09:58:00+08:00",
+			DurationMS:   3500,
+			Error:        "db timeout\nquery killed",
+		}},
+		SlowTasks: []TaskDailyReportTask{{
+			Name:         "user_report.recalc_today/recalc_today",
+			State:        "archived",
+			Queue:        "maintenance",
+			WorkflowName: "user_report.recalc_today",
+			DurationMS:   3500,
+		}},
+		RetentionWarning: "completed_retention_seconds 不大于统计窗口",
+	})
+	if err != nil {
+		t.Fatalf("send task daily report failed: %v", err)
+	}
+	if got.MsgType != "interactive" {
+		t.Fatalf("msg_type=%s, want interactive", got.MsgType)
+	}
+	if got.Content != nil {
+		t.Fatalf("daily report should use card instead of text: %+v", got.Content)
+	}
+	if got.Card == nil || got.Card.Header == nil {
+		t.Fatalf("missing card/header: %+v", got)
+	}
+	if !got.Card.Config.WideScreenMode {
+		t.Fatalf("daily report card should use wide screen mode")
+	}
+	if got.Card.Header.Template != "red" {
+		t.Fatalf("header template=%s, want red", got.Card.Header.Template)
+	}
+	text := requireCardText(t, got)
+	for _, want := range []string{
+		"P3 任务运行日报 | 存在失败",
+		"**状态**：存在终态失败",
+		"**窗口**：2026-06-29 10:00 ~ 2026-06-30 10:00",
+		"**队列积压**\npending 1 / active 2 / retry 0 / archived 1",
+		"**总览**",
+		"- 周期触发：4 次，成功 3，失败 1",
+		"- 工作流：4 个，成功 3，失败 1",
+		"**重点关注**",
+		"- 失败：任务 1，工作流 1",
+		"**失败明细**",
+		"错误 db timeout query killed",
+		"**周期任务 Top**",
+		"user-report-recalc-today｜执行 4 / 成功 3 / 失败 1 / 触发 1",
+		"**工作流 Top**",
+		"user_report.recalc_today｜实例 1 / 成功 0 / 失败 1 / 运行 0",
+		"**慢任务 Top**",
+		"**处理建议**",
+		"- 数据完整性：completed_retention_seconds 不大于统计窗口",
+		`<at id=all></at>`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("card text missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestTaskDailyReportAtAllsWorkflowFailure 验证工作流失败也会触发日报 @all。
+func TestTaskDailyReportAtAllsWorkflowFailure(t *testing.T) {
+	notifier := &Notifier{
+		atAll:        true,
+		maxErrorByte: defaultMaxErrorBytes,
+		now:          func() time.Time { return time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC) },
+	}
+	card := notifier.formatTaskDailyReportCard(TaskDailyReport{
+		ServiceName:          "admin",
+		Environment:          "prod",
+		WindowStart:          time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC),
+		WindowEnd:            time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC),
+		WorkflowTotal:        1,
+		WorkflowFailed:       1,
+		FailureTasks:         nil,
+		FailedTaskExecutions: 0,
+	})
+	text := cardTextContent(card)
+	if !strings.Contains(text, `<at id=all></at>`) {
+		t.Fatalf("expected workflow failure to at all:\n%s", text)
 	}
 }
 
@@ -281,7 +498,7 @@ func TestSendTextSendsPlainText(t *testing.T) {
 		t.Fatalf("SendText() error = %v", err)
 	}
 	payload := <-payloadCh
-	if payload.MsgType != "text" || payload.Content.Text != "CDC 审核日志" {
+	if payload.MsgType != "text" || requirePayloadText(t, payload) != "CDC 审核日志" {
 		t.Fatalf("Lark payload 不符合预期: %+v", payload)
 	}
 	if payload.Timestamp == "" || payload.Sign == "" {

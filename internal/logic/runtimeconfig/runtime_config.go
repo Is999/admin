@@ -145,6 +145,16 @@ func EncodeSnapshot(snapshot ReleaseSnapshot) (string, string, string, error) {
 	return string(jsonBytes), string(yamlBytes), sha256Hex(jsonBytes), nil
 }
 
+// encodeReleaseSnapshot 补齐发布默认值后生成快照文本和校验和，供概览、预检和发布复用同一口径。
+func encodeReleaseSnapshot(snapshot ReleaseSnapshot) (ReleaseSnapshot, string, string, string, error) {
+	normalized := normalizeReleaseSnapshot(snapshot)
+	jsonText, yamlText, checksum, err := EncodeSnapshot(normalized)
+	if err != nil {
+		return normalized, "", "", "", errors.Tag(err)
+	}
+	return normalized, jsonText, yamlText, checksum, nil
+}
+
 // LoadActiveSnapshotCached 从 table-cache 读取当前 active 发布快照。
 func LoadActiveSnapshotCached(ctx context.Context, svcCtx *svc.ServiceContext) (*ActiveRelease, error) {
 	logicObj := NewRuntimeConfigLogicWithContext(ctx, svcCtx)
@@ -205,7 +215,7 @@ func LoadActiveStateCached(ctx context.Context, svcCtx *svc.ServiceContext) (Sta
 	return logicObj.loadActiveStateCached()
 }
 
-// Overview 查询运行配置来源、active 版本、草稿数量和当前快照。
+// Overview 查询运行配置来源、active 版本、草稿数量和对比快照。
 func (l *RuntimeConfigLogic) Overview() *types.BizResult {
 	cfg := l.currentConfig()
 	state, _ := l.loadActiveStateCached()
@@ -213,6 +223,15 @@ func (l *RuntimeConfigLogic) Overview() *types.BizResult {
 	if err != nil {
 		return types.DBError(i18n.MsgKeyQueryFail, err, "RuntimeConfigLogic.Overview 查询草稿数量失败").ToBizResult()
 	}
+	draftSnapshot, err := l.buildDraftSnapshot()
+	if err != nil {
+		return types.DBError(i18n.MsgKeyQueryFail, err, "RuntimeConfigLogic.Overview 读取草稿快照失败").ToBizResult()
+	}
+	draftSnapshot, _, _, draftChecksum, err := encodeReleaseSnapshot(draftSnapshot)
+	if err != nil {
+		return types.ServerError(i18n.MsgKeyInternalError, err, "RuntimeConfigLogic.Overview 生成草稿快照失败").ToBizResult()
+	}
+	activeChecksum := strings.TrimSpace(state.ActiveChecksum)
 	return types.NewBizResult(codes.FetchSuccess).WithData(&types.RuntimeConfigOverviewResp{
 		Source:              NormalizeSource(cfg.RuntimeConfig.Source),
 		PollIntervalSeconds: PollIntervalSeconds(cfg),
@@ -222,6 +241,9 @@ func (l *RuntimeConfigLogic) Overview() *types.BizResult {
 			ArchiveJobs:   archiveCount,
 		},
 		CurrentSnapshot: snapshotToResp(CurrentSnapshotFromConfig(cfg)),
+		DraftSnapshot:   snapshotToResp(draftSnapshot),
+		DraftChecksum:   draftChecksum,
+		DraftChanged:    draftChecksum != activeChecksum,
 	})
 }
 
@@ -387,12 +409,13 @@ func (l *RuntimeConfigLogic) ValidateDraft() *types.BizResult {
 	if err != nil {
 		return types.ServerError(i18n.MsgKeyQueryFail, err, "RuntimeConfigLogic.ValidateDraft 读取草稿失败").ToBizResult()
 	}
+	snapshot = normalizeReleaseSnapshot(snapshot)
 	messages, err := ValidateSnapshot(snapshot)
 	if err != nil {
 		return types.NewBizResult(codes.Success).
 			WithData(&types.RuntimeConfigValidateResp{Valid: false, Messages: append(messages, err.Error())})
 	}
-	_, _, checksum, err := EncodeSnapshot(snapshot)
+	_, _, _, checksum, err := encodeReleaseSnapshot(snapshot)
 	if err != nil {
 		return types.ServerError(i18n.MsgKeyInternalError, err, "RuntimeConfigLogic.ValidateDraft 生成快照失败").ToBizResult()
 	}
@@ -528,7 +551,7 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 		return nil, errors.Tag(err)
 	}
 	admin := l.GetCtxAdmin()
-	jsonText, yamlText, checksum, err := EncodeSnapshot(snapshot)
+	_, jsonText, yamlText, checksum, err := encodeReleaseSnapshot(snapshot)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}

@@ -28,6 +28,38 @@ type larkAlertPayload struct {
 	Content struct {
 		Text string `json:"text"` // Text 表示测试字段。
 	} `json:"content"`
+	// Card 表示 Lark 卡片消息内容。
+	Card struct {
+		Header struct {
+			Template string `json:"template"` // Template 表示卡片颜色模板。
+			Title    struct {
+				Content string `json:"content"` // Content 表示卡片标题。
+			} `json:"title"`
+		} `json:"header"`
+		Elements []struct {
+			Text *struct {
+				Content string `json:"content"` // Content 表示卡片文本。
+			} `json:"text"`
+			Fields []struct {
+				Text struct {
+					Content string `json:"content"` // Content 表示字段文本。
+				} `json:"text"`
+			} `json:"fields"`
+		} `json:"elements"`
+	} `json:"card"`
+}
+
+func larkAlertCardText(payload larkAlertPayload) string {
+	parts := []string{payload.Card.Header.Title.Content}
+	for _, element := range payload.Card.Elements {
+		if element.Text != nil {
+			parts = append(parts, element.Text.Content)
+		}
+		for _, field := range element.Fields {
+			parts = append(parts, field.Text.Content)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // TestTaskFailureLarkAlertSendsOnArchivedTask 验证任务进入 archived 终态失败后会真正调用 Lark webhook。
@@ -113,22 +145,25 @@ func TestTaskFailureLarkAlertSendsOnArchivedTask(t *testing.T) {
 
 	select {
 	case payload := <-payloadCh:
-		if payload.MsgType != "text" {
-			t.Fatalf("Lark 消息类型 = %s，期望 text", payload.MsgType)
+		if payload.MsgType != "interactive" {
+			t.Fatalf("Lark 消息类型 = %s，期望 interactive", payload.MsgType)
 		}
+		if payload.Card.Header.Template != "red" {
+			t.Fatalf("Lark 卡片颜色 = %s，期望 red", payload.Card.Header.Template)
+		}
+		text := larkAlertCardText(payload)
 		for _, want := range []string{
-			"【P1 后台任务终态失败】",
-			"站点：site-1",
-			"任务\n- 名称：demo:lark-final-failure",
-			"- 类型：demo:lark-final-failure",
-			"任务ID：" + resp.TaskID,
-			"工作流ID：wf-lark",
-			"节点：root",
-			"模式：delta",
-			"状态：已归档失败，不会继续自动重试",
+			"P1 后台任务终态失败",
+			"**环境 / 站点**\ntest / site-1",
+			"**任务**\ndemo:lark-final-failure",
+			"**任务类型**\ndemo:lark-final-failure",
+			"**任务ID**\n" + resp.TaskID,
+			"**工作流ID**\nwf-lark",
+			"**节点 / 模式**\nroot / delta",
+			"**状态**：已归档失败，不会继续自动重试",
 		} {
-			if !strings.Contains(payload.Content.Text, want) {
-				t.Fatalf("Lark 告警缺少 %q:\n%s", want, payload.Content.Text)
+			if !strings.Contains(text, want) {
+				t.Fatalf("Lark 告警缺少 %q:\n%s", want, text)
 			}
 		}
 	case <-time.After(5 * time.Second):
@@ -171,11 +206,11 @@ func TestPeriodicConfigInvalidLarkAlertSends(t *testing.T) {
 		DefaultQueue: taskqueue.QueueDefault,
 		Periodic: []config.TaskPeriodicConfig{
 			enabledBootstrapPeriodic(config.TaskPeriodicConfig{
-				Name:      "monitorfeishu-feishu-report-2m",
-				Cron:      "*/2 * * * *",
-				Workflow:  "monitorfeishu.feishu_report",
-				Queue:     taskqueue.QueueDefault,
-				UniqueKey: "periodic:monitorfeishu.feishu_report",
+				Name:      "task-report-daily-summary",
+				Cron:      "0 10 * * *",
+				Workflow:  "task_report.daily_summary",
+				Queue:     taskqueue.QueueMaintenance,
+				UniqueKey: "periodic:task_report.daily_summary",
 			}),
 		},
 	}, client)
@@ -204,21 +239,25 @@ func TestPeriodicConfigInvalidLarkAlertSends(t *testing.T) {
 
 	select {
 	case payload := <-payloadCh:
-		if payload.MsgType != "text" {
-			t.Fatalf("Lark 消息类型 = %s，期望 text", payload.MsgType)
+		if payload.MsgType != "interactive" {
+			t.Fatalf("Lark 消息类型 = %s，期望 interactive", payload.MsgType)
 		}
+		if payload.Card.Header.Template != "red" {
+			t.Fatalf("Lark 卡片颜色 = %s，期望 red", payload.Card.Header.Template)
+		}
+		text := larkAlertCardText(payload)
 		for _, want := range []string{
-			"【P1 周期任务配置异常】",
-			"站点：site-1",
-			"名称：monitorfeishu-feishu-report-2m",
-			"工作流：monitorfeishu.feishu_report",
-			"Cron：*/2 * * * *",
-			"去重键：periodic:monitorfeishu.feishu_report",
-			"错误摘要\n工作流定义不存在",
-			"该周期任务不会注册到调度器",
+			"P1 周期任务配置异常",
+			"**环境 / 站点**\ntest / site-1",
+			"**名称**\ntask-report-daily-summary",
+			"**工作流**\ntask_report.daily_summary",
+			"**Cron / Every**\ncron 0 10 * * *",
+			"**去重键**\nperiodic:task_report.daily_summary",
+			"**错误摘要**\n工作流定义不存在",
+			"**影响与建议**\n- 该周期任务不会注册到调度器",
 		} {
-			if !strings.Contains(payload.Content.Text, want) {
-				t.Fatalf("Lark 告警缺少 %q:\n%s", want, payload.Content.Text)
+			if !strings.Contains(text, want) {
+				t.Fatalf("Lark 告警缺少 %q:\n%s", want, text)
 			}
 		}
 	case <-time.After(5 * time.Second):

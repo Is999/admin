@@ -142,6 +142,8 @@ func TestRuntimeConfigBaselineSeedsDraftRows(t *testing.T) {
 		"INSERT IGNORE INTO `runtime_task_periodic`",
 		"INSERT IGNORE INTO `runtime_archive_job`",
 		"archive-admin-log-hourly",
+		"task-report-daily-summary",
+		"task_report.daily_summary",
 		"user-tag-delta-daily",
 		"active_release_id",
 	} {
@@ -154,8 +156,8 @@ func TestRuntimeConfigBaselineSeedsDraftRows(t *testing.T) {
 		t.Fatal("runtime_config_release.sql should not seed default snapshot rows")
 	}
 	periodicSQL := migrationSQLByAsset(t, "runtime_task_periodic.sql")
-	if got := strings.Count(periodicSQL, "INSERT IGNORE INTO `runtime_task_periodic`"); got != 4 {
-		t.Fatalf("runtime_task_periodic seed count = %d, want 4", got)
+	if got := strings.Count(periodicSQL, "INSERT IGNORE INTO `runtime_task_periodic`"); got != 5 {
+		t.Fatalf("runtime_task_periodic seed count = %d, want 5", got)
 	}
 	archiveSQL := migrationSQLByAsset(t, "runtime_archive_job.sql")
 	if got := strings.Count(archiveSQL, "INSERT IGNORE INTO `runtime_archive_job`"); got != 1 {

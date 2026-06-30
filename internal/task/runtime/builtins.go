@@ -3,6 +3,7 @@ package taskruntime
 import (
 	archivetask "admin/internal/jobs/archive/task"
 	exportjob "admin/internal/jobs/export"
+	taskreporttask "admin/internal/jobs/taskreport/task"
 	usertagtask "admin/internal/jobs/usertag/task"
 	"admin/internal/svc"
 	"admin/internal/task/queue"
@@ -62,6 +63,13 @@ var builtinPluginSpecs = []BuiltinPluginSpec{
 				return exportjob.Setup(runtime)
 			})
 		},
+	},
+	{
+		Name:        taskreporttask.PluginName,
+		File:        "internal/jobs/taskreport/task/plugin.go",
+		Method:      "taskruntime.NewTaskReportPlugin / taskreporttask.Setup",
+		Description: "注册周期任务和工作流运行日报任务",
+		Build:       NewTaskReportPlugin,
 	},
 	{
 		Name:        usertagtask.PluginName,

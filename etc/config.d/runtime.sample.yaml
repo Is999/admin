@@ -145,3 +145,22 @@ task_periodic:
     unique_key: "periodic:user_tag.event_outbox.retry_scan"
     # 唯一键保留时间，单位秒。
     unique_ttl_seconds: 540
+
+  # 周期任务与工作流运行日报 Lark 通知。
+  - name: "task-report-daily-summary"
+    # 是否启用该任务；发送前仍受 alert.lark.enabled 控制。
+    enabled: true
+    # 每天 10 点汇总昨日 10 点到今日 10 点的任务运行情况。
+    cron: "0 10 * * *"
+    # 触发的工作流名称。
+    workflow: "task_report.daily_summary"
+    # 投递队列名。
+    queue: "maintenance"
+    # 发送任务重试次数。
+    retry: 1
+    # 单次日报聚合和发送超时时间，单位秒。
+    timeout_seconds: 300
+    # 周期任务唯一键，避免同一日报窗口重复投递。
+    unique_key: "periodic:task_report.daily_summary"
+    # 唯一键保留时间略小于 24 小时，单位秒。
+    unique_ttl_seconds: 82800

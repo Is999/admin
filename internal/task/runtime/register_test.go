@@ -11,6 +11,7 @@ import (
 	"github.com/Is999/go-utils/errors"
 
 	"admin/internal/config"
+	"admin/internal/jobs/taskreport"
 	usertagtask "admin/internal/jobs/usertag/task"
 	"admin/internal/svc"
 	"admin/internal/task/queue"
@@ -344,6 +345,20 @@ func TestNewPeriodicWorkflowPlugin(t *testing.T) {
 	if len(runtime.PeriodicTasks()) != 1 {
 		t.Fatalf("期望插件注册后存在 1 个周期任务，实际为 %d", len(runtime.PeriodicTasks()))
 	}
+}
+
+// TestTaskReportPluginRegistersDailySummaryWorkflow 验证任务运行日报插件会注册日报工作流。
+func TestTaskReportPluginRegistersDailySummaryWorkflow(t *testing.T) {
+	manager := newTestManager()
+	if _, err := Register(&svc.ServiceContext{}, manager, NewTaskReportPlugin()); err != nil {
+		t.Fatalf("注册任务运行日报插件失败: %v", err)
+	}
+	for _, item := range manager.ListRegisteredWorkflows() {
+		if item.Name == taskreport.WorkflowNameDailySummary {
+			return
+		}
+	}
+	t.Fatalf("未注册任务运行日报工作流 %s，当前清单=%+v", taskreport.WorkflowNameDailySummary, manager.ListRegisteredWorkflows())
 }
 
 // TestUserTagPluginRegistersMaintenanceWorkflows 验证用户标签插件会注册独立维护工作流。

@@ -94,9 +94,26 @@ func TestAPIDocsIndexStoredAsStaticAsset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("api docs index asset missing: %v", err)
 	}
-	for _, text := range []string{"前台 API 文档", "basePath: '/api/docs/api/'", "docsify.min.js"} {
+	for _, text := range []string{
+		"前台 API 文档",
+		"basePath: '/api/docs/api/'",
+		"docsify.min.js",
+		"installLazySearchBox",
+		"startSearchIndex",
+		"window.fetch(docFetchURL",
+		"return docsBasePath +",
+		"ai-prompt-copy-button",
+		"copyTextToClipboard",
+		"handlePromptCopyClick",
+		"document.addEventListener('click', handlePromptCopyClick, true)",
+	} {
 		if !strings.Contains(string(content), text) {
 			t.Fatalf("api docs index asset missing %q", text)
+		}
+	}
+	for _, text := range []string{"search.min.js", "cdn.jsdelivr.net"} {
+		if strings.Contains(string(content), text) {
+			t.Fatalf("api docs index must not depend on blocking search plugin or CDN %q", text)
 		}
 	}
 }

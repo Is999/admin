@@ -74,7 +74,7 @@ func Setup(runtime Runtime) error {
 	})); err != nil {
 		return errors.Tag(err)
 	}
-	defaults := NewDefaults(runtime.ServiceContext().CurrentConfig().Workflows.UserTag)
+	defaults := usertagoptions.NewDefaults(runtime.ServiceContext().CurrentConfig().Workflows.UserTag)
 	for _, def := range WorkflowDefinitions(defaults) {
 		if err := runtime.RegisterWorkflow(def); err != nil {
 			return errors.Tag(err)
@@ -153,9 +153,9 @@ func releaseUserTagWorkflowLeaseOnFinalFailure(ctx context.Context, svcCtx *svc.
 	if workflowName := strings.TrimSpace(meta.WorkflowName); workflowName != "" && workflowName != WorkflowNameUserTagFull {
 		return nil
 	}
-	defaults := NewDefaults(config.UserTagConfig{})
+	defaults := usertagoptions.NewDefaults(config.UserTagConfig{})
 	if svcCtx != nil {
-		defaults = NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
+		defaults = usertagoptions.NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
 	}
 	deps := repository.NewRuntimeDeps(svcCtx, route.NewShardPlanWithResult(defaults.ShardTotal, defaults.RuntimeShardTotal, defaults.ResultShardTotal))
 	return repository.NewTagRepository(deps).ReleaseWorkflowLease(ctx, usertagtypes.RuntimeOptions{
@@ -190,9 +190,9 @@ func runUserTagEventOutboxRetryTask(ctx context.Context, task *asynq.Task, svcCt
 	if payload.Node == usertagtypes.NodeEventOutboxRetryScan {
 		return runUserTagEventOutboxRetryScanTask(ctx, svcCtx)
 	}
-	defaults := NewDefaults(config.UserTagConfig{})
+	defaults := usertagoptions.NewDefaults(config.UserTagConfig{})
 	if svcCtx != nil {
-		defaults = NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
+		defaults = usertagoptions.NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
 	}
 	opts, err := userTagEventOutboxRetryOptions(payload, defaults)
 	if err != nil {
@@ -208,9 +208,9 @@ func runUserTagEventOutboxRetryTask(ctx context.Context, task *asynq.Task, svcCt
 
 // runUserTagEventOutboxRetryScanTask 周期扫描并重派异常用户标签事件 outbox。
 func runUserTagEventOutboxRetryScanTask(ctx context.Context, svcCtx *svc.ServiceContext) error {
-	defaults := NewDefaults(config.UserTagConfig{})
+	defaults := usertagoptions.NewDefaults(config.UserTagConfig{})
 	if svcCtx != nil {
-		defaults = NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
+		defaults = usertagoptions.NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
 	}
 	if svcCtx == nil {
 		return errors.Errorf("用户标签事件 outbox 异常扫描失败：ServiceContext 为空")
@@ -234,9 +234,9 @@ func runUserTagEventOutboxRetryScanTask(ctx context.Context, svcCtx *svc.Service
 // runUserTagRuntimeCleanupTask 独立清理用户标签运行期辅助表。
 // 该任务不读取 workflow 负载，失败只进入任务系统 retry/dead，不会回写或影响任何用户标签计算工作流。
 func runUserTagRuntimeCleanupTask(ctx context.Context, svcCtx *svc.ServiceContext) error {
-	defaults := NewDefaults(config.UserTagConfig{})
+	defaults := usertagoptions.NewDefaults(config.UserTagConfig{})
 	if svcCtx != nil {
-		defaults = NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
+		defaults = usertagoptions.NewDefaults(svcCtx.CurrentConfig().Workflows.UserTag)
 	}
 	if svcCtx == nil {
 		return errors.Errorf("用户标签运行期清理失败：ServiceContext 为空")

@@ -374,7 +374,7 @@ func (l *CollectorLogic) RunNow(req *types.RunCollectorReq) *types.BizResult {
 	}
 	if l.Svc == nil || l.Svc.Collector == nil {
 		return types.NewBizResult(codes.ServerError).
-			SetI18nMessage(i18n.MsgKeyInternalErrorFormat, "Collector 未初始化").
+			SetI18nMessage(i18n.MsgKeyCollectorUnavailable).
 			WithError(types.Nil)
 	}
 
@@ -385,10 +385,10 @@ func (l *CollectorLogic) RunNow(req *types.RunCollectorReq) *types.BizResult {
 	}
 	if err != nil {
 		resp.Error = err.Error()
-		resp.Message = "本次执行出现失败任务，已按重试策略回写任务状态"
+		resp.Message = l.Message(i18n.MsgKeyCollectorRunPartialFailed)
 		return types.NewBizResult(codes.ServerError).WithData(resp).WithError(errors.Tag(err))
 	}
-	resp.Message = "执行完成"
+	resp.Message = l.Message(i18n.MsgKeyCollectorRunSuccess)
 	return types.NewBizResult(codes.Success).SetI18nMessage(i18n.MsgKeySuccess).WithData(resp)
 }
 

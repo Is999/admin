@@ -79,35 +79,6 @@ func (m *Manager) taskRuntimeFinalRetention(ctx context.Context, runErr error) t
 	return retention + time.Hour
 }
 
-// expireFinalTaskRecord 为成功和终态失败任务的 Asynq hash 设置 TTL。
-func (m *Manager) expireFinalTaskRecord(ctx context.Context, queue string, taskID string, runErr error) {
-	taskID = strings.TrimSpace(taskID)
-	queue = strings.TrimSpace(queue)
-	if m == nil || m.redis == nil || taskID == "" || queue == "" {
-		return
-	}
-	retention, ok := m.finalTaskRecordRetention(ctx, runErr)
-	if !ok || retention <= 0 {
-		return
-	}
-	writeCtx, cancel := m.taskFinalWriteContext(ctx)
-	defer cancel()
-	if err := m.redis.Expire(writeCtx, keys.TaskAsynqTaskHashKey(queue, taskID), retention+taskRecordTTLBuffer).Err(); err != nil {
-		loggerx.Errorw(writeCtx, "任务终态缓存 TTL 设置失败", err, logx.Field("task_id", taskID))
-	}
-}
-
-// finalTaskRecordRetention 返回终态任务 hash 应使用的保留时长。
-func (m *Manager) finalTaskRecordRetention(ctx context.Context, runErr error) (time.Duration, bool) {
-	if runErr == nil {
-		return m.completedRetention(), true
-	}
-	if !taskWillArchive(ctx, runErr) {
-		return 0, false
-	}
-	return m.archivedRetention(), true
-}
-
 // taskWillArchive 判断本次失败是否会进入 archived 终态。
 func taskWillArchive(ctx context.Context, runErr error) bool {
 	if runErr == nil || errors.Is(runErr, asynq.RevokeTask) {

@@ -57,8 +57,8 @@ func TestTableCacheKeyScope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tableCachePhysicalKey(base, tt.key); got != tt.want {
-				t.Fatalf("tableCachePhysicalKey() = %q, want %q", got, tt.want)
+			if got := TableCachePhysicalKey(base, tt.key); got != tt.want {
+				t.Fatalf("TableCachePhysicalKey() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -98,8 +98,8 @@ func TestTableCacheLogicalKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tableCacheLogicalKey(base, tt.key); got != tt.want {
-				t.Fatalf("tableCacheLogicalKey() = %q, want %q", got, tt.want)
+			if got := TableCacheLogicalKey(base, tt.key); got != tt.want {
+				t.Fatalf("TableCacheLogicalKey() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -154,8 +154,8 @@ func TestInvalidateAdminRelationCachePreserveSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetAdminInfo() error = %v", err)
 	}
-	roleKey := tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 7))
-	permissionKey := tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 7))
+	roleKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 7))
+	permissionKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 7))
 	if err := client.Set(base.Ctx, roleKey, "1,2", 0).Err(); err != nil {
 		t.Fatalf("seed role key error = %v", err)
 	}
@@ -163,7 +163,7 @@ func TestInvalidateAdminRelationCachePreserveSession(t *testing.T) {
 		t.Fatalf("seed permission key error = %v", err)
 	}
 
-	invalidateAdminRelationCachePreserveSession(base, 7)
+	InvalidateAdminRelationCachePreserveSession(base, 7)
 
 	if _, err := cacheLogic.GetAdminInfo(7); err != nil {
 		t.Fatalf("GetAdminInfo() error = %v, want session kept", err)
@@ -184,18 +184,18 @@ func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(
 	ctx := context.Background()
 
 	targetKeys := []string{
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 7)),
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, 7)),
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, 7)),
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 7)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 7)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, 7)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, 7)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 7)),
 	}
 	untouchedKeys := []string{
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 8)),
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, 8)),
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, 8)),
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 8)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 8)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, 8)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, 8)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 8)),
 		keys.AdminInfoRedisKey(7),
-		tableCachePhysicalKey(base, fmt.Sprintf(keys.AdminProfile, 7)),
+		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminProfile, 7)),
 	}
 	for _, key := range append(targetKeys, untouchedKeys...) {
 		if err := client.SAdd(ctx, key, "value").Err(); err != nil {
@@ -203,16 +203,16 @@ func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(
 		}
 	}
 
-	invalidateAdminRoleAndPermissionCacheByAdminIDs(base, 7)
+	InvalidateAdminRoleAndPermissionCacheByAdminIDs(base, 7)
 
 	for _, key := range targetKeys {
 		if server.Exists(key) {
-			t.Fatalf("invalidateAdminRoleAndPermissionCacheByAdminIDs() target key %s should be deleted", key)
+			t.Fatalf("InvalidateAdminRoleAndPermissionCacheByAdminIDs() target key %s should be deleted", key)
 		}
 	}
 	for _, key := range untouchedKeys {
 		if !server.Exists(key) {
-			t.Fatalf("invalidateAdminRoleAndPermissionCacheByAdminIDs() unrelated key %s should be kept", key)
+			t.Fatalf("InvalidateAdminRoleAndPermissionCacheByAdminIDs() unrelated key %s should be kept", key)
 		}
 	}
 }
@@ -224,21 +224,21 @@ func TestInvalidateRolePermissionCacheByRoleIDsDeletesOnlyTargetRoles(t *testing
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
 	ctx := context.Background()
 
-	targetKey := tableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 3))
-	untouchedKey := tableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 4))
+	targetKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 3))
+	untouchedKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 4))
 	for _, key := range []string{targetKey, untouchedKey} {
 		if err := client.SAdd(ctx, key, "value").Err(); err != nil {
 			t.Fatalf("SAdd(%s) error = %v", key, err)
 		}
 	}
 
-	invalidateRolePermissionCacheByRoleIDs(base, 3, 3, 0)
+	InvalidateRolePermissionCacheByRoleIDs(base, 3, 3, 0)
 
 	if server.Exists(targetKey) {
-		t.Fatalf("invalidateRolePermissionCacheByRoleIDs() target key %s should be deleted", targetKey)
+		t.Fatalf("InvalidateRolePermissionCacheByRoleIDs() target key %s should be deleted", targetKey)
 	}
 	if !server.Exists(untouchedKey) {
-		t.Fatalf("invalidateRolePermissionCacheByRoleIDs() unrelated key %s should be kept", untouchedKey)
+		t.Fatalf("InvalidateRolePermissionCacheByRoleIDs() unrelated key %s should be kept", untouchedKey)
 	}
 }
 
@@ -266,11 +266,11 @@ func TestDeleteRedisKeysExactBatchesUsesSingleKeyDeleteCommands(t *testing.T) {
 		}
 	}
 
-	deleteRedisKeysExactBatches(base, "test delete", cacheKeys)
+	DeleteRedisKeysExactBatches(base, "test delete", cacheKeys)
 
 	for _, key := range cacheKeys {
 		if server.Exists(key) {
-			t.Fatalf("deleteRedisKeysExactBatches() key %s should be deleted", key)
+			t.Fatalf("DeleteRedisKeysExactBatches() key %s should be deleted", key)
 		}
 	}
 	allArgCounts := append(directArgCounts, pipelineArgCounts...)

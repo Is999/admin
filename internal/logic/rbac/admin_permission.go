@@ -82,7 +82,7 @@ func (l *AdminPermissionLogic) List(req *types.PermissionListReq) *types.BizResu
 
 // TreeList 查询权限树，供权限选择和角色授权使用。
 func (l *AdminPermissionLogic) TreeList() *types.BizResult {
-	items, err := l.loadPermissionTreeWithCache()
+	items, err := l.LoadPermissionTreeWithCache()
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminPermissionLogic.TreeList 查询权限树失败").ToBizResult()
@@ -329,8 +329,8 @@ func (l *AdminPermissionLogic) loadAllPermissions() ([]model.AdminPermission, er
 	return permissions, nil
 }
 
-// loadPermissionTreeWithCache 优先读取权限树缓存，未命中时自动回源并重建。
-func (l *AdminPermissionLogic) loadPermissionTreeWithCache() ([]types.AdminPermissionItem, error) {
+// LoadPermissionTreeWithCache 优先读取权限树缓存，未命中时自动回源并重建。
+func (l *AdminPermissionLogic) LoadPermissionTreeWithCache() ([]types.AdminPermissionItem, error) {
 	if l.Redis() == nil {
 		permissions, err := l.loadAllPermissions()
 		if err != nil {
@@ -347,13 +347,8 @@ func (l *AdminPermissionLogic) loadPermissionTreeWithCache() ([]types.AdminPermi
 	return items, errors.Tag(err)
 }
 
-// LoadPermissionTreeWithCache 查询权限树缓存，未命中时自动回源。
-func (l *AdminPermissionLogic) LoadPermissionTreeWithCache() ([]types.AdminPermissionItem, error) {
-	return l.loadPermissionTreeWithCache()
-}
-
-// permissionUUIDsByIDsWithCache 优先从权限 UUID 缓存读取启用权限码，缺失时自动回源重建。
-func (l *AdminPermissionLogic) permissionUUIDsByIDsWithCache(permissionIDs []int) ([]string, error) {
+// PermissionUUIDsByIDsWithCache 优先从权限 UUID 缓存读取启用权限码，缺失时自动回源重建。
+func (l *AdminPermissionLogic) PermissionUUIDsByIDsWithCache(permissionIDs []int) ([]string, error) {
 	permissionIDs = types.UniquePositiveInts(permissionIDs)
 	if len(permissionIDs) == 0 {
 		return []string{}, nil
@@ -374,11 +369,6 @@ func (l *AdminPermissionLogic) permissionUUIDsByIDsWithCache(permissionIDs []int
 		codesArr = append(codesArr, code)
 	}
 	return helper.UniqueNonEmptyStrings(codesArr), nil
-}
-
-// PermissionUUIDsByIDsWithCache 查询权限 ID 对应的启用权限码。
-func (l *AdminPermissionLogic) PermissionUUIDsByIDsWithCache(permissionIDs []int) ([]string, error) {
-	return l.permissionUUIDsByIDsWithCache(permissionIDs)
 }
 
 // permissionUUIDsByIDs 直接从数据库读取启用权限码，作为缓存 miss 后的最终兜底。
@@ -544,7 +534,7 @@ func (l *AdminPermissionLogic) manageablePermissionIDSet() (map[int]struct{}, er
 		return nil, errors.Tag(err)
 	}
 	roleLogic := &AdminRoleLogic{BaseLogic: l.BaseLogic}
-	isSuperRole, err := roleLogic.currentOperatorIsSuperRole()
+	isSuperRole, err := roleLogic.CurrentOperatorIsSuperRole()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -555,13 +545,13 @@ func (l *AdminPermissionLogic) manageablePermissionIDSet() (map[int]struct{}, er
 		}
 		return result, nil
 	}
-	roleIDs, err := roleLogic.currentOperatorEnabledRoleIDs()
+	roleIDs, err := roleLogic.CurrentOperatorEnabledRoleIDs()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	operatorPermissionSet := make(map[int]struct{})
 	for _, roleID := range roleIDs {
-		permissionIDs, err := roleLogic.rolePermissionIDsWithCache(roleID)
+		permissionIDs, err := roleLogic.RolePermissionIDsWithCache(roleID)
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -607,7 +597,7 @@ func (l *AdminPermissionLogic) ensurePermissionsWithinManageScope(permissionIDs 
 func (l *AdminPermissionLogic) ensurePermissionParentWithinManageScope(parentPermissionID int) error {
 	if parentPermissionID <= 0 {
 		roleLogic := &AdminRoleLogic{BaseLogic: l.BaseLogic}
-		isSuperRole, err := roleLogic.currentOperatorIsSuperRole()
+		isSuperRole, err := roleLogic.CurrentOperatorIsSuperRole()
 		if err != nil {
 			return errors.Tag(err)
 		}

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	i18n "admin/common/i18n"
 	"admin/internal/config"
 	"admin/internal/model"
 	"admin/internal/svc"
@@ -82,7 +83,7 @@ func TestUserAccountOrderField(t *testing.T) {
 // TestUseUserAccountListHonorsSplitWriteConfig 验证写入路由切分后列表直接走账号索引。
 func TestUseUserAccountListHonorsSplitWriteConfig(t *testing.T) {
 	svcCtx := svc.NewServiceContext(config.Config{
-		User: config.UserConfig{RouteShardCount: 10},
+		User: config.UserConfig{RouteShardCount: 2},
 	}, svc.Dependencies{})
 	logicObj := NewLogic(nil, svcCtx)
 	got, err := logicObj.useUserAccountList(nil)
@@ -96,7 +97,8 @@ func TestUseUserAccountListHonorsSplitWriteConfig(t *testing.T) {
 
 // TestAPIRuntimeSyncWarningPreservesDBSuccessSemantics 验证写库后的同步失败只作为可重试告警返回。
 func TestAPIRuntimeSyncWarningPreservesDBSuccessSemantics(t *testing.T) {
-	resp := apiRuntimeSyncWarning(7, types.UserRuntimeSyncResp{Enabled: true}, "资料已更新", assertError("timeout"))
+	logicObj := NewLogic(nil, svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+	resp := logicObj.apiRuntimeSyncWarning(7, types.UserRuntimeSyncResp{Enabled: true}, i18n.MsgKeyAPIRuntimeProfileSyncWarning, assertError("timeout"))
 	if resp.Success {
 		t.Fatal("sync warning should mark success false")
 	}

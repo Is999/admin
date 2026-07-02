@@ -32,7 +32,7 @@ const (
 // User 表示 admin 直接管理的业务用户实体。
 type User struct {
 	ID           int64     `gorm:"column:id;type:bigint;primaryKey;index:idx_user_shard_no_id,priority:2;index:idx_user_status_id,priority:2;comment:雪花 ID" json:"id"`              // 雪花 ID
-	ShardNo      int       `gorm:"column:shard_no;type:int;not null;default:0;index:idx_user_shard_no_id,priority:1;comment:ID 哈希分片，CRC32(id字符串)%1000，用于分表和分片游标查询" json:"shard_no"` // ID 哈希分片，来源 idgen.ShardNo(id)
+	ShardNo      int       `gorm:"column:shard_no;type:int;not null;default:0;index:idx_user_shard_no_id,priority:1;comment:ID 哈希分片，CRC32(id字符串)%1024，用于分表和分片游标查询" json:"shard_no"` // ID 哈希分片，来源 idgen.ShardNo(id)
 	Username     string    `gorm:"column:username;type:varchar(32);not null;uniqueIndex:uk_user_username;comment:用户名" json:"username"`                                              // 用户名
 	Nickname     string    `gorm:"column:nickname;type:varchar(64);not null;default:'';comment:昵称" json:"nickname"`                                                                 // 昵称
 	PasswordHash string    `gorm:"column:password_hash;type:varchar(255);not null;comment:密码哈希" json:"-"`                                                                           // 密码哈希
@@ -51,8 +51,8 @@ type UserAccount struct {
 	ID              uint64    `gorm:"column:id;type:bigint unsigned;primaryKey;autoIncrement:true;comment:主键 ID" json:"id"`                                                                                                                    // 主键 ID
 	Username        string    `gorm:"column:username;type:varchar(32);not null;uniqueIndex:uk_user_account_username;comment:用户名" json:"username"`                                                                                              // 全局唯一用户名
 	UserID          int64     `gorm:"column:user_id;type:bigint;not null;uniqueIndex:uk_user_account_user_id;index:idx_user_account_shard_user,priority:2;index:idx_user_account_route_shard_user,priority:3;comment:业务用户雪花 ID" json:"userId"` // 业务用户雪花 ID
-	ShardNo         int       `gorm:"column:shard_no;type:int;not null;index:idx_user_account_shard_user,priority:1;index:idx_user_account_route_shard_user,priority:2;comment:ID 哈希分片，CRC32(id字符串)%1000" json:"shardNo"`                      // 逻辑分片号
-	RouteShardCount int       `gorm:"column:route_shard_count;type:smallint unsigned;not null;default:1;index:idx_user_account_route_shard_user,priority:1;comment:当前物理用户表数量：1/10/100/1000" json:"routeShardCount"`                            // 当前物理表数量
+	ShardNo         int       `gorm:"column:shard_no;type:int;not null;index:idx_user_account_shard_user,priority:1;index:idx_user_account_route_shard_user,priority:2;comment:ID 哈希分片，CRC32(id字符串)%1024" json:"shardNo"`                      // 逻辑分片号
+	RouteShardCount int       `gorm:"column:route_shard_count;type:smallint unsigned;not null;default:1;index:idx_user_account_route_shard_user,priority:1;comment:当前物理用户表数量：1/2/4/.../1024" json:"routeShardCount"`                           // 当前物理表数量
 	CreatedAt       time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                                                                                                       // 创建时间
 	UpdatedAt       time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"`                                                                           // 更新时间
 }
@@ -69,12 +69,10 @@ func (*UserAccount) TableName() string {
 
 // ValidateUserRouteShardCount 校验物理用户表数量是否支持平滑拆分。
 func ValidateUserRouteShardCount(routeShardCount int) error {
-	switch normalizeUserRouteShardCount(routeShardCount) {
-	case 1, 10, 100, 1000:
+	if validUserRouteShardCount(normalizeUserRouteShardCount(routeShardCount)) {
 		return nil
-	default:
-		return errors.Errorf("用户物理表数量仅支持 1/10/100/1000")
 	}
+	return errors.Errorf("用户物理表数量仅支持 1/2/4/8/16/32/64/128/256/512/1024")
 }
 
 // UserPhysicalTableName 返回逻辑分片当前所在的物理用户表名。
@@ -91,7 +89,7 @@ func UserPhysicalTableName(shardNo int, routeShardCount int) (string, error) {
 	}
 	rangeSize := userRouteShardMod / routeShardCount
 	rangeStart := (shardNo / rangeSize) * rangeSize
-	return fmt.Sprintf("%s_%03d", TableNameUser, rangeStart), nil
+	return fmt.Sprintf("%s_%04d", TableNameUser, rangeStart), nil
 }
 
 // UserTableName 返回账号索引记录指向的物理用户表名。
@@ -315,6 +313,11 @@ func normalizeUserRouteShardCount(routeShardCount int) int {
 		return UserRouteShardCountDefault
 	}
 	return routeShardCount
+}
+
+// validUserRouteShardCount 判断物理表数量是否为 1024 逻辑分片可平分的 2 的幂。
+func validUserRouteShardCount(routeShardCount int) bool {
+	return routeShardCount > 0 && routeShardCount <= userRouteShardMod && routeShardCount&(routeShardCount-1) == 0
 }
 
 // validateUserAccountRoute 校验账号索引中的用户 ID 与逻辑分片一致。

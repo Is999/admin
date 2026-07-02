@@ -124,7 +124,7 @@ func (l *FileTransferLogic) GetUploadStatus(req *types.FileUploadStatusReq) *typ
 		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 			"FileTransferLogic.GetUploadStatus 查询上传会话[%s]失败", req.UploadID).ToBizResult()
 	}
-	if err := l.ensureSessionOwner(session); err != nil {
+	if err := l.EnsureSessionOwner(session); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).ToBizResult().
 			WithError(corelogic.WrapLogicError(err, "FileTransferLogic.GetUploadStatus 无权访问上传会话"))
 	}
@@ -144,7 +144,7 @@ func (l *FileTransferLogic) UploadChunk(req *types.FileUploadChunkReq, body io.R
 		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 			"FileTransferLogic.UploadChunk 读取上传会话[%s]失败", req.UploadID).ToBizResult()
 	}
-	if err := l.ensureSessionOwner(session); err != nil {
+	if err := l.EnsureSessionOwner(session); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).ToBizResult().
 			WithError(corelogic.WrapLogicError(err, "FileTransferLogic.UploadChunk 无权访问上传会话"))
 	}
@@ -170,7 +170,7 @@ func (l *FileTransferLogic) CompleteUpload(req *types.FileUploadCompleteReq) *ty
 		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 			"FileTransferLogic.CompleteUpload 读取上传会话[%s]失败", req.UploadID).ToBizResult()
 	}
-	if err := l.ensureSessionOwner(session); err != nil {
+	if err := l.EnsureSessionOwner(session); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).ToBizResult().
 			WithError(corelogic.WrapLogicError(err, "FileTransferLogic.CompleteUpload 无权访问上传会话"))
 	}
@@ -219,23 +219,13 @@ func (l *FileTransferLogic) PrepareDownload(uploadID string) (*transfer.UploadSe
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if err := l.ensureSessionOwner(session); err != nil {
+	if err := l.EnsureSessionOwner(session); err != nil {
 		return nil, errors.Tag(err)
 	}
-	if !l.isCompletedSession(session) {
+	if !l.IsCompletedSession(session) {
 		return nil, errors.Errorf("上传会话尚未完成")
 	}
 	return session, nil
-}
-
-// EnsureSessionOwner 校验上传会话属于当前登录管理员。
-func (l *FileTransferLogic) EnsureSessionOwner(session *transfer.UploadSession) error {
-	return l.ensureSessionOwner(session)
-}
-
-// IsCompletedSession 判断上传会话是否已完成。
-func (l *FileTransferLogic) IsCompletedSession(session *transfer.UploadSession) bool {
-	return l.isCompletedSession(session)
 }
 
 // PreparePublicAccess 校验上传会话是否允许匿名访问。
@@ -244,7 +234,7 @@ func (l *FileTransferLogic) PreparePublicAccess(uploadID string) (*transfer.Uplo
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if !l.isCompletedSession(session) {
+	if !l.IsCompletedSession(session) {
 		return nil, errors.Errorf("上传会话尚未完成")
 	}
 	if !isPublicAccessibleBizType(session.BizType) {
@@ -375,8 +365,8 @@ func (l *FileTransferLogic) ResolveManagedSessionByFileURL(fileURL string) (*tra
 	return session, nil
 }
 
-// ensureSessionOwner 确保上传会话归属于当前请求的管理员。
-func (l *FileTransferLogic) ensureSessionOwner(session *transfer.UploadSession) error {
+// EnsureSessionOwner 确保上传会话归属于当前请求的管理员。
+func (l *FileTransferLogic) EnsureSessionOwner(session *transfer.UploadSession) error {
 	if session == nil {
 		return errors.Errorf("上传会话不存在")
 	}
@@ -399,8 +389,8 @@ func (l *FileTransferLogic) decorateSessionURLs(session *transfer.UploadSession)
 	session.DownloadURL = buildUploadDownloadURL(session.UploadID)
 }
 
-// isCompletedSession 判断上传会话是否已完成。
-func (l *FileTransferLogic) isCompletedSession(session *transfer.UploadSession) bool {
+// IsCompletedSession 判断上传会话是否已完成。
+func (l *FileTransferLogic) IsCompletedSession(session *transfer.UploadSession) bool {
 	return session != nil && strings.EqualFold(strings.TrimSpace(session.Status), "completed")
 }
 

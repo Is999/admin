@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// TestUserPhysicalTableName 验证 1/10/100/1000 物理表数量的路由规则稳定。
+// TestUserPhysicalTableName 验证 2 的幂物理表数量路由规则稳定。
 func TestUserPhysicalTableName(t *testing.T) {
 	tests := []struct {
 		name            string // name 表示测试场景名称。
@@ -18,15 +18,12 @@ func TestUserPhysicalTableName(t *testing.T) {
 		routeShardCount int    // routeShardCount 表示物理路由分片数。
 		want            string // want 表示期望结果。
 	}{
-		{name: "single", shardNo: 999, routeShardCount: 1, want: "user"},
-		{name: "ten first", shardNo: 0, routeShardCount: 10, want: "user_000"},
-		{name: "ten boundary", shardNo: 100, routeShardCount: 10, want: "user_100"},
-		{name: "ten middle", shardNo: 345, routeShardCount: 10, want: "user_300"},
-		{name: "ten last", shardNo: 999, routeShardCount: 10, want: "user_900"},
-		{name: "hundred first boundary", shardNo: 10, routeShardCount: 100, want: "user_010"},
-		{name: "hundred", shardNo: 345, routeShardCount: 100, want: "user_340"},
-		{name: "thousand boundary", shardNo: 999, routeShardCount: 1000, want: "user_999"},
-		{name: "thousand", shardNo: 345, routeShardCount: 1000, want: "user_345"},
+		{name: "single", shardNo: 1023, routeShardCount: 1, want: "user"},
+		{name: "two first", shardNo: 0, routeShardCount: 2, want: "user_0000"},
+		{name: "two boundary", shardNo: 512, routeShardCount: 2, want: "user_0512"},
+		{name: "four middle", shardNo: 700, routeShardCount: 4, want: "user_0512"},
+		{name: "sixteen middle", shardNo: 345, routeShardCount: 16, want: "user_0320"},
+		{name: "full last", shardNo: 1023, routeShardCount: 1024, want: "user_1023"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -41,12 +38,12 @@ func TestUserPhysicalTableName(t *testing.T) {
 	}
 }
 
-// TestUserPhysicalTableNameRejectsInvalidRoute 验证路由数量只能按 1/10/100/1000 平滑拆分。
+// TestUserPhysicalTableNameRejectsInvalidRoute 验证路由数量只能按 2 的幂平滑拆分。
 func TestUserPhysicalTableNameRejectsInvalidRoute(t *testing.T) {
-	if _, err := UserPhysicalTableName(1, 64); err == nil {
+	if _, err := UserPhysicalTableName(1, 3); err == nil {
 		t.Fatal("期望非法物理表数量返回错误")
 	}
-	if _, err := UserPhysicalTableName(1000, 10); err == nil {
+	if _, err := UserPhysicalTableName(1024, 2); err == nil {
 		t.Fatal("期望非法 shard_no 返回错误")
 	}
 }
@@ -57,7 +54,7 @@ func TestUserAccountTableNameRejectsMismatchedShardNo(t *testing.T) {
 	account := &UserAccount{
 		UserID:          userID,
 		ShardNo:         idgen.ShardNo(userID),
-		RouteShardCount: 1000,
+		RouteShardCount: 1024,
 	}
 	want, err := UserPhysicalTableName(account.ShardNo, account.RouteShardCount)
 	if err != nil {

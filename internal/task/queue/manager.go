@@ -12,6 +12,7 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
+	i18n "admin/common/i18n"
 	keys "admin/common/rediskeys"
 	"admin/common/runtimecfg"
 	"admin/helper"
@@ -21,6 +22,7 @@ import (
 	"admin/internal/requestctx"
 	"admin/internal/svc"
 	"admin/internal/task/stats"
+	"admin/internal/task/taskwire"
 	"admin/internal/types"
 
 	"github.com/google/uuid"
@@ -36,16 +38,16 @@ import (
 
 const (
 	// QueueCritical 高优先级业务队列。
-	QueueCritical = "critical"
+	QueueCritical = taskwire.QueueCritical
 	// QueueDefault 默认业务队列。
-	QueueDefault = "default"
+	QueueDefault = taskwire.QueueDefault
 	// QueueMaintenance 运维/缓存刷新等后台队列。
-	QueueMaintenance = "maintenance"
+	QueueMaintenance = taskwire.QueueMaintenance
 
 	// TypeWorkflowTrigger 是触发工作流实例的入口任务。
-	TypeWorkflowTrigger = "workflow:trigger"
+	TypeWorkflowTrigger = taskwire.TypeWorkflowTrigger
 	// TypeWorkflowNoop 是 DAG 中用于收尾/汇聚的空任务。
-	TypeWorkflowNoop = "workflow:noop"
+	TypeWorkflowNoop = taskwire.TypeWorkflowNoop
 	// TypeCacheRefreshRequest 是请求聚合缓存刷新的原始任务。
 	TypeCacheRefreshRequest = "cache:refresh:request"
 	// TypeCacheRefreshBatch 是聚合后的批量缓存刷新任务。
@@ -58,11 +60,15 @@ const (
 	headerUserID       = "x-app-user-id"              // 任务透传的操作者 ID
 	headerUserName     = "x-app-user-name"            // 任务透传的操作者名称
 	headerTaskName     = "x-app-task-name"            // 任务展示名称
-	headerTaskSource   = "x-app-task-source"          // 任务触发来源
-	HeaderPeriodicName = "x-app-periodic-name"        // 周期任务原始名称
-	headerWorkflowID   = "x-app-workflow-id"          // 工作流实例 ID
-	headerWorkflowName = "x-app-workflow-name"        // 工作流名称
-	headerWorkflowNode = "x-app-workflow-node"        // 工作流节点名称
+	headerTaskSource   = taskwire.HeaderTaskSource    // 任务触发来源
+	HeaderTaskSource   = headerTaskSource             // 任务触发来源头，供业务报表按来源筛选任务
+	HeaderPeriodicName = taskwire.HeaderPeriodicName  // 周期任务原始名称
+	headerWorkflowID   = taskwire.HeaderWorkflowID    // 工作流实例 ID
+	HeaderWorkflowID   = headerWorkflowID             // 工作流实例 ID 头，供业务报表关联工作流状态
+	headerWorkflowName = taskwire.HeaderWorkflowName  // 工作流名称
+	HeaderWorkflowName = headerWorkflowName           // 工作流名称头，供业务聚合任务反查工作流归属
+	headerWorkflowNode = taskwire.HeaderWorkflowNode  // 工作流节点名称
+	HeaderWorkflowNode = headerWorkflowNode           // 工作流节点名称头，供业务报表展示节点维度
 	headerShardIndex   = "x-app-workflow-shard-index" // 工作流分片序号
 	headerShardTotal   = "x-app-workflow-shard-total" // 工作流分片总数
 	headerAppID        = "x-app-id"                   // 当前应用 app_id
@@ -81,7 +87,6 @@ const (
 	taskFinalWriteTimeout  = 5 * time.Second     // 任务收尾写 Redis 的短超时，避免业务 ctx 超时后失败状态无法落库
 	taskListFilterPageSize = 100                 // 任务列表二次过滤单批读取量，和接口最大页大小保持一致
 	taskListFilterMaxPages = 50                  // 任务列表二次过滤最大扫描页数，避免无索引历史查询拖垮 Redis
-	taskRecordTTLBuffer    = time.Hour           // 终态任务 hash 额外保留窗口，避免清理边界抖动影响列表查询
 	taskRuntimeAlertTTL    = 5 * time.Minute     // 任务系统同一运行异常的告警限频窗口，避免后台循环刷屏
 	periodicConfigAlertTTL = taskRuntimeAlertTTL // 周期任务同一配置异常复用任务运行异常的告警限频窗口
 )
@@ -338,6 +343,14 @@ func (m *Manager) CurrentConfig() config.TaskQueueConfig {
 	return config.TaskQueueConfig{}
 }
 
+// RedisClient 返回任务队列使用的 Redis 客户端。
+func (m *Manager) RedisClient() redis.UniversalClient {
+	if m == nil {
+		return nil
+	}
+	return m.redis
+}
+
 // UpdateConfig 原子替换任务系统配置快照。
 // 该方法不会在线重建 Worker / Redis 连接，只影响后续按快照读取的配置项。
 func (m *Manager) UpdateConfig(cfg config.TaskQueueConfig) {
@@ -502,10 +515,11 @@ func (m *Manager) RegisterWorkflow(def *WorkflowDefinition) error {
 }
 
 // ListRegisteredTaskTypes 返回当前进程已注册的任务类型清单。
-func (m *Manager) ListRegisteredTaskTypes() []types.TaskTypeRegistryItem {
+func (m *Manager) ListRegisteredTaskTypes(ctx context.Context) []types.TaskTypeRegistryItem {
 	if m == nil {
 		return nil
 	}
+	locale := displayLocale(ctx)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	items := make([]types.TaskTypeRegistryItem, 0, len(m.handlers))
@@ -514,7 +528,7 @@ func (m *Manager) ListRegisteredTaskTypes() []types.TaskTypeRegistryItem {
 		if taskType == "" {
 			continue
 		}
-		items = append(items, buildTaskTypeRegistryItem(taskType))
+		items = append(items, buildTaskTypeRegistryItem(taskType, locale))
 	}
 	sort.Slice(items, func(left int, right int) bool {
 		return items[left].TaskType < items[right].TaskType
@@ -523,10 +537,11 @@ func (m *Manager) ListRegisteredTaskTypes() []types.TaskTypeRegistryItem {
 }
 
 // ListRegisteredWorkflows 返回当前进程已注册的工作流定义快照。
-func (m *Manager) ListRegisteredWorkflows() []types.WorkflowRegistryItem {
+func (m *Manager) ListRegisteredWorkflows(ctx context.Context) []types.WorkflowRegistryItem {
 	if m == nil {
 		return nil
 	}
+	locale := displayLocale(ctx)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	items := make([]types.WorkflowRegistryItem, 0, len(m.workflows))
@@ -534,13 +549,14 @@ func (m *Manager) ListRegisteredWorkflows() []types.WorkflowRegistryItem {
 		if def == nil {
 			continue
 		}
+		name := strings.TrimSpace(def.Name)
 		items = append(items, types.WorkflowRegistryItem{
-			Name:           strings.TrimSpace(def.Name),
-			Description:    strings.TrimSpace(def.Description),
+			Name:           name,
+			Description:    workflowDescription(name, def.Description, locale),
 			DefaultQueue:   strings.TrimSpace(def.DefaultQueue),
 			NodeCount:      len(def.Nodes),
-			UsageHint:      workflowUsageHint(strings.TrimSpace(def.Name)),
-			TargetsExample: workflowTargetsExample(strings.TrimSpace(def.Name)),
+			UsageHint:      workflowUsageHint(name, locale),
+			TargetsExample: workflowTargetsExample(name),
 		})
 	}
 	sort.Slice(items, func(left int, right int) bool {
@@ -550,15 +566,23 @@ func (m *Manager) ListRegisteredWorkflows() []types.WorkflowRegistryItem {
 }
 
 // buildTaskTypeRegistryItem 构造任务类型注册清单项，补充管理后台展示需要的说明和示例。
-func buildTaskTypeRegistryItem(taskType string) types.TaskTypeRegistryItem {
+func buildTaskTypeRegistryItem(taskType string, locale string) types.TaskTypeRegistryItem {
 	item := types.TaskTypeRegistryItem{
 		TaskType:          taskType,
-		Description:       taskTypeDescription(taskType),
-		UsageHint:         taskTypeUsageHint(taskType),
+		Description:       taskTypeDescriptionForLocale(taskType, locale),
+		UsageHint:         taskTypeUsageHint(taskType, locale),
 		PayloadExample:    taskTypePayloadExample(taskType),
 		ManualRecommended: taskTypeManualRecommended(taskType),
 	}
 	return item
+}
+
+// displayLocale 从请求上下文读取管理端展示语言；后台任务缺省使用中文。
+func displayLocale(ctx context.Context) string {
+	if meta := requestctx.FromContext(ctx); meta != nil {
+		return meta.Locale
+	}
+	return ""
 }
 
 // writeTaskResult 把任务执行结果写回 Asynq，便于管理后台查看成功记录的结果摘要。
@@ -656,25 +680,25 @@ func (m *Manager) StartScheduler() error {
 
 	// 启动前置条件：任务系统启用 + scheduler 开关开启 + 至少存在一个周期任务。
 	if !m.IsEnabled() {
-		m.markSchedulerStopped("任务系统未启用，调度器未启动")
+		m.markSchedulerStopped(i18n.MsgKeySchedulerTaskDisabled, "任务系统未启用，调度器未启动")
 		return nil
 	}
 	if !m.schedulerEnabled() {
-		m.markSchedulerStopped("调度器开关未开启")
+		m.markSchedulerStopped(i18n.MsgKeySchedulerDisabled, "调度器开关未开启")
 		return nil
 	}
 	if m.periodicTaskCount() == 0 {
-		m.markSchedulerStopped("未配置有效周期任务")
+		m.markSchedulerStopped(i18n.MsgKeySchedulerNoPeriodicTask, "未配置有效周期任务")
 		return nil
 	}
 	// 避免重复启动：同一进程只允许存在一个 scheduler 选举循环。
 	if m.cancel != nil {
-		m.markSchedulerWaitingLeader("调度器已在运行，等待 leader 状态变化")
+		m.markSchedulerWaitingLeader(i18n.MsgKeySchedulerAlreadyRunning, "调度器已在运行，等待 leader 状态变化")
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
-	m.markSchedulerWaitingLeader("调度器 leader 选举已启动")
+	m.markSchedulerWaitingLeader(i18n.MsgKeySchedulerElectionStarted, "调度器 leader 选举已启动")
 	// 构造 leader 选举器：仅 leader 实例负责 asynq PeriodicTaskManager 调度。
 	m.leader = NewLeaderRunner(m.redis, m.schedulerLeaseKey(), m.schedulerLeaseTTL(), m.schedulerRenewInterval(), func(leaderCtx context.Context) (func(), error) {
 		// leader 回调内启动调度器，并返回 shutdown hook 供 leader 丢失/Stop 时回收。
@@ -689,7 +713,7 @@ func (m *Manager) StartScheduler() error {
 		)
 		return func() {
 			scheduler.Shutdown()
-			m.markSchedulerLeaderReleased("调度器已释放 leader，等待重新竞争")
+			m.markSchedulerLeaderReleased(i18n.MsgKeySchedulerLeaderReleased, "调度器已释放 leader，等待重新竞争")
 			loggerx.Infow(leaderCtx, "任务调度 主节点已停止",
 				logx.Field("instance", m.instance),
 			)
@@ -725,7 +749,7 @@ func (m *Manager) Stop(context.Context) error {
 		m.archivedCleanStop = nil
 	}
 	m.wg.Wait()
-	m.markSchedulerStopped("调度器已停止")
+	m.markSchedulerStopped(i18n.MsgKeySchedulerStopped, "调度器已停止")
 	return nil
 }
 
@@ -966,16 +990,11 @@ func (m *Manager) ListQueues(ctx context.Context) (*types.TaskQueueListResp, err
 	resp := &types.TaskQueueListResp{
 		Queues: make([]types.TaskQueueItem, 0, len(queueNames)),
 	}
-	resp.Scheduler = m.schedulerStatusSnapshot()
+	resp.Scheduler = m.schedulerStatusSnapshot(ctx)
 	for _, queue := range queueNames {
 		info, infoErr := m.inspector.GetQueueInfo(m.namespacedQueueName(queue))
 		if infoErr != nil {
-			// 部分托管 Redis 会限制 Asynq 队列巡检脚本，查询单个队列概览失败时
-			// 仍然返回静态队列名与零值指标，保证前端任务队列页可用。
-			resp.Queues = append(resp.Queues, types.TaskQueueItem{
-				Name: queue,
-			})
-			continue
+			return nil, errors.Wrapf(infoErr, "查询任务队列概览失败 queue=%s", queue)
 		}
 		resp.Queues = append(resp.Queues, types.TaskQueueItem{
 			Name:        m.displayQueueName(info.Queue),
@@ -1121,11 +1140,6 @@ func (m *Manager) RunTask(ctx context.Context, req *types.OperateTaskReq) error 
 	if err = m.inspector.RunTask(internalQueue, taskID); err != nil {
 		return errors.Tag(err)
 	}
-	if info != nil && info.State == asynq.TaskStateArchived {
-		if err = m.persistTaskRecordForRerun(ctx, internalQueue, taskID); err != nil {
-			return errors.Wrapf(err, "清理归档任务重跑缓存 TTL 失败 task_id=%s", taskID)
-		}
-	}
 	return nil
 }
 
@@ -1164,18 +1178,6 @@ func (m *Manager) prepareWorkflowArchivedTaskRerun(ctx context.Context, info *as
 		"errorMessage": "",
 		"finishedAt":   "",
 	})
-}
-
-// persistTaskRecordForRerun 移除任务详情 hash 的 TTL，避免已归档任务重跑后继续使用原过期时间。
-func (m *Manager) persistTaskRecordForRerun(ctx context.Context, queue string, taskID string) error {
-	taskID = strings.TrimSpace(taskID)
-	queue = strings.TrimSpace(queue)
-	if m == nil || m.redis == nil || taskID == "" || queue == "" {
-		return nil
-	}
-	writeCtx, cancel := m.taskFinalWriteContext(ctx)
-	defer cancel()
-	return errors.Tag(m.redis.Persist(writeCtx, keys.TaskAsynqTaskHashKey(queue, taskID)).Err())
 }
 
 // DeleteTask 删除 pending/scheduled/retry/archived 状态的任务。
@@ -1416,8 +1418,6 @@ func (m *Manager) traceAndLogMiddleware() asynq.MiddlewareFunc {
 				loggerx.Infow(ctx, taskLogMessage("任务 执行完成", requestctx.FromContext(ctx)), fields...)
 				span.SetStatus(otelcodes.Ok, "ok")
 			}
-			m.expireFinalTaskRecord(ctx, queue, taskID, err)
-
 			// 统一写入 span attributes/status，方便按 queue/task_type/workflow 维度检索。
 			span.SetAttributes(
 				attribute.String("messaging.system", "redis"),

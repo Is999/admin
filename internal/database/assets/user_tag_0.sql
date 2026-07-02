@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS `user_tag_0` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',
   `uid` bigint unsigned NOT NULL COMMENT '用户 ID',
-  `shard_no` int NOT NULL DEFAULT 0 COMMENT 'uid取模1000分片',
+  `shard_no` int NOT NULL DEFAULT 0 COMMENT 'uid取模1024分片',
   `tag_type` int NOT NULL COMMENT '标签类型',
   `tag_source` tinyint NOT NULL DEFAULT 0 COMMENT '标签来源：0系统 1人工',
   `tag_data` int NOT NULL DEFAULT 0 COMMENT '标签附加数据',

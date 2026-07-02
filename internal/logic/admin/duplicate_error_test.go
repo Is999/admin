@@ -9,7 +9,7 @@ import (
 
 // TestAdminNameAlreadyExistsResultMessage 验证对应场景符合预期。
 func TestAdminNameAlreadyExistsResultMessage(t *testing.T) {
-	result := adminNameAlreadyExistsResult("alice", errAdminNameAlreadyExists)
+	result := AdminNameAlreadyExistsResult("alice", errAdminNameAlreadyExists)
 	if result.Code != codes.UserAlreadyExists {
 		t.Fatalf("code = %d, want %d", result.Code, codes.UserAlreadyExists)
 	}

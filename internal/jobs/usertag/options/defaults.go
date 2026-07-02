@@ -6,7 +6,7 @@ const (
 	// defaultShardTotal 是用户标签工作流默认任务分片数。
 	defaultShardTotal = 1
 	// defaultRuntimeShardTotal 是运行期 UID 索引默认逻辑分片数。
-	defaultRuntimeShardTotal = 1000
+	defaultRuntimeShardTotal = 1024
 	// defaultResultShardTotal 是用户标签结果表默认物理分表数。
 	defaultResultShardTotal = 1
 	// defaultBatchSize 是默认游标批次大小。

@@ -17,6 +17,7 @@ import (
 	i18n "admin/common/i18n"
 	keys "admin/common/rediskeys"
 	"admin/internal/config"
+	usertagoptions "admin/internal/jobs/usertag/options"
 	usertagrepo "admin/internal/jobs/usertag/repository"
 	usertagroute "admin/internal/jobs/usertag/route"
 	usertagtask "admin/internal/jobs/usertag/task"
@@ -71,7 +72,7 @@ func (l *UserTagLogic) RecalculateByTagTypes(req *types.RecalculateUserTagReq) *
 	// 返回结构按 admin 历史接口习惯裁剪，避免把底层任务响应细节直接暴露给上层调用方。
 	return l.enqueueWorkflow(triggerReq, func(resp *types.TaskWorkflowTriggerResp) any {
 		return types.RecalculateUserTagResp{
-			Message:      fmt.Sprintf("已启动 %d 个标签重算任务", len(req.TagTypes)),
+			Message:      l.Message(i18n.MsgKeyUserTagRecalculateStarted, len(req.TagTypes)),
 			TagCount:     len(req.TagTypes),
 			TaskID:       resp.TaskID,
 			WorkflowID:   resp.WorkflowID,
@@ -96,7 +97,7 @@ func (l *UserTagLogic) ReleaseWorkflowLease(req *types.ReleaseUserTagWorkflowLea
 			SetI18nMessage(i18n.MsgKeyRedisUnavailable).
 			WithError(corelogic.WrapLogicError(errors.Errorf("用户标签工作流互斥租约需要 Redis，但 Redis 未初始化 workflow_id=%s mode=%s", req.WorkflowID, req.Mode), "UserTagLogic.ReleaseWorkflowLease Redis不可用"))
 	}
-	defaults := usertagtask.NewDefaults(l.Svc.CurrentConfig().Workflows.UserTag)
+	defaults := usertagoptions.NewDefaults(l.Svc.CurrentConfig().Workflows.UserTag)
 	repo := usertagrepo.NewTagRepository(usertagrepo.NewRuntimeDeps(l.Svc, usertagroute.NewShardPlanWithResult(defaults.ShardTotal, defaults.RuntimeShardTotal, defaults.ResultShardTotal)))
 	releaseResult, err := repo.ManualReleaseWorkflowLease(l.Ctx, usertagtypes.RuntimeOptions{
 		WorkflowID: req.WorkflowID,
@@ -204,7 +205,7 @@ func buildUserTagWorkflowReq(req *types.TriggerUserTagWorkflowReq, cfg config.Us
 	}
 
 	// defaults 负责补齐标签系统在配置中的默认分片、批次等运行参数。
-	defaults := usertagtask.NewDefaults(cfg)
+	defaults := usertagoptions.NewDefaults(cfg)
 
 	// targets 承载工作流运行参数，后续由任务插件解析回领域选项。
 	targets := make([]string, 0, len(req.TagTypes)+len(req.UIDs)+6)

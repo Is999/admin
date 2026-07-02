@@ -37,6 +37,14 @@ func (m *Manager) completedRetention() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+// CompletedRetention 返回成功任务交给 Asynq completed 队列保留的时长。
+func (m *Manager) CompletedRetention() time.Duration {
+	if m == nil {
+		return 24 * time.Hour
+	}
+	return m.completedRetention()
+}
+
 // archivedRetention 返回归档失败任务在 Asynq 中的保留时长。
 func (m *Manager) archivedRetention() time.Duration {
 	seconds := m.CurrentConfig().ArchivedRetentionSeconds

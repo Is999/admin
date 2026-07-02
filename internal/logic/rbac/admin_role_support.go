@@ -397,8 +397,8 @@ func (l *AdminRoleLogic) roleStatusMap(roleIDs []int) (map[int]int, error) {
 	return result, nil
 }
 
-// rolePermissionIDsWithCache 优先读取单角色权限集合缓存，未命中时自动回源并重建。
-func (l *AdminRoleLogic) rolePermissionIDsWithCache(roleID int) ([]int, error) {
+// RolePermissionIDsWithCache 优先读取单角色权限集合缓存，未命中时自动回源并重建。
+func (l *AdminRoleLogic) RolePermissionIDsWithCache(roleID int) ([]int, error) {
 	if roleID <= 0 {
 		return nil, nil
 	}
@@ -419,11 +419,6 @@ func (l *AdminRoleLogic) rolePermissionIDsWithCache(roleID int) ([]int, error) {
 		return []int{}, nil
 	}
 	return cachelogic.ParsePositiveIntStrings(values, "角色权限缓存")
-}
-
-// RolePermissionIDsWithCache 查询角色启用权限 ID。
-func (l *AdminRoleLogic) RolePermissionIDsWithCache(roleID int) ([]int, error) {
-	return l.rolePermissionIDsWithCache(roleID)
 }
 
 // rolePidsTx 在事务内计算角色族谱。

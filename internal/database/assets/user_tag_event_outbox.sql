@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS `user_tag_event_outbox` (
   `workflow_id` varchar(80) NOT NULL COMMENT '工作流ID',
   `event_id` varchar(120) NOT NULL COMMENT '事件幂等ID',
   `uid` bigint NOT NULL COMMENT '用户 ID',
-  `shard_no` int NOT NULL DEFAULT 0 COMMENT 'uid取模1000分片',
+  `shard_no` int NOT NULL DEFAULT 0 COMMENT 'uid取模1024分片',
   `tag_type` int NOT NULL COMMENT '标签类型',
   `tag_source` tinyint NOT NULL DEFAULT 0 COMMENT '标签来源：0系统 1人工',
   `action` varchar(20) NOT NULL COMMENT '动作：gain/lost',

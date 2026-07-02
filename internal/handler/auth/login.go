@@ -35,7 +35,7 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 		var req types.LoginReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
 		req.IP = utils.ClientIP(r)

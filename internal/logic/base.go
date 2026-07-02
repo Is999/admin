@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	i18n "admin/common/i18n"
 	keys "admin/common/rediskeys"
 	"admin/common/runtimecfg"
 	"admin/helper"
@@ -116,6 +117,19 @@ func (l *BaseLogic) Meta() *requestctx.Meta {
 	return requestctx.FromContext(l.Ctx)
 }
 
+// Locale 返回当前请求语言，缺省时使用管理后台默认中文。
+func (l *BaseLogic) Locale() string {
+	if meta := l.Meta(); meta != nil && meta.Locale != "" {
+		return meta.Locale
+	}
+	return i18n.LocaleZHCN
+}
+
+// Message 按当前请求语言解析多语言文案。
+func (l *BaseLogic) Message(key string, args ...any) string {
+	return i18n.MessageByKey(key, l.Locale(), args...)
+}
+
 // ClientIP 返回当前请求的客户端 IP（优先取 request meta）。
 func (l *BaseLogic) ClientIP() string {
 	if meta := l.Meta(); meta != nil {
@@ -212,8 +226,8 @@ func (l *BaseLogic) RdsGetJSONObj(key string, dest any) error {
 	return errors.Tag(json.Unmarshal([]byte(val), dest))
 }
 
-// wrapLogicError 统一给逻辑层错误补充业务上下文，同时保留原始错误链。
-func wrapLogicError(err error, format string, args ...any) error {
+// WrapLogicError 给拆分后的领域包复用统一错误上下文包装。
+func WrapLogicError(err error, format string, args ...any) error {
 	if err == nil {
 		return nil
 	}
@@ -227,17 +241,12 @@ func wrapLogicError(err error, format string, args ...any) error {
 	return errors.Wrap(err, format)
 }
 
-// WrapLogicError 给拆分后的领域包复用统一错误上下文包装。
-func WrapLogicError(err error, format string, args ...any) error {
-	return wrapLogicError(err, format, args...)
-}
-
 // logWrappedError 用于无法继续向上返回的兜底场景，统一补充上下文后按一条错误链打印。
 func logWrappedError(logger interface{ Errorf(string, ...any) }, err error, format string, args ...any) {
 	if logger == nil || err == nil {
 		return
 	}
-	logger.Errorf("%s", loggerx.ErrorChain(wrapLogicError(err, format, args...)))
+	logger.Errorf("%s", loggerx.ErrorChain(WrapLogicError(err, format, args...)))
 }
 
 // LogWrappedError 给拆分后的领域包复用兜底错误日志格式。

@@ -12,8 +12,8 @@ func TestNewDefaultsStartsFromSinglePhysicalResultShard(t *testing.T) {
 	if got.ShardTotal != 1 {
 		t.Fatalf("ShardTotal=%d want=1", got.ShardTotal)
 	}
-	if got.RuntimeShardTotal != 1000 {
-		t.Fatalf("RuntimeShardTotal=%d want=1000", got.RuntimeShardTotal)
+	if got.RuntimeShardTotal != 1024 {
+		t.Fatalf("RuntimeShardTotal=%d want=1024", got.RuntimeShardTotal)
 	}
 	if got.ResultShardTotal != 1 {
 		t.Fatalf("ResultShardTotal=%d want=1", got.ResultShardTotal)
@@ -24,10 +24,10 @@ func TestNewDefaultsStartsFromSinglePhysicalResultShard(t *testing.T) {
 func TestNewDefaultsKeepsConfiguredPhysicalResultShard(t *testing.T) {
 	got := NewDefaults(config.UserTagConfig{
 		DefaultShardTotal: 8,
-		RuntimeShardTotal: 1000,
-		ResultShardTotal:  100,
+		RuntimeShardTotal: 1024,
+		ResultShardTotal:  128,
 	})
-	if got.ShardTotal != 8 || got.RuntimeShardTotal != 1000 || got.ResultShardTotal != 100 {
+	if got.ShardTotal != 8 || got.RuntimeShardTotal != 1024 || got.ResultShardTotal != 128 {
 		t.Fatalf("unexpected defaults: %+v", got)
 	}
 }

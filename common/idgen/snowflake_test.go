@@ -167,8 +167,8 @@ func TestShardNo(t *testing.T) {
 			t.Fatalf("ShardNo(%d)=%d want=%d", tt.id, got, tt.want)
 		}
 	}
-	if ShardNo(1000) == 0 {
-		t.Fatal("ShardNo(1000) should not fall back to id%1000")
+	if ShardNo(1024) == 0 {
+		t.Fatal("ShardNo(1024) should not fall back to raw id%1024")
 	}
 }
 

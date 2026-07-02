@@ -962,7 +962,7 @@ func (l *AdminExportLogic) refreshDownloadAvailability(status *types.AdminExport
 	if err := l.probeDownloadObject(status); err != nil {
 		status.DownloadReady = false
 		status.Status = types.AdminExportStatusFailed
-		status.ErrorMessage = "导出文件不存在或已失效，请重新导出"
+		status.ErrorMessage = l.Message(i18n.MsgKeyAdminExportFileExpired)
 		if clearErr := l.clearRequestIndex(status.RequestFingerprint); clearErr != nil {
 			corelogic.LogWrappedError(l, clearErr, "AdminExportLogic.refreshDownloadAvailability 清理管理员导出复用索引失败")
 		}

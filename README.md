@@ -139,11 +139,11 @@ admin
 
 | 注册对象 | 统一入口 | 说明 |
 | --- | --- | --- |
-| 启动组件 | `internal/bootstrap/registrations.go:defaultComponentSpecs` | Collector、任务运行时、HTTP Server 从规格派生真实组件和注册清单 |
+| 启动组件 | `internal/bootstrap/components/builtin/specs.go:DefaultSpecs` | Collector、CDC、任务运行时、HTTP Server 从规格派生真实组件和注册清单 |
 | HTTP 路由 | `internal/handler/routes.go:builtinRouteModuleSpecs` + 各模块 `RouteSpecs` | 真实路由、RouteContract、访问日志降噪和文档校验都从路由规格派生 |
 | RouteMeta | `internal/handler/shared/route_meta.go:DefaultRouteMetas` | 路由别名、中文说明和审计动作集中登记 |
 | 路由安全清单 | `internal/handler/route_security_manifest.go:DefaultRouteSecurityManifest` | 汇总 method、path、chain 和字段级签名加密策略，用于文档和前端同步 |
-| 任务插件 | `internal/task/runtime/builtins.go:BuiltinPluginSpecs` | core、archive、admin_export、user_tag 等任务插件从规格派生 |
+| 任务插件 | `internal/bootstrap/components/builtin/task.go:DefaultTaskPluginSpecs` + `internal/jobs/plugins.go:PluginSpecs` | core、archive、admin_export、task_report、user_tag 和维护任务插件从规格派生 |
 | 运行时扩展 | 各能力归属包 `RuntimeRegistrySpecs` | `pkg/storage`、`internal/logic/file`、`internal/infra/collectorx` 分别声明自身扩展入口 |
 | 数据库迁移 | `internal/database/migrations.go:defaultMigrationSpecs` | 迁移版本、名称、SQL 资产和 bootstrap-only 边界集中登记 |
 | Redis Key | `common/rediskeys` | Key 模板集中定义并带静态检查，业务代码不散落高基数字符串 |
@@ -291,7 +291,7 @@ make ci
 - 请求参数放在 `internal/types`，需要实现 go-zero `Validate()`。
 - handler 只负责解析、鉴权审计和响应写出，业务编排放在 `internal/logic`。
 - 新增接口必须同步接口文档、RouteMeta、权限码、审计动作、业务码和 i18n。
-- 新增任务必须进入 `internal/task/runtime/builtins.go:BuiltinPluginSpecs` 或明确说明为何只作为外部注入插件。
+- 新增默认任务必须进入 `internal/jobs/plugins.go:PluginSpecs`，核心任务能力放在 `taskruntime.CorePluginSpecs`；外部注入插件需要明确说明边界。
 - Redis Key 必须走 `common/rediskeys`，禁止在业务代码散落高基数通配 key。
 - 原生 SQL / Lua 必须作为代码资产，通过 `go:embed` 加载并在执行前剥离文件头说明。
 - 新增运行期能力必须同步注册清单和测试，不能只加业务实现。

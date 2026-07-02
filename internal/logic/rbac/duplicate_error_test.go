@@ -18,16 +18,16 @@ func TestRBACDuplicateResultMessages(t *testing.T) {
 	}{
 		{
 			name: "role",
-			got:  roleTitleAlreadyExistsResult("运营", errRoleTitleAlreadyExists).Code,
+			got:  RoleTitleAlreadyExistsResult("运营", errRoleTitleAlreadyExists).Code,
 			want: codes.AdminRoleAlreadyExists,
-			msg:  roleTitleAlreadyExistsResult("运营", errRoleTitleAlreadyExists).ResolveMessage(context.Background()),
+			msg:  RoleTitleAlreadyExistsResult("运营", errRoleTitleAlreadyExists).ResolveMessage(context.Background()),
 			text: "角色[运营]已存在",
 		},
 		{
 			name: "permission",
-			got:  permissionUUIDAlreadyExistsResult("100001", errPermissionUUIDAlreadyExists).Code,
+			got:  PermissionUUIDAlreadyExistsResult("100001", errPermissionUUIDAlreadyExists).Code,
 			want: codes.AdminPermissionAlreadyExists,
-			msg:  permissionUUIDAlreadyExistsResult("100001", errPermissionUUIDAlreadyExists).ResolveMessage(context.Background()),
+			msg:  PermissionUUIDAlreadyExistsResult("100001", errPermissionUUIDAlreadyExists).ResolveMessage(context.Background()),
 			text: "权限标识[100001]已存在",
 		},
 	}

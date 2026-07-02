@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	i18n "admin/common/i18n"
 	"admin/internal/config"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -54,12 +55,12 @@ func (f *taskOverviewFakeQueue) EnqueueRegisteredTask(context.Context, *types.En
 }
 
 // ListRegisteredTaskTypes 表示测试辅助逻辑。
-func (f *taskOverviewFakeQueue) ListRegisteredTaskTypes() []types.TaskTypeRegistryItem {
+func (f *taskOverviewFakeQueue) ListRegisteredTaskTypes(context.Context) []types.TaskTypeRegistryItem {
 	return nil
 }
 
 // ListRegisteredWorkflows 表示测试辅助逻辑。
-func (f *taskOverviewFakeQueue) ListRegisteredWorkflows() []types.WorkflowRegistryItem {
+func (f *taskOverviewFakeQueue) ListRegisteredWorkflows(context.Context) []types.WorkflowRegistryItem {
 	return nil
 }
 
@@ -330,6 +331,7 @@ func TestGetConfigReloadStatus(t *testing.T) {
 		ConfigSummary:          "mode=all task=true periodic=2 user_tag=true hot_reload=true kafka=true clickhouse=true archive=false",
 		LastStatus:             "success",
 		LastMessage:            "配置热加载成功",
+		LastMessageKey:         i18n.MsgKeyHotReloadSuccess,
 		LastTriggerSource:      "watcher",
 		LastFailureCategory:    "",
 		LastCheckedAt:          time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC),
@@ -577,6 +579,7 @@ func TestRunConfigReload(t *testing.T) {
 		ConfigSummary:        "mode=all task=true periodic=1 user_tag=true hot_reload=true kafka=true clickhouse=true archive=true",
 		LastStatus:           "success",
 		LastMessage:          "配置热加载成功",
+		LastMessageKey:       i18n.MsgKeyHotReloadSuccess,
 		LastTriggerSource:    "manual_api",
 	})
 

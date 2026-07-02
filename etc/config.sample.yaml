@@ -29,7 +29,7 @@ snowflake:
 
 # 业务用户写入路由；提升前必须完成 user_account 回填、目标表创建和多实例同步重启。
 user:
-  # 新增业务用户默认物理表数量，仅支持 1/10/100/1000。
+  # 新增业务用户默认物理表数量，仅支持 1/2/4/8/16/32/64/128/256/512/1024。
   route_shard_count: 1
 
 # JWT 密钥，请替换为强随机字符串。
@@ -399,8 +399,6 @@ Telemetry:
 observability:
   # 可观测性服务名。
   service_name: "admin"
-  # 环境标识。
-  environment: "dev"
   # 是否启用 trace 上报。
   trace_enabled: true
   # OTLP 上报协议：grpc/http-protobuf；为空默认 grpc。

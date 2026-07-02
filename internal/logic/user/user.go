@@ -188,7 +188,7 @@ func (l *Logic) Create(req *types.CreateUserReq) *types.BizResult {
 				Enabled: apiruntime.Configured(l.Svc.CurrentConfig().APIService),
 				Success: true,
 				UserID:  row.ID,
-				Message: "新增用户无既有运行态缓存",
+				Message: l.Message(i18n.MsgKeyAPIRuntimeUserCreateNoCache),
 			},
 		})
 }
@@ -224,12 +224,12 @@ func (l *Logic) Update(req *types.UpdateUserReq) *types.BizResult {
 		Enabled: apiruntime.Configured(l.Svc.CurrentConfig().APIService),
 		Success: true,
 		UserID:  req.ID,
-		Message: "资料未变更，无需同步 API 运行态",
+		Message: l.Message(i18n.MsgKeyAPIRuntimeProfileUnchanged),
 	}
 	if len(updates) > 0 {
 		syncResp, err = l.syncUserRuntime(req.ID, true, false, "admin_update_user_profile")
 		if err != nil {
-			syncResp = apiRuntimeSyncWarning(req.ID, syncResp, "资料已更新，API 资料缓存同步失败，请手动重试", err)
+			syncResp = l.apiRuntimeSyncWarning(req.ID, syncResp, i18n.MsgKeyAPIRuntimeProfileSyncWarning, err)
 		}
 	}
 	return types.NewBizResult(codes.UpdateSuccess).
@@ -251,7 +251,7 @@ func (l *Logic) UpdateStatus(req *types.UserStatusReq) *types.BizResult {
 		Enabled: apiruntime.Configured(l.Svc.CurrentConfig().APIService),
 		Success: true,
 		UserID:  req.ID,
-		Message: "状态未变更，无需同步 API 运行态",
+		Message: l.Message(i18n.MsgKeyAPIRuntimeStatusUnchanged),
 	}
 	if row.Status != status {
 		if _, err := l.runtimeClient(); err != nil {
@@ -279,7 +279,7 @@ func (l *Logic) UpdateStatus(req *types.UserStatusReq) *types.BizResult {
 		if status != model.UserStatusDisabled {
 			syncResp, err = l.syncUserRuntime(req.ID, true, false, "admin_update_user_status")
 			if err != nil {
-				syncResp = apiRuntimeSyncWarning(req.ID, syncResp, "状态已更新，API 资料缓存同步失败，请手动重试", err)
+				syncResp = l.apiRuntimeSyncWarning(req.ID, syncResp, i18n.MsgKeyAPIRuntimeStatusSyncWarning, err)
 			}
 		}
 	}
@@ -391,7 +391,7 @@ func (l *Logic) runtimeClient() (*apiruntime.Client, error) {
 func (l *Logic) syncUserRuntime(userID int64, profile bool, sessions bool, reason string) (types.UserRuntimeSyncResp, error) {
 	client, err := l.runtimeClient()
 	if err != nil {
-		return types.UserRuntimeSyncResp{Enabled: false, Success: false, UserID: userID, Message: err.Error()}, errors.Tag(err)
+		return types.UserRuntimeSyncResp{Enabled: false, Success: false, UserID: userID, Message: l.Message(i18n.MsgKeyAPIRuntimeNotConfigured)}, errors.Tag(err)
 	}
 	resp, err := client.SyncUserRuntime(l.Ctx, userID, profile, sessions, reason)
 	if err != nil {
@@ -537,11 +537,11 @@ func apiRuntimeSyncFailedResult(context string, err error) *types.BizResult {
 }
 
 // apiRuntimeSyncWarning 把写库后同步失败转换为可重试的运行态提示，避免误报数据库写入失败。
-func apiRuntimeSyncWarning(userID int64, resp types.UserRuntimeSyncResp, fallback string, err error) types.UserRuntimeSyncResp {
+func (l *Logic) apiRuntimeSyncWarning(userID int64, resp types.UserRuntimeSyncResp, fallbackKey string, err error) types.UserRuntimeSyncResp {
 	resp.Success = false
 	resp.UserID = userID
 	if resp.Message == "" {
-		resp.Message = fallback
+		resp.Message = l.Message(fallbackKey)
 	}
 	if err != nil && !strings.Contains(resp.Message, err.Error()) {
 		resp.Message = resp.Message + "：" + err.Error()

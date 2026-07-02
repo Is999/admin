@@ -35,7 +35,7 @@ type SnowflakeConfig struct {
 
 // UserConfig 定义业务用户写入和后续拆表路由配置。
 type UserConfig struct {
-	RouteShardCount int `json:"route_shard_count,optional,default=1"` // 新增业务用户默认物理表数量：1/10/100/1000
+	RouteShardCount int `json:"route_shard_count,optional,default=1"` // 新增业务用户默认物理表数量：1/2/4/.../1024
 }
 
 // SecuritySecretKeyVersionConfig 定义配置文件中的单个秘钥版本材料。
@@ -372,7 +372,7 @@ type FileStorageConfig struct {
 // ObservabilityConfig 聚合日志、链路追踪和审计相关配置，避免可观测性参数散落在多个配置段中。
 type ObservabilityConfig struct {
 	ServiceName     string  `json:"service_name,optional"`       // 服务名
-	Environment     string  `json:"environment,optional"`        // 环境名
+	Environment     string  `json:"environment,optional"`        // 观测环境，由顶层 Mode 填充
 	TraceEnabled    bool    `json:"trace_enabled,optional"`      // 是否启用 trace 采样/上报
 	OTLPProtocol    string  `json:"otlp_protocol,optional"`      // OTLP 协议：grpc/http；为空默认 grpc
 	OTLPEndpoint    string  `json:"otlp_endpoint,optional"`      // OTLP endpoint

@@ -12,6 +12,7 @@ import (
 
 	"admin/helper"
 	"admin/internal/task/stats"
+	"admin/internal/task/taskwire"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
@@ -23,11 +24,11 @@ const (
 	WorkflowNameCacheRefresh = "cache.refresh"
 
 	// WorkflowSourceAPI 表示由管理接口手动触发。
-	WorkflowSourceAPI = "api"
+	WorkflowSourceAPI = taskwire.WorkflowSourceAPI
 	// WorkflowSourcePeriodic 表示由周期调度触发。
-	WorkflowSourcePeriodic = "periodic"
+	WorkflowSourcePeriodic = taskwire.WorkflowSourcePeriodic
 	// WorkflowSourceInternal 表示由应用内部逻辑触发。
-	WorkflowSourceInternal = "internal"
+	WorkflowSourceInternal = taskwire.WorkflowSourceInternal
 
 	// WorkflowStatusPending 表示工作流已创建但尚未开始。
 	WorkflowStatusPending = "pending"
@@ -89,7 +90,7 @@ type WorkflowStartSpec struct {
 // 节点图在进程启动时注册到内存中，实例状态则落在 Redis 中以支持多实例协同。
 type WorkflowDefinition struct {
 	Name          string                             // 工作流名称
-	Description   string                             // 工作流中文说明
+	Description   string                             // 工作流默认说明，注册表展示优先使用多语言展示元数据
 	DefaultQueue  string                             // 默认执行队列
 	MaxShardTotal int                                // 允许的最大分片数，0 表示不限制
 	Nodes         map[string]*WorkflowNodeDefinition // 节点定义集合，key 为节点名

@@ -203,7 +203,7 @@ func (l *SysConfigLogic) Update(req *types.SaveSysConfigReq) *types.BizResult {
 	}); err != nil {
 		if strings.Contains(err.Error(), "配置已被其他人修改，请刷新后重试") {
 			return types.NewBizResult(codes.ParamError).
-				SetI18nMessage(i18n.MsgKeyParamErrorFormat, "配置已被其他人修改，请刷新后重试").
+				SetI18nMessage(i18n.MsgKeyConfigVersionConflict).
 				WithError(corelogic.WrapLogicError(err, "SysConfigLogic.Update 乐观锁校验失败"))
 		}
 		return types.DBError(i18n.MsgKeyDBError, err,

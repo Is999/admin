@@ -39,7 +39,7 @@ func CompleteFileUploadHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		req, err := parseFileUploadCompleteReq(r)
 		if err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)
@@ -54,7 +54,7 @@ func UploadFileChunkHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		req, err := parseFileUploadChunkReq(r)
 		if err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)
@@ -69,7 +69,7 @@ func DownloadUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.FileUploadStatusReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)
@@ -113,7 +113,7 @@ func AccessUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.FileUploadStatusReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)

@@ -33,8 +33,8 @@ type redisPipelinedClient interface {
 	Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error)
 }
 
-// parsePositiveIntStrings 把字符串切片转换成去重后的正整数切片。
-func parsePositiveIntStrings(values []string, title string) ([]int, error) {
+// ParsePositiveIntStrings 把字符串切片转换成去重后的正整数切片。
+func ParsePositiveIntStrings(values []string, title string) ([]int, error) {
 	result := make([]int, 0, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
@@ -44,17 +44,17 @@ func parsePositiveIntStrings(values []string, title string) ([]int, error) {
 		id, err := strconv.Atoi(value)
 		if err != nil || id <= 0 {
 			if err != nil {
-				return nil, errors.Wrapf(err, "parsePositiveIntStrings 解析%s失败 value=%s", title, value)
+				return nil, errors.Wrapf(err, "ParsePositiveIntStrings 解析%s失败 value=%s", title, value)
 			}
-			return nil, errors.Errorf("parsePositiveIntStrings 解析%s失败，非正整数 value=%s", title, value)
+			return nil, errors.Errorf("ParsePositiveIntStrings 解析%s失败，非正整数 value=%s", title, value)
 		}
 		result = append(result, id)
 	}
 	return types.UniquePositiveInts(result), nil
 }
 
-// deleteRedisKeysExactBatches 按精确 key 批量删除 Redis 缓存，禁止使用 SCAN/通配符兜底。
-func deleteRedisKeysExactBatches(base *corelogic.BaseLogic, title string, cacheKeys []string) {
+// DeleteRedisKeysExactBatches 按精确 key 批量删除 Redis 缓存，禁止使用 SCAN/通配符兜底。
+func DeleteRedisKeysExactBatches(base *corelogic.BaseLogic, title string, cacheKeys []string) {
 	if base == nil || base.Redis() == nil {
 		return
 	}
@@ -93,8 +93,8 @@ func deleteRedisKeysExactBatches(base *corelogic.BaseLogic, title string, cacheK
 	}
 }
 
-// trackRoutePermissionAliasCache 登记已访问的路由权限候选缓存别名，权限变更时可按索引精确删除。
-func trackRoutePermissionAliasCache(base *corelogic.BaseLogic, routeAlias string) {
+// TrackRoutePermissionAliasCache 登记已访问的路由权限候选缓存别名，权限变更时可按索引精确删除。
+func TrackRoutePermissionAliasCache(base *corelogic.BaseLogic, routeAlias string) {
 	if base == nil || base.Redis() == nil {
 		return
 	}
@@ -102,26 +102,26 @@ func trackRoutePermissionAliasCache(base *corelogic.BaseLogic, routeAlias string
 	if routeAlias == "" {
 		return
 	}
-	indexKey := tableCachePhysicalKey(base, keys.RoutePermissionAliasIndex)
+	indexKey := TableCachePhysicalKey(base, keys.RoutePermissionAliasIndex)
 	if err := base.Redis().SAdd(base.Ctx, indexKey, routeAlias).Err(); err != nil {
-		corelogic.LogWrappedError(base, err, "trackRoutePermissionAliasCache 登记路由权限候选缓存索引失败 route_alias=%s", routeAlias)
+		corelogic.LogWrappedError(base, err, "TrackRoutePermissionAliasCache 登记路由权限候选缓存索引失败 route_alias=%s", routeAlias)
 	}
 }
 
-// invalidateAdminRelationCache 删除管理员关系缓存，并清理登录态触发资料重建。
-func invalidateAdminRelationCache(base *corelogic.BaseLogic, adminIDs ...int) {
+// InvalidateAdminRelationCache 删除管理员关系缓存，并清理登录态触发资料重建。
+func InvalidateAdminRelationCache(base *corelogic.BaseLogic, adminIDs ...int) {
 	invalidateAdminRelationCacheWithOptions(base, false, adminIDs...)
 }
 
-// invalidateAdminRelationCachePreserveSession 删除管理员关系缓存，但保留登录态。
+// InvalidateAdminRelationCachePreserveSession 删除管理员关系缓存，但保留登录态。
 // 适用于个人中心自助更新场景，避免刚更新完资料就把当前会话自身打成未登录。
-func invalidateAdminRelationCachePreserveSession(base *corelogic.BaseLogic, adminIDs ...int) {
+func InvalidateAdminRelationCachePreserveSession(base *corelogic.BaseLogic, adminIDs ...int) {
 	invalidateAdminRelationCacheWithOptions(base, true, adminIDs...)
 }
 
-// invalidateAdminRoleAndPermissionCacheByAdminIDs 精确删除指定管理员的角色与权限聚合缓存。
+// InvalidateAdminRoleAndPermissionCacheByAdminIDs 精确删除指定管理员的角色与权限聚合缓存。
 // 角色变更只影响绑定了相关角色的管理员，不能在接口链路里按前缀扫描 Redis 高基数 key。
-func invalidateAdminRoleAndPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminIDs ...int) {
+func InvalidateAdminRoleAndPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminIDs ...int) {
 	if base == nil {
 		return
 	}
@@ -134,11 +134,11 @@ func invalidateAdminRoleAndPermissionCacheByAdminIDs(base *corelogic.BaseLogic, 
 			fmt.Sprintf(keys.AdminPermissionUUIDs, adminID),
 		)
 	}
-	deleteRedisKeysExactBatches(base, "invalidateAdminRoleAndPermissionCacheByAdminIDs 删除管理员关系权限缓存", tableCachePhysicalKeys(base, cacheKeys...))
+	DeleteRedisKeysExactBatches(base, "InvalidateAdminRoleAndPermissionCacheByAdminIDs 删除管理员关系权限缓存", TableCachePhysicalKeys(base, cacheKeys...))
 }
 
-// invalidateAdminPermissionCacheByAdminIDs 精确删除指定管理员的聚合权限与最终权限码缓存。
-func invalidateAdminPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminIDs ...int) {
+// InvalidateAdminPermissionCacheByAdminIDs 精确删除指定管理员的聚合权限与最终权限码缓存。
+func InvalidateAdminPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminIDs ...int) {
 	if base == nil {
 		return
 	}
@@ -149,11 +149,11 @@ func invalidateAdminPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminID
 			fmt.Sprintf(keys.AdminPermissionUUIDs, adminID),
 		)
 	}
-	deleteRedisKeysExactBatches(base, "invalidateAdminPermissionCacheByAdminIDs 删除管理员权限缓存", tableCachePhysicalKeys(base, cacheKeys...))
+	DeleteRedisKeysExactBatches(base, "InvalidateAdminPermissionCacheByAdminIDs 删除管理员权限缓存", TableCachePhysicalKeys(base, cacheKeys...))
 }
 
-// invalidateRolePermissionCacheByRoleIDs 精确删除指定角色的权限关系缓存。
-func invalidateRolePermissionCacheByRoleIDs(base *corelogic.BaseLogic, roleIDs ...int) {
+// InvalidateRolePermissionCacheByRoleIDs 精确删除指定角色的权限关系缓存。
+func InvalidateRolePermissionCacheByRoleIDs(base *corelogic.BaseLogic, roleIDs ...int) {
 	if base == nil {
 		return
 	}
@@ -161,17 +161,17 @@ func invalidateRolePermissionCacheByRoleIDs(base *corelogic.BaseLogic, roleIDs .
 	for _, roleID := range types.UniquePositiveInts(roleIDs) {
 		cacheKeys = append(cacheKeys, fmt.Sprintf(keys.RolePermission, roleID))
 	}
-	deleteRedisKeysExactBatches(base, "invalidateRolePermissionCacheByRoleIDs 删除角色权限缓存", tableCachePhysicalKeys(base, cacheKeys...))
+	DeleteRedisKeysExactBatches(base, "InvalidateRolePermissionCacheByRoleIDs 删除角色权限缓存", TableCachePhysicalKeys(base, cacheKeys...))
 }
 
-// invalidateAllRolePermissionCache 精确删除全量角色权限关系缓存，适用于权限定义整体变更或迁移补权场景。
-func invalidateAllRolePermissionCache(base *corelogic.BaseLogic) {
+// InvalidateAllRolePermissionCache 精确删除全量角色权限关系缓存，适用于权限定义整体变更或迁移补权场景。
+func InvalidateAllRolePermissionCache(base *corelogic.BaseLogic) {
 	if base == nil {
 		return
 	}
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
-		corelogic.LogWrappedError(base, err, "invalidateAllRolePermissionCache 获取admin读库失败")
+		corelogic.LogWrappedError(base, err, "InvalidateAllRolePermissionCache 获取admin读库失败")
 		return
 	}
 	lastRoleID := 0
@@ -184,13 +184,13 @@ func invalidateAllRolePermissionCache(base *corelogic.BaseLogic) {
 			Order("id ASC").
 			Limit(rolePermissionInvalidateQueryBatchSize).
 			Pluck("id", &roleIDs).Error; err != nil {
-			corelogic.LogWrappedError(base, err, "invalidateAllRolePermissionCache 查询全量角色ID失败 last_role_id=%d", lastRoleID)
+			corelogic.LogWrappedError(base, err, "InvalidateAllRolePermissionCache 查询全量角色ID失败 last_role_id=%d", lastRoleID)
 			return
 		}
 		if len(roleIDs) == 0 {
 			return
 		}
-		invalidateRolePermissionCacheByRoleIDs(base, roleIDs...)
+		InvalidateRolePermissionCacheByRoleIDs(base, roleIDs...)
 		lastRoleID = roleIDs[len(roleIDs)-1]
 		if len(roleIDs) < rolePermissionInvalidateQueryBatchSize {
 			return
@@ -204,7 +204,7 @@ func invalidateAdminRelationCacheWithOptions(base *corelogic.BaseLogic, preserve
 		return
 	}
 	cacheLogic := NewCacheLogic(base.Ctx, base.Svc)
-	manager, err := tableCacheManager(base)
+	manager, err := TableCacheManager(base)
 	if err != nil {
 		corelogic.LogWrappedError(base, err, "invalidateAdminRelationCache 初始化表缓存管理器失败")
 		manager = nil
@@ -219,38 +219,38 @@ func invalidateAdminRelationCacheWithOptions(base *corelogic.BaseLogic, preserve
 		permissionKey := fmt.Sprintf(keys.AdminPermissionIDs, adminID)
 		permissionUUIDKey := fmt.Sprintf(keys.AdminPermissionUUIDs, adminID)
 		if manager != nil {
-			if err := manager.DeleteByKey(base.Ctx, tableCachePhysicalKey(base, profileKey)); err != nil && !isTableCacheTargetNotFound(err) {
+			if err := manager.DeleteByKey(base.Ctx, TableCachePhysicalKey(base, profileKey)); err != nil && !IsTableCacheTargetNotFound(err) {
 				corelogic.LogWrappedError(base, err, "invalidateAdminRelationCache 删除管理员ID[%d]资料缓存失败", adminID)
 			}
-			if err := manager.DeleteByKey(base.Ctx, tableCachePhysicalKey(base, roleKey)); err != nil && !isTableCacheTargetNotFound(err) {
+			if err := manager.DeleteByKey(base.Ctx, TableCachePhysicalKey(base, roleKey)); err != nil && !IsTableCacheTargetNotFound(err) {
 				corelogic.LogWrappedError(base, err, "invalidateAdminRelationCache 删除管理员ID[%d]角色缓存失败", adminID)
 			}
-			if err := manager.DeleteByKey(base.Ctx, tableCachePhysicalKey(base, roleDetailKey)); err != nil && !isTableCacheTargetNotFound(err) {
+			if err := manager.DeleteByKey(base.Ctx, TableCachePhysicalKey(base, roleDetailKey)); err != nil && !IsTableCacheTargetNotFound(err) {
 				corelogic.LogWrappedError(base, err, "invalidateAdminRelationCache 删除管理员ID[%d]角色详情缓存失败", adminID)
 			}
-			if err := manager.DeleteByKey(base.Ctx, tableCachePhysicalKey(base, permissionKey)); err != nil && !isTableCacheTargetNotFound(err) {
+			if err := manager.DeleteByKey(base.Ctx, TableCachePhysicalKey(base, permissionKey)); err != nil && !IsTableCacheTargetNotFound(err) {
 				corelogic.LogWrappedError(base, err, "invalidateAdminRelationCache 删除管理员ID[%d]聚合权限缓存失败", adminID)
 			}
-			if err := manager.DeleteByKey(base.Ctx, tableCachePhysicalKey(base, permissionUUIDKey)); err != nil && !isTableCacheTargetNotFound(err) {
+			if err := manager.DeleteByKey(base.Ctx, TableCachePhysicalKey(base, permissionUUIDKey)); err != nil && !IsTableCacheTargetNotFound(err) {
 				corelogic.LogWrappedError(base, err, "invalidateAdminRelationCache 删除管理员ID[%d]最终权限码缓存失败", adminID)
 			}
 		}
 		if base.Redis() != nil {
-			if err := base.RdsDelKeys(tableCachePhysicalKeys(base, profileKey, roleKey, roleDetailKey, permissionKey, permissionUUIDKey)...); err != nil {
+			if err := base.RdsDelKeys(TableCachePhysicalKeys(base, profileKey, roleKey, roleDetailKey, permissionKey, permissionUUIDKey)...); err != nil {
 				corelogic.LogWrappedError(base, err, "invalidateAdminRelationCache 删除管理员ID[%d]Redis关系缓存失败", adminID)
 			}
 		}
 	}
 }
 
-// invalidateAllAdminPermissionCache 精确删除全量管理员聚合权限缓存，适用于权限定义整体变更场景。
-func invalidateAllAdminPermissionCache(base *corelogic.BaseLogic) {
+// InvalidateAllAdminPermissionCache 精确删除全量管理员聚合权限缓存，适用于权限定义整体变更场景。
+func InvalidateAllAdminPermissionCache(base *corelogic.BaseLogic) {
 	if base == nil {
 		return
 	}
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
-		corelogic.LogWrappedError(base, err, "invalidateAllAdminPermissionCache 获取admin读库失败")
+		corelogic.LogWrappedError(base, err, "InvalidateAllAdminPermissionCache 获取admin读库失败")
 		return
 	}
 	lastAdminID := 0
@@ -263,13 +263,13 @@ func invalidateAllAdminPermissionCache(base *corelogic.BaseLogic) {
 			Order("id ASC").
 			Limit(adminPermissionInvalidateQueryBatchSize).
 			Pluck("id", &adminIDs).Error; err != nil {
-			corelogic.LogWrappedError(base, err, "invalidateAllAdminPermissionCache 查询全量管理员ID失败 last_admin_id=%d", lastAdminID)
+			corelogic.LogWrappedError(base, err, "InvalidateAllAdminPermissionCache 查询全量管理员ID失败 last_admin_id=%d", lastAdminID)
 			return
 		}
 		if len(adminIDs) == 0 {
 			return
 		}
-		invalidateAdminPermissionCacheByAdminIDs(base, adminIDs...)
+		InvalidateAdminPermissionCacheByAdminIDs(base, adminIDs...)
 		lastAdminID = adminIDs[len(adminIDs)-1]
 		if len(adminIDs) < adminPermissionInvalidateQueryBatchSize {
 			return
@@ -277,62 +277,7 @@ func invalidateAllAdminPermissionCache(base *corelogic.BaseLogic) {
 	}
 }
 
-// isTableCacheTargetNotFound 判断当前错误是否为表缓存目标未注册。
-func isTableCacheTargetNotFound(err error) bool {
-	return errors.Is(err, tablecache.ErrTargetNotFound)
-}
-
-// ParsePositiveIntStrings 把 Redis 字符串集合解析为正整数集合。
-func ParsePositiveIntStrings(values []string, title string) ([]int, error) {
-	return parsePositiveIntStrings(values, title)
-}
-
-// DeleteRedisKeysExactBatches 分批删除明确 Redis Key。
-func DeleteRedisKeysExactBatches(base *corelogic.BaseLogic, title string, cacheKeys []string) {
-	deleteRedisKeysExactBatches(base, title, cacheKeys)
-}
-
-// TrackRoutePermissionAliasCache 记录路由权限候选缓存别名。
-func TrackRoutePermissionAliasCache(base *corelogic.BaseLogic, routeAlias string) {
-	trackRoutePermissionAliasCache(base, routeAlias)
-}
-
-// InvalidateAdminRelationCache 删除管理员资料、角色、权限与登录态缓存。
-func InvalidateAdminRelationCache(base *corelogic.BaseLogic, adminIDs ...int) {
-	invalidateAdminRelationCache(base, adminIDs...)
-}
-
-// InvalidateAdminRelationCachePreserveSession 删除管理员资料、角色和权限缓存，但保留登录态。
-func InvalidateAdminRelationCachePreserveSession(base *corelogic.BaseLogic, adminIDs ...int) {
-	invalidateAdminRelationCachePreserveSession(base, adminIDs...)
-}
-
-// InvalidateAdminRoleAndPermissionCacheByAdminIDs 删除指定管理员角色和权限聚合缓存。
-func InvalidateAdminRoleAndPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminIDs ...int) {
-	invalidateAdminRoleAndPermissionCacheByAdminIDs(base, adminIDs...)
-}
-
-// InvalidateAdminPermissionCacheByAdminIDs 删除指定管理员权限聚合缓存。
-func InvalidateAdminPermissionCacheByAdminIDs(base *corelogic.BaseLogic, adminIDs ...int) {
-	invalidateAdminPermissionCacheByAdminIDs(base, adminIDs...)
-}
-
-// InvalidateRolePermissionCacheByRoleIDs 删除指定角色权限关系缓存。
-func InvalidateRolePermissionCacheByRoleIDs(base *corelogic.BaseLogic, roleIDs ...int) {
-	invalidateRolePermissionCacheByRoleIDs(base, roleIDs...)
-}
-
-// InvalidateAllRolePermissionCache 删除所有角色权限关系缓存。
-func InvalidateAllRolePermissionCache(base *corelogic.BaseLogic) {
-	invalidateAllRolePermissionCache(base)
-}
-
-// InvalidateAllAdminPermissionCache 删除所有管理员权限聚合缓存。
-func InvalidateAllAdminPermissionCache(base *corelogic.BaseLogic) {
-	invalidateAllAdminPermissionCache(base)
-}
-
-// IsTableCacheTargetNotFound 判断错误是否表示缓存目标不存在。
+// IsTableCacheTargetNotFound 判断当前错误是否为表缓存目标未注册。
 func IsTableCacheTargetNotFound(err error) bool {
-	return isTableCacheTargetNotFound(err)
+	return errors.Is(err, tablecache.ErrTargetNotFound)
 }

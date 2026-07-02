@@ -16,7 +16,7 @@ func QueryAdminLogHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		// 解析请求参数并校验
 		var req types.AdminLogQueryReq
 		if err := httpx.Parse(r, &req); err != nil {
-			return nil, shared.ParamErrorResult(err)
+			return nil, types.ParamErrorResult(err)
 		}
 
 		// 业务逻辑处理

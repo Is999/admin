@@ -13,13 +13,13 @@ const (
 	// userPasswordMaxLength 表示业务用户后台重置密码的最大长度。
 	userPasswordMaxLength = 64
 	// userShardNoMod 表示用户 ID 哈希分片上限，与 idgen.ShardMod 保持一致。
-	userShardNoMod = 1000
+	userShardNoMod = 1024
 )
 
 // UserListReq 表示业务用户列表查询请求。
 type UserListReq struct {
 	ID          int64  `json:"id,optional" form:"id,optional"`             // 用户 ID 精确筛选
-	ShardNo     *int   `json:"shardNo,optional" form:"shardNo,optional"`   // ID 哈希分片筛选：0-999
+	ShardNo     *int   `json:"shardNo,optional" form:"shardNo,optional"`   // ID 哈希分片筛选：0-1023
 	Username    string `json:"username,optional" form:"username,optional"` // 用户名筛选
 	Email       string `json:"email,optional" form:"email,optional"`       // 邮箱筛选
 	Phone       string `json:"phone,optional" form:"phone,optional"`       // 手机号筛选
@@ -184,7 +184,7 @@ func (r *SyncUserRuntimeReq) Validate() error {
 // UserItem 表示前台用户列表和详情项。
 type UserItem struct {
 	ID          int64  `json:"id,string"`   // 用户 ID，JSON 以字符串返回，避免前端丢失精度
-	ShardNo     int    `json:"shardNo"`     // ID 哈希分片，来源 CRC32(id字符串)%1000，便于分表和分片游标查询
+	ShardNo     int    `json:"shardNo"`     // ID 哈希分片，来源 CRC32(id字符串)%1024，便于分表和分片游标查询
 	Username    string `json:"username"`    // 用户名
 	Nickname    string `json:"nickname"`    // 昵称
 	Email       string `json:"email"`       // 邮箱

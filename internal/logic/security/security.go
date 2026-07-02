@@ -134,7 +134,7 @@ func (l *SecurityLogic) CheckRoutePermission(userID int, routeAlias string) (boo
 		return true, nil
 	}
 
-	roleIDs, err := l.enabledRoleIDs(userID)
+	roleIDs, err := l.EnabledRoleIDs(userID)
 	if err != nil {
 		return false, errors.Tag(err)
 	}
@@ -347,14 +347,9 @@ func (l *SecurityLogic) checkAdminMFA(admin *model.Admin) error {
 	return nil
 }
 
-// enabledRoleIDs 查询用户拥有的启用角色 ID。
-func (l *SecurityLogic) enabledRoleIDs(userID int) ([]int, error) {
-	return (&rbaclogic.AdminRoleLogic{BaseLogic: l.BaseLogic}).EnabledRoleIDsByUserWithCache(userID)
-}
-
-// EnabledRoleIDs 查询管理员绑定的启用角色 ID。
+// EnabledRoleIDs 查询用户拥有的启用角色 ID。
 func (l *SecurityLogic) EnabledRoleIDs(userID int) ([]int, error) {
-	return l.enabledRoleIDs(userID)
+	return (&rbaclogic.AdminRoleLogic{BaseLogic: l.BaseLogic}).EnabledRoleIDsByUserWithCache(userID)
 }
 
 // routePermissionIDs 查询路由别名对应的启用权限 ID。
@@ -410,7 +405,7 @@ func (l *SecurityLogic) userPermissionIDsWithCache(userID int) ([]int, error) {
 		return []int{}, nil
 	}
 	if l.Redis() == nil {
-		roleIDs, err := l.enabledRoleIDs(userID)
+		roleIDs, err := l.EnabledRoleIDs(userID)
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -440,8 +435,8 @@ func (l *SecurityLogic) userPermissionIDsWithCache(userID int) ([]int, error) {
 	return cachelogic.ParsePositiveIntStrings(values, "管理员聚合权限缓存")
 }
 
-// userPermissionUUIDsWithCache 查询管理员最终权限码集合，供高频权限初始化链路优先走缓存。
-func (l *SecurityLogic) userPermissionUUIDsWithCache(userID int) ([]string, error) {
+// UserPermissionUUIDsWithCache 查询管理员最终权限码集合，供高频权限初始化链路优先走缓存。
+func (l *SecurityLogic) UserPermissionUUIDsWithCache(userID int) ([]string, error) {
 	if userID <= 0 {
 		return []string{}, nil
 	}
@@ -476,11 +471,6 @@ func (l *SecurityLogic) userPermissionUUIDsWithCache(userID int) ([]string, erro
 		return nil, errors.Tag(err)
 	}
 	return values, nil
-}
-
-// UserPermissionUUIDsWithCache 查询管理员最终权限码集合。
-func (l *SecurityLogic) UserPermissionUUIDsWithCache(userID int) ([]string, error) {
-	return l.userPermissionUUIDsWithCache(userID)
 }
 
 // routePermissionIDsFromModuleCache 从权限模块缓存反查路由关联权限 ID。

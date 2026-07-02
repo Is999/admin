@@ -106,7 +106,7 @@ func (l *AdminRoleLogic) List(req *types.RoleListReq) *types.BizResult {
 
 // TreeList 查询角色树，供新增/编辑角色和用户分配角色时使用。
 func (l *AdminRoleLogic) TreeList() *types.BizResult {
-	items, err := l.loadRoleTreeWithCache()
+	items, err := l.LoadRoleTreeWithCache()
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminRoleLogic.TreeList 查询角色树失败").ToBizResult()
@@ -123,7 +123,7 @@ func (l *AdminRoleLogic) TreeList() *types.BizResult {
 
 // ParentTreeOptions 查询角色父级下拉树，普通管理员可选择自身角色来创建下级角色。
 func (l *AdminRoleLogic) ParentTreeOptions() *types.BizResult {
-	items, err := l.loadRoleTreeWithCache()
+	items, err := l.LoadRoleTreeWithCache()
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminRoleLogic.ParentTreeOptions 查询角色树失败").ToBizResult()
@@ -222,7 +222,7 @@ func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
 				ToBizResult().
 				WithError(errors.Wrapf(forbidErr, "AdminRoleLogic.Update 角色 ID[%d]不允许禁用", req.ID))
 		}
-		if err := l.ensureRolesWithinManageScope([]int{req.ID}); err != nil {
+		if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
 			return types.Forbidden(i18n.MsgKeyForbidden).
 				ToBizResult().
 				WithError(errors.Wrapf(err, "AdminRoleLogic.Update 角色 ID[%d]超出可操作范围", req.ID))
@@ -291,7 +291,7 @@ func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
 
 // Delete 软删除角色；删除时级联软删除全部子孙角色，并清理管理员绑定关系与角色权限关系。
 func (l *AdminRoleLogic) Delete(req *types.IDPathReq) *types.BizResult {
-	if err := l.ensureRolesWithinManageScope([]int{req.ID}); err != nil {
+	if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).
 			ToBizResult().
 			WithError(errors.Wrapf(err, "AdminRoleLogic.Delete 角色 ID[%d]超出可操作范围", req.ID))
@@ -323,7 +323,7 @@ func (l *AdminRoleLogic) Delete(req *types.IDPathReq) *types.BizResult {
 				return errors.Errorf("超级管理员角色不允许删除")
 			}
 		}
-		if err := l.ensureRolesWithinManageScope(roleIDs); err != nil {
+		if err := l.EnsureRolesWithinManageScope(roleIDs); err != nil {
 			return errors.Tag(err)
 		}
 		now := time.Now()
@@ -369,7 +369,7 @@ func (l *AdminRoleLogic) Delete(req *types.IDPathReq) *types.BizResult {
 
 // UpdateStatus 修改角色启用/禁用状态；禁用时级联禁用全部子孙角色。
 func (l *AdminRoleLogic) UpdateStatus(req *types.RoleStatusReq) *types.BizResult {
-	if err := l.ensureRolesWithinManageScope([]int{req.ID}); err != nil {
+	if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).
 			ToBizResult().
 			WithError(errors.Wrapf(err, "AdminRoleLogic.UpdateStatus 角色 ID[%d]超出可操作范围", req.ID))
@@ -391,7 +391,7 @@ func (l *AdminRoleLogic) UpdateStatus(req *types.RoleStatusReq) *types.BizResult
 		}
 		roleIDs = append(roleIDs, descendantRoleIDs...)
 		roleIDs = types.UniquePositiveInts(roleIDs)
-		if err := l.ensureRolesWithinManageScope(roleIDs); err != nil {
+		if err := l.EnsureRolesWithinManageScope(roleIDs); err != nil {
 			return types.Forbidden(i18n.MsgKeyForbidden).
 				ToBizResult().
 				WithError(errors.Wrapf(err, "AdminRoleLogic.UpdateStatus 角色 ID[%d]级联角色超出可操作范围", req.ID))
@@ -424,12 +424,12 @@ func (l *AdminRoleLogic) UpdateStatus(req *types.RoleStatusReq) *types.BizResult
 
 // PermissionTree 查询角色权限树，节点 checked 表示当前角色已拥有权限。
 func (l *AdminRoleLogic) PermissionTree(req *types.RolePermissionReq) *types.BizResult {
-	rolePermissionIDs, err := l.rolePermissionIDsWithCache(req.ID)
+	rolePermissionIDs, err := l.RolePermissionIDsWithCache(req.ID)
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminRoleLogic.PermissionTree 查询角色 ID[%d]权限失败", req.ID).ToBizResult()
 	}
-	items, err := l.loadPermissionTreeWithCache()
+	items, err := l.LoadPermissionTreeWithCache()
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminRoleLogic.PermissionTree 查询权限树失败").ToBizResult()
@@ -454,8 +454,8 @@ func (l *AdminRoleLogic) PermissionTree(req *types.RolePermissionReq) *types.Biz
 		WithData(markPermissionTreeChecked(items, checked, assignable, lockAll))
 }
 
-// loadPermissionTreeWithCache 优先读取权限树缓存，未命中时自动回源。
-func (l *AdminRoleLogic) loadPermissionTreeWithCache() ([]types.AdminPermissionItem, error) {
+// LoadPermissionTreeWithCache 优先读取权限树缓存，未命中时自动回源。
+func (l *AdminRoleLogic) LoadPermissionTreeWithCache() ([]types.AdminPermissionItem, error) {
 	if l.Redis() == nil {
 		var permissions []model.AdminPermission
 		if err := l.Svc.ReadDB(svc.DatabaseMain).Order("id ASC").Find(&permissions).Error; err != nil {
@@ -476,7 +476,7 @@ func (l *AdminRoleLogic) loadPermissionTreeWithCache() ([]types.AdminPermissionI
 func (l *AdminRoleLogic) SavePermissions(req *types.RolePermissionSaveReq) *types.BizResult {
 	return l.withRolePermissionWriteLock("AdminRoleLogic.SavePermissions", func() *types.BizResult {
 		affectedRoleSet := map[int]struct{}{req.ID: {}}
-		if err := l.ensureRolesWithinManageScope([]int{req.ID}); err != nil {
+		if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
 			return types.Forbidden(i18n.MsgKeyForbidden).
 				ToBizResult().
 				WithError(errors.Wrapf(err, "AdminRoleLogic.SavePermissions 角色 ID[%d]超出可操作范围", req.ID))
@@ -567,8 +567,8 @@ func (l *AdminRoleLogic) loadAllRoles() ([]model.AdminRole, error) {
 	return roles, nil
 }
 
-// userRoleIDs 查询管理员绑定的全部角色 ID，不在这里过滤状态，统一交给角色状态缓存判断。
-func (l *AdminRoleLogic) userRoleIDs(userID int) ([]int, error) {
+// UserRoleIDs 查询管理员绑定的全部角色 ID，不在这里过滤状态，统一交给角色状态缓存判断。
+func (l *AdminRoleLogic) UserRoleIDs(userID int) ([]int, error) {
 	if userID <= 0 {
 		return []int{}, nil
 	}
@@ -578,14 +578,9 @@ func (l *AdminRoleLogic) userRoleIDs(userID int) ([]int, error) {
 		Order("role_id ASC").
 		Pluck("role_id", &roleIDs).Error
 	if err != nil {
-		return nil, errors.Wrapf(err, "AdminRoleLogic.userRoleIDs 查询管理员ID[%d]角色关系失败", userID)
+		return nil, errors.Wrapf(err, "AdminRoleLogic.UserRoleIDs 查询管理员ID[%d]角色关系失败", userID)
 	}
 	return types.UniquePositiveInts(roleIDs), nil
-}
-
-// UserRoleIDs 查询管理员绑定的全部角色 ID。
-func (l *AdminRoleLogic) UserRoleIDs(userID int) ([]int, error) {
-	return l.userRoleIDs(userID)
 }
 
 // adminIDsByRoleIDs 查询绑定了指定角色集合的管理员 ID，用于角色变更后精确失效管理员权限缓存。
@@ -624,8 +619,8 @@ func (l *AdminRoleLogic) adminIDsByRoleIDsTx(tx *gorm.DB, roleIDs []int) ([]int,
 	return types.UniquePositiveInts(adminIDs), nil
 }
 
-// loadRoleTreeWithCache 优先从 Redis 读取角色树缓存，未命中时自动回源数据库并重建。
-func (l *AdminRoleLogic) loadRoleTreeWithCache() ([]types.AdminRoleItem, error) {
+// LoadRoleTreeWithCache 优先从 Redis 读取角色树缓存，未命中时自动回源数据库并重建。
+func (l *AdminRoleLogic) LoadRoleTreeWithCache() ([]types.AdminRoleItem, error) {
 	if l.Redis() == nil {
 		roles, err := l.loadAllRoles()
 		if err != nil {
@@ -642,18 +637,13 @@ func (l *AdminRoleLogic) loadRoleTreeWithCache() ([]types.AdminRoleItem, error) 
 	return items, errors.Tag(err)
 }
 
-// LoadRoleTreeWithCache 查询角色树缓存，未命中时自动回源。
-func (l *AdminRoleLogic) LoadRoleTreeWithCache() ([]types.AdminRoleItem, error) {
-	return l.loadRoleTreeWithCache()
-}
-
-// enabledRoleIDsByUserWithCache 查询管理员绑定的启用角色 ID，优先使用角色状态缓存做过滤。
-func (l *AdminRoleLogic) enabledRoleIDsByUserWithCache(userID int) ([]int, error) {
+// EnabledRoleIDsByUserWithCache 查询管理员绑定的启用角色 ID，优先使用角色状态缓存做过滤。
+func (l *AdminRoleLogic) EnabledRoleIDsByUserWithCache(userID int) ([]int, error) {
 	if userID <= 0 {
 		return []int{}, nil
 	}
 	if l.Redis() == nil {
-		roleIDs, err := l.userRoleIDs(userID)
+		roleIDs, err := l.UserRoleIDs(userID)
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -675,28 +665,18 @@ func (l *AdminRoleLogic) enabledRoleIDsByUserWithCache(userID int) ([]int, error
 	return cachelogic.ParsePositiveIntStrings(values, "管理员角色 ID缓存")
 }
 
-// EnabledRoleIDsByUserWithCache 查询管理员绑定的启用角色 ID。
-func (l *AdminRoleLogic) EnabledRoleIDsByUserWithCache(userID int) ([]int, error) {
-	return l.enabledRoleIDsByUserWithCache(userID)
-}
-
-// currentOperatorEnabledRoleIDs 查询当前登录管理员拥有的全部启用角色 ID。
-func (l *AdminRoleLogic) currentOperatorEnabledRoleIDs() ([]int, error) {
+// CurrentOperatorEnabledRoleIDs 查询当前登录管理员拥有的全部启用角色 ID。
+func (l *AdminRoleLogic) CurrentOperatorEnabledRoleIDs() ([]int, error) {
 	ctxAdmin := l.GetCtxAdmin()
 	if ctxAdmin == nil || ctxAdmin.ID <= 0 {
 		return nil, errors.Errorf("未获取到当前登录管理员信息")
 	}
-	return l.enabledRoleIDsByUserWithCache(ctxAdmin.ID)
+	return l.EnabledRoleIDsByUserWithCache(ctxAdmin.ID)
 }
 
-// CurrentOperatorEnabledRoleIDs 查询当前登录管理员启用角色 ID。
-func (l *AdminRoleLogic) CurrentOperatorEnabledRoleIDs() ([]int, error) {
-	return l.currentOperatorEnabledRoleIDs()
-}
-
-// currentOperatorIsSuperRole 判断当前登录管理员是否拥有超级管理员角色。
-func (l *AdminRoleLogic) currentOperatorIsSuperRole() (bool, error) {
-	roleIDs, err := l.currentOperatorEnabledRoleIDs()
+// CurrentOperatorIsSuperRole 判断当前登录管理员是否拥有超级管理员角色。
+func (l *AdminRoleLogic) CurrentOperatorIsSuperRole() (bool, error) {
+	roleIDs, err := l.CurrentOperatorEnabledRoleIDs()
 	if err != nil {
 		return false, errors.Tag(err)
 	}
@@ -708,11 +688,6 @@ func (l *AdminRoleLogic) currentOperatorIsSuperRole() (bool, error) {
 	return false, nil
 }
 
-// CurrentOperatorIsSuperRole 判断当前登录管理员是否拥有超级管理员角色。
-func (l *AdminRoleLogic) CurrentOperatorIsSuperRole() (bool, error) {
-	return l.currentOperatorIsSuperRole()
-}
-
 // manageableRoleIDSet 计算当前登录管理员可管理的角色集合。
 // 超级管理员可管理全部未删除角色；普通管理员只能管理自己角色的后代角色。
 func (l *AdminRoleLogic) manageableRoleIDSet() (map[int]struct{}, error) {
@@ -720,11 +695,11 @@ func (l *AdminRoleLogic) manageableRoleIDSet() (map[int]struct{}, error) {
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	isSuperRole, err := l.currentOperatorIsSuperRole()
+	isSuperRole, err := l.CurrentOperatorIsSuperRole()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	roleIDs, err := l.currentOperatorEnabledRoleIDs()
+	roleIDs, err := l.CurrentOperatorEnabledRoleIDs()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -767,8 +742,8 @@ func roleScopeSetFrom(roles []model.AdminRole, operatorRoleIDs []int, isSuperRol
 	return result
 }
 
-// ensureRolesWithinManageScope 校验目标角色是否都在当前登录管理员可管理范围内。
-func (l *AdminRoleLogic) ensureRolesWithinManageScope(roleIDs []int) error {
+// EnsureRolesWithinManageScope 校验目标角色是否都在当前登录管理员可管理范围内。
+func (l *AdminRoleLogic) EnsureRolesWithinManageScope(roleIDs []int) error {
 	roleIDs = types.UniquePositiveInts(roleIDs)
 	if len(roleIDs) == 0 {
 		return nil
@@ -787,11 +762,6 @@ func (l *AdminRoleLogic) ensureRolesWithinManageScope(roleIDs []int) error {
 		return errors.Wrapf(errRoleManageScopeExceeded, "存在超出当前管理员可管理范围的角色: %v", invalidRoleIDs)
 	}
 	return nil
-}
-
-// EnsureRolesWithinManageScope 校验角色集合是否在当前管理员可管理范围内。
-func (l *AdminRoleLogic) EnsureRolesWithinManageScope(roleIDs []int) error {
-	return l.ensureRolesWithinManageScope(roleIDs)
 }
 
 // retainRolePermissionsInScope 过滤当前角色权限配置请求中的越权权限，仅保留允许继续写入的部分。
@@ -834,14 +804,14 @@ func (l *AdminRoleLogic) allowedPermissionIDsForRole(roleID int) ([]int, error) 
 func (l *AdminRoleLogic) allowedPermissionIDsForParentRole(parentRoleID int) ([]int, error) {
 	// 角色继承边界始终以“目标角色的直接父角色”实际拥有的权限为准；
 	// 只有当前操作人是超级管理员时，顶级或超级管理员父级才允许使用全量权限范围。
-	isSuperRole, err := l.currentOperatorIsSuperRole()
+	isSuperRole, err := l.CurrentOperatorIsSuperRole()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	if parentRoleUsesFullPermissionScope(parentRoleID, isSuperRole) {
 		return l.allEnabledPermissionIDs()
 	}
-	return l.rolePermissionIDsWithCache(parentRoleID)
+	return l.RolePermissionIDsWithCache(parentRoleID)
 }
 
 // parentRoleUsesFullPermissionScope 判断父角色是否使用全部启用权限作为子角色可分配范围。
@@ -859,7 +829,7 @@ func (l *AdminRoleLogic) permissionTreeAssignScope(req *types.RolePermissionReq)
 			}
 			return nil, false, errors.Tag(err)
 		}
-		isSuperRole, err := l.currentOperatorIsSuperRole()
+		isSuperRole, err := l.CurrentOperatorIsSuperRole()
 		if err != nil {
 			return nil, false, errors.Tag(err)
 		}
@@ -867,7 +837,7 @@ func (l *AdminRoleLogic) permissionTreeAssignScope(req *types.RolePermissionReq)
 			assignableIDs, err := l.allEnabledPermissionIDs()
 			return assignableIDs, false, errors.Tag(err)
 		}
-		assignableIDs, err := l.rolePermissionIDsWithCache(req.ID)
+		assignableIDs, err := l.RolePermissionIDsWithCache(req.ID)
 		return assignableIDs, false, errors.Tag(err)
 	}
 
@@ -877,7 +847,7 @@ func (l *AdminRoleLogic) permissionTreeAssignScope(req *types.RolePermissionReq)
 		return assignableIDs, true, errors.Tag(err)
 	}
 
-	if err := l.ensureRolesWithinManageScope([]int{req.ID}); err != nil {
+	if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
 		if errors.Is(err, ErrRoleManageScopeExceeded) {
 			return []int{}, true, nil
 		}
@@ -904,7 +874,7 @@ func (l *AdminRoleLogic) allEnabledPermissionIDs() ([]int, error) {
 // ensureRoleParentWithinManageScope 校验目标父级角色是否在当前登录管理员可管理范围内。
 func (l *AdminRoleLogic) ensureRoleParentWithinManageScope(parentRoleID int) error {
 	if parentRoleID <= 0 {
-		isSuperRole, err := l.currentOperatorIsSuperRole()
+		isSuperRole, err := l.CurrentOperatorIsSuperRole()
 		if err != nil {
 			return errors.Tag(err)
 		}
@@ -917,11 +887,11 @@ func (l *AdminRoleLogic) ensureRoleParentWithinManageScope(parentRoleID int) err
 	if err != nil {
 		return errors.Tag(err)
 	}
-	isSuperRole, err := l.currentOperatorIsSuperRole()
+	isSuperRole, err := l.CurrentOperatorIsSuperRole()
 	if err != nil {
 		return errors.Tag(err)
 	}
-	roleIDs, err := l.currentOperatorEnabledRoleIDs()
+	roleIDs, err := l.CurrentOperatorEnabledRoleIDs()
 	if err != nil {
 		return errors.Tag(err)
 	}
@@ -990,11 +960,11 @@ func (l *AdminRoleLogic) decorateRoleTreeParentScope(items []types.AdminRoleItem
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	isSuperRole, err := l.currentOperatorIsSuperRole()
+	isSuperRole, err := l.CurrentOperatorIsSuperRole()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	roleIDs, err := l.currentOperatorEnabledRoleIDs()
+	roleIDs, err := l.CurrentOperatorEnabledRoleIDs()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -1070,7 +1040,7 @@ func (l *AdminRoleLogic) rolePermissionIDsTx(tx *gorm.DB, roleID int) ([]int, er
 
 // allowedPermissionIDsForParentRoleTx 按角色继承关系计算父角色允许子角色保留的权限范围。
 func (l *AdminRoleLogic) allowedPermissionIDsForParentRoleTx(tx *gorm.DB, parentRoleID int) ([]int, error) {
-	isSuperRole, err := l.currentOperatorIsSuperRole()
+	isSuperRole, err := l.CurrentOperatorIsSuperRole()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}

@@ -150,8 +150,8 @@ func (l *AdminLogic) generateJWT(userID int, username string, IP string) (string
 
 // Create 新增管理员账号，并在同一事务内完成落库和密码摘要回写。
 func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
-	if err := l.requireOperateMFATwoStep(securitylogic.MFAScenarioAddUser, req.TwoStepKey, req.TwoStepValue); err != nil {
-		return l.mfaBizResult(err)
+	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioAddUser, req.TwoStepKey, req.TwoStepValue); err != nil {
+		return l.MFABizResult(err)
 	}
 
 	// 创建前唯一性校验也走主库，避免从库延迟导致“刚创建完又查不到”而误判可重复创建。
@@ -237,8 +237,8 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 		SetI18nMessage(i18n.MsgKeyAddSuccess)
 }
 
-// requireOperateMFATwoStep 在新增管理员等敏感操作前校验当前登录管理员的 MFA 二次票据。
-func (l *AdminLogic) requireOperateMFATwoStep(scenario int, twoStepKey string, twoStepValue string) error {
+// RequireOperateMFATwoStep 校验后台敏感操作的 MFA 二次票据。
+func (l *AdminLogic) RequireOperateMFATwoStep(scenario int, twoStepKey string, twoStepValue string) error {
 	ctxAdmin := l.GetCtxAdmin()
 	if ctxAdmin == nil || ctxAdmin.ID <= 0 {
 		return types.Nil
@@ -250,19 +250,9 @@ func (l *AdminLogic) requireOperateMFATwoStep(scenario int, twoStepKey string, t
 	return securityLogic.VerifyMFATwoStepTicket(ctxAdmin.ID, scenario, twoStepKey, twoStepValue)
 }
 
-// RequireOperateMFATwoStep 校验后台敏感操作的 MFA 二次票据。
-func (l *AdminLogic) RequireOperateMFATwoStep(scenario int, twoStepKey string, twoStepValue string) error {
-	return l.requireOperateMFATwoStep(scenario, twoStepKey, twoStepValue)
-}
-
-// mfaBizResult 把后台管理敏感操作中的 MFA 错误转换成统一业务响应。
-func (l *AdminLogic) mfaBizResult(err error) *types.BizResult {
-	return securitylogic.OperateMFABizResult(err, "AdminLogic.mfaBizResult")
-}
-
 // MFABizResult 把后台敏感操作中的 MFA 错误转换成统一业务响应。
 func (l *AdminLogic) MFABizResult(err error) *types.BizResult {
-	return l.mfaBizResult(err)
+	return securitylogic.OperateMFABizResult(err, "AdminLogic.MFABizResult")
 }
 
 // GetAdminByID 通过ID获取管理员详细信息。

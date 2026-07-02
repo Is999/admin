@@ -21,8 +21,8 @@ var (
 	ErrPermissionUUIDAlreadyExists = errPermissionUUIDAlreadyExists
 )
 
-// roleTitleAlreadyExistsResult 返回角色名称重复的明确业务响应。
-func roleTitleAlreadyExistsResult(title string, cause error) *types.BizResult {
+// RoleTitleAlreadyExistsResult 返回角色名称重复的明确业务响应。
+func RoleTitleAlreadyExistsResult(title string, cause error) *types.BizResult {
 	title = strings.TrimSpace(title)
 	if cause == nil {
 		cause = errRoleTitleAlreadyExists
@@ -32,13 +32,8 @@ func roleTitleAlreadyExistsResult(title string, cause error) *types.BizResult {
 		WithError(errors.Wrapf(cause, "角色名称[%s]已存在", title))
 }
 
-// RoleTitleAlreadyExistsResult 返回角色名称重复的明确业务响应。
-func RoleTitleAlreadyExistsResult(title string, cause error) *types.BizResult {
-	return roleTitleAlreadyExistsResult(title, cause)
-}
-
-// permissionUUIDAlreadyExistsResult 返回权限 UUID 重复的明确业务响应。
-func permissionUUIDAlreadyExistsResult(uuid string, cause error) *types.BizResult {
+// PermissionUUIDAlreadyExistsResult 返回权限 UUID 重复的明确业务响应。
+func PermissionUUIDAlreadyExistsResult(uuid string, cause error) *types.BizResult {
 	uuid = strings.TrimSpace(uuid)
 	if cause == nil {
 		cause = errPermissionUUIDAlreadyExists
@@ -46,9 +41,4 @@ func permissionUUIDAlreadyExistsResult(uuid string, cause error) *types.BizResul
 	return types.NewBizResult(codes.AdminPermissionAlreadyExists).
 		SetI18nMessage(i18n.MsgKeyPermissionExistsFormat, uuid).
 		WithError(errors.Wrapf(cause, "权限UUID[%s]已存在", uuid))
-}
-
-// PermissionUUIDAlreadyExistsResult 返回权限 UUID 重复的明确业务响应。
-func PermissionUUIDAlreadyExistsResult(uuid string, cause error) *types.BizResult {
-	return permissionUUIDAlreadyExistsResult(uuid, cause)
 }

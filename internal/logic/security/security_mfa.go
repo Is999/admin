@@ -142,8 +142,8 @@ func (l *SecurityLogic) ClearLoginMFACompleted(adminID int) error {
 
 // verifyMFACodeBySecret 按给定 MFA 秘钥校验动态码。
 func verifyMFACodeBySecret(secret string, code string) error {
-	secret = normalizeMFASecret(secret)
-	if !isUsableMFASecret(secret) {
+	secret = NormalizeMFASecret(secret)
+	if !IsUsableMFASecret(secret) {
 		return ErrAdminMFACodeInvalid
 	}
 	ok, err := totp.ValidateCustom(strings.TrimSpace(code), secret, time.Now(), totp.ValidateOpts{
@@ -166,7 +166,7 @@ func (l *SecurityLogic) VerifyMFACode(admin *model.Admin, code string) error {
 	if admin == nil {
 		return ErrAdminNotFound
 	}
-	secret, err := l.loadAdminMFASecret(admin)
+	secret, err := l.LoadAdminMFASecret(admin)
 	if err != nil {
 		return errors.Tag(err)
 	}
@@ -185,26 +185,26 @@ func (l *SecurityLogic) VerifyBindingMFACodeDetail(admin *model.Admin, secret st
 	if admin == nil {
 		return nil, ErrAdminNotFound
 	}
-	requestSecret := normalizeMFASecret(secret)
-	currentSecret, err := l.loadAdminMFASecret(admin)
+	requestSecret := NormalizeMFASecret(secret)
+	currentSecret, err := l.LoadAdminMFASecret(admin)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	currentSecretUsable := isUsableMFASecret(currentSecret)
+	currentSecretUsable := IsUsableMFASecret(currentSecret)
 	if admin.MfaStatus == 1 && currentSecretUsable {
 		if err := verifyMFACodeBySecret(currentSecret, code); err != nil {
 			return nil, errors.Tag(err)
 		}
 		return &mfaBindingVerifyResult{
 			SecretSource: mfaTwoStepSecretSourceCurrent,
-			SecretDigest: hashMFASecret(currentSecret),
+			SecretDigest: HashMFASecret(currentSecret),
 		}, nil
 	}
-	if isUsableMFASecret(requestSecret) {
+	if IsUsableMFASecret(requestSecret) {
 		if err := verifyMFACodeBySecret(requestSecret, code); err == nil {
 			return &mfaBindingVerifyResult{
 				SecretSource: mfaTwoStepSecretSourceRequest,
-				SecretDigest: hashMFASecret(requestSecret),
+				SecretDigest: HashMFASecret(requestSecret),
 			}, nil
 		}
 	}
@@ -212,7 +212,7 @@ func (l *SecurityLogic) VerifyBindingMFACodeDetail(admin *model.Admin, secret st
 		if err := verifyMFACodeBySecret(currentSecret, code); err == nil {
 			return &mfaBindingVerifyResult{
 				SecretSource: mfaTwoStepSecretSourceCurrent,
-				SecretDigest: hashMFASecret(currentSecret),
+				SecretDigest: HashMFASecret(currentSecret),
 			}, nil
 		}
 	}
@@ -436,7 +436,7 @@ func buildAdminMFAURLBySecret(admin *model.Admin, secret string, issuer string) 
 		account = fmt.Sprintf("admin-%d", admin.ID)
 	}
 	issuer = normalizeMFAIssuer(issuer)
-	secret = normalizeMFASecret(secret)
+	secret = NormalizeMFASecret(secret)
 	if _, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret); err != nil {
 		return "", errors.Wrap(err, "解析管理员MFA秘钥失败")
 	}
@@ -458,11 +458,11 @@ func (l *SecurityLogic) BuildAdminMFAURL(admin *model.Admin) (string, error) {
 	if admin == nil {
 		return "", ErrAdminNotFound
 	}
-	currentSecret, err := l.loadAdminMFASecret(admin)
+	currentSecret, err := l.LoadAdminMFASecret(admin)
 	if err != nil {
 		return "", errors.Tag(err)
 	}
-	if isUsableMFASecret(currentSecret) {
+	if IsUsableMFASecret(currentSecret) {
 		return l.BuildAdminMFAURLBySecret(admin, currentSecret)
 	}
 	return l.BuildFreshAdminMFAURL(admin)
@@ -522,21 +522,11 @@ func buildMFAOtpauthURL(issuer string, account string, secret string) string {
 
 // HasUsableAdminMFASecret 判断管理员当前是否存在可用的 MFA 秘钥。
 func (l *SecurityLogic) HasUsableAdminMFASecret(admin *model.Admin) bool {
-	secret, err := l.loadAdminMFASecret(admin)
+	secret, err := l.LoadAdminMFASecret(admin)
 	if err != nil {
 		return false
 	}
-	return isUsableMFASecret(secret)
-}
-
-// EncryptAdminMFASecret 把 MFA 明文秘钥加密后再写入数据库。
-func (l *SecurityLogic) EncryptAdminMFASecret(secret string) (string, error) {
-	return l.encryptAdminMFASecret(secret)
-}
-
-// LoadAdminMFASecret 读取管理员当前可用的 MFA 明文秘钥。
-func (l *SecurityLogic) LoadAdminMFASecret(admin *model.Admin) (string, error) {
-	return l.loadAdminMFASecret(admin)
+	return IsUsableMFASecret(secret)
 }
 
 // sanitizeMFALabelValue 归一化 otpauth 标签字段，避免多余分隔符影响身份验证器解析。
@@ -609,9 +599,9 @@ func isReusableMFATwoStepScenario(scenario int) bool {
 	}
 }
 
-// encryptAdminMFASecret 把 MFA 明文秘钥加密后再写入数据库，避免库内直接暴露种子。
-func (l *SecurityLogic) encryptAdminMFASecret(secret string) (string, error) {
-	secret = normalizeMFASecret(secret)
+// EncryptAdminMFASecret 把 MFA 明文秘钥加密后再写入数据库，避免库内直接暴露种子。
+func (l *SecurityLogic) EncryptAdminMFASecret(secret string) (string, error) {
+	secret = NormalizeMFASecret(secret)
 	if secret == "" {
 		return "", nil
 	}
@@ -670,17 +660,17 @@ func (l *SecurityLogic) decryptAdminMFASecret(cipherText string) (string, error)
 	if err != nil {
 		return "", errors.Wrap(err, "解密MFA秘钥失败")
 	}
-	return normalizeMFASecret(string(plain)), nil
+	return NormalizeMFASecret(string(plain)), nil
 }
 
-// loadAdminMFASecret 读取管理员当前可用的 MFA 明文秘钥；数据异常时按未绑定处理，避免异常密文继续参与校验。
-func (l *SecurityLogic) loadAdminMFASecret(admin *model.Admin) (string, error) {
+// LoadAdminMFASecret 读取管理员当前可用的 MFA 明文秘钥；数据异常时按未绑定处理，避免异常密文继续参与校验。
+func (l *SecurityLogic) LoadAdminMFASecret(admin *model.Admin) (string, error) {
 	if admin == nil {
 		return "", ErrAdminNotFound
 	}
 	secret, err := l.decryptAdminMFASecret(admin.MfaSecureKey)
 	if err != nil {
-		corelogic.LogWrappedError(l, err, "SecurityLogic.loadAdminMFASecret 解析管理员ID[%d]MFA秘钥失败", admin.ID)
+		corelogic.LogWrappedError(l, err, "SecurityLogic.LoadAdminMFASecret 解析管理员ID[%d]MFA秘钥失败", admin.ID)
 		return "", nil
 	}
 	return secret, nil
@@ -699,20 +689,15 @@ func (l *SecurityLogic) mfaSecretCipherKey() ([]byte, error) {
 	return sum[:], nil
 }
 
-// normalizeMFASecret 归一化 MFA 秘钥，统一转成大写并去掉空白字符。
-func normalizeMFASecret(secret string) string {
+// NormalizeMFASecret 归一化 MFA 秘钥，统一转成大写并去掉空白字符。
+func NormalizeMFASecret(secret string) string {
 	secret = strings.ToUpper(strings.TrimSpace(secret))
 	secret = strings.ReplaceAll(secret, " ", "")
 	return secret
 }
 
-// NormalizeMFASecret 归一化 MFA 秘钥。
-func NormalizeMFASecret(secret string) string {
-	return normalizeMFASecret(secret)
-}
-
-// isUsableMFASecret 判断当前秘钥是否满足 TOTP 所需的基础格式。
-func isUsableMFASecret(secret string) bool {
+// IsUsableMFASecret 判断当前秘钥是否满足 TOTP 所需的基础格式。
+func IsUsableMFASecret(secret string) bool {
 	if len(secret) != 16 {
 		return false
 	}
@@ -724,23 +709,13 @@ func isUsableMFASecret(secret string) bool {
 	return true
 }
 
-// IsUsableMFASecret 判断当前秘钥是否满足 TOTP 所需的基础格式。
-func IsUsableMFASecret(secret string) bool {
-	return isUsableMFASecret(secret)
-}
-
-// hashMFASecret 返回归一化 MFA 秘钥的稳定摘要，用于二次票据防止后续请求篡改秘钥。
-func hashMFASecret(secret string) string {
-	secret = normalizeMFASecret(secret)
+// HashMFASecret 返回归一化 MFA 秘钥的稳定摘要，用于二次票据防止后续请求篡改秘钥。
+func HashMFASecret(secret string) string {
+	secret = NormalizeMFASecret(secret)
 	if secret == "" {
 		return ""
 	}
 	return utils.SHA256(secret)
-}
-
-// HashMFASecret 返回归一化 MFA 秘钥的稳定摘要。
-func HashMFASecret(secret string) string {
-	return hashMFASecret(secret)
 }
 
 // encodeMFATwoStepTicketPayload 把 MFA 二次票据内容编码为 Redis 字符串。

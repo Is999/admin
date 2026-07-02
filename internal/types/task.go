@@ -396,8 +396,8 @@ type TaskListOverviewResp struct {
 // TaskTypeRegistryItem 表示一个已注册的任务类型。
 type TaskTypeRegistryItem struct {
 	TaskType          string `json:"taskType"`                 // 任务类型标识
-	Description       string `json:"description,omitempty"`    // 任务类型中文说明
-	UsageHint         string `json:"usageHint,omitempty"`      // 使用提示
+	Description       string `json:"description,omitempty"`    // 按请求语言返回的任务类型说明
+	UsageHint         string `json:"usageHint,omitempty"`      // 按请求语言返回的使用提示
 	PayloadExample    string `json:"payloadExample,omitempty"` // 推荐负载 JSON 示例
 	ManualRecommended bool   `json:"manualRecommended"`        // 是否推荐人工手动投递
 }
@@ -410,10 +410,10 @@ type TaskTypeRegistryResp struct {
 // WorkflowRegistryItem 表示一个已注册的工作流定义。
 type WorkflowRegistryItem struct {
 	Name           string `json:"name"`                     // 工作流名称
-	Description    string `json:"description"`              // 工作流说明
+	Description    string `json:"description"`              // 按请求语言返回的工作流说明
 	DefaultQueue   string `json:"defaultQueue"`             // 默认执行队列
 	NodeCount      int    `json:"nodeCount"`                // 节点数量
-	UsageHint      string `json:"usageHint,omitempty"`      // 使用提示
+	UsageHint      string `json:"usageHint,omitempty"`      // 按请求语言返回的使用提示
 	TargetsExample string `json:"targetsExample,omitempty"` // 执行目标填写示例
 }
 

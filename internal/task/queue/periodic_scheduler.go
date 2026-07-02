@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	i18n "admin/common/i18n"
 	"admin/helper"
 	"admin/internal/config"
 	"admin/internal/infra/loggerx"
@@ -202,7 +203,7 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 	guardCtx, cancel := context.WithTimeout(context.Background(), periodicEnqueueGuardTimeout)
 	defer cancel()
 	if ok, err := s.manager.schedulerLeaderStillHeld(guardCtx); err != nil {
-		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), err.Error())
+		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), "", err.Error())
 		loggerx.Errorw(context.Background(), "周期任务 leader 校验失败", err,
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),
@@ -225,7 +226,7 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 		return
 	}
 	if ok, queueName, backlog, limit, err := s.manager.periodicQueueBackpressureOK(guardCtx, cfg); err != nil {
-		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), err.Error())
+		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), "", err.Error())
 		loggerx.Errorw(context.Background(), "周期任务 队列背压检查失败", err,
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),
@@ -241,7 +242,7 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 		)
 		return
 	} else if !ok {
-		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), "queue backlog exceeded")
+		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), i18n.MsgKeySchedulerBacklogExceeded, "queue backlog exceeded")
 		loggerx.Infow(context.Background(), "周期任务 队列积压过高跳过本轮",
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),
@@ -255,7 +256,7 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 	enqueueCtx, enqueueCancel := context.WithTimeout(context.Background(), periodicEnqueueGuardTimeout)
 	defer enqueueCancel()
 	if _, err := s.manager.client.EnqueueContext(enqueueCtx, cfg.Task, cfg.Opts...); err != nil {
-		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), err.Error())
+		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), "", err.Error())
 		loggerx.Errorw(context.Background(), "周期任务 入队失败", err,
 			logx.Field("cron", cfg.Cronspec),
 			logx.Field("task_type", cfg.Task.Type()),

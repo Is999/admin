@@ -167,10 +167,10 @@ type TaskQueue interface {
 	EnqueueRegisteredTask(ctx context.Context, req *types.EnqueueTaskReq) (*types.TaskEnqueueResp, error)
 
 	// ListRegisteredTaskTypes 返回当前系统已注册的任务类型清单。
-	ListRegisteredTaskTypes() []types.TaskTypeRegistryItem
+	ListRegisteredTaskTypes(ctx context.Context) []types.TaskTypeRegistryItem
 
 	// ListRegisteredWorkflows 返回当前系统已注册的工作流清单。
-	ListRegisteredWorkflows() []types.WorkflowRegistryItem
+	ListRegisteredWorkflows(ctx context.Context) []types.WorkflowRegistryItem
 
 	// ListTasks 按队列、状态和过滤条件查询任务列表。
 	ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*types.TaskListResp, error)

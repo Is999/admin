@@ -11,7 +11,7 @@ const (
 	// defaultShardTotal 是工作流任务拆分兜底分片数。
 	defaultShardTotal = 1
 	// defaultRuntimeShardTotal 是运行期 UID 索引默认分片数。
-	defaultRuntimeShardTotal = 1000
+	defaultRuntimeShardTotal = 1024
 	// defaultResultShardTotal 是用户标签结果表默认物理分片数。
 	defaultResultShardTotal = 1
 )

@@ -635,7 +635,7 @@ func (l *TaskLogic) GetConfigReloadStatus() *types.BizResult {
 			RestartRequired:        status.RestartRequired,
 			RestartReason:          status.RestartReason,
 			LastStatus:             status.LastStatus,
-			LastMessage:            status.LastMessage,
+			LastMessage:            l.messageFromKeyOrRaw(status.LastMessageKey, status.LastMessage),
 			LastTriggerSource:      status.LastTriggerSource,
 			LastFailureCategory:    status.LastFailureCategory,
 			LastCheckedAt:          formatTaskTime(status.LastCheckedAt),
@@ -645,6 +645,15 @@ func (l *TaskLogic) GetConfigReloadStatus() *types.BizResult {
 			ReloadCount:            status.ReloadCount,
 			SuppressedFailureCount: status.SuppressedFailureCount,
 		})
+}
+
+// messageFromKeyOrRaw 优先使用状态源头保存的 key 翻译，动态错误说明保留原文。
+func (l *TaskLogic) messageFromKeyOrRaw(messageKey, fallback string) string {
+	messageKey = strings.TrimSpace(messageKey)
+	if messageKey != "" {
+		return l.Message(messageKey)
+	}
+	return strings.TrimSpace(fallback)
 }
 
 // RunConfigReload 手动触发一次配置重载，并返回最新热加载状态。
@@ -703,7 +712,7 @@ func (l *TaskLogic) ListRegisteredTaskTypes() *types.BizResult {
 	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(&types.TaskTypeRegistryResp{Items: l.Svc.Task.ListRegisteredTaskTypes()})
+		WithData(&types.TaskTypeRegistryResp{Items: l.Svc.Task.ListRegisteredTaskTypes(l.Ctx)})
 }
 
 // ListRegisteredWorkflows 返回当前已注册的工作流清单，供管理后台总控台选择工作流名称。
@@ -715,7 +724,7 @@ func (l *TaskLogic) ListRegisteredWorkflows() *types.BizResult {
 	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(&types.WorkflowRegistryResp{Items: l.Svc.Task.ListRegisteredWorkflows()})
+		WithData(&types.WorkflowRegistryResp{Items: l.Svc.Task.ListRegisteredWorkflows(l.Ctx)})
 }
 
 // DeleteTask 删除指定任务。

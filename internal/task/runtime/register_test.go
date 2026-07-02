@@ -7,16 +7,17 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Is999/go-utils/errors"
 
 	"admin/internal/config"
-	"admin/internal/jobs/taskreport"
-	usertagtask "admin/internal/jobs/usertag/task"
 	"admin/internal/svc"
 	"admin/internal/task/queue"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 // mockPlugin 表示测试使用的辅助结构。
@@ -43,11 +44,11 @@ func (p mockPlugin) Setup(runtime *Runtime) error {
 	return p.run(runtime)
 }
 
-// TestBuiltinPluginsNoDefaultCacheTargets 确认移除 AI 模块后，默认插件不再注册示例缓存刷新目标。
-func TestBuiltinPluginsNoDefaultCacheTargets(t *testing.T) {
+// TestCorePluginsNoDefaultCacheTargets 确认核心插件不再注册示例缓存刷新目标。
+func TestCorePluginsNoDefaultCacheTargets(t *testing.T) {
 	runtime := NewRuntime(nil, nil)
-	if err := runtime.RegisterPlugins(BuiltinPlugins()...); err != nil {
-		t.Fatalf("注册内置插件失败: %v", err)
+	if err := runtime.RegisterPlugins(PluginsFromSpecs(CorePluginSpecs())...); err != nil {
+		t.Fatalf("注册核心插件失败: %v", err)
 	}
 
 	targets := runtime.DefaultCacheRefreshTargets()
@@ -56,24 +57,24 @@ func TestBuiltinPluginsNoDefaultCacheTargets(t *testing.T) {
 	}
 }
 
-// TestBuiltinPluginSpecsValid 确保默认插件规格字段完整且名称唯一。
-func TestBuiltinPluginSpecsValid(t *testing.T) {
-	specs := BuiltinPluginSpecs()
+// TestCorePluginSpecsValid 确保核心插件规格字段完整且名称唯一。
+func TestCorePluginSpecsValid(t *testing.T) {
+	specs := CorePluginSpecs()
 	if len(specs) == 0 {
-		t.Fatal("BuiltinPluginSpecs() 不能为空")
+		t.Fatal("CorePluginSpecs() 不能为空")
 	}
 
 	nameSeen := make(map[string]struct{}, len(specs))
 	for _, spec := range specs {
 		if spec.Name == "" || spec.File == "" || spec.Method == "" || spec.Description == "" {
-			t.Fatalf("内置插件规格字段不完整: %+v", spec)
+			t.Fatalf("核心插件规格字段不完整: %+v", spec)
 		}
 		if _, ok := nameSeen[spec.Name]; ok {
-			t.Fatalf("内置插件名称重复: %s", spec.Name)
+			t.Fatalf("核心插件名称重复: %s", spec.Name)
 		}
 		nameSeen[spec.Name] = struct{}{}
 		if spec.Build == nil {
-			t.Fatalf("内置插件构造函数为空: %+v", spec)
+			t.Fatalf("核心插件构造函数为空: %+v", spec)
 		}
 	}
 }
@@ -150,6 +151,40 @@ func TestRefreshTargetsUsesRegisteredHandler(t *testing.T) {
 	}
 	if called != 1 {
 		t.Fatalf("期望处理函数只调用一次，实际为 %d", called)
+	}
+}
+
+// TestAggregateCacheRefreshTasksKeepsCompletedRetention 确保聚合后的批量刷新任务仍写入 Asynq completed 保留期。
+func TestAggregateCacheRefreshTasksKeepsCompletedRetention(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer func() { _ = client.Close() }()
+
+	manager := taskqueue.New(config.TaskQueueConfig{
+		Enabled:                   true,
+		AppID:                     "1",
+		CompletedRetentionSeconds: 45,
+	}, client)
+	runtime := NewRuntime(&svc.ServiceContext{}, manager)
+	task := runtime.aggregateCacheRefreshTasks([]*asynq.Task{
+		asynq.NewTaskWithHeaders(taskqueue.TypeCacheRefreshRequest, []byte(`{"operation":"reload","targets":["demo.target"]}`), map[string]string{}),
+	})
+	if task == nil {
+		t.Fatal("期望生成聚合后的缓存刷新任务，实际为 nil")
+	}
+
+	asynqClient := asynq.NewClientFromRedisClient(client)
+	info, err := asynqClient.Enqueue(task, asynq.Queue(taskqueue.QueueMaintenance))
+	if err != nil {
+		t.Fatalf("投递聚合缓存刷新任务失败: %v", err)
+	}
+	inspector := asynq.NewInspectorFromRedisClient(client)
+	taskInfo, err := inspector.GetTaskInfo(taskqueue.QueueMaintenance, info.ID)
+	if err != nil {
+		t.Fatalf("读取聚合缓存刷新任务失败: %v", err)
+	}
+	if taskInfo.Retention != 45*time.Second {
+		t.Fatalf("聚合缓存刷新任务 retention = %s，期望 %s", taskInfo.Retention, 45*time.Second)
 	}
 }
 
@@ -344,52 +379,6 @@ func TestNewPeriodicWorkflowPlugin(t *testing.T) {
 	}
 	if len(runtime.PeriodicTasks()) != 1 {
 		t.Fatalf("期望插件注册后存在 1 个周期任务，实际为 %d", len(runtime.PeriodicTasks()))
-	}
-}
-
-// TestTaskReportPluginRegistersDailySummaryWorkflow 验证任务运行日报插件会注册日报工作流。
-func TestTaskReportPluginRegistersDailySummaryWorkflow(t *testing.T) {
-	manager := newTestManager()
-	if _, err := Register(&svc.ServiceContext{}, manager, NewTaskReportPlugin()); err != nil {
-		t.Fatalf("注册任务运行日报插件失败: %v", err)
-	}
-	for _, item := range manager.ListRegisteredWorkflows() {
-		if item.Name == taskreport.WorkflowNameDailySummary {
-			return
-		}
-	}
-	t.Fatalf("未注册任务运行日报工作流 %s，当前清单=%+v", taskreport.WorkflowNameDailySummary, manager.ListRegisteredWorkflows())
-}
-
-// TestUserTagPluginRegistersMaintenanceWorkflows 验证用户标签插件会注册独立维护工作流。
-func TestUserTagPluginRegistersMaintenanceWorkflows(t *testing.T) {
-	svcCtx := svc.NewServiceContext(config.Config{
-		Workflows: config.WorkflowsConfig{
-			UserTag: config.UserTagConfig{Enabled: true},
-		},
-	}, svc.Dependencies{})
-	manager := newTestManager()
-
-	plugin := NewPluginFunc(usertagtask.PluginName, func(runtime *Runtime) error {
-		return usertagtask.Setup(runtime)
-	})
-	if _, err := Register(svcCtx, manager, plugin); err != nil {
-		t.Fatalf("注册用户标签插件失败: %v", err)
-	}
-	registered := manager.ListRegisteredWorkflows()
-	want := map[string]bool{
-		usertagtask.WorkflowNameUserTagEventOutboxRetryScan: false,
-		usertagtask.WorkflowNameUserTagRuntimeCleanup:       false,
-	}
-	for _, item := range registered {
-		if _, ok := want[item.Name]; ok {
-			want[item.Name] = true
-		}
-	}
-	for workflowName, ok := range want {
-		if !ok {
-			t.Fatalf("未注册用户标签维护工作流 %s，当前清单=%+v", workflowName, registered)
-		}
 	}
 }
 

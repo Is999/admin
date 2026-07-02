@@ -33,7 +33,7 @@ func AddSysConfigHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.SysConfigAdd, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		var req types.CreateSysConfigReq
 		if err := parseSysConfigJSONRequest(r, &req); err != nil {
-			return nil, shared.ParamErrorResult(err)
+			return nil, types.ParamErrorResult(err)
 		}
 		logicObj := configlogic.NewSysConfigLogic(r, sCtx)
 		resp := logicObj.Create(req.ToSaveSysConfigReq())
@@ -47,7 +47,7 @@ func UpdateSysConfigHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.SysConfigUpdate, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		var req types.SaveSysConfigReq
 		if err := parseSysConfigJSONRequest(r, &req); err != nil {
-			return nil, shared.ParamErrorResult(err)
+			return nil, types.ParamErrorResult(err)
 		}
 		logicObj := configlogic.NewSysConfigLogic(r, sCtx)
 		resp := logicObj.Update(&req)
@@ -108,7 +108,7 @@ func ExportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.SysConfigExcelExportReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := configlogic.NewSysConfigLogic(r, sCtx)

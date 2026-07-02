@@ -97,7 +97,7 @@ func TestUserTagRuntimeMigrationStartsSinglePhysicalShard(t *testing.T) {
 		t.Fatalf("user tag migration assets missing base result table or tmp table")
 	}
 	for _, want := range []string{
-		"`shard_no` int NOT NULL DEFAULT 0 COMMENT 'uid取模1000分片'",
+		"`shard_no` int NOT NULL DEFAULT 0 COMMENT 'uid取模1024分片'",
 		"KEY `idx_shard_uid` (`shard_no`, `uid`)",
 		"KEY `idx_tag_type_shard_uid` (`tag_type`, `shard_no`, `uid`)",
 	} {
@@ -163,9 +163,21 @@ func TestRuntimeConfigBaselineSeedsDraftRows(t *testing.T) {
 	if got := strings.Count(archiveSQL, "INSERT IGNORE INTO `runtime_archive_job`"); got != 1 {
 		t.Fatalf("runtime_archive_job seed count = %d, want 1", got)
 	}
+	for table, seedSQL := range map[string]string{
+		"runtime_task_periodic": periodicSQL,
+		"runtime_archive_job":   archiveSQL,
+	} {
+		if strings.Contains(seedSQL, "INSERT IGNORE INTO `"+table+"` (`id`,") {
+			t.Fatalf("%s seed insert should not pin auto-increment id", table)
+		}
+	}
 	stateSQL := migrationSQLByAsset(t, "runtime_config_state.sql")
 	if !strings.Contains(stateSQL, "VALUES (1, 0, 0, ''") {
 		t.Fatalf("runtime_config_state should start without active release: %s", stateSQL)
+	}
+	sysConfigSQL := migrationSQLByAsset(t, "sys_config.sql")
+	if !strings.Contains(sysConfigSQL, "INSERT IGNORE INTO `sys_config` (`id`,") {
+		t.Fatal("sys_config seed insert should keep fixed ids because pid/pids reference the hierarchy")
 	}
 	for _, forbidden := range []string{"admin_role_permission_rel", "(1, 139", "baseline local runtime config seed"} {
 		if strings.Contains(sql, forbidden) {

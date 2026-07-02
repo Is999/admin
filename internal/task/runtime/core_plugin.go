@@ -162,7 +162,16 @@ func (r *Runtime) aggregateCacheRefreshTasks(tasks []*asynq.Task) *asynq.Task {
 	if err != nil {
 		return nil
 	}
-	return asynq.NewTaskWithHeaders(taskqueue.TypeCacheRefreshBatch, body, headers, asynq.Timeout(5*time.Minute), asynq.MaxRetry(3))
+	opts := []asynq.Option{
+		asynq.Timeout(5 * time.Minute),
+		asynq.MaxRetry(3),
+	}
+	if r != nil && r.manager != nil {
+		if retention := r.manager.CompletedRetention(); retention > 0 {
+			opts = append(opts, asynq.Retention(retention))
+		}
+	}
+	return asynq.NewTaskWithHeaders(taskqueue.TypeCacheRefreshBatch, body, headers, opts...)
 }
 
 // refreshTargets 顺序执行目标刷新逻辑，并聚合多个目标的错误结果。

@@ -46,7 +46,7 @@ func (l *AdminRoleRelLogic) GetRolesByUserID(userID int64) ([]string, error) {
 		return roles, nil
 	}
 	roleLogic := &AdminRoleLogic{BaseLogic: l.BaseLogic}
-	roleIDs, err := roleLogic.enabledRoleIDsByUserWithCache(int(userID))
+	roleIDs, err := roleLogic.EnabledRoleIDsByUserWithCache(int(userID))
 	if err != nil {
 		return nil, errors.Wrapf(err, "AdminRoleRelLogic.GetRolesByUserID 查询管理员ID[%d]启用角色失败", userID)
 	}

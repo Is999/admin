@@ -3,7 +3,6 @@ package task
 import (
 	"encoding/json"
 
-	"admin/internal/config"
 	"admin/internal/jobs/usertag/options"
 	"admin/internal/jobs/usertag/types"
 
@@ -64,11 +63,6 @@ type (
 	// Defaults 是用户标签工作流默认运行参数。
 	Defaults = options.Defaults
 )
-
-// NewDefaults 从全局配置构造用户标签默认运行参数。
-func NewDefaults(cfg config.UserTagConfig) Defaults {
-	return options.NewDefaults(cfg)
-}
 
 // DecodePayload 解析 Asynq 任务负载。
 func DecodePayload(task *asynq.Task) (WorkflowPayload, error) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 
+	"admin/common/i18n"
 	keys "admin/common/rediskeys"
 	"admin/common/runtimecfg"
 	"admin/internal/config"
@@ -249,10 +250,69 @@ func TestRegisterHandlerRecoversServeMuxPanic(t *testing.T) {
 	if err := manager.RegisterHandler("demo:mux-only", handler); err == nil {
 		t.Fatal("期望 ServeMux 重复注册被转成错误，实际为 nil")
 	}
-	for _, item := range manager.ListRegisteredTaskTypes() {
+	for _, item := range manager.ListRegisteredTaskTypes(context.Background()) {
 		if item.TaskType == "demo:mux-only" {
 			t.Fatalf("期望本地注册表已回滚，实际仍存在: %+v", item)
 		}
+	}
+}
+
+// TestRegistryDisplayUsesRequestLocale 验证前端注册表展示文案通过统一语言包按请求语言返回。
+func TestRegistryDisplayUsesRequestLocale(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if err := manager.RegisterHandler(TypeCacheRefreshRequest, asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
+		return nil
+	})); err != nil {
+		t.Fatalf("注册测试任务处理器失败: %v", err)
+	}
+	if err := manager.RegisterWorkflow(&WorkflowDefinition{
+		Name:         WorkflowNameCacheRefresh,
+		Description:  "中文兜底说明",
+		DefaultQueue: QueueMaintenance,
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"refresh": {
+				Name:     "refresh",
+				TaskType: TypeCacheRefreshBatch,
+				BuildPayload: func(WorkflowStartSpec, *WorkflowNodeDefinition, int, int) ([]byte, error) {
+					return []byte(`{}`), nil
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("注册测试工作流失败: %v", err)
+	}
+
+	ctx, _ := requestctx.New(context.Background())
+	requestctx.SetLocale(ctx, i18n.LocaleENUS)
+
+	var taskItem types.TaskTypeRegistryItem
+	for _, item := range manager.ListRegisteredTaskTypes(ctx) {
+		if item.TaskType == TypeCacheRefreshRequest {
+			taskItem = item
+			break
+		}
+	}
+	if taskItem.Description != i18n.MessageByKey(i18n.MsgKeyTaskRegistryTypeCacheRefreshRequestDesc, i18n.LocaleENUS) {
+		t.Fatalf("任务类型说明未按语言包返回: %+v", taskItem)
+	}
+	if strings.Contains(taskItem.Description, "缓存") || strings.Contains(taskItem.UsageHint, "适合") {
+		t.Fatalf("任务类型注册表残留中文展示文案: %+v", taskItem)
+	}
+
+	var workflowItem types.WorkflowRegistryItem
+	for _, item := range manager.ListRegisteredWorkflows(ctx) {
+		if item.Name == WorkflowNameCacheRefresh {
+			workflowItem = item
+			break
+		}
+	}
+	if workflowItem.Description != i18n.MessageByKey(i18n.MsgKeyTaskRegistryWorkflowCacheRefreshDesc, i18n.LocaleENUS) {
+		t.Fatalf("工作流说明未按语言包返回: %+v", workflowItem)
+	}
+	if strings.Contains(workflowItem.Description, "中文") || strings.Contains(workflowItem.UsageHint, "适合") {
+		t.Fatalf("工作流注册表残留中文展示文案: %+v", workflowItem)
 	}
 }
 
@@ -1247,15 +1307,15 @@ func TestTaskRetryMovesTaskToRetryQueue(t *testing.T) {
 	})
 }
 
-// TestTaskRetryDoesNotExpireActiveCache 验证仍会重试的失败任务不会被提前设置终态 TTL。
-func TestTaskRetryDoesNotExpireActiveCache(t *testing.T) {
+// TestTaskRetryDoesNotSetTaskHashTTL 验证仍会重试的失败任务不会被项目层设置 task hash TTL。
+func TestTaskRetryDoesNotSetTaskHashTTL(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
 	if err := manager.RegisterHandler("demo:retry-ttl", asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
 		return errors.New("retry later")
 	})); err != nil {
-		t.Fatalf("注册重试 TTL 测试处理器失败: %v", err)
+		t.Fatalf("注册重试 task hash 测试处理器失败: %v", err)
 	}
 	if err := manager.StartWorker(); err != nil {
 		t.Fatalf("启动 worker 失败: %v", err)
@@ -1267,7 +1327,7 @@ func TestTaskRetryDoesNotExpireActiveCache(t *testing.T) {
 		Payload:  json.RawMessage(`{"demo":true}`),
 	})
 	if err != nil {
-		t.Fatalf("投递重试 TTL 测试任务失败: %v", err)
+		t.Fatalf("投递重试 task hash 测试任务失败: %v", err)
 	}
 	waitForCondition(t, 5*time.Second, func() bool {
 		info, infoErr := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueDefault), resp.TaskID)
@@ -1276,7 +1336,7 @@ func TestTaskRetryDoesNotExpireActiveCache(t *testing.T) {
 
 	ttl := manager.redis.TTL(context.Background(), keys.TaskAsynqTaskHashKey(manager.namespacedQueueName(QueueDefault), resp.TaskID)).Val()
 	if ttl != -1 {
-		t.Fatalf("重试任务不应设置终态 TTL，实际 TTL=%s", ttl)
+		t.Fatalf("重试任务不应设置项目 task hash TTL，实际 TTL=%s", ttl)
 	}
 }
 
@@ -1368,8 +1428,8 @@ func TestFinalFailureHookOnlyRunsForArchivedTask(t *testing.T) {
 	}
 }
 
-// TestWorkflowMarkSuccessFailureDoesNotUseCompletedTTL 验证工作流成功回写失败时不会误用成功任务 TTL。
-func TestWorkflowMarkSuccessFailureDoesNotUseCompletedTTL(t *testing.T) {
+// TestWorkflowMarkSuccessFailureDoesNotSetTaskHashTTL 验证工作流成功回写失败时不会设置项目 task hash TTL。
+func TestWorkflowMarkSuccessFailureDoesNotSetTaskHashTTL(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -1406,12 +1466,12 @@ func TestWorkflowMarkSuccessFailureDoesNotUseCompletedTTL(t *testing.T) {
 
 	ttl := manager.redis.TTL(context.Background(), keys.TaskAsynqTaskHashKey(manager.namespacedQueueName(QueueDefault), resp.TaskID)).Val()
 	if ttl != -1 {
-		t.Fatalf("成功回写失败的重试任务不应设置成功终态 TTL，实际 TTL=%s", ttl)
+		t.Fatalf("成功回写失败的重试任务不应设置项目 task hash TTL，实际 TTL=%s", ttl)
 	}
 }
 
-// TestArchivedTaskRecordHasTTL 验证真实终态失败任务进入 archived 后保留有限 TTL。
-func TestArchivedTaskRecordHasTTL(t *testing.T) {
+// TestArchivedTaskKeepsRuntimeSnapshotTTL 验证 archived 任务只保留业务运行快照 TTL，不干预 Asynq task hash。
+func TestArchivedTaskKeepsRuntimeSnapshotTTL(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -1423,7 +1483,7 @@ func TestArchivedTaskRecordHasTTL(t *testing.T) {
 	if err := manager.RegisterHandler("demo:archive-ttl", asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
 		return asynq.SkipRetry
 	})); err != nil {
-		t.Fatalf("注册归档 TTL 测试处理器失败: %v", err)
+		t.Fatalf("注册归档运行快照测试处理器失败: %v", err)
 	}
 	if err := manager.StartWorker(); err != nil {
 		t.Fatalf("启动 worker 失败: %v", err)
@@ -1435,7 +1495,7 @@ func TestArchivedTaskRecordHasTTL(t *testing.T) {
 		Payload:  json.RawMessage(`{"demo":true}`),
 	})
 	if err != nil {
-		t.Fatalf("投递归档 TTL 测试任务失败: %v", err)
+		t.Fatalf("投递归档运行快照测试任务失败: %v", err)
 	}
 	waitForCondition(t, 5*time.Second, func() bool {
 		info, infoErr := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueDefault), resp.TaskID)
@@ -1453,12 +1513,13 @@ func TestArchivedTaskRecordHasTTL(t *testing.T) {
 	}
 
 	ttl := manager.redis.TTL(context.Background(), keys.TaskAsynqTaskHashKey(manager.namespacedQueueName(QueueDefault), resp.TaskID)).Val()
-	if ttl <= taskRecordTTLBuffer+time.Minute || ttl > taskRecordTTLBuffer+2*time.Minute+time.Second {
-		t.Fatalf("归档终态任务 TTL = %s，期望约为 %s", ttl, taskRecordTTLBuffer+2*time.Minute)
+	if ttl != -1 {
+		t.Fatalf("归档终态任务不应设置项目 task hash TTL，实际 TTL=%s", ttl)
 	}
 	runtimeTTL := manager.redis.TTL(context.Background(), manager.taskRuntimeKey(resp.TaskID)).Val()
-	if runtimeTTL <= taskRecordTTLBuffer+time.Minute || runtimeTTL > taskRecordTTLBuffer+2*time.Minute+time.Second {
-		t.Fatalf("归档终态任务 runtime TTL = %s，期望约为 %s", runtimeTTL, taskRecordTTLBuffer+2*time.Minute)
+	expectedRuntimeTTL := manager.archivedRetention() + time.Hour
+	if runtimeTTL <= manager.archivedRetention() || runtimeTTL > expectedRuntimeTTL+time.Second {
+		t.Fatalf("归档终态任务 runtime TTL = %s，期望约为 %s", runtimeTTL, expectedRuntimeTTL)
 	}
 	if err = manager.Stop(context.Background()); err != nil {
 		t.Fatalf("停止 worker 失败: %v", err)
@@ -1468,7 +1529,7 @@ func TestArchivedTaskRecordHasTTL(t *testing.T) {
 	}
 	ttl = manager.redis.TTL(context.Background(), keys.TaskAsynqTaskHashKey(manager.namespacedQueueName(QueueDefault), resp.TaskID)).Val()
 	if ttl != -1 {
-		t.Fatalf("归档任务重跑后应清除旧 TTL，实际 TTL=%s", ttl)
+		t.Fatalf("归档任务重跑后仍不应设置项目 task hash TTL，实际 TTL=%s", ttl)
 	}
 }
 
@@ -1623,13 +1684,14 @@ func TestCompletedTaskWritesResult(t *testing.T) {
 	if item.StartedAt == "" || item.DurationMS <= 0 {
 		t.Fatalf("成功任务应保留开始时间和耗时，实际 item=%+v", item)
 	}
-	ttl := manager.redis.TTL(context.Background(), keys.TaskAsynqTaskHashKey(manager.namespacedQueueName(QueueDefault), resp.TaskID)).Val()
-	if ttl <= taskRecordTTLBuffer || ttl > manager.completedRetention()+taskRecordTTLBuffer+time.Second {
-		t.Fatalf("成功终态任务 TTL = %s，期望约为 %s", ttl, manager.completedRetention()+taskRecordTTLBuffer)
+	taskTTL := manager.redis.TTL(context.Background(), keys.TaskAsynqTaskHashKey(manager.namespacedQueueName(QueueDefault), resp.TaskID)).Val()
+	if taskTTL != -1 {
+		t.Fatalf("成功终态任务不应设置项目 task hash TTL，实际 TTL=%s", taskTTL)
 	}
 	runtimeTTL := manager.redis.TTL(context.Background(), manager.taskRuntimeKey(resp.TaskID)).Val()
-	if runtimeTTL <= taskRecordTTLBuffer || runtimeTTL > manager.completedRetention()+taskRecordTTLBuffer+time.Second {
-		t.Fatalf("成功终态任务 runtime TTL = %s，期望约为 %s", runtimeTTL, manager.completedRetention()+taskRecordTTLBuffer)
+	expectedRuntimeTTL := manager.completedRetention() + time.Hour
+	if runtimeTTL <= manager.completedRetention() || runtimeTTL > expectedRuntimeTTL+time.Second {
+		t.Fatalf("成功终态任务 runtime TTL = %s，期望约为 %s", runtimeTTL, expectedRuntimeTTL)
 	}
 	if err = manager.redis.Del(context.Background(), manager.taskRuntimeKey(resp.TaskID)).Err(); err != nil {
 		t.Fatalf("删除 runtime 兜底测试 key 失败: %v", err)
@@ -1646,8 +1708,8 @@ func TestCompletedTaskWritesResult(t *testing.T) {
 	}
 }
 
-// TestCompletedTaskTTLUsesNamespacedQueue 验证多站点命名空间下成功任务 TTL 写入真实 Asynq 队列。
-func TestCompletedTaskTTLUsesNamespacedQueue(t *testing.T) {
+// TestCompletedTaskHashUsesNamespacedQueue 验证多站点命名空间下只检查真实 Asynq 队列 task hash。
+func TestCompletedTaskHashUsesNamespacedQueue(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -1660,7 +1722,7 @@ func TestCompletedTaskTTLUsesNamespacedQueue(t *testing.T) {
 	if err := manager.RegisterHandler("demo:namespaced-complete-ttl", asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
 		return nil
 	})); err != nil {
-		t.Fatalf("注册命名空间成功 TTL 测试处理器失败: %v", err)
+		t.Fatalf("注册命名空间 task hash 测试处理器失败: %v", err)
 	}
 	if err := manager.StartWorker(); err != nil {
 		t.Fatalf("启动 worker 失败: %v", err)
@@ -1672,7 +1734,7 @@ func TestCompletedTaskTTLUsesNamespacedQueue(t *testing.T) {
 		Payload:  json.RawMessage(`{"demo":true}`),
 	})
 	if err != nil {
-		t.Fatalf("投递命名空间成功 TTL 测试任务失败: %v", err)
+		t.Fatalf("投递命名空间 task hash 测试任务失败: %v", err)
 	}
 	internalQueue := manager.namespacedQueueName(QueueDefault)
 	waitForCondition(t, 5*time.Second, func() bool {
@@ -1681,12 +1743,50 @@ func TestCompletedTaskTTLUsesNamespacedQueue(t *testing.T) {
 	})
 
 	internalKey := keys.TaskAsynqTaskHashKey(internalQueue, resp.TaskID)
+	if exists := manager.redis.Exists(context.Background(), internalKey).Val(); exists != 1 {
+		t.Fatalf("期望真实队列任务 hash 存在，exists=%d", exists)
+	}
 	ttl := manager.redis.TTL(context.Background(), internalKey).Val()
-	if ttl <= taskRecordTTLBuffer || ttl > taskRecordTTLBuffer+time.Minute+time.Second {
-		t.Fatalf("命名空间成功任务 TTL = %s，期望约为 %s", ttl, taskRecordTTLBuffer+time.Minute)
+	if ttl != -1 {
+		t.Fatalf("命名空间成功任务不应设置项目 task hash TTL，实际 TTL=%s", ttl)
 	}
 	if exists := manager.redis.Exists(context.Background(), keys.TaskAsynqTaskHashKey(QueueDefault, resp.TaskID)).Val(); exists != 0 {
 		t.Fatalf("不应写入逻辑队列任务 hash，exists=%d", exists)
+	}
+}
+
+// TestListCompletedTasksReturnsErrorForOrphanedZSetMember 验证历史孤儿 completed 成员会显式暴露。
+func TestListCompletedTasksReturnsErrorForOrphanedZSetMember(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	internalQueue := manager.namespacedQueueName(QueueDefault)
+	if err := manager.redis.SAdd(ctx, "asynq:queues", internalQueue).Err(); err != nil {
+		t.Fatalf("写入 Asynq 队列索引失败: %v", err)
+	}
+	completedKey, err := keys.TaskAsynqStateZSetKey(internalQueue, "completed")
+	if err != nil {
+		t.Fatalf("生成 completed key 失败: %v", err)
+	}
+	if err = manager.redis.ZAdd(ctx, completedKey, redis.Z{
+		Score:  float64(time.Now().Add(time.Hour).Unix()),
+		Member: "orphan-completed-task",
+	}).Err(); err != nil {
+		t.Fatalf("写入孤儿 completed 成员失败: %v", err)
+	}
+
+	resp, err := manager.ListTasks(ctx, &types.ListTaskItemsReq{
+		Queue:    QueueDefault,
+		State:    "completed",
+		Page:     1,
+		PageSize: 20,
+	})
+	if err == nil {
+		t.Fatalf("查询包含孤儿成员的 completed 列表应失败，实际 resp=%+v", resp)
+	}
+	if !errors.Is(err, asynq.ErrTaskNotFound) {
+		t.Fatalf("期望暴露任务详情缺失错误，实际: %v", err)
 	}
 }
 
@@ -1982,7 +2082,7 @@ func TestSchedulerEnabledRespectsConfigSwitch(t *testing.T) {
 	if manager.schedulerEnabled() {
 		t.Fatal("期望 scheduler.enabled=false 时不启动调度器，实际返回 true")
 	}
-	status := manager.schedulerStatusSnapshot()
+	status := manager.schedulerStatusSnapshot(context.Background())
 	if status == nil {
 		t.Fatal("期望调度器状态快照存在，实际为 nil")
 	}
@@ -2014,7 +2114,7 @@ func TestSchedulerEnabledRequiresConfigSwitch(t *testing.T) {
 	if manager.schedulerEnabled() {
 		t.Fatal("期望未配置 scheduler.enabled 时不启动调度器，实际返回 true")
 	}
-	status := manager.schedulerStatusSnapshot()
+	status := manager.schedulerStatusSnapshot(context.Background())
 	if status == nil {
 		t.Fatal("期望调度器状态快照存在，实际为 nil")
 	}
@@ -2059,6 +2159,33 @@ func TestListQueuesReturnsSchedulerStatus(t *testing.T) {
 	}
 	if resp.Scheduler.HeartbeatIntervalSeconds != 12 {
 		t.Fatalf("期望心跳间隔为 12 秒，实际为 %d", resp.Scheduler.HeartbeatIntervalSeconds)
+	}
+}
+
+// TestListQueuesReturnsErrorForOrphanedCompletedMember 验证队列概览不吞掉 Asynq 巡检错误。
+func TestListQueuesReturnsErrorForOrphanedCompletedMember(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	internalQueue := manager.namespacedQueueName(QueueDefault)
+	if err := manager.redis.SAdd(ctx, "asynq:queues", internalQueue).Err(); err != nil {
+		t.Fatalf("写入 Asynq 队列索引失败: %v", err)
+	}
+	completedKey, err := keys.TaskAsynqStateZSetKey(internalQueue, "completed")
+	if err != nil {
+		t.Fatalf("生成 completed key 失败: %v", err)
+	}
+	if err = manager.redis.ZAdd(ctx, completedKey, redis.Z{
+		Score:  float64(time.Now().Add(time.Hour).Unix()),
+		Member: "orphan-completed-task",
+	}).Err(); err != nil {
+		t.Fatalf("写入孤儿 completed 成员失败: %v", err)
+	}
+
+	resp, err := manager.ListQueues(ctx)
+	if err == nil {
+		t.Fatalf("查询包含孤儿成员的队列概览应失败，实际 resp=%+v", resp)
 	}
 }
 
@@ -2591,41 +2718,6 @@ func TestDeleteTaskRemovesScheduledTask(t *testing.T) {
 	}
 	if _, err := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueDefault), resp.TaskID); !errors.Is(err, asynq.ErrTaskNotFound) {
 		t.Fatalf("期望删除后任务不存在，实际为 %v", err)
-	}
-}
-
-// TestExpireFinalTaskRecordSetsTTL 验证成功和归档失败任务都会设置缓存 TTL。
-func TestExpireFinalTaskRecordSetsTTL(t *testing.T) {
-	manager, cleanup := newTestManager(t)
-	defer cleanup()
-
-	cfg := manager.CurrentConfig()
-	cfg.CompletedRetentionSeconds = 60
-	cfg.ArchivedRetentionSeconds = 120
-	manager.UpdateConfig(cfg)
-
-	ctx := context.Background()
-	internalQueue := manager.namespacedQueueName(QueueDefault)
-	completedTaskID := "completed-task"
-	completedKey := keys.TaskAsynqTaskHashKey(internalQueue, completedTaskID)
-	if err := manager.redis.HSet(ctx, completedKey, "state", "active").Err(); err != nil {
-		t.Fatalf("写入成功任务 hash 失败: %v", err)
-	}
-	manager.expireFinalTaskRecord(ctx, internalQueue, completedTaskID, nil)
-	completedTTL := manager.redis.TTL(ctx, completedKey).Val()
-	if completedTTL <= taskRecordTTLBuffer || completedTTL > taskRecordTTLBuffer+time.Minute+time.Second {
-		t.Fatalf("成功任务 TTL = %s，期望约为 %s", completedTTL, taskRecordTTLBuffer+time.Minute)
-	}
-
-	archivedTaskID := "archived-task"
-	archivedKey := keys.TaskAsynqTaskHashKey(internalQueue, archivedTaskID)
-	if err := manager.redis.HSet(ctx, archivedKey, "state", "active").Err(); err != nil {
-		t.Fatalf("写入归档任务 hash 失败: %v", err)
-	}
-	manager.expireFinalTaskRecord(ctx, internalQueue, archivedTaskID, asynq.SkipRetry)
-	archivedTTL := manager.redis.TTL(ctx, archivedKey).Val()
-	if archivedTTL <= taskRecordTTLBuffer+time.Minute || archivedTTL > taskRecordTTLBuffer+2*time.Minute+time.Second {
-		t.Fatalf("归档任务 TTL = %s，期望约为 %s", archivedTTL, taskRecordTTLBuffer+2*time.Minute)
 	}
 }
 

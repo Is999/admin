@@ -22,8 +22,8 @@ const (
 	tableCacheWaitStep = 80 * time.Millisecond
 )
 
-// tableCacheManager 创建 admin 的表数据缓存管理器。
-func tableCacheManager(base *corelogic.BaseLogic) (*tablecache.Manager, error) {
+// TableCacheManager 创建 admin 的表数据缓存管理器。
+func TableCacheManager(base *corelogic.BaseLogic) (*tablecache.Manager, error) {
 	if base == nil || base.Redis() == nil {
 		return nil, errors.Errorf("Redis未初始化")
 	}
@@ -37,11 +37,6 @@ func tableCacheManager(base *corelogic.BaseLogic) (*tablecache.Manager, error) {
 	)
 }
 
-// TableCacheManager 创建 admin 的表数据缓存管理器。
-func TableCacheManager(base *corelogic.BaseLogic) (*tablecache.Manager, error) {
-	return tableCacheManager(base)
-}
-
 // tableCacheKeyPrefix 返回当前站点 table-cache 托管缓存使用的 Redis Key 前缀。
 // 前缀来源于运行期 app_id，确保多站点共用 Redis 时权限、配置和秘钥缓存不会相互覆盖。
 func tableCacheKeyPrefix(base *corelogic.BaseLogic) string {
@@ -51,9 +46,9 @@ func tableCacheKeyPrefix(base *corelogic.BaseLogic) string {
 	return keys.TableCachePrefix()
 }
 
-// tableCachePhysicalKey 把逻辑缓存 key 转换为 table-cache 当前要求的真实 Redis key。
+// TableCachePhysicalKey 把逻辑缓存 key 转换为 table-cache 当前要求的真实 Redis key。
 // 读穿缓存、刷新、删除和直接 Redis 删除都统一使用带前缀的真实 key，确保 miss 后能回源写入当前命名空间。
-func tableCachePhysicalKey(base *corelogic.BaseLogic, key string) string {
+func TableCachePhysicalKey(base *corelogic.BaseLogic, key string) string {
 	key = strings.TrimSpace(key)
 	prefix := tableCacheKeyPrefix(base)
 	if key == "" || prefix == "" || strings.HasPrefix(key, prefix) {
@@ -68,13 +63,8 @@ func tableCachePhysicalKey(base *corelogic.BaseLogic, key string) string {
 	return prefix + key
 }
 
-// TableCachePhysicalKey 把逻辑缓存 key 转换为 table-cache 真实 Redis key。
-func TableCachePhysicalKey(base *corelogic.BaseLogic, key string) string {
-	return tableCachePhysicalKey(base, key)
-}
-
-// tableCacheLogicalKey 去掉 table-cache 项目级前缀，供分类、脱敏和模板匹配使用。
-func tableCacheLogicalKey(base *corelogic.BaseLogic, key string) string {
+// TableCacheLogicalKey 去掉 table-cache 项目级前缀，供分类、脱敏和模板匹配使用。
+func TableCacheLogicalKey(base *corelogic.BaseLogic, key string) string {
 	key = strings.TrimSpace(key)
 	if base == nil || base.Svc == nil {
 		return key
@@ -82,16 +72,11 @@ func tableCacheLogicalKey(base *corelogic.BaseLogic, key string) string {
 	return keys.TrimTableCachePrefix(key)
 }
 
-// TableCacheLogicalKey 去掉 table-cache 项目级前缀。
-func TableCacheLogicalKey(base *corelogic.BaseLogic, key string) string {
-	return tableCacheLogicalKey(base, key)
-}
-
-// tableCachePhysicalKeys 批量转换 table-cache 托管缓存 key，并过滤空值。
-func tableCachePhysicalKeys(base *corelogic.BaseLogic, cacheKeys ...string) []string {
+// TableCachePhysicalKeys 批量转换 table-cache 托管缓存 key，并过滤空值。
+func TableCachePhysicalKeys(base *corelogic.BaseLogic, cacheKeys ...string) []string {
 	result := make([]string, 0, len(cacheKeys))
 	for _, key := range cacheKeys {
-		key = tableCachePhysicalKey(base, key)
+		key = TableCachePhysicalKey(base, key)
 		if key == "" {
 			continue
 		}
@@ -100,13 +85,8 @@ func tableCachePhysicalKeys(base *corelogic.BaseLogic, cacheKeys ...string) []st
 	return result
 }
 
-// TableCachePhysicalKeys 批量转换 table-cache 托管缓存 key。
-func TableCachePhysicalKeys(base *corelogic.BaseLogic, cacheKeys ...string) []string {
-	return tableCachePhysicalKeys(base, cacheKeys...)
-}
-
-// tableCacheReadDB 统一获取表缓存回源所需的读库连接，缺失时返回明确错误，避免直接触发 GORM 空指针。
-func tableCacheReadDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
+// TableCacheReadDB 统一获取表缓存回源所需的读库连接，缺失时返回明确错误，避免直接触发 GORM 空指针。
+func TableCacheReadDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
 	if base == nil || base.Svc == nil {
 		return nil, errors.Errorf("服务上下文未初始化")
 	}
@@ -117,13 +97,8 @@ func tableCacheReadDB(base *corelogic.BaseLogic, database svc.DBName, databaseLa
 	return readDB, nil
 }
 
-// TableCacheReadDB 获取表缓存回源读库连接。
-func TableCacheReadDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
-	return tableCacheReadDB(base, database, databaseLabel)
-}
-
-// tableCacheWriteDB 统一获取表缓存回源所需的主库连接，缺失时返回明确错误，避免直接触发 GORM 空指针。
-func tableCacheWriteDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
+// TableCacheWriteDB 统一获取表缓存回源所需的主库连接，缺失时返回明确错误，避免直接触发 GORM 空指针。
+func TableCacheWriteDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
 	if base == nil || base.Svc == nil {
 		return nil, errors.Errorf("服务上下文未初始化")
 	}
@@ -134,13 +109,8 @@ func tableCacheWriteDB(base *corelogic.BaseLogic, database svc.DBName, databaseL
 	return writeDB, nil
 }
 
-// TableCacheWriteDB 获取表缓存回源主库连接。
-func TableCacheWriteDB(base *corelogic.BaseLogic, database svc.DBName, databaseLabel string) (*gorm.DB, error) {
-	return tableCacheWriteDB(base, database, databaseLabel)
-}
-
-// tableCacheItems 返回缓存管理页使用的通用表缓存目标列表。
-func tableCacheItems(base *corelogic.BaseLogic) []types.CacheItem {
+// TableCacheItems 返回缓存管理页使用的通用表缓存目标列表。
+func TableCacheItems(base *corelogic.BaseLogic) []types.CacheItem {
 	targets := tableCacheTargets(base)
 	items := make([]types.CacheItem, 0, len(targets))
 	for _, target := range targets {
@@ -148,8 +118,8 @@ func tableCacheItems(base *corelogic.BaseLogic) []types.CacheItem {
 		if keyTitle == "" {
 			keyTitle = target.Key
 		}
-		keyTitle = tableCachePhysicalKey(base, keyTitle)
-		logicalKeyTitle := tableCacheLogicalKey(base, keyTitle)
+		keyTitle = TableCachePhysicalKey(base, keyTitle)
+		logicalKeyTitle := TableCacheLogicalKey(base, keyTitle)
 		items = append(items, types.CacheItem{
 			Index:        target.Index,
 			Key:          keyTitle,
@@ -157,18 +127,13 @@ func tableCacheItems(base *corelogic.BaseLogic) []types.CacheItem {
 			Type:         string(target.Type),
 			Remark:       target.Remark,
 			Category:     tableCacheCategory(target.Index, logicalKeyTitle),
-			IsTemplate:   isTemplateCachePattern(keyTitle),
+			IsTemplate:   IsTemplateCachePattern(keyTitle),
 			ExampleKey:   tableCacheExampleKey(keyTitle),
 			AutoRebuild:  true,
 			RefreshScope: tableCacheRefreshScope(target),
 		})
 	}
 	return items
-}
-
-// TableCacheItems 返回缓存管理页使用的通用表缓存目标列表。
-func TableCacheItems(base *corelogic.BaseLogic) []types.CacheItem {
-	return tableCacheItems(base)
 }
 
 // tableCacheCategory 根据缓存目标索引和 key 模板归类缓存用途，供管理页分组展示。
@@ -209,7 +174,7 @@ func tableCacheRefreshScope(target tablecache.Target) string {
 	switch {
 	case target.RefreshAll:
 		return "all"
-	case isTemplateCachePattern(target.KeyTitle):
+	case IsTemplateCachePattern(target.KeyTitle):
 		return "single"
 	case strings.HasSuffix(target.Key, ":"):
 		return "prefix"
@@ -218,26 +183,16 @@ func tableCacheRefreshScope(target tablecache.Target) string {
 	}
 }
 
-// isTemplateCachePattern 判断缓存管理页中的 key 是否属于模板型缓存键。
+// IsTemplateCachePattern 判断缓存管理页中的 key 是否属于模板型缓存键。
 // 这里同时支持 `{id}` 与 `%s/%d/%v` 两类占位写法，保证前后端识别规则一致。
-func isTemplateCachePattern(key string) bool {
+func IsTemplateCachePattern(key string) bool {
 	return strings.Contains(key, "{") || strings.Contains(key, "%")
 }
 
-// IsTemplateCachePattern 判断缓存键是否属于模板型缓存键。
-func IsTemplateCachePattern(key string) bool {
-	return isTemplateCachePattern(key)
-}
-
-// cacheTemplatePrefix 返回模板型缓存键的固定前缀部分。
-// 管理页在匹配真实 Redis Key 与模板缓存项时，会基于该前缀做快速归类。
-func cacheTemplatePrefix(key string) string {
-	return keys.KeyTemplatePrefix(key)
-}
-
 // CacheTemplatePrefix 返回模板型缓存键的固定前缀部分。
+// 管理页在匹配真实 Redis Key 与模板缓存项时，会基于该前缀做快速归类。
 func CacheTemplatePrefix(key string) string {
-	return cacheTemplatePrefix(key)
+	return keys.KeyTemplatePrefix(key)
 }
 
 // tableCacheFirstStringPart 读取前缀型缓存 key 的第一个参数。

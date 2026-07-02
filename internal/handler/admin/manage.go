@@ -118,7 +118,7 @@ func DownloadAdminExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.AdminExportJobReq
 		if err := httpx.Parse(r, &req); err != nil {
-			shared.WriteBizResponse(w, r, nil, shared.ParamErrorResult(err), nil)
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
 

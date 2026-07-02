@@ -18,8 +18,8 @@ var (
 	ErrCacheEmptyMarker = errCacheEmptyMarker
 )
 
-// jitterTTL 为基础过期时间添加抖动，降低同类缓存集中失效导致的雪崩风险。
-func jitterTTL(base time.Duration) time.Duration {
+// JitterTTL 为基础过期时间添加抖动，降低同类缓存集中失效导致的雪崩风险。
+func JitterTTL(base time.Duration) time.Duration {
 	if base <= 0 {
 		return 0
 	}
@@ -30,27 +30,12 @@ func jitterTTL(base time.Duration) time.Duration {
 	return base + time.Duration(time.Now().UnixNano()%int64(jitterRange))
 }
 
-// JitterTTL 为基础过期时间添加抖动。
-func JitterTTL(base time.Duration) time.Duration {
-	return jitterTTL(base)
-}
-
-// emptyCacheTTL 返回空值缓存的过期时间，确保不存在的数据也能短时间挡住回源请求。
-func emptyCacheTTL() time.Duration {
-	return jitterTTL(2 * time.Minute)
-}
-
-// EmptyCacheTTL 返回空值缓存的过期时间。
+// EmptyCacheTTL 返回空值缓存的过期时间，确保不存在的数据也能短时间挡住回源请求。
 func EmptyCacheTTL() time.Duration {
-	return emptyCacheTTL()
-}
-
-// cacheIsEmptyMarker 判断当前缓存字段是否为统一空值占位符。
-func cacheIsEmptyMarker(value string) bool {
-	return value == keys.EmptyValueMarker
+	return JitterTTL(2 * time.Minute)
 }
 
 // CacheIsEmptyMarker 判断当前缓存字段是否为统一空值占位符。
 func CacheIsEmptyMarker(value string) bool {
-	return cacheIsEmptyMarker(value)
+	return value == keys.EmptyValueMarker
 }

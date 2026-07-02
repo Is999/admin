@@ -82,6 +82,7 @@ type HotReloadStatus struct {
 	RestartReason          string    // 需要重启才能完全生效的原因摘要
 	LastStatus             string    // 最近一次处理结果：idle/success/failed
 	LastMessage            string    // 最近一次处理结果说明
+	LastMessageKey         string    // 最近一次前端展示文案的多语言 key
 	LastTriggerSource      string    // 最近一次触发来源：watcher/manual_api/startup 等
 	LastFailureCategory    string    // 最近一次失败分类：fingerprint/load/reload/not_bound 等
 	LastCheckedAt          time.Time // 最近一次检查配置文件时间

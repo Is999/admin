@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	// ShardMod 表示用户 ID 哈希分片数量。
-	ShardMod = 1000
+	// ShardMod 表示用户 ID 哈希分片数量，固定为 2 的幂便于平滑拆表。
+	ShardMod = 1024
 	// SnowflakeWorkerIDUnset 表示未显式配置雪花 worker_id。
 	SnowflakeWorkerIDUnset int64 = -1
 
@@ -161,7 +161,7 @@ func (g *Snowflake) NextID() (int64, error) {
 	return g.node.Generate().Int64(), nil
 }
 
-// ShardNo 返回用户 ID 稳定哈希后的 0-999 分片号。
+// ShardNo 返回用户 ID 稳定哈希后的 0-1023 分片号。
 func ShardNo(id int64) int {
 	checksum := crc32.ChecksumIEEE([]byte(strconv.FormatInt(id, 10)))
 	return int(checksum % ShardMod)

@@ -63,10 +63,9 @@ func TestBuildProfileInfoReturnsMFAURLWhenDisabled(t *testing.T) {
 	oldSecret := "RCABDVITFNQJJ4VJ"
 	cipherText, err := securityLogic.EncryptAdminMFASecret(oldSecret)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
-	userLogic := &ProfileLogic{BaseLogic: securityLogic.BaseLogic}
-	info, err := userLogic.BuildProfileInfo(&model.Admin{
+	info, err := securityLogic.BuildProfileInfo(&model.Admin{
 		ID:           9,
 		Name:         "admin999",
 		MfaSecureKey: cipherText,
@@ -91,10 +90,9 @@ func TestBuildProfileInfoSkipsLoginMFAWhenNeedResetPassword(t *testing.T) {
 	securityLogic.Svc.Rds = client
 	cipherText, err := securityLogic.EncryptAdminMFASecret("RCABDVITFNQJJ4VJ")
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
-	userLogic := &ProfileLogic{BaseLogic: securityLogic.BaseLogic}
-	info, err := userLogic.BuildProfileInfo(&model.Admin{
+	info, err := securityLogic.BuildProfileInfo(&model.Admin{
 		ID:                9,
 		Name:              "admin999",
 		MfaSecureKey:      cipherText,
@@ -121,11 +119,10 @@ func TestBuildProfileInfoRequiresBindWhenForceMFAEnabled(t *testing.T) {
 	seedBoolSecurityConfig(t, client, securitylogic.ConfigAdminMFACheckEnable, true)
 	cipherText, err := securityLogic.EncryptAdminMFASecret("RCABDVITFNQJJ4VJ")
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
 
-	userLogic := &ProfileLogic{BaseLogic: securityLogic.BaseLogic}
-	info, err := userLogic.BuildProfileInfo(&model.Admin{
+	info, err := securityLogic.BuildProfileInfo(&model.Admin{
 		ID:           9,
 		Name:         "admin999",
 		MfaSecureKey: cipherText,
@@ -158,8 +155,7 @@ func TestBuildProfileInfoRequiresBindWhenEnabledMFASecretMissing(t *testing.T) {
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
 
-	userLogic := &ProfileLogic{BaseLogic: securityLogic.BaseLogic}
-	info, err := userLogic.BuildProfileInfo(&model.Admin{
+	info, err := securityLogic.BuildProfileInfo(&model.Admin{
 		ID:           10,
 		Name:         "admin-enabled",
 		MfaSecureKey: "broken-secret",
@@ -355,7 +351,7 @@ func TestResolveEnableMFASecretUsesRequestSecret(t *testing.T) {
 	requestSecret := "JBSWY3DPEHPK3PXP"
 	cipherText, err := securityLogic.EncryptAdminMFASecret(oldSecret)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
 	userLogic := &ProfileLogic{BaseLogic: securityLogic.BaseLogic}
 	secret, err := userLogic.resolveEnableMFASecret(&model.Admin{
@@ -384,7 +380,7 @@ func TestResolveEnableMFASecretUsesCurrentSecret(t *testing.T) {
 	requestSecret := "JBSWY3DPEHPK3PXP"
 	cipherText, err := securityLogic.EncryptAdminMFASecret(currentSecret)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
 	userLogic := &ProfileLogic{BaseLogic: securityLogic.BaseLogic}
 	secret, err := userLogic.resolveEnableMFASecret(&model.Admin{

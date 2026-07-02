@@ -120,8 +120,8 @@ func (l *AdminManageLogic) Update(req *types.UpdateAdminReq) *types.BizResult {
 	if req.Password != nil && strings.TrimSpace(*req.Password) != "" {
 		mfaScenario = securitylogic.MFAScenarioChangePassword
 	}
-	if err := l.requireOperateMFATwoStep(mfaScenario, req.TwoStepKey, req.TwoStepValue); err != nil {
-		return l.mfaBizResult(err)
+	if err := l.RequireOperateMFATwoStep(mfaScenario, req.TwoStepKey, req.TwoStepValue); err != nil {
+		return l.MFABizResult(err)
 	}
 
 	admin, err := l.GetAdminByID(req.ID)
@@ -193,8 +193,8 @@ func (l *AdminManageLogic) Update(req *types.UpdateAdminReq) *types.BizResult {
 
 // Delete 删除管理员账号，同时清理角色关系和登录态缓存。
 func (l *AdminManageLogic) Delete(req *types.IDPathReq) *types.BizResult {
-	if err := l.requireOperateMFATwoStep(securitylogic.MFAScenarioDeleteUser, req.TwoStepKey, req.TwoStepValue); err != nil {
-		return l.mfaBizResult(err)
+	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioDeleteUser, req.TwoStepKey, req.TwoStepValue); err != nil {
+		return l.MFABizResult(err)
 	}
 	if req.ID == l.GetCtxAdmin().ID {
 		return types.NewBizResult(codes.Fail).
@@ -238,8 +238,8 @@ func (l *AdminManageLogic) Delete(req *types.IDPathReq) *types.BizResult {
 
 // UpdateStatus 修改管理员启用/禁用状态。
 func (l *AdminManageLogic) UpdateStatus(req *types.AdminStatusReq) *types.BizResult {
-	if err := l.requireOperateMFATwoStep(securitylogic.MFAScenarioUserStatus, req.TwoStepKey, req.TwoStepValue); err != nil {
-		return l.mfaBizResult(err)
+	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioUserStatus, req.TwoStepKey, req.TwoStepValue); err != nil {
+		return l.MFABizResult(err)
 	}
 	status := req.StatusValue()
 
@@ -278,8 +278,8 @@ func (l *AdminManageLogic) UpdateStatus(req *types.AdminStatusReq) *types.BizRes
 
 // ResetPassword 重置管理员密码，并清理登录态缓存。
 func (l *AdminManageLogic) ResetPassword(req *types.ResetAdminPasswordReq) *types.BizResult {
-	if err := l.requireOperateMFATwoStep(securitylogic.MFAScenarioResetUserPassword, req.TwoStepKey, req.TwoStepValue); err != nil {
-		return l.mfaBizResult(err)
+	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioResetUserPassword, req.TwoStepKey, req.TwoStepValue); err != nil {
+		return l.MFABizResult(err)
 	}
 	if req.ID == l.GetCtxAdmin().ID {
 		return types.NewBizResult(codes.Fail).
@@ -328,8 +328,8 @@ func (l *AdminManageLogic) ResetPassword(req *types.ResetAdminPasswordReq) *type
 
 // ResetInitialState 把管理员恢复为首次登录前状态，要求使用临时密码重新登录并强制修改新密码。
 func (l *AdminManageLogic) ResetInitialState(req *types.ResetAdminInitialStateReq) *types.BizResult {
-	if err := l.requireOperateMFATwoStep(securitylogic.MFAScenarioResetUserInitialState, req.TwoStepKey, req.TwoStepValue); err != nil {
-		return l.mfaBizResult(err)
+	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioResetUserInitialState, req.TwoStepKey, req.TwoStepValue); err != nil {
+		return l.MFABizResult(err)
 	}
 	if req.ID == l.GetCtxAdmin().ID {
 		return types.NewBizResult(codes.Fail).
@@ -406,8 +406,8 @@ func (l *AdminManageLogic) ListRoles(req *types.IDPathReq) *types.BizResult {
 
 // ReplaceRoles 替换管理员全部角色关系。
 func (l *AdminManageLogic) ReplaceRoles(req *types.AdminRoleAssignReq) *types.BizResult {
-	if err := l.requireOperateMFATwoStep(securitylogic.MFAScenarioEditUser, req.TwoStepKey, req.TwoStepValue); err != nil {
-		return l.mfaBizResult(err)
+	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioEditUser, req.TwoStepKey, req.TwoStepValue); err != nil {
+		return l.MFABizResult(err)
 	}
 	roleIDs, err := l.pruneInheritedAssignedRoleIDs(types.UniquePositiveInts(req.RoleIDs))
 	if err != nil {

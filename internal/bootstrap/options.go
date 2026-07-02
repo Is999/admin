@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"admin/internal/bootstrap/components"
 	"admin/internal/handler"
 	"admin/internal/task/runtime"
 )
@@ -10,11 +11,11 @@ const defaultDisplayName = "admin"
 
 // Options 描述应用启动时可注入的扩展项。
 type Options struct {
-	DisplayName          string                // 启动日志中展示的服务名
-	UseDefaultComponents bool                  // 是否启用内置启动组件集合
-	Components           []Component           // 额外注入的启动组件
-	RouteModules         []handler.RouteModule // 额外注入的 HTTP 路由模块
-	TaskPlugins          []taskruntime.Plugin  // 额外注入的任务运行时插件
+	DisplayName          string                 // 启动日志中展示的服务名
+	UseDefaultComponents bool                   // 是否启用内置启动组件集合
+	Components           []components.Component // 额外注入的启动组件
+	RouteModules         []handler.RouteModule  // 额外注入的 HTTP 路由模块
+	TaskPlugins          []taskruntime.Plugin   // 额外注入的任务运行时插件
 }
 
 // Option 定义启动选项的注入方式。
@@ -31,12 +32,12 @@ func WithTaskPlugins(plugins ...taskruntime.Plugin) Option {
 }
 
 // WithComponents 为启动链追加外部启动组件。
-func WithComponents(components ...Component) Option {
+func WithComponents(items ...components.Component) Option {
 	return func(opts *Options) {
-		if opts == nil || len(components) == 0 {
+		if opts == nil || len(items) == 0 {
 			return
 		}
-		opts.Components = append(opts.Components, components...)
+		opts.Components = append(opts.Components, items...)
 	}
 }
 

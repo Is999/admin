@@ -70,7 +70,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "role_permission",
 			Title:            "角色权限",
-			Key:              cacheTemplatePrefix(keys.RolePermissionPattern),
+			Key:              CacheTemplatePrefix(keys.RolePermissionPattern),
 			KeyTitle:         keys.RolePermissionPattern,
 			Type:             tablecache.TypeSet,
 			Remark:           "单个角色权限集合缓存",
@@ -80,7 +80,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "admin_role_ids",
 			Title:            "管理员角色 ID",
-			Key:              cacheTemplatePrefix(keys.AdminRoleIDsPattern),
+			Key:              CacheTemplatePrefix(keys.AdminRoleIDsPattern),
 			KeyTitle:         keys.AdminRoleIDsPattern,
 			Type:             tablecache.TypeSet,
 			Remark:           "管理员启用角色 ID集合缓存",
@@ -91,7 +91,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "admin_permission_ids",
 			Title:            "管理员权限ID",
-			Key:              cacheTemplatePrefix(keys.AdminPermissionIDsPattern),
+			Key:              CacheTemplatePrefix(keys.AdminPermissionIDsPattern),
 			KeyTitle:         keys.AdminPermissionIDsPattern,
 			Type:             tablecache.TypeSet,
 			Remark:           "管理员聚合权限ID集合缓存",
@@ -102,7 +102,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "admin_permission_uuids",
 			Title:            "管理员权限码",
-			Key:              cacheTemplatePrefix(keys.AdminPermissionUUIDsPattern),
+			Key:              CacheTemplatePrefix(keys.AdminPermissionUUIDsPattern),
 			KeyTitle:         keys.AdminPermissionUUIDsPattern,
 			Type:             tablecache.TypeSet,
 			Remark:           "管理员最终权限码集合缓存",
@@ -113,7 +113,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "admin_profile",
 			Title:            "管理员公开资料",
-			Key:              cacheTemplatePrefix(keys.AdminProfilePattern),
+			Key:              CacheTemplatePrefix(keys.AdminProfilePattern),
 			KeyTitle:         keys.AdminProfilePattern,
 			Type:             tablecache.TypeString,
 			Remark:           "管理员公开资料缓存",
@@ -124,7 +124,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "admin_roles_detail",
 			Title:            "管理员角色详情",
-			Key:              cacheTemplatePrefix(keys.AdminRolesDetailPattern),
+			Key:              CacheTemplatePrefix(keys.AdminRolesDetailPattern),
 			KeyTitle:         keys.AdminRolesDetailPattern,
 			Type:             tablecache.TypeString,
 			Remark:           "管理员角色名称列表缓存",
@@ -165,7 +165,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "route_permission_ids",
 			Title:            "路由权限候选ID",
-			Key:              cacheTemplatePrefix(keys.RoutePermissionIDsPattern),
+			Key:              CacheTemplatePrefix(keys.RoutePermissionIDsPattern),
 			KeyTitle:         keys.RoutePermissionIDsPattern,
 			Type:             tablecache.TypeSet,
 			Remark:           "路由别名候选权限ID集合缓存",
@@ -176,7 +176,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "config_uuid",
 			Title:            "系统常量配置",
-			Key:              cacheTemplatePrefix(keys.SysConfigUUIDPattern),
+			Key:              CacheTemplatePrefix(keys.SysConfigUUIDPattern),
 			KeyTitle:         keys.SysConfigUUIDPattern,
 			Type:             tablecache.TypeHash,
 			Remark:           "系统常量配置缓存",
@@ -187,7 +187,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "runtime_config_state",
 			Title:            "运行配置版本",
-			Key:              cacheTemplatePrefix(keys.RuntimeConfigStatePattern),
+			Key:              CacheTemplatePrefix(keys.RuntimeConfigStatePattern),
 			KeyTitle:         keys.RuntimeConfigStatePattern,
 			Type:             tablecache.TypeHash,
 			Remark:           "运行配置 active 版本状态缓存",
@@ -198,7 +198,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:            "runtime_config_release",
 			Title:            "运行配置发布快照",
-			Key:              cacheTemplatePrefix(keys.RuntimeConfigReleasePattern),
+			Key:              CacheTemplatePrefix(keys.RuntimeConfigReleasePattern),
 			KeyTitle:         keys.RuntimeConfigReleasePattern,
 			Type:             tablecache.TypeString,
 			Remark:           "运行配置不可变发布快照缓存",
@@ -209,7 +209,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:    "secret_key_route",
 			Title:    "秘钥路由配置",
-			Key:      cacheTemplatePrefix(keys.SecretKeyRoutePattern),
+			Key:      CacheTemplatePrefix(keys.SecretKeyRoutePattern),
 			KeyTitle: keys.SecretKeyRoutePattern,
 			Type:     tablecache.TypeHash,
 			Remark:   "秘钥稳定版与灰度版路由缓存",
@@ -219,7 +219,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:    "secret_key_aes",
 			Title:    "AES秘钥配置",
-			Key:      cacheTemplatePrefix(keys.SecretKeyAESVersionPattern),
+			Key:      CacheTemplatePrefix(keys.SecretKeyAESVersionPattern),
 			KeyTitle: keys.SecretKeyAESVersionPattern,
 			Type:     tablecache.TypeHash,
 			Remark:   "版本化 AES 秘钥配置缓存",
@@ -229,7 +229,7 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 		{
 			Index:    "secret_key_rsa",
 			Title:    "RSA秘钥配置",
-			Key:      cacheTemplatePrefix(keys.SecretKeyRSAVersionPattern),
+			Key:      CacheTemplatePrefix(keys.SecretKeyRSAVersionPattern),
 			KeyTitle: keys.SecretKeyRSAVersionPattern,
 			Type:     tablecache.TypeHash,
 			Remark:   "版本化 RSA 秘钥配置缓存",
@@ -336,7 +336,7 @@ func loadAdminRolesDetailTableCache(base *corelogic.BaseLogic) tablecache.Loader
 		}
 		var roles []string
 		// 角色名称缓存回源使用主库，空连接时返回明确错误而不是触发 GORM panic。
-		readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+		readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -374,7 +374,7 @@ func loadRoleStatusTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 	return func(ctx context.Context, params tablecache.LoadParams) ([]tablecache.Entry, error) {
 		var roles []model.AdminRole
 		// 角色状态缓存来源于 admin_role，统一从主库读取。
-		readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+		readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -513,7 +513,7 @@ func loadPermissionFieldTableCache(base *corelogic.BaseLogic, cacheKey string, f
 	return func(ctx context.Context, params tablecache.LoadParams) ([]tablecache.Entry, error) {
 		var permissions []model.AdminPermission
 		// 权限字段缓存来源于 admin_permission，统一从主库读取。
-		readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+		readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -539,7 +539,7 @@ func loadPermissionFieldTableCache(base *corelogic.BaseLogic, cacheKey string, f
 
 // loadAdminByIDForCache 读取管理员公开资料缓存所需的管理员模型。
 func loadAdminByIDForCache(base *corelogic.BaseLogic, adminID int) (*model.Admin, error) {
-	writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
+	writeDB, err := TableCacheWriteDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -552,7 +552,7 @@ func loadAdminByIDForCache(base *corelogic.BaseLogic, adminID int) (*model.Admin
 
 // loadAllRolesForCache 读取角色树缓存所需的全部有效角色。
 func loadAllRolesForCache(base *corelogic.BaseLogic) ([]model.AdminRole, error) {
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -565,7 +565,7 @@ func loadAllRolesForCache(base *corelogic.BaseLogic) ([]model.AdminRole, error) 
 
 // loadAllPermissionsForCache 读取权限树缓存所需的全部权限。
 func loadAllPermissionsForCache(base *corelogic.BaseLogic) ([]model.AdminPermission, error) {
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -591,7 +591,7 @@ func loadRoutePermissionIDsForCache(base *corelogic.BaseLogic, routeAlias string
 		}
 		modules = append(modules, module)
 	}
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -610,7 +610,7 @@ func loadEnabledRoleIDsByUserForCache(base *corelogic.BaseLogic, adminID int) ([
 	if adminID <= 0 {
 		return []int{}, nil
 	}
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -630,7 +630,7 @@ func loadRolePermissionIDsForCache(base *corelogic.BaseLogic, roleID int) ([]int
 	if roleID <= 0 {
 		return []int{}, nil
 	}
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -654,7 +654,7 @@ func loadAdminPermissionIDsForCache(base *corelogic.BaseLogic, adminID int) ([]i
 	if len(roleIDs) == 0 {
 		return []int{}, nil
 	}
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -676,7 +676,7 @@ func loadPermissionUUIDsByIDsForCache(base *corelogic.BaseLogic, permissionIDs [
 	if len(permissionIDs) == 0 {
 		return []string{}, nil
 	}
-	readDB, err := tableCacheReadDB(base, svc.DatabaseMain, "main")
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -712,7 +712,7 @@ func loadSysConfigTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 			return nil, errors.Tag(err)
 		}
 		// 系统配置缓存需要读取最新配置值，回源时走主库。
-		writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
+		writeDB, err := TableCacheWriteDB(base, svc.DatabaseMain, "main")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -748,7 +748,7 @@ func loadSysConfigTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 // loadRuntimeConfigStateTableCache 加载当前 MySQL 库的运行配置 active 版本状态。
 func loadRuntimeConfigStateTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 	return func(ctx context.Context, params tablecache.LoadParams) ([]tablecache.Entry, error) {
-		writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
+		writeDB, err := TableCacheWriteDB(base, svc.DatabaseMain, "main")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -779,7 +779,7 @@ func loadRuntimeConfigReleaseTableCache(base *corelogic.BaseLogic) tablecache.Lo
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
-		writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
+		writeDB, err := TableCacheWriteDB(base, svc.DatabaseMain, "main")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -806,7 +806,7 @@ func loadSecretKeyRouteTableCache(base *corelogic.BaseLogic) tablecache.Loader {
 			return nil, errors.Tag(err)
 		}
 		// 秘钥路由缓存回源主库，确保启停状态和灰度配置即时生效。
-		writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
+		writeDB, err := TableCacheWriteDB(base, svc.DatabaseMain, "main")
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
@@ -889,7 +889,7 @@ func loadSecretKeyVersionTableCacheRow(base *corelogic.BaseLogic, params tableca
 		return "", "", nil, errors.Tag(err)
 	}
 	// 版本材料缓存回源主库，避免从读库拿到滞后的秘钥文件引用。
-	writeDB, err := tableCacheWriteDB(base, svc.DatabaseMain, "main")
+	writeDB, err := TableCacheWriteDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return "", "", nil, errors.Tag(err)
 	}

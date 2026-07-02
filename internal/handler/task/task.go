@@ -34,7 +34,7 @@ func EnqueueTaskHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.TaskEnqueue, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		var req types.EnqueueTaskReq
 		if err := parseEnqueueTaskReq(r, &req); err != nil {
-			return nil, shared.ParamErrorResult(err)
+			return nil, types.ParamErrorResult(err)
 		}
 		logicObj := tasklogic.NewTaskLogic(r, sCtx)
 		resp := logicObj.EnqueueTask(&req)

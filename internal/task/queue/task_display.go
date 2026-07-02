@@ -6,13 +6,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"admin/common/i18n"
 	keys "admin/common/rediskeys"
 	"admin/helper"
 	"admin/internal/config"
-	"admin/internal/jobs/archive"
-	"admin/internal/jobs/taskreport"
 	"admin/internal/requestctx"
 	taskstats "admin/internal/task/stats"
 
@@ -20,146 +20,223 @@ import (
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
-// taskTypeDescription 返回任务类型中文说明。
-func taskTypeDescription(taskType string) string {
-	switch {
-	case taskType == TypeWorkflowTrigger:
-		return "工作流触发入口任务，由总控台触发工作流时自动入队"
-	case taskType == TypeWorkflowNoop:
-		return "工作流空节点任务，仅用于 DAG 收尾和依赖串联"
-	case taskType == TypeCacheRefreshRequest:
-		return "缓存刷新请求任务，用于把短时间内多次刷新请求聚合"
-	case taskType == TypeCacheRefreshBatch:
-		return "缓存批量刷新任务，真正执行缓存刷新逻辑"
-	case taskType == archive.TaskTypeExecute:
-		return "通用归档执行任务，负责按区间批量写历史表、校验并删除热表"
-	case taskType == taskreport.TaskTypeDailySummary:
-		return "周期任务与工作流运行日报任务，汇总昨日 10 点到今日 10 点的执行情况并发送 Lark 通知"
-	case taskType == "admin:export":
-		return "管理员列表异步导出任务，生成 Excel 并回写进度"
-	case strings.HasPrefix(taskType, "user_tag:"):
-		return "用户标签工作流节点任务，用于用户标签重建、补算与同步"
-	default:
-		return "已注册任务处理器"
+// TaskTypeDisplaySpec 描述任务类型在管理端展示和人工投递时使用的元数据。
+type TaskTypeDisplaySpec struct {
+	TaskType          string // 精确任务类型；与 TaskTypePrefix 二选一
+	TaskTypePrefix    string // 任务类型前缀，用于同类动态任务
+	DescriptionKey    string // 任务类型说明 i18n key
+	UsageHintKey      string // 使用提示 i18n key
+	PayloadExample    string // 推荐人工投递 payload 示例
+	ManualRecommended bool   // 是否推荐人工手动投递
+}
+
+// WorkflowDisplaySpec 描述工作流在管理端展示和人工触发时使用的元数据。
+type WorkflowDisplaySpec struct {
+	Name           string // 工作流名称
+	DescriptionKey string // 工作流说明 i18n key
+	UsageHintKey   string // 使用提示 i18n key
+	TargetsExample string // 目标输入示例
+}
+
+var (
+	taskDisplayMu       sync.RWMutex                       // 保护任务类型和工作流展示元数据注册表
+	taskTypeDisplayMap  = map[string]TaskTypeDisplaySpec{} // 精确任务类型到展示元数据的映射
+	taskTypeDisplayList []TaskTypeDisplaySpec              // 前缀匹配任务类型展示元数据，按注册顺序查找
+	workflowDisplayMap  = map[string]WorkflowDisplaySpec{} // 工作流名称到展示元数据的映射
+)
+
+func init() {
+	RegisterTaskTypeDisplaySpecs(
+		TaskTypeDisplaySpec{
+			TaskType:       TypeWorkflowTrigger,
+			DescriptionKey: i18n.MsgKeyTaskRegistryTypeWorkflowTriggerDesc,
+			UsageHintKey:   i18n.MsgKeyTaskRegistryTypeWorkflowTriggerHint,
+			PayloadExample: fmt.Sprintf("{\n  \"workflowId\": \"wf-demo-001\",\n  \"workflowName\": \"cache.refresh\",\n  \"targets\": [\"%s\"]\n}", fmt.Sprintf(keys.AdminProfile, 1)),
+		},
+		TaskTypeDisplaySpec{
+			TaskType:       TypeWorkflowNoop,
+			DescriptionKey: i18n.MsgKeyTaskRegistryTypeWorkflowNoopDesc,
+			UsageHintKey:   i18n.MsgKeyTaskRegistryTypeWorkflowNoopHint,
+			PayloadExample: "{\n  \"note\": \"finalize\"\n}",
+		},
+		TaskTypeDisplaySpec{
+			TaskType:          TypeCacheRefreshRequest,
+			DescriptionKey:    i18n.MsgKeyTaskRegistryTypeCacheRefreshRequestDesc,
+			UsageHintKey:      i18n.MsgKeyTaskRegistryTypeCacheRefreshRequestHint,
+			PayloadExample:    fmt.Sprintf("{\n  \"operation\": \"manual_refresh\",\n  \"targets\": [\"%s\", \"%s\"]\n}", fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)),
+			ManualRecommended: true,
+		},
+		TaskTypeDisplaySpec{
+			TaskType:       TypeCacheRefreshBatch,
+			DescriptionKey: i18n.MsgKeyTaskRegistryTypeCacheRefreshBatchDesc,
+			UsageHintKey:   i18n.MsgKeyTaskRegistryTypeCacheRefreshBatchHint,
+			PayloadExample: fmt.Sprintf("{\n  \"operation\": \"manual_refresh\",\n  \"targets\": [\"%s\", \"%s\"]\n}", fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)),
+		},
+	)
+	RegisterWorkflowDisplaySpecs(WorkflowDisplaySpec{
+		Name:           WorkflowNameCacheRefresh,
+		DescriptionKey: i18n.MsgKeyTaskRegistryWorkflowCacheRefreshDesc,
+		UsageHintKey:   i18n.MsgKeyTaskRegistryWorkflowCacheRefreshHint,
+		TargetsExample: strings.Join([]string{fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)}, ", "),
+	})
+}
+
+// RegisterTaskTypeDisplaySpecs 注册任务类型展示元数据；重复注册同一任务类型时以后者覆盖。
+func RegisterTaskTypeDisplaySpecs(specs ...TaskTypeDisplaySpec) {
+	taskDisplayMu.Lock()
+	defer taskDisplayMu.Unlock()
+	for _, spec := range specs {
+		spec.TaskType = strings.TrimSpace(spec.TaskType)
+		spec.TaskTypePrefix = strings.TrimSpace(spec.TaskTypePrefix)
+		if spec.TaskType != "" {
+			taskTypeDisplayMap[spec.TaskType] = spec
+			continue
+		}
+		if spec.TaskTypePrefix == "" {
+			continue
+		}
+		replaced := false
+		for idx := range taskTypeDisplayList {
+			if taskTypeDisplayList[idx].TaskTypePrefix == spec.TaskTypePrefix {
+				taskTypeDisplayList[idx] = spec
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			taskTypeDisplayList = append(taskTypeDisplayList, spec)
+		}
 	}
+}
+
+// RegisterWorkflowDisplaySpecs 注册工作流展示元数据；重复注册同一工作流时以后者覆盖。
+func RegisterWorkflowDisplaySpecs(specs ...WorkflowDisplaySpec) {
+	taskDisplayMu.Lock()
+	defer taskDisplayMu.Unlock()
+	for _, spec := range specs {
+		spec.Name = strings.TrimSpace(spec.Name)
+		if spec.Name == "" {
+			continue
+		}
+		workflowDisplayMap[spec.Name] = spec
+	}
+}
+
+// taskTypeDisplaySpec 按精确任务类型优先、前缀兜底读取展示元数据。
+func taskTypeDisplaySpec(taskType string) (TaskTypeDisplaySpec, bool) {
+	taskType = strings.TrimSpace(taskType)
+	taskDisplayMu.RLock()
+	defer taskDisplayMu.RUnlock()
+	if spec, ok := taskTypeDisplayMap[taskType]; ok {
+		return spec, true
+	}
+	for _, spec := range taskTypeDisplayList {
+		if spec.TaskTypePrefix != "" && strings.HasPrefix(taskType, spec.TaskTypePrefix) {
+			return spec, true
+		}
+	}
+	return TaskTypeDisplaySpec{}, false
+}
+
+// workflowDisplaySpec 按工作流名称读取展示元数据。
+func workflowDisplaySpec(name string) (WorkflowDisplaySpec, bool) {
+	name = strings.TrimSpace(name)
+	taskDisplayMu.RLock()
+	defer taskDisplayMu.RUnlock()
+	spec, ok := workflowDisplayMap[name]
+	return spec, ok
+}
+
+// taskTypeDescription 返回默认语言任务类型说明。
+func taskTypeDescription(taskType string) string {
+	return taskTypeDescriptionForLocale(taskType, i18n.LocaleZHCN)
+}
+
+// taskTypeDescriptionForLocale 返回指定语言任务类型说明。
+func taskTypeDescriptionForLocale(taskType string, locale string) string {
+	if spec, ok := taskTypeDisplaySpec(taskType); ok {
+		if description := taskDisplayMessage(spec.DescriptionKey, locale); description != "" {
+			return description
+		}
+	}
+	return i18n.MessageByKey(i18n.MsgKeyTaskRegistryTypeRegisteredDesc, locale)
 }
 
 // taskTypeDisplayName 返回任务类型的人类可读名称，优先用于日志和管理后台展示。
 func taskTypeDisplayName(taskType string) string {
 	description := strings.TrimSpace(taskTypeDescription(strings.TrimSpace(taskType)))
-	if description == "" || description == "已注册任务处理器" {
+	defaultDescription := i18n.MessageByKey(i18n.MsgKeyTaskRegistryTypeRegisteredDesc, i18n.LocaleZHCN)
+	if description == "" || description == defaultDescription {
 		return strings.TrimSpace(taskType)
 	}
 	return description
 }
 
-// taskTypeUsageHint 返回任务类型使用提示。
-func taskTypeUsageHint(taskType string) string {
-	switch {
-	case taskType == TypeWorkflowTrigger:
-		return "通常不建议直接手动投递该类型；优先使用“手动触发工作流”表单。"
-	case taskType == TypeWorkflowNoop:
-		return "仅工作流内部使用，人工投递没有业务意义。"
-	case taskType == TypeCacheRefreshRequest:
-		return "适合少量缓存目标补刷；payload.targets 填缓存目标数组。"
-	case taskType == TypeCacheRefreshBatch:
-		return "该任务通常由聚合器自动生成，不建议人工直接投递。"
-	case taskType == archive.TaskTypeExecute:
-		return "建议通过归档工作流统一触发；单独投递时只适合排障或补跑。"
-	case taskType == taskreport.TaskTypeDailySummary:
-		return "建议由每天 10 点的 task_report.daily_summary 周期任务触发；手工投递可传 windowStart/windowEnd RFC3339 覆盖统计窗口。"
-	case taskType == "admin:export":
-		return "建议优先使用管理员列表页导出入口；手工投递时需提供 jobId、operatorId 和 request。"
-	case strings.HasPrefix(taskType, "user_tag:"):
-		return "该类型通常由用户标签工作流节点内部调度，不建议脱离工作流单独投递。"
-	default:
-		return "投递前请确认后端已为该任务类型注册合法 payload 解析逻辑。"
+// taskTypeUsageHint 返回指定语言任务类型使用提示。
+func taskTypeUsageHint(taskType string, locale string) string {
+	if spec, ok := taskTypeDisplaySpec(taskType); ok {
+		if usageHint := taskDisplayMessage(spec.UsageHintKey, locale); usageHint != "" {
+			return usageHint
+		}
 	}
+	return i18n.MessageByKey(i18n.MsgKeyTaskRegistryTypeDefaultHint, locale)
 }
 
 // taskTypePayloadExample 返回任务类型推荐负载示例。
 func taskTypePayloadExample(taskType string) string {
-	switch {
-	case taskType == TypeWorkflowTrigger:
-		return fmt.Sprintf("{\n  \"workflowId\": \"wf-demo-001\",\n  \"workflowName\": \"cache.refresh\",\n  \"targets\": [\"%s\"]\n}", fmt.Sprintf(keys.AdminProfile, 1))
-	case taskType == TypeWorkflowNoop:
-		return "{\n  \"note\": \"finalize\"\n}"
-	case taskType == TypeCacheRefreshRequest, taskType == TypeCacheRefreshBatch:
-		return fmt.Sprintf("{\n  \"operation\": \"manual_refresh\",\n  \"targets\": [\"%s\", \"%s\"]\n}",
-			fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1))
-	case taskType == archive.TaskTypeExecute:
-		return "{\n  \"targets\": [\"admin_log\"]\n}"
-	case taskType == taskreport.TaskTypeDailySummary:
-		return "{\n  \"windowStart\": \"2026-06-29T10:00:00+08:00\",\n  \"windowEnd\": \"2026-06-30T10:00:00+08:00\"\n}"
-	case taskType == "admin:export":
-		return "{\n  \"jobId\": \"job-demo-001\",\n  \"operatorId\": 1,\n  \"operatorName\": \"admin\",\n  \"request\": {\n    \"username\": \"demo\"\n  }\n}"
-	case strings.HasPrefix(taskType, "user_tag:"):
-		return "{\n  \"mode\": \"targeted\",\n  \"targets\": [\"uid=10001\"],\n  \"uids\": [10001],\n  \"tagTypes\": [2, 3]\n}"
-	default:
-		return "{\n  \"demo\": true\n}"
+	if spec, ok := taskTypeDisplaySpec(taskType); ok && strings.TrimSpace(spec.PayloadExample) != "" {
+		return strings.TrimSpace(spec.PayloadExample)
 	}
+	return "{\n  \"demo\": true\n}"
 }
 
 // taskTypeManualRecommended 返回当前任务类型是否适合在总控台人工直接投递。
 func taskTypeManualRecommended(taskType string) bool {
-	switch {
-	case taskType == TypeCacheRefreshRequest:
-		return true
-	case taskType == "admin:export":
-		return true
-	case taskType == taskreport.TaskTypeDailySummary:
-		return true
-	default:
-		return false
+	if spec, ok := taskTypeDisplaySpec(taskType); ok {
+		return spec.ManualRecommended
 	}
+	return false
 }
 
-// workflowUsageHint 返回工作流使用提示。
-func workflowUsageHint(name string) string {
-	switch name {
-	case WorkflowNameCacheRefresh:
-		return "适合按目标列表触发缓存刷新；targets 可填写缓存目标或页面带入的缓存键。"
-	case archive.WorkflowNameRun:
-		return "适合在低峰期批量执行热表归档；targets 可填写 admin_log 等归档任务名。"
-	case taskreport.WorkflowNameDailySummary:
-		return "通常由每天 10 点周期任务触发，发送昨日 10 点到今日 10 点的任务运行日报；手动触发可覆盖统计窗口。"
-	case "user_tag.full.rebuild":
-		return "每日全量重建链路，建议在低峰期执行，避免和日常重算任务叠加。"
-	case "user_tag.delta.refresh":
-		return "用于日常增量刷新用户标签，通常不需要填写 targets。"
-	case "user_tag.targeted.calc":
-		return "用于指定用户补算，必须在 targets 中填写 uid；多维筛选 hash 不能作为用户标签计算来源。"
-	case "user_tag.tag.recalculate":
-		return "用于按标签类型全量重算，建议在 targets 中携带 tagType 或执行标识。"
-	case "user_tag.runtime.cleanup":
-		return "用于机会型清理用户标签运行期辅助表，通常由周期任务触发，不需要填写 targets。"
-	case "user_tag.event_outbox.retry_scan":
-		return "用于周期扫描并重派用户标签事件 outbox 异常数据，通常由周期任务触发，不需要填写 targets。"
-	default:
-		return "触发前请确认执行目标和默认队列是否符合当前环境。"
+// workflowDescription 返回指定语言工作流说明。
+func workflowDescription(name string, fallback string, locale string) string {
+	if spec, ok := workflowDisplaySpec(name); ok {
+		if description := taskDisplayMessage(spec.DescriptionKey, locale); description != "" {
+			return description
+		}
 	}
+	return strings.TrimSpace(fallback)
+}
+
+// workflowUsageHint 返回指定语言工作流使用提示。
+func workflowUsageHint(name string, locale string) string {
+	if spec, ok := workflowDisplaySpec(name); ok {
+		if usageHint := taskDisplayMessage(spec.UsageHintKey, locale); usageHint != "" {
+			return usageHint
+		}
+	}
+	return i18n.MessageByKey(i18n.MsgKeyTaskRegistryWorkflowDefaultHint, locale)
+}
+
+// taskDisplayMessage 通过统一语言包解析前端可见的任务注册表文案。
+func taskDisplayMessage(key string, locale string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	text := strings.TrimSpace(i18n.MessageByKey(key, locale))
+	if text == "" || text == key {
+		return ""
+	}
+	return text
 }
 
 // workflowTargetsExample 返回工作流执行目标填写示例。
 func workflowTargetsExample(name string) string {
-	switch name {
-	case WorkflowNameCacheRefresh:
-		return strings.Join([]string{fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)}, ", ")
-	case archive.WorkflowNameRun:
-		return "admin_log"
-	case taskreport.WorkflowNameDailySummary:
-		return ""
-	case "user_tag.targeted.calc":
-		return "uid:10001, uid:10002"
-	case "user_tag.tag.recalculate":
-		return "tagType:2, tagType:3"
-	case "user_tag.runtime.cleanup":
-		return ""
-	case "user_tag.event_outbox.retry_scan":
-		return ""
-	default:
-		return ""
+	if spec, ok := workflowDisplaySpec(name); ok {
+		return strings.TrimSpace(spec.TargetsExample)
 	}
+	return ""
 }
 
 // workflowTriggerTaskName 返回工作流触发入口任务的展示名称。

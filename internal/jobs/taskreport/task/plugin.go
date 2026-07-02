@@ -6,16 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"admin/internal/config"
-	"admin/internal/infra/larkx"
 	"admin/internal/jobs/taskreport"
 	"admin/internal/svc"
 	queue "admin/internal/task/queue"
-	taskstats "admin/internal/task/stats"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
-	"github.com/zeromicro/go-zero/core/logx"
 )
 
 const (
@@ -52,18 +48,17 @@ func Setup(runtime Runtime) error {
 		if err != nil {
 			return errors.Tag(err)
 		}
-		report, err := runtime.Manager().BuildTaskDailyReport(ctx, queue.TaskDailyReportRequest{
+		report, err := taskreport.NewService(runtime.Manager()).Build(ctx, taskreport.ReportRequest{
 			WindowStart: start,
 			WindowEnd:   end,
 			GeneratedAt: time.Now(),
 		})
 		if err != nil {
-			taskstats.RecordError(ctx, taskstats.JoinDetailName(taskreport.TraceNameDailySummary, taskstats.DetailPartRows), 1)
+			taskreport.RecordBuildError(ctx)
 			return errors.Wrap(err, "生成任务运行日报失败")
 		}
-		recordReportTrace(ctx, report)
-		if err := sendReport(ctx, runtime.ServiceContext(), report); err != nil {
-			taskstats.RecordError(ctx, taskstats.JoinDetailName(taskreport.TraceNameDailySummary, "lark"), 1)
+		taskreport.RecordReportTrace(ctx, report)
+		if err := taskreport.SendLarkReport(ctx, runtime.ServiceContext(), report); err != nil {
 			return errors.Tag(err)
 		}
 		return nil
@@ -73,6 +68,7 @@ func Setup(runtime Runtime) error {
 	return runtime.RegisterWorkflow(dailySummaryWorkflow())
 }
 
+// decodePayload 解析任务载荷；空载荷使用默认日报窗口。
 func decodePayload(task *asynq.Task) (taskreport.TaskPayload, error) {
 	var payload taskreport.TaskPayload
 	if task == nil || len(task.Payload()) == 0 {
@@ -84,9 +80,10 @@ func decodePayload(task *asynq.Task) (taskreport.TaskPayload, error) {
 	return payload, nil
 }
 
+// resolveReportWindow 解析手动窗口，并限制最大回看范围。
 func resolveReportWindow(payload taskreport.TaskPayload) (time.Time, time.Time, error) {
 	now := time.Now()
-	start, end := queue.TaskDailyReportWindow(now)
+	start, end := taskreport.Window(now)
 	var err error
 	if strings.TrimSpace(payload.WindowStart) != "" {
 		start, err = time.Parse(time.RFC3339, strings.TrimSpace(payload.WindowStart))
@@ -109,148 +106,11 @@ func resolveReportWindow(payload taskreport.TaskPayload) (time.Time, time.Time, 
 	return start, end, nil
 }
 
-func sendReport(ctx context.Context, svcCtx *svc.ServiceContext, report queue.TaskDailyReport) error {
-	if svcCtx == nil {
-		return nil
-	}
-	cfg := svcCtx.CurrentConfig()
-	notifier, err := larkx.New(cfg.Alert.Lark)
-	if err != nil {
-		return errors.Wrap(err, "初始化 Lark 日报通知失败")
-	}
-	if notifier == nil {
-		logx.WithContext(ctx).Info("Lark 日报通知未启用，跳过任务运行日报发送")
-		return nil
-	}
-	// 发送外部通知使用独立背景上下文，避免任务收尾 deadline 截断 HTTP 请求。
-	if err := notifier.SendTaskDailyReport(context.Background(), toLarkReport(cfg, report)); err != nil {
-		return errors.Wrap(err, "发送任务运行日报 Lark 通知失败")
-	}
-	return nil
-}
-
-func toLarkReport(cfg config.Config, report queue.TaskDailyReport) larkx.TaskDailyReport {
-	result := larkx.TaskDailyReport{
-		ServiceName:           strings.TrimSpace(cfg.Observability.ServiceName),
-		Environment:           strings.TrimSpace(cfg.Observability.Environment),
-		AppID:                 strings.TrimSpace(cfg.AppID),
-		WindowStart:           report.WindowStart,
-		WindowEnd:             report.WindowEnd,
-		GeneratedAt:           report.GeneratedAt,
-		TotalTaskExecutions:   report.TotalTaskExecutions,
-		SuccessTaskExecutions: report.SuccessTaskExecutions,
-		FailedTaskExecutions:  report.FailedTaskExecutions,
-		PeriodicTriggerTotal:  report.PeriodicTriggerTotal,
-		PeriodicTriggerOK:     report.PeriodicTriggerOK,
-		PeriodicTriggerFailed: report.PeriodicTriggerFailed,
-		NodeTaskTotal:         report.NodeTaskTotal,
-		WorkflowTotal:         report.WorkflowTotal,
-		WorkflowSuccess:       report.WorkflowSuccess,
-		WorkflowFailed:        report.WorkflowFailed,
-		WorkflowRunning:       report.WorkflowRunning,
-		WorkflowUnknown:       report.WorkflowUnknown,
-		TraceTotalCount:       report.TraceTotalCount,
-		TraceReadCount:        report.TraceReadCount,
-		TraceWriteCount:       report.TraceWriteCount,
-		TraceDeleteCount:      report.TraceDeleteCount,
-		TraceErrorCount:       report.TraceErrorCount,
-		AverageDurationMS:     report.AverageDurationMS,
-		MaxDurationMS:         report.MaxDurationMS,
-		Truncated:             report.Truncated,
-		RetentionWarning:      strings.TrimSpace(report.RetentionWarning),
-	}
-	if result.ServiceName == "" {
-		result.ServiceName = strings.TrimSpace(cfg.Name)
-	}
-	if result.Environment == "" {
-		result.Environment = strings.TrimSpace(cfg.Mode)
-	}
-	result.Queues = make([]larkx.TaskDailyReportQueue, 0, len(report.QueueSummaries))
-	for _, item := range report.QueueSummaries {
-		result.Queues = append(result.Queues, larkx.TaskDailyReportQueue{
-			Name:           item.Name,
-			TaskExecutions: item.TaskExecutions,
-			Success:        item.Success,
-			Failed:         item.Failed,
-			Triggers:       item.Triggers,
-			NodeTasks:      item.NodeTasks,
-			Pending:        item.Pending,
-			Active:         item.Active,
-			Scheduled:      item.Scheduled,
-			Retry:          item.Retry,
-			Archived:       item.Archived,
-		})
-	}
-	result.PeriodicTasks = make([]larkx.TaskDailyReportItem, 0, len(report.PeriodicTasks))
-	for _, item := range report.PeriodicTasks {
-		result.PeriodicTasks = append(result.PeriodicTasks, larkx.TaskDailyReportItem{
-			Name:           item.Name,
-			Related:        item.WorkflowName,
-			Queue:          item.Queue,
-			TaskExecutions: item.TaskExecutions,
-			Triggers:       item.Triggers,
-			NodeTasks:      item.NodeTasks,
-			Success:        item.Success,
-			Failed:         item.Failed,
-			AverageMS:      item.AverageMS,
-			MaxMS:          item.MaxMS,
-			LastAt:         item.LastAt,
-		})
-	}
-	result.Workflows = make([]larkx.TaskDailyReportItem, 0, len(report.Workflows))
-	for _, item := range report.Workflows {
-		result.Workflows = append(result.Workflows, larkx.TaskDailyReportItem{
-			Name:           item.Name,
-			Related:        item.Periodic,
-			Queue:          item.Queue,
-			TaskExecutions: item.Total,
-			NodeTasks:      item.NodeTasks,
-			Success:        item.Success,
-			Failed:         item.Failed,
-			Running:        item.Running,
-			Unknown:        item.Unknown,
-			AverageMS:      item.AverageMS,
-			MaxMS:          item.MaxMS,
-			LastAt:         item.LastAt,
-		})
-	}
-	result.FailureTasks = toLarkReportTasks(report.FailureTasks)
-	result.SlowTasks = toLarkReportTasks(report.SlowTasks)
-	return result
-}
-
-func toLarkReportTasks(items []queue.TaskDailyReportTask) []larkx.TaskDailyReportTask {
-	result := make([]larkx.TaskDailyReportTask, 0, len(items))
-	for _, item := range items {
-		result = append(result, larkx.TaskDailyReportTask{
-			ID:           item.ID,
-			Name:         item.Name,
-			Type:         item.Type,
-			State:        item.State,
-			Queue:        item.Queue,
-			PeriodicName: item.PeriodicName,
-			WorkflowID:   item.WorkflowID,
-			WorkflowName: item.WorkflowName,
-			WorkflowNode: item.WorkflowNode,
-			StartedAt:    item.StartedAt,
-			FinishedAt:   item.FinishedAt,
-			DurationMS:   item.DurationMS,
-			Error:        item.Error,
-		})
-	}
-	return result
-}
-
-func recordReportTrace(ctx context.Context, report queue.TaskDailyReport) {
-	taskstats.RecordRead(ctx, taskstats.JoinDetailName(taskreport.TraceNameDailySummary, "task_executions"), int64(report.TotalTaskExecutions))
-	taskstats.RecordRead(ctx, taskstats.JoinDetailName(taskreport.TraceNameDailySummary, "workflow_instances"), int64(report.WorkflowTotal))
-	taskstats.RecordError(ctx, taskstats.JoinDetailName(taskreport.TraceNameDailySummary, "failed_tasks"), int64(report.FailedTaskExecutions))
-}
-
+// dailySummaryWorkflow 构造任务运行日报工作流定义。
 func dailySummaryWorkflow() *queue.WorkflowDefinition {
 	return &queue.WorkflowDefinition{
 		Name:         taskreport.WorkflowNameDailySummary,
-		Description:  "周期任务与工作流运行日报工作流，按固定窗口聚合任务执行、失败、慢任务和队列状态",
+		Description:  "周期任务与工作流运行日报工作流，按统计窗口聚合任务执行、失败、慢任务和队列状态",
 		DefaultQueue: queue.QueueMaintenance,
 		Nodes: map[string]*queue.WorkflowNodeDefinition{
 			taskreport.NodeDailySummary: {

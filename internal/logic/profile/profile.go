@@ -82,7 +82,7 @@ func (l *ProfileLogic) Mine() *types.BizResult {
 	if err != nil {
 		return l.adminFetchErrorResult("ProfileLogic.Mine", err)
 	}
-	info, err := l.BuildProfileInfo(admin, l.AccessToken())
+	info, err := securitylogic.NewSecurityLogic(l.Ctx, l.Svc).BuildProfileInfo(admin, l.AccessToken())
 	if err != nil {
 		return types.NewBizResult(codes.ServerError).
 			SetI18nMessage(i18n.MsgKeyInternalError).
@@ -608,11 +608,6 @@ func (l *ProfileLogic) resolveEnableMFASecret(admin *model.Admin, requestSecret 
 	default:
 		return "", securitylogic.ErrAdminMFATwoStepExpired
 	}
-}
-
-// BuildProfileInfo 构造前端用户资料。
-func (l *ProfileLogic) BuildProfileInfo(admin *model.Admin, token string) (*types.ProfileInfo, error) {
-	return securitylogic.NewSecurityLogic(l.Ctx, l.Svc).BuildProfileInfo(admin, token)
 }
 
 // requireScenarioTwoStep 在当前场景需要 MFA 时校验二次校验票据。

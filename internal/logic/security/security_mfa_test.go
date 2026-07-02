@@ -37,9 +37,9 @@ func TestEncryptDecryptAdminMFASecret(t *testing.T) {
 	logicObj := newTestSecurityLogic()
 	plain := "JBSWY3DPEHPK3PXP"
 
-	cipherText, err := logicObj.encryptAdminMFASecret(plain)
+	cipherText, err := logicObj.EncryptAdminMFASecret(plain)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
 	if cipherText == plain {
 		t.Fatalf("cipher text should not equal plain text")
@@ -62,9 +62,9 @@ func TestVerifyMFACodeWithEncryptedSecret(t *testing.T) {
 	logicObj := newTestSecurityLogic()
 	plain := "JBSWY3DPEHPK3PXP"
 
-	cipherText, err := logicObj.encryptAdminMFASecret(plain)
+	cipherText, err := logicObj.EncryptAdminMFASecret(plain)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
 
 	code, err := totp.GenerateCodeCustom(plain, time.Now(), totp.ValidateOpts{
@@ -92,9 +92,9 @@ func TestVerifyMFACodeWithEncryptedSecret(t *testing.T) {
 func TestBuildAdminMFAURLUsesMicrosoftAuthenticatorFormat(t *testing.T) {
 	logicObj := newTestSecurityLogicWithAppID("102")
 	plain := "RCABDVITFNQJJ4VJ"
-	cipherText, err := logicObj.encryptAdminMFASecret(plain)
+	cipherText, err := logicObj.EncryptAdminMFASecret(plain)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
 	admin := &model.Admin{
 		ID:           9,
@@ -131,9 +131,9 @@ func TestBuildAdminMFAURLUsesDefaultIssuerWithAppID(t *testing.T) {
 func TestBuildFreshAdminMFAURLKeepsDatabaseSecret(t *testing.T) {
 	logicObj := newTestSecurityLogic()
 	oldSecret := "RCABDVITFNQJJ4VJ"
-	oldCipher, err := logicObj.encryptAdminMFASecret(oldSecret)
+	oldCipher, err := logicObj.EncryptAdminMFASecret(oldSecret)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
 	admin := &model.Admin{
 		ID:           9,
@@ -162,9 +162,9 @@ func TestVerifyBindingMFACodeUsesRequestSecret(t *testing.T) {
 	logicObj := newTestSecurityLogic()
 	oldSecret := "RCABDVITFNQJJ4VJ"
 	requestSecret := "JBSWY3DPEHPK3PXP"
-	oldCipher, err := logicObj.encryptAdminMFASecret(oldSecret)
+	oldCipher, err := logicObj.EncryptAdminMFASecret(oldSecret)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret old secret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret old secret failed: %v", err)
 	}
 	admin := &model.Admin{
 		ID:           9,
@@ -191,7 +191,7 @@ func TestVerifyBindingMFACodeUsesRequestSecret(t *testing.T) {
 	if verifyResult.SecretSource != mfaTwoStepSecretSourceRequest {
 		t.Fatalf("VerifyBindingMFACodeDetail secret source = %q, want %q", verifyResult.SecretSource, mfaTwoStepSecretSourceRequest)
 	}
-	if verifyResult.SecretDigest != hashMFASecret(requestSecret) {
+	if verifyResult.SecretDigest != HashMFASecret(requestSecret) {
 		t.Fatalf("VerifyBindingMFACodeDetail secret digest mismatch, got %q", verifyResult.SecretDigest)
 	}
 	if err := logicObj.VerifyMFACode(admin, code); err != ErrAdminMFACodeInvalid {
@@ -228,7 +228,7 @@ func TestVerifyBindingMFACodeAllowsRequestSecretWhenEnabledSecretMissing(t *test
 	if verifyResult.SecretSource != mfaTwoStepSecretSourceRequest {
 		t.Fatalf("VerifyBindingMFACodeDetail secret source = %q, want %q", verifyResult.SecretSource, mfaTwoStepSecretSourceRequest)
 	}
-	if verifyResult.SecretDigest != hashMFASecret(requestSecret) {
+	if verifyResult.SecretDigest != HashMFASecret(requestSecret) {
 		t.Fatalf("VerifyBindingMFACodeDetail secret digest mismatch, got %q", verifyResult.SecretDigest)
 	}
 }
@@ -238,9 +238,9 @@ func TestVerifyBindingMFACodeFallsBackToCurrentSecret(t *testing.T) {
 	logicObj := newTestSecurityLogic()
 	currentSecret := "RCABDVITFNQJJ4VJ"
 	requestSecret := "JBSWY3DPEHPK3PXP"
-	currentCipher, err := logicObj.encryptAdminMFASecret(currentSecret)
+	currentCipher, err := logicObj.EncryptAdminMFASecret(currentSecret)
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret current secret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret current secret failed: %v", err)
 	}
 	admin := &model.Admin{
 		ID:           10,
@@ -267,7 +267,7 @@ func TestVerifyBindingMFACodeFallsBackToCurrentSecret(t *testing.T) {
 	if verifyResult.SecretSource != mfaTwoStepSecretSourceCurrent {
 		t.Fatalf("VerifyBindingMFACodeDetail secret source = %q, want %q", verifyResult.SecretSource, mfaTwoStepSecretSourceCurrent)
 	}
-	if verifyResult.SecretDigest != hashMFASecret(currentSecret) {
+	if verifyResult.SecretDigest != HashMFASecret(currentSecret) {
 		t.Fatalf("VerifyBindingMFACodeDetail secret digest mismatch, got %q", verifyResult.SecretDigest)
 	}
 }
@@ -280,7 +280,7 @@ func TestConsumeMFATwoStepTicketPreservesVerifyResult(t *testing.T) {
 	logicObj.Svc.Rds = client
 	verifyResult := &mfaBindingVerifyResult{
 		SecretSource: mfaTwoStepSecretSourceRequest,
-		SecretDigest: hashMFASecret("JBSWY3DPEHPK3PXP"),
+		SecretDigest: HashMFASecret("JBSWY3DPEHPK3PXP"),
 	}
 	twoStep, err := logicObj.IssueMFATwoStepTicketWithVerifyResult(99, MFAScenarioStatus, verifyResult)
 	if err != nil {
@@ -437,9 +437,9 @@ func TestCheckAdminMFAToleratesOneSecondSkew(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a", AppKey: "unit-test-app-key"}, svc.Dependencies{Rds: client})
 	logicObj := NewSecurityLogic(context.Background(), svcCtx)
-	cipherText, err := logicObj.encryptAdminMFASecret("JBSWY3DPEHPK3PXP")
+	cipherText, err := logicObj.EncryptAdminMFASecret("JBSWY3DPEHPK3PXP")
 	if err != nil {
-		t.Fatalf("encryptAdminMFASecret failed: %v", err)
+		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
 	}
 	lastLoginTime := time.Unix(1_777_613_352, 0)
 	admin := &model.Admin{

@@ -116,10 +116,11 @@ func (m *Manager) listTaskInfoPage(ctx context.Context, internalQueue string, in
 	if err != nil {
 		return nil, 0, errors.Tag(err)
 	}
-	total := int64(len(items))
-	if info, qerr := m.inspector.GetQueueInfo(internalQueue); qerr == nil {
-		total = queueInfoTotalByState(info, state)
+	info, qerr := m.inspector.GetQueueInfo(internalQueue)
+	if qerr != nil {
+		return nil, 0, errors.Tag(qerr)
 	}
+	total := queueInfoTotalByState(info, state)
 	return items, total, nil
 }
 
@@ -164,7 +165,7 @@ func (m *Manager) listDescZSetTaskInfoPage(ctx context.Context, internalQueue st
 			Count:  int64(pageSize),
 		}).Result()
 	} else {
-		total, err = m.taskTotalByState(internalQueue, state)
+		total, err = m.redis.ZCard(ctx, key).Result()
 		if err != nil {
 			return nil, 0, errors.Tag(err)
 		}
@@ -179,9 +180,6 @@ func (m *Manager) listDescZSetTaskInfoPage(ctx context.Context, internalQueue st
 	items := make([]*asynq.TaskInfo, 0, len(ids))
 	for _, id := range ids {
 		taskInfo, infoErr := m.inspector.GetTaskInfo(internalQueue, id)
-		if errors.Is(infoErr, asynq.ErrTaskNotFound) {
-			continue
-		}
 		if infoErr != nil {
 			return nil, 0, errors.Tag(infoErr)
 		}
@@ -218,15 +216,6 @@ func descZSetScoreRange(state string, timeRange taskListTimeRange, retention tim
 	return minScore, maxScore, true
 }
 
-// taskTotalByState 返回队列中指定状态的任务总数。
-func (m *Manager) taskTotalByState(internalQueue string, state string) (int64, error) {
-	info, err := m.inspector.GetQueueInfo(internalQueue)
-	if err != nil {
-		return 0, errors.Tag(err)
-	}
-	return queueInfoTotalByState(info, state), nil
-}
-
 // listScheduledTaskInfoPage 按计划执行时间倒序读取 scheduled 任务。
 // Asynq Inspector 的 ListScheduledTasks 固定按 NextProcessAt 升序且没有公开倒序选项，因此这里只对 scheduled 使用 zset 倒序取 ID，再复用 Inspector 装配任务详情。
 func (m *Manager) listScheduledTaskInfoPage(ctx context.Context, internalQueue string, page int, pageSize int, timeRange taskListTimeRange) ([]*asynq.TaskInfo, int64, error) {
@@ -247,9 +236,6 @@ func (m *Manager) listScheduledTaskInfoPage(ctx context.Context, internalQueue s
 	items := make([]*asynq.TaskInfo, 0, len(ids))
 	for _, id := range ids {
 		taskInfo, infoErr := m.inspector.GetTaskInfo(internalQueue, id)
-		if errors.Is(infoErr, asynq.ErrTaskNotFound) {
-			continue
-		}
 		if infoErr != nil {
 			return nil, 0, errors.Tag(infoErr)
 		}

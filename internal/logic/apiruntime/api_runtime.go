@@ -18,6 +18,7 @@ import (
 	"admin/internal/config"
 	adminlogic "admin/internal/logic/admin"
 	securitylogic "admin/internal/logic/security"
+	"admin/internal/requestctx"
 	"admin/internal/svc"
 	"admin/internal/types"
 )
@@ -134,7 +135,7 @@ func (l *Logic) Status() *types.BizResult {
 	if err != nil {
 		return types.NewBizResult(codes.Success).
 			SetI18nMessage(i18n.MsgKeyQuerySuccess).
-			WithData(&types.APIRuntimeConfigReloadResp{Connected: false, Message: err.Error()})
+			WithData(&types.APIRuntimeConfigReloadResp{Connected: false, Message: l.Message(i18n.MsgKeyAPIRuntimeNotConfigured)})
 	}
 	status, err := client.ConfigReloadStatus(l.Ctx)
 	if err != nil {
@@ -142,7 +143,7 @@ func (l *Logic) Status() *types.BizResult {
 	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(&types.APIRuntimeConfigReloadResp{Connected: true, Status: status, Message: "API 热加载状态已获取"})
+		WithData(&types.APIRuntimeConfigReloadResp{Connected: true, Status: status, Message: l.Message(i18n.MsgKeyAPIRuntimeStatusFetched)})
 }
 
 // Items 查询 API 当前运行态配置项。
@@ -157,7 +158,7 @@ func (l *Logic) Items(req *types.TaskConfigItemQueryReq) *types.BizResult {
 	if err != nil {
 		return types.NewBizResult(codes.Success).
 			SetI18nMessage(i18n.MsgKeyQuerySuccess).
-			WithData(&types.APIRuntimeConfigItemsResp{Connected: false, Message: err.Error()})
+			WithData(&types.APIRuntimeConfigItemsResp{Connected: false, Message: l.Message(i18n.MsgKeyAPIRuntimeNotConfigured)})
 	}
 	items, err := client.ConfigReloadItems(l.Ctx, req)
 	if err != nil {
@@ -165,7 +166,7 @@ func (l *Logic) Items(req *types.TaskConfigItemQueryReq) *types.BizResult {
 	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(&types.APIRuntimeConfigItemsResp{Connected: true, Items: items, Message: "API 运行态配置项已获取"})
+		WithData(&types.APIRuntimeConfigItemsResp{Connected: true, Items: items, Message: l.Message(i18n.MsgKeyAPIRuntimeItemsFetched)})
 }
 
 // Reload 手动触发 API 配置热加载。
@@ -185,7 +186,7 @@ func (l *Logic) Reload(req *types.APIRuntimeConfigReloadReq) *types.BizResult {
 	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess).
-		WithData(&types.APIRuntimeConfigReloadResp{Connected: true, Status: status, Message: "API 热加载已触发"})
+		WithData(&types.APIRuntimeConfigReloadResp{Connected: true, Status: status, Message: l.Message(i18n.MsgKeyAPIRuntimeReloadTriggered)})
 }
 
 // ConfigReloadStatus 查询 API 配置热加载状态。
@@ -244,7 +245,7 @@ func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool
 	}
 	message := data.Message
 	if message == "" {
-		message = "API 运行态已同步"
+		message = i18n.MessageByKey(i18n.MsgKeyAPIRuntimeSyncSuccess, localeFromContext(ctx))
 	}
 	return &types.UserRuntimeSyncResp{
 		Enabled:                 true,
@@ -346,8 +347,19 @@ func buildAPIRequest(ctx context.Context, c *Client, method string, path string,
 		return nil, errors.Wrap(err, "创建 API 内网请求失败")
 	}
 	req.Header.Set(apiRuntimeOpsTokenHeader, c.token)
+	if locale := localeFromContext(ctx); locale != "" {
+		req.Header.Set("Accept-Language", locale)
+	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return req, nil
+}
+
+// localeFromContext 读取当前请求语言，用于 admin 代理 API 内网接口时透传多语言偏好。
+func localeFromContext(ctx context.Context) string {
+	if meta := requestctx.FromContext(ctx); meta != nil && meta.Locale != "" {
+		return meta.Locale
+	}
+	return i18n.LocaleZHCN
 }

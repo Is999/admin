@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	i18n "admin/common/i18n"
 	"admin/internal/config"
 	"admin/internal/types"
 )
@@ -32,6 +33,9 @@ func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 		}
 		if got := r.Header.Get(apiRuntimeOpsTokenHeader); got != "ops-token" {
 			t.Fatalf("%s = %q, want ops-token", apiRuntimeOpsTokenHeader, got)
+		}
+		if got := r.Header.Get("Accept-Language"); got != i18n.LocaleZHCN {
+			t.Fatalf("Accept-Language = %q, want %q", got, i18n.LocaleZHCN)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
 			t.Fatalf("Decode payload failed: %v", err)

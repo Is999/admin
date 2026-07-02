@@ -139,6 +139,8 @@ const (
 	MsgKeyTemplateNotFound = "biz.template_not_found"
 	// MsgKeyConfigNotFound 表示系统配置不存在的文案 key。
 	MsgKeyConfigNotFound = "biz.config_not_found"
+	// MsgKeyConfigVersionConflict 表示系统配置已被并发修改的文案 key。
+	MsgKeyConfigVersionConflict = "config.version_conflict"
 	// MsgKeyCacheKeyNotFound 表示缓存 key 不存在的文案 key。
 	MsgKeyCacheKeyNotFound = "cache.key_not_found"
 	// MsgKeyLogoutSuccess 表示登出成功的认证文案 key。
@@ -207,6 +209,168 @@ const (
 	MsgKeyTaskResumeFail = "task.resume_fail"
 	// MsgKeyTaskDuplicate 表示任务重复触发的文案 key。
 	MsgKeyTaskDuplicate = "task.duplicate"
+	// MsgKeyTaskRegistryTypeRegisteredDesc 表示任务注册表默认任务类型说明 key。
+	MsgKeyTaskRegistryTypeRegisteredDesc = "task.registry.type.registered.desc"
+	// MsgKeyTaskRegistryTypeDefaultHint 表示任务注册表默认任务类型使用提示 key。
+	MsgKeyTaskRegistryTypeDefaultHint = "task.registry.type.default.hint"
+	// MsgKeyTaskRegistryTypeWorkflowTriggerDesc 表示工作流触发入口任务说明 key。
+	MsgKeyTaskRegistryTypeWorkflowTriggerDesc = "task.registry.type.workflow_trigger.desc"
+	// MsgKeyTaskRegistryTypeWorkflowTriggerHint 表示工作流触发入口任务使用提示 key。
+	MsgKeyTaskRegistryTypeWorkflowTriggerHint = "task.registry.type.workflow_trigger.hint"
+	// MsgKeyTaskRegistryTypeWorkflowNoopDesc 表示工作流空节点任务说明 key。
+	MsgKeyTaskRegistryTypeWorkflowNoopDesc = "task.registry.type.workflow_noop.desc"
+	// MsgKeyTaskRegistryTypeWorkflowNoopHint 表示工作流空节点任务使用提示 key。
+	MsgKeyTaskRegistryTypeWorkflowNoopHint = "task.registry.type.workflow_noop.hint"
+	// MsgKeyTaskRegistryTypeCacheRefreshRequestDesc 表示缓存刷新请求任务说明 key。
+	MsgKeyTaskRegistryTypeCacheRefreshRequestDesc = "task.registry.type.cache_refresh_request.desc"
+	// MsgKeyTaskRegistryTypeCacheRefreshRequestHint 表示缓存刷新请求任务使用提示 key。
+	MsgKeyTaskRegistryTypeCacheRefreshRequestHint = "task.registry.type.cache_refresh_request.hint"
+	// MsgKeyTaskRegistryTypeCacheRefreshBatchDesc 表示缓存刷新批量任务说明 key。
+	MsgKeyTaskRegistryTypeCacheRefreshBatchDesc = "task.registry.type.cache_refresh_batch.desc"
+	// MsgKeyTaskRegistryTypeCacheRefreshBatchHint 表示缓存刷新批量任务使用提示 key。
+	MsgKeyTaskRegistryTypeCacheRefreshBatchHint = "task.registry.type.cache_refresh_batch.hint"
+	// MsgKeyTaskRegistryTypeArchiveExecuteDesc 表示归档执行任务说明 key。
+	MsgKeyTaskRegistryTypeArchiveExecuteDesc = "task.registry.type.archive_execute.desc"
+	// MsgKeyTaskRegistryTypeArchiveExecuteHint 表示归档执行任务使用提示 key。
+	MsgKeyTaskRegistryTypeArchiveExecuteHint = "task.registry.type.archive_execute.hint"
+	// MsgKeyTaskRegistryTypeDailySummaryDesc 表示任务运行日报任务说明 key。
+	MsgKeyTaskRegistryTypeDailySummaryDesc = "task.registry.type.daily_summary.desc"
+	// MsgKeyTaskRegistryTypeDailySummaryHint 表示任务运行日报任务使用提示 key。
+	MsgKeyTaskRegistryTypeDailySummaryHint = "task.registry.type.daily_summary.hint"
+	// MsgKeyTaskRegistryTypeAdminExportDesc 表示管理员导出任务说明 key。
+	MsgKeyTaskRegistryTypeAdminExportDesc = "task.registry.type.admin_export.desc"
+	// MsgKeyTaskRegistryTypeAdminExportHint 表示管理员导出任务使用提示 key。
+	MsgKeyTaskRegistryTypeAdminExportHint = "task.registry.type.admin_export.hint"
+	// MsgKeyTaskRegistryTypeUserTagDesc 表示用户标签任务说明 key。
+	MsgKeyTaskRegistryTypeUserTagDesc = "task.registry.type.user_tag.desc"
+	// MsgKeyTaskRegistryTypeUserTagHint 表示用户标签任务使用提示 key。
+	MsgKeyTaskRegistryTypeUserTagHint = "task.registry.type.user_tag.hint"
+	// MsgKeyTaskRegistryWorkflowDefaultHint 表示任务注册表默认工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowDefaultHint = "task.registry.workflow.default.hint"
+	// MsgKeyTaskRegistryWorkflowCacheRefreshDesc 表示缓存刷新工作流说明 key。
+	MsgKeyTaskRegistryWorkflowCacheRefreshDesc = "task.registry.workflow.cache_refresh.desc"
+	// MsgKeyTaskRegistryWorkflowCacheRefreshHint 表示缓存刷新工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowCacheRefreshHint = "task.registry.workflow.cache_refresh.hint"
+	// MsgKeyTaskRegistryWorkflowArchiveRunDesc 表示归档工作流说明 key。
+	MsgKeyTaskRegistryWorkflowArchiveRunDesc = "task.registry.workflow.archive_run.desc"
+	// MsgKeyTaskRegistryWorkflowArchiveRunHint 表示归档工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowArchiveRunHint = "task.registry.workflow.archive_run.hint"
+	// MsgKeyTaskRegistryWorkflowDailySummaryDesc 表示任务运行日报工作流说明 key。
+	MsgKeyTaskRegistryWorkflowDailySummaryDesc = "task.registry.workflow.daily_summary.desc"
+	// MsgKeyTaskRegistryWorkflowDailySummaryHint 表示任务运行日报工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowDailySummaryHint = "task.registry.workflow.daily_summary.hint"
+	// MsgKeyTaskRegistryWorkflowUserTagFullDesc 表示用户标签全量工作流说明 key。
+	MsgKeyTaskRegistryWorkflowUserTagFullDesc = "task.registry.workflow.user_tag_full.desc"
+	// MsgKeyTaskRegistryWorkflowUserTagFullHint 表示用户标签全量工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowUserTagFullHint = "task.registry.workflow.user_tag_full.hint"
+	// MsgKeyTaskRegistryWorkflowUserTagDeltaDesc 表示用户标签增量工作流说明 key。
+	MsgKeyTaskRegistryWorkflowUserTagDeltaDesc = "task.registry.workflow.user_tag_delta.desc"
+	// MsgKeyTaskRegistryWorkflowUserTagDeltaHint 表示用户标签增量工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowUserTagDeltaHint = "task.registry.workflow.user_tag_delta.hint"
+	// MsgKeyTaskRegistryWorkflowUserTagTargetedDesc 表示用户标签指定用户补算工作流说明 key。
+	MsgKeyTaskRegistryWorkflowUserTagTargetedDesc = "task.registry.workflow.user_tag_targeted.desc"
+	// MsgKeyTaskRegistryWorkflowUserTagTargetedHint 表示用户标签指定用户补算工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowUserTagTargetedHint = "task.registry.workflow.user_tag_targeted.hint"
+	// MsgKeyTaskRegistryWorkflowUserTagRecalculateDesc 表示用户标签重算工作流说明 key。
+	MsgKeyTaskRegistryWorkflowUserTagRecalculateDesc = "task.registry.workflow.user_tag_recalculate.desc"
+	// MsgKeyTaskRegistryWorkflowUserTagRecalculateHint 表示用户标签重算工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowUserTagRecalculateHint = "task.registry.workflow.user_tag_recalculate.hint"
+	// MsgKeyTaskRegistryWorkflowUserTagRuntimeCleanupDesc 表示用户标签运行期清理工作流说明 key。
+	MsgKeyTaskRegistryWorkflowUserTagRuntimeCleanupDesc = "task.registry.workflow.user_tag_runtime_cleanup.desc"
+	// MsgKeyTaskRegistryWorkflowUserTagRuntimeCleanupHint 表示用户标签运行期清理工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowUserTagRuntimeCleanupHint = "task.registry.workflow.user_tag_runtime_cleanup.hint"
+	// MsgKeyTaskRegistryWorkflowUserTagOutboxRetryDesc 表示用户标签 outbox 重派工作流说明 key。
+	MsgKeyTaskRegistryWorkflowUserTagOutboxRetryDesc = "task.registry.workflow.user_tag_outbox_retry.desc"
+	// MsgKeyTaskRegistryWorkflowUserTagOutboxRetryHint 表示用户标签 outbox 重派工作流使用提示 key。
+	MsgKeyTaskRegistryWorkflowUserTagOutboxRetryHint = "task.registry.workflow.user_tag_outbox_retry.hint"
+	// MsgKeyTaskReportRetentionWarning 表示任务运行日报 completed 保留期不足提示 key。
+	MsgKeyTaskReportRetentionWarning = "task.report.retention_warning"
+	// MsgKeyHotReloadFailed 表示配置热加载失败状态说明 key。
+	MsgKeyHotReloadFailed = "hot_reload.failed"
+	// MsgKeyHotReloadFingerprintInitFailed 表示初始化配置指纹失败状态说明 key。
+	MsgKeyHotReloadFingerprintInitFailed = "hot_reload.fingerprint_init_failed"
+	// MsgKeyHotReloadFingerprintReadFailed 表示读取配置指纹失败状态说明 key。
+	MsgKeyHotReloadFingerprintReadFailed = "hot_reload.fingerprint_read_failed"
+	// MsgKeyHotReloadFileStatusReadFailed 表示读取配置文件状态失败说明 key。
+	MsgKeyHotReloadFileStatusReadFailed = "hot_reload.file_status_read_failed"
+	// MsgKeyHotReloadNotBound 表示配置热加载未绑定文件说明 key。
+	MsgKeyHotReloadNotBound = "hot_reload.not_bound"
+	// MsgKeyHotReloadCancelled 表示配置热加载被取消说明 key。
+	MsgKeyHotReloadCancelled = "hot_reload.cancelled"
+	// MsgKeyHotReloadRuntimeConfigLoadFailed 表示加载运行配置失败说明 key。
+	MsgKeyHotReloadRuntimeConfigLoadFailed = "hot_reload.runtime_config_load_failed"
+	// MsgKeyHotReloadManualFailed 表示手动触发热加载失败说明 key。
+	MsgKeyHotReloadManualFailed = "hot_reload.manual_failed"
+	// MsgKeyHotReloadSuccess 表示配置热加载成功说明 key。
+	MsgKeyHotReloadSuccess = "hot_reload.success"
+	// MsgKeyHotReloadSuccessRestart 表示热加载成功但需重启说明 key。
+	MsgKeyHotReloadSuccessRestart = "hot_reload.success_restart"
+	// MsgKeyHotReloadUnchanged 表示配置无变化说明 key。
+	MsgKeyHotReloadUnchanged = "hot_reload.unchanged"
+	// MsgKeyHotReloadWatcherNotStarted 表示热加载 watcher 未启动说明 key。
+	MsgKeyHotReloadWatcherNotStarted = "hot_reload.watcher_not_started"
+	// MsgKeyHotReloadWatcherRunning 表示热加载 watcher 运行中说明 key。
+	MsgKeyHotReloadWatcherRunning = "hot_reload.watcher_running"
+	// MsgKeyHotReloadWatcherClosed 表示热加载 watcher 已关闭说明 key。
+	MsgKeyHotReloadWatcherClosed = "hot_reload.watcher_closed"
+	// MsgKeyHotReloadWatcherStopped 表示热加载 watcher 已停止说明 key。
+	MsgKeyHotReloadWatcherStopped = "hot_reload.watcher_stopped"
+	// MsgKeySchedulerDisabled 表示周期调度器未启用说明 key。
+	MsgKeySchedulerDisabled = "scheduler.disabled"
+	// MsgKeySchedulerTaskDisabled 表示任务系统关闭导致调度器未启动说明 key。
+	MsgKeySchedulerTaskDisabled = "scheduler.task_disabled"
+	// MsgKeySchedulerNotStarted 表示周期调度器尚未启动说明 key。
+	MsgKeySchedulerNotStarted = "scheduler.not_started"
+	// MsgKeySchedulerNoPeriodicTask 表示未配置有效周期任务说明 key。
+	MsgKeySchedulerNoPeriodicTask = "scheduler.no_periodic_task"
+	// MsgKeySchedulerAlreadyRunning 表示调度器已在运行说明 key。
+	MsgKeySchedulerAlreadyRunning = "scheduler.already_running"
+	// MsgKeySchedulerElectionStarted 表示周期调度器开始竞争 leader 说明 key。
+	MsgKeySchedulerElectionStarted = "scheduler.election_started"
+	// MsgKeySchedulerStopped 表示周期调度器已停止说明 key。
+	MsgKeySchedulerStopped = "scheduler.stopped"
+	// MsgKeySchedulerLeaderAcquired 表示周期调度器已获取 leader 说明 key。
+	MsgKeySchedulerLeaderAcquired = "scheduler.leader_acquired"
+	// MsgKeySchedulerLeaderReleased 表示周期调度器释放 leader 后等待重试说明 key。
+	MsgKeySchedulerLeaderReleased = "scheduler.leader_released"
+	// MsgKeySchedulerSyncSuccess 表示周期任务配置同步成功说明 key。
+	MsgKeySchedulerSyncSuccess = "scheduler.sync_success"
+	// MsgKeySchedulerSyncFailed 表示周期任务配置同步失败说明 key。
+	MsgKeySchedulerSyncFailed = "scheduler.sync_failed"
+	// MsgKeySchedulerHeartbeatOK 表示周期调度器 leader 心跳正常说明 key。
+	MsgKeySchedulerHeartbeatOK = "scheduler.heartbeat_ok"
+	// MsgKeySchedulerEnqueueFailed 表示周期任务入队失败说明 key。
+	MsgKeySchedulerEnqueueFailed = "scheduler.enqueue_failed"
+	// MsgKeySchedulerBacklogExceeded 表示周期任务队列积压超过阈值说明 key。
+	MsgKeySchedulerBacklogExceeded = "scheduler.backlog_exceeded"
+	// MsgKeyAPIRuntimeNotConfigured 表示 API 内网运行态未配置说明 key。
+	MsgKeyAPIRuntimeNotConfigured = "api_runtime.not_configured"
+	// MsgKeyAPIRuntimeStatusFetched 表示 API 热加载状态已获取说明 key。
+	MsgKeyAPIRuntimeStatusFetched = "api_runtime.status_fetched"
+	// MsgKeyAPIRuntimeItemsFetched 表示 API 运行态配置项已获取说明 key。
+	MsgKeyAPIRuntimeItemsFetched = "api_runtime.items_fetched"
+	// MsgKeyAPIRuntimeReloadTriggered 表示 API 热加载已触发说明 key。
+	MsgKeyAPIRuntimeReloadTriggered = "api_runtime.reload_triggered"
+	// MsgKeyAPIRuntimeSyncSuccess 表示 API 运行态同步成功说明 key。
+	MsgKeyAPIRuntimeSyncSuccess = "api_runtime.sync_success"
+	// MsgKeyAPIRuntimeUserCreateNoCache 表示新增用户无需同步 API 运行态说明 key。
+	MsgKeyAPIRuntimeUserCreateNoCache = "api_runtime.user_create_no_cache"
+	// MsgKeyAPIRuntimeProfileUnchanged 表示资料未变更无需同步 API 运行态说明 key。
+	MsgKeyAPIRuntimeProfileUnchanged = "api_runtime.profile_unchanged"
+	// MsgKeyAPIRuntimeStatusUnchanged 表示状态未变更无需同步 API 运行态说明 key。
+	MsgKeyAPIRuntimeStatusUnchanged = "api_runtime.status_unchanged"
+	// MsgKeyAPIRuntimeProfileSyncWarning 表示资料已更新但 API 缓存同步失败说明 key。
+	MsgKeyAPIRuntimeProfileSyncWarning = "api_runtime.profile_sync_warning"
+	// MsgKeyAPIRuntimeStatusSyncWarning 表示状态已更新但 API 缓存同步失败说明 key。
+	MsgKeyAPIRuntimeStatusSyncWarning = "api_runtime.status_sync_warning"
+	// MsgKeyCollectorRunPartialFailed 表示 Collector 执行存在失败任务说明 key。
+	MsgKeyCollectorRunPartialFailed = "collector.run_partial_failed"
+	// MsgKeyCollectorRunSuccess 表示 Collector 执行完成说明 key。
+	MsgKeyCollectorRunSuccess = "collector.run_success"
+	// MsgKeyAdminExportFileExpired 表示导出文件失效说明 key。
+	MsgKeyAdminExportFileExpired = "admin_export.file_expired"
+	// MsgKeyUserTagRecalculateStarted 表示用户标签重算任务已启动说明 key。
+	MsgKeyUserTagRecalculateStarted = "user_tag.recalculate_started"
 	// MsgKeyDependencyUnavailable 表示核心依赖不可用的文案 key。
 	MsgKeyDependencyUnavailable = codes.MsgKeyDependencyUnavailable
 	// MsgKeyMySQLUnavailable 表示 MySQL 不可用的文案 key。

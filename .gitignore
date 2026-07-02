@@ -17,4 +17,3 @@ logs
 
 
 # 代码资产保护：*.sql.tmpl 是 go:embed 原生 SQL 模板，*.lua 是 Redis Lua 脚本源码，禁止加入忽略或清理规则。
-/.cursor/rules/ark-admin-cron.mdc

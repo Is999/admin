@@ -458,7 +458,7 @@ func Errorw(ctx context.Context, msg string, err error, fields ...logx.LogField)
 func errorw(ctx context.Context, skip int, msg string, err error, fields ...logx.LogField) {
 	fields = appendLogFields(fields, ErrorFields(err)...)
 	fields = appendErrorCallerFields(fields, err, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, logxCallerSkip(skip)).Errorw(msg, fields...)
+	loggerFor(ctx, normalizeCallerSkip(skip)).Errorw(msg, fields...)
 }
 
 // ErrorTextw 统一输出只有错误文本的错误日志，并自动补齐 error 与 error_chain 字段。
@@ -470,7 +470,7 @@ func ErrorTextw(ctx context.Context, msg string, errorText string, fields ...log
 func errorTextw(ctx context.Context, skip int, msg string, errorText string, fields ...logx.LogField) {
 	fields = appendLogFields(fields, ErrorTextFields(errorText)...)
 	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, logxCallerSkip(skip)).Errorw(msg, fields...)
+	loggerFor(ctx, normalizeCallerSkip(skip)).Errorw(msg, fields...)
 }
 
 // ErrorwSkip 统一输出带 caller skip 的错误日志，适用于 GORM、适配器等封装层。
@@ -496,7 +496,7 @@ func InfowSkip(ctx context.Context, skip int, msg string, fields ...logx.LogFiel
 // infow 写入信息日志，并统一补充业务 caller 字段。
 func infow(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
 	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, logxCallerSkip(skip)).Infow(msg, fields...)
+	loggerFor(ctx, normalizeCallerSkip(skip)).Infow(msg, fields...)
 }
 
 // Debugw 统一输出调试日志，并自动绑定上下文中的 trace/task/workflow 字段。
@@ -512,7 +512,7 @@ func DebugwSkip(ctx context.Context, skip int, msg string, fields ...logx.LogFie
 // debugw 写入调试日志，并统一补充业务 caller 字段。
 func debugw(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
 	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, logxCallerSkip(skip)).Debugw(msg, fields...)
+	loggerFor(ctx, normalizeCallerSkip(skip)).Debugw(msg, fields...)
 }
 
 // Sloww 统一输出慢操作日志，并自动绑定上下文中的 trace/task/workflow 字段。
@@ -528,7 +528,7 @@ func SlowwSkip(ctx context.Context, skip int, msg string, fields ...logx.LogFiel
 // sloww 写入慢操作日志，并统一补充业务 caller 字段。
 func sloww(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
 	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, logxCallerSkip(skip)).Sloww(msg, fields...)
+	loggerFor(ctx, normalizeCallerSkip(skip)).Sloww(msg, fields...)
 }
 
 // appendLogFields 统一复制并追加日志字段，避免调用方直接复用底层切片导致字段串写。
@@ -542,11 +542,6 @@ func appendLogFields(base []logx.LogField, extra ...logx.LogField) []logx.LogFie
 // runtimeCallerSkip 返回 runtime.Caller 使用的最终 skip。
 func runtimeCallerSkip(skip int) int {
 	return loggerxRuntimeCallerSkip + positiveSkip(skip)
-}
-
-// logxCallerSkip 返回 go-zero logx 使用的最终 skip。
-func logxCallerSkip(skip int) int {
-	return normalizeCallerSkip(skip)
 }
 
 // appendErrorCallerFields 优先使用 error 产生位置作为业务 caller。
@@ -702,7 +697,7 @@ func loggerFor(ctx context.Context, skip int) logx.Logger {
 	if ctx == nil {
 		return LoggerWithCallerSkip(skip)
 	}
-	return contextLoggerWithCallerSkip(BindContext(ctx), skip)
+	return logx.WithContext(BindContext(ctx)).WithCallerSkip(positiveSkip(skip))
 }
 
 // BindContext 将当前请求字段绑定进 logx context，后续 logx.WithContext(ctx) 会自动带上这些字段。
@@ -717,9 +712,4 @@ func BindContext(ctx context.Context) context.Context {
 // LoggerWithCallerSkip 返回带 caller skip 的底层 logger，供第三方 logger 适配器使用。
 func LoggerWithCallerSkip(skip int) logx.Logger {
 	return logx.WithCallerSkip(positiveSkip(skip))
-}
-
-// contextLoggerWithCallerSkip 返回同时绑定上下文和 caller skip 的底层 logger。
-func contextLoggerWithCallerSkip(ctx context.Context, skip int) logx.Logger {
-	return logx.WithContext(ctx).WithCallerSkip(positiveSkip(skip))
 }

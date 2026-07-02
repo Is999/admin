@@ -50,9 +50,9 @@ workflows:
     default_batch_size: 2000
     # 节点内部 worker 默认值。
     default_worker_count: 4
-    # 运行期 UID 索引分片数；shard_no 固定支持 0-999。
-    runtime_shard_total: 1000
-    # 标签结果物理分表数；小量数据保持 1，后续按 10/100/1000 平滑扩容。
+    # 运行期 UID 索引分片数；shard_no 固定支持 0-1023。
+    runtime_shard_total: 1024
+    # 标签结果物理分表数；小量数据保持 1，后续按 2 的幂平滑扩容。
     result_shard_total: 1
     # 标签差异解析批次大小。
     diff_batch_size: 10000
@@ -150,7 +150,7 @@ task_periodic:
   - name: "task-report-daily-summary"
     # 是否启用该任务；发送前仍受 alert.lark.enabled 控制。
     enabled: true
-    # 每天 10 点汇总昨日 10 点到今日 10 点的任务运行情况。
+    # 默认每天 10 点发送；改调度时间后，统计窗口会随执行时间向前回看 24 小时。
     cron: "0 10 * * *"
     # 触发的工作流名称。
     workflow: "task_report.daily_summary"

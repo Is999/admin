@@ -63,7 +63,7 @@ func ActionHandler[Req any](
 		return ActionLogHandler(meta, func(r *http.Request) (LogicObj, *types.BizResult) {
 			var req Req
 			if err := httpx.Parse(r, &req); err != nil {
-				return nil, ParamErrorResult(err)
+				return nil, types.ParamErrorResult(err)
 			}
 			logicObj, resp := exec(r, sCtx, &req)
 			if resp == nil {
@@ -83,7 +83,7 @@ func RespHandler[Req any](
 		return RespHandlerFunc(func(r *http.Request) (LogicObj, *types.BizResult) {
 			var req Req
 			if err := httpx.Parse(r, &req); err != nil {
-				return nil, ParamErrorResult(err)
+				return nil, types.ParamErrorResult(err)
 			}
 			logicObj, resp := exec(r, sCtx, &req)
 			if resp == nil {
@@ -93,11 +93,6 @@ func RespHandler[Req any](
 			return logicObj, resp
 		})
 	}
-}
-
-// ParamErrorResult 统一封装参数解析失败响应，强制走国际化模板，避免各 handler 重复拼接文案。
-func ParamErrorResult(err error) *types.BizResult {
-	return types.ParamErrorResult(err)
 }
 
 // WriteBizResponse 把标准业务响应写出，并按需补充审计日志，保证成功/失败处理路径一致。

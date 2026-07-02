@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"testing"
 
+	"admin/internal/bootstrap/components"
 	"admin/internal/handler"
 	"admin/internal/task/runtime"
 )
@@ -25,7 +26,7 @@ func TestResolveOptionsDefaults(t *testing.T) {
 func TestResolveOptionsMergesPlugins(t *testing.T) {
 	pluginA := taskruntime.NewPluginFunc("plugin-a", nil)
 	pluginB := taskruntime.NewPluginFunc("plugin-b", nil)
-	component := NewComponentFunc("component-a", nil)
+	component := components.NewFunc("component-a", nil)
 	routeModule := handler.NewRouteModuleFunc("route-a", nil)
 
 	opts := resolveOptions([]Option{

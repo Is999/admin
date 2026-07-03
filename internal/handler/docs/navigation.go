@@ -58,13 +58,9 @@ func readDocsSiteAsset(assetPath string) ([]byte, error) {
 	return fs.ReadFile(sitedocs.FS, pathpkg.Join("site", assetPath))
 }
 
-// docsAccessForRequest 根据当前请求账号计算可见文档权限；开发、测试和单测 handler 维持全量导航。
+// docsAccessForRequest 根据当前请求账号计算可见文档权限；无登录身份时返回空权限集合。
 func docsAccessForRequest(r *http.Request, svcCtx *svc.ServiceContext) (docsAccessSet, error) {
 	if svcCtx == nil {
-		return docsAccessSet{all: true}, nil
-	}
-	mode := strings.TrimSpace(svcCtx.CurrentConfig().Mode)
-	if mode == "dev" || mode == "test" {
 		return docsAccessSet{all: true}, nil
 	}
 	meta := requestctx.FromContext(r.Context())

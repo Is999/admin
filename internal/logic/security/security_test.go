@@ -157,12 +157,11 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 	}
 }
 
-// TestRoutePermissionModulesForDocsFile 验证单篇文档鉴权会兼容所属目录权限。
+// TestRoutePermissionModulesForDocsFile 验证单篇文档鉴权只使用自身文件权限。
 func TestRoutePermissionModulesForDocsFile(t *testing.T) {
 	got := routePermissionModules("docs.file.api/接口文档/前台系统/系统接口.md")
 	want := []string{
 		"docs.file.api/接口文档/前台系统/系统接口.md",
-		string(routealias.DocsAPIServiceFront),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("routePermissionModules() len = %d, want %d, got=%v", len(got), len(want), got)
@@ -171,6 +170,36 @@ func TestRoutePermissionModulesForDocsFile(t *testing.T) {
 		if got[index] != want[index] {
 			t.Fatalf("routePermissionModules()[%d] = %q, want %q", index, got[index], want[index])
 		}
+	}
+}
+
+// TestDocsFileRoutePermissionIDsIgnoreOldCandidateCache 验证旧候选缓存中的父目录权限不会继续放行单篇文档。
+func TestDocsFileRoutePermissionIDsIgnoreOldCandidateCache(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
+	logicObj := NewSecurityLogic(context.Background(), svcCtx)
+	ctx := context.Background()
+
+	routeAlias := "docs.file.api/接口文档/前台系统/认证接口.md"
+	routeCacheKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.RoutePermissionIDs, routeAlias))
+	if err := client.SAdd(ctx, routeCacheKey, "165").Err(); err != nil {
+		t.Fatalf("SAdd(old route cache) error = %v", err)
+	}
+	permissionModuleKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.PermissionModule)
+	if err := client.HSet(ctx, permissionModuleKey,
+		"165", string(routealias.DocsAPIServiceFront),
+		"223", routeAlias,
+	).Err(); err != nil {
+		t.Fatalf("HSet(permission_module) error = %v", err)
+	}
+
+	got, err := logicObj.routePermissionIDs(routeAlias)
+	if err != nil {
+		t.Fatalf("routePermissionIDs(%s) error = %v", routeAlias, err)
+	}
+	if len(got) != 1 || got[0] != 223 {
+		t.Fatalf("routePermissionIDs(%s) = %v, want [223]", routeAlias, got)
 	}
 }
 

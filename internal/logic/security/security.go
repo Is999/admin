@@ -357,28 +357,29 @@ func (l *SecurityLogic) routePermissionIDs(routeAlias string) ([]int, error) {
 	routeAlias = strings.TrimSpace(routeAlias)
 	modules := routePermissionModules(routeAlias)
 	if l.Redis() == nil {
-		var permissionIDs []int
-		err := l.Svc.WriteDB(svc.DatabaseMain).Model(&model.AdminPermission{}).
-			Where("status = 1 AND module IN ?", modules).
-			Order("id ASC").
-			Pluck("id", &permissionIDs).Error
-		return types.UniquePositiveInts(permissionIDs), errors.Tag(err)
+		return l.routePermissionIDsFromDB(modules)
 	}
 	cacheKey := fmt.Sprintf(keys.RoutePermissionIDs, routeAlias)
-	permissionIDs, found, err := l.readPositiveIntSetCache(cacheKey, "路由候选权限缓存")
+	useRouteCache := shouldUseRoutePermissionCandidateCache(routeAlias)
+	if useRouteCache {
+		permissionIDs, found, err := l.readPositiveIntSetCache(cacheKey, "路由候选权限缓存")
+		if err != nil {
+			return nil, errors.Tag(err)
+		}
+		if found {
+			cachelogic.TrackRoutePermissionAliasCache(l.BaseLogic, routeAlias)
+			return permissionIDs, nil
+		}
+	}
+	permissionIDs, found, err := l.routePermissionIDsFromModuleCache(routeAlias, useRouteCache)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	if found {
-		cachelogic.TrackRoutePermissionAliasCache(l.BaseLogic, routeAlias)
 		return permissionIDs, nil
 	}
-	permissionIDs, found, err = l.routePermissionIDsFromModuleCache(routeAlias)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	if found {
-		return permissionIDs, nil
+	if !useRouteCache {
+		return l.routePermissionIDsFromDB(modules)
 	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
@@ -397,6 +398,20 @@ func (l *SecurityLogic) routePermissionIDs(routeAlias string) ([]int, error) {
 		return []int{}, nil
 	}
 	return cachelogic.ParsePositiveIntStrings(values, "路由候选权限缓存")
+}
+
+// routePermissionIDsFromDB 从数据库读取当前路由匹配的启用权限 ID。
+func (l *SecurityLogic) routePermissionIDsFromDB(modules []string) ([]int, error) {
+	modules = helper.UniqueNonEmptyStrings(modules)
+	if len(modules) == 0 {
+		return []int{}, nil
+	}
+	var permissionIDs []int
+	err := l.Svc.WriteDB(svc.DatabaseMain).Model(&model.AdminPermission{}).
+		Where("status = 1 AND module IN ?", modules).
+		Order("id ASC").
+		Pluck("id", &permissionIDs).Error
+	return types.UniquePositiveInts(permissionIDs), errors.Tag(err)
 }
 
 // userPermissionIDsWithCache 查询管理员聚合权限 ID 集合，供鉴权链路优先走缓存。
@@ -474,7 +489,7 @@ func (l *SecurityLogic) UserPermissionUUIDsWithCache(userID int) ([]string, erro
 }
 
 // routePermissionIDsFromModuleCache 从权限模块缓存反查路由关联权限 ID。
-func (l *SecurityLogic) routePermissionIDsFromModuleCache(routeAlias string) ([]int, bool, error) {
+func (l *SecurityLogic) routePermissionIDsFromModuleCache(routeAlias string, writeRouteCache bool) ([]int, bool, error) {
 	routeAlias = strings.TrimSpace(routeAlias)
 	if routeAlias == "" || l.Redis() == nil {
 		return []int{}, false, nil
@@ -506,6 +521,9 @@ func (l *SecurityLogic) routePermissionIDsFromModuleCache(routeAlias string) ([]
 	sort.Ints(permissionIDs)
 	if len(permissionIDs) == 0 {
 		return []int{}, false, nil
+	}
+	if !writeRouteCache {
+		return permissionIDs, true, nil
 	}
 	cacheKey := fmt.Sprintf(keys.RoutePermissionIDs, routeAlias)
 	values := make([]string, 0, len(permissionIDs))
@@ -666,7 +684,7 @@ func routeAliasKey(routeAlias string) routealias.Alias {
 	return routealias.Alias(strings.TrimSpace(routeAlias))
 }
 
-// routePermissionModules 返回路由权限可匹配的 module；文档路由支持单篇和目录权限兼容。
+// routePermissionModules 返回路由权限可匹配的 module；单篇文档只匹配自身文件权限。
 func routePermissionModules(routeAlias string) []string {
 	aliases := routealias.DocsCandidateAliases(routeAliasKey(routeAlias))
 	modules := make([]string, 0, len(aliases))
@@ -681,6 +699,12 @@ func routePermissionModules(routeAlias string) []string {
 		return []string{strings.TrimSpace(routeAlias)}
 	}
 	return helper.UniqueNonEmptyStrings(modules)
+}
+
+// shouldUseRoutePermissionCandidateCache 判断当前路由是否允许命中路由候选权限缓存。
+func shouldUseRoutePermissionCandidateCache(routeAlias string) bool {
+	_, isDocsFile := routealias.DocsFilePathFromAlias(routeAliasKey(routeAlias))
+	return !isDocsFile
 }
 
 // checkAdminNeedResetPassword 校验管理员是否处于必须先修改登录密码状态。

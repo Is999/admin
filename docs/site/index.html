@@ -510,9 +510,6 @@
             title: (links[i].textContent || '').trim() || path.replace(/\.md$/i, '')
           });
         }
-        if (!seen['文档首页.md']) {
-          docs.unshift({ path: '文档首页.md', title: '文档首页' });
-        }
         return docs;
       }
 

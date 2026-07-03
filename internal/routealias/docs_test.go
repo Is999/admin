@@ -43,15 +43,15 @@ func TestDocsAliasForPath(t *testing.T) {
 	}
 }
 
-// TestDocsCandidateAliases 验证单篇文档权限保留所属目录权限作为兼容兜底。
+// TestDocsCandidateAliases 验证单篇文档只匹配自身文件权限。
 func TestDocsCandidateAliases(t *testing.T) {
 	cases := []struct {
 		name  string  // name 表示测试场景名称。
 		alias Alias   // alias 表示文档权限别名。
 		want  []Alias // want 表示候选权限别名。
 	}{
-		{name: "后台具体接口文档", alias: docsFileAlias("接口文档/后台系统/权限管理接口.md"), want: []Alias{docsFileAlias("接口文档/后台系统/权限管理接口.md"), DocsAPIAdmin}},
-		{name: "前台 API 具体接口文档", alias: docsFileAlias("api/接口文档/前台系统/认证接口.md"), want: []Alias{docsFileAlias("api/接口文档/前台系统/认证接口.md"), DocsAPIServiceFront}},
+		{name: "后台具体接口文档", alias: docsFileAlias("接口文档/后台系统/权限管理接口.md"), want: []Alias{docsFileAlias("接口文档/后台系统/权限管理接口.md")}},
+		{name: "前台 API 具体接口文档", alias: docsFileAlias("api/接口文档/前台系统/认证接口.md"), want: []Alias{docsFileAlias("api/接口文档/前台系统/认证接口.md")}},
 		{name: "目录权限", alias: DocsRoleBackend, want: []Alias{DocsRoleBackend}},
 	}
 	for _, tc := range cases {

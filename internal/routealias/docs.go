@@ -190,17 +190,13 @@ func DocsParentAliasForPath(assetPath string) Alias {
 	return DocsIndex
 }
 
-// DocsCandidateAliases 返回访问指定文档别名时允许匹配的权限别名集合。
+// DocsCandidateAliases 返回访问指定文档别名时必须匹配的权限别名集合。
 func DocsCandidateAliases(alias Alias) []Alias {
-	docsPath, ok := DocsFilePathFromAlias(alias)
-	if !ok {
-		return []Alias{alias}
+	alias = Alias(strings.TrimSpace(string(alias)))
+	if alias == "" {
+		return []Alias{}
 	}
-	parentAlias := DocsParentAliasForPath(docsPath)
-	if parentAlias == alias || parentAlias == "" {
-		return []Alias{alias}
-	}
-	return []Alias{alias, parentAlias}
+	return []Alias{alias}
 }
 
 // normalizedDocsPath 返回 /api/docs 下的相对路径，空值表示文档首页或站点公共资源。

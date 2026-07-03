@@ -318,9 +318,6 @@
             title: (links[i].textContent || '').trim() || path.replace(/\.md$/i, '')
           });
         }
-        if (!seen[homeDocPath]) {
-          docs.unshift({ path: homeDocPath, title: '系统接口' });
-        }
         return docs;
       }
 

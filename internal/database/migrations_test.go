@@ -107,6 +107,22 @@ func TestUserTagRuntimeMigrationStartsSinglePhysicalShard(t *testing.T) {
 	}
 }
 
+// TestBusinessUIDMigrationAssetsCarryShardNo 确保新增业务 UID 表不会漏掉分片字段。
+func TestBusinessUIDMigrationAssetsCarryShardNo(t *testing.T) {
+	shardIndexRe := regexp.MustCompile("(?i)KEY\\s+`[^`]*shard[^`]*`\\s*\\([^)]*`shard_no`")
+	for _, item := range DefaultMigrations() {
+		if !strings.Contains(item.SQL, "`uid`") {
+			continue
+		}
+		if !strings.Contains(item.SQL, "`shard_no`") {
+			t.Fatalf("migration asset with business uid must carry shard_no: %s", item.Asset)
+		}
+		if !shardIndexRe.MatchString(item.SQL) {
+			t.Fatalf("migration asset with business uid must keep shard_no index: %s", item.Asset)
+		}
+	}
+}
+
 // TestCollectorOutboxBaselineIndexes 确保收集器概览索引内置在基线 DDL。
 func TestCollectorOutboxBaselineIndexes(t *testing.T) {
 	sql := migrationSQLByAsset(t, "collector_outbox.sql")

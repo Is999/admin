@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	sitedocs "admin/docs"
+	"admin/internal/config"
 	"admin/internal/middleware"
 	"admin/internal/requestctx"
 	"admin/internal/routealias"
+	"admin/internal/svc"
 )
 
 // TestDocsSessionCookieLimitsScope 校验文档会话 cookie 只挂在文档路径下。
@@ -59,6 +61,17 @@ func TestDocsSessionHandlerSetsCookie(t *testing.T) {
 	}
 	if cookies[0].Name != middleware.DocsSessionCookieName || cookies[0].Value != "token-1" {
 		t.Fatalf("unexpected docs cookie: %+v", cookies[0])
+	}
+}
+
+// TestDocsIndexSearchUsesFilteredNavigation 校验后台文档搜索只使用已过滤导航里的文档路径。
+func TestDocsIndexSearchUsesFilteredNavigation(t *testing.T) {
+	content, err := fs.ReadFile(sitedocs.FS, "site/index.html")
+	if err != nil {
+		t.Fatalf("docs index asset missing: %v", err)
+	}
+	if strings.Contains(string(content), "docs.unshift({ path: '文档首页.md'") {
+		t.Fatal("docs search index must not reinsert filtered homepage doc")
 	}
 }
 
@@ -116,6 +129,9 @@ func TestAPIDocsIndexStoredAsStaticAsset(t *testing.T) {
 			t.Fatalf("api docs index must not depend on blocking search plugin or CDN %q", text)
 		}
 	}
+	if strings.Contains(string(content), "docs.unshift({ path: homeDocPath") {
+		t.Fatal("api docs search index must not reinsert filtered homepage doc")
+	}
 }
 
 // TestAPIDocsIndexStandalone 校验前台 API 文档入口不复用 Admin 文档导航。
@@ -151,16 +167,55 @@ func TestAPIDocsSidebarRequiresAPIProxy(t *testing.T) {
 	}
 }
 
-// TestFilterDocsNavigationByAccess 校验后台文档导航只展示当前账号有权访问的目录。
+// TestDocsAccessForRequestNonProdAnonymousDenied 校验开发和测试环境无登录身份时不会输出全量导航。
+func TestDocsAccessForRequestNonProdAnonymousDenied(t *testing.T) {
+	for _, mode := range []string{"dev", "test"} {
+		t.Run(mode, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/docs/_sidebar.md", nil)
+			cfg := config.Config{}
+			cfg.Mode = mode
+			svcCtx := svc.NewServiceContext(cfg, svc.Dependencies{})
+
+			access, err := docsAccessForRequest(req, svcCtx)
+			if err != nil {
+				t.Fatalf("docsAccessForRequest returned error: %v", err)
+			}
+			if access.all || len(access.aliases) != 0 {
+				t.Fatalf("%s anonymous docs request should be denied, got %+v", mode, access)
+			}
+		})
+	}
+}
+
+// TestDocsAccessForRequestProdAnonymousDenied 校验生产环境无登录身份时不会输出全量导航。
+func TestDocsAccessForRequestProdAnonymousDenied(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/docs/_sidebar.md", nil)
+	cfg := config.Config{}
+	cfg.Mode = "pro"
+	svcCtx := svc.NewServiceContext(cfg, svc.Dependencies{})
+
+	access, err := docsAccessForRequest(req, svcCtx)
+	if err != nil {
+		t.Fatalf("docsAccessForRequest returned error: %v", err)
+	}
+	if access.all || len(access.aliases) != 0 {
+		t.Fatalf("prod anonymous docs request should be denied, got %+v", access)
+	}
+}
+
+// TestFilterDocsNavigationByAccess 校验后台文档导航只展示当前账号有单篇权限的文件。
 func TestFilterDocsNavigationByAccess(t *testing.T) {
 	content, err := fs.ReadFile(sitedocs.FS, "site/"+docsSidebarAssetPath)
 	if err != nil {
 		t.Fatalf("read sidebar asset: %v", err)
 	}
 	access := docsAccessSet{aliases: map[routealias.Alias]struct{}{
-		routealias.DocsIndex:       {},
-		routealias.DocsAPIIndex:    {},
-		routealias.DocsRoleBackend: {},
+		routealias.DocsIndex:                            {},
+		routealias.DocsAPIAdmin:                         {},
+		routealias.DocsRoleBackend:                      {},
+		routealias.DocsAliasForAssetPath("", "文档首页.md"): {},
+		routealias.DocsAliasForAssetPath("", "接口文档/接口文档统一规范.md"):    {},
+		routealias.DocsAliasForAssetPath("", "角色文档/后端开发/AI开发规范.md"): {},
 	}}
 
 	body := string(filterDocsNavigation(content, "", access))
@@ -189,6 +244,9 @@ func TestFilterAPIDocsNavigationByAccess(t *testing.T) {
 `)
 	access := docsAccessSet{aliases: map[routealias.Alias]struct{}{
 		routealias.DocsAPIServiceIndex: {},
+		routealias.DocsAPIServiceFront: {},
+		routealias.DocsAliasForAssetPath(apiDocsProxyBasePath, "接口文档/接口文档统一规范.md"):    {},
+		routealias.DocsAliasForAssetPath(apiDocsProxyBasePath, "角色文档/后端开发/AI开发规范.md"): {},
 	}}
 
 	body := string(filterDocsNavigation(content, apiDocsProxyBasePath, access))

@@ -18,7 +18,7 @@ import (
 	"github.com/zeromicro/go-zero/rest"
 )
 
-// DocsJwtMiddleware 为文档站提供轻量鉴权；开发和测试环境跳过校验，生产环境要求携带有效 JWT。
+// DocsJwtMiddleware 为文档站提供轻量鉴权，所有运行模式都要求携带有效后台凭证。
 func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -27,15 +27,6 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 			docsAlias := docsRouteAliasForPath(r.URL.Path)
 			requestctx.SetRoute(ctx, string(docsAlias))
 			r = r.WithContext(ctx)
-			mode := ""
-			if svcCtx != nil {
-				mode = svcCtx.CurrentConfig().Mode
-			}
-			if mode == "dev" || mode == "test" {
-				// 开发和测试环境下跳过认证
-				next(w, r)
-				return
-			}
 
 			identity, err := verifyAdminTokenFromDocsRequest(ctx, svcCtx, r, true)
 			if err != nil {

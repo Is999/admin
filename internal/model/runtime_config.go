@@ -15,13 +15,13 @@ const (
 
 // RuntimeConfigState 记录当前 MySQL 库正在生效的发布版本。
 type RuntimeConfigState struct {
-	ID              uint64    `gorm:"column:id;type:bigint unsigned;primaryKey;autoIncrement:true;comment:主键ID" json:"id"`                                           // 主键 ID
-	ActiveReleaseID uint64    `gorm:"column:active_release_id;type:bigint unsigned;not null;default:0;comment:当前发布ID" json:"activeReleaseId"`                        // 当前发布 ID
-	ActiveVersion   uint64    `gorm:"column:active_version;type:bigint unsigned;not null;default:0;comment:当前发布版本号" json:"activeVersion"`                            // 当前发布版本号
-	ActiveChecksum  string    `gorm:"column:active_checksum;type:char(64);not null;default:'';comment:当前快照SHA256" json:"activeChecksum"`                             // 当前快照 SHA256
-	PublishedAt     time.Time `gorm:"column:published_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:最近发布时间" json:"publishedAt"`                       // 最近发布时间
-	CreatedAt       time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                             // 创建时间
-	UpdatedAt       time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"` // 更新时间
+	ID              uint64    `gorm:"column:id;type:bigint unsigned;primaryKey;autoIncrement:true;comment:主键ID" json:"id"`                                          // 主键 ID
+	ActiveReleaseID uint64    `gorm:"column:active_release_id;type:bigint unsigned;not null;default:0;comment:当前发布ID" json:"activeReleaseId"`                       // 当前发布 ID
+	ActiveVersion   uint64    `gorm:"column:active_version;type:bigint unsigned;not null;default:0;comment:当前发布版本号" json:"activeVersion"`                           // 当前发布版本号
+	ActiveChecksum  string    `gorm:"column:active_checksum;type:char(64);not null;default:'';comment:当前快照SHA256" json:"activeChecksum"`                            // 当前快照 SHA256
+	PublishedAt     time.Time `gorm:"column:published_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:最近发布时间" json:"publishedAt"`                       // 最近发布时间
+	CreatedAt       time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                             // 创建时间
+	UpdatedAt       time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"` // 更新时间
 }
 
 // TableName 返回运行配置状态表名。
@@ -31,19 +31,19 @@ func (*RuntimeConfigState) TableName() string {
 
 // RuntimeConfigRelease 记录一次不可变发布快照。
 type RuntimeConfigRelease struct {
-	ID                 uint64    `gorm:"column:id;type:bigint unsigned;primaryKey;autoIncrement:true;comment:主键ID" json:"id"`                                       // 主键 ID
-	VersionNo          uint64    `gorm:"column:version_no;type:bigint unsigned;not null;uniqueIndex:uk_version_no;comment:发布版本号" json:"versionNo"`                  // 发布版本号
-	SnapshotJSON       string    `gorm:"column:snapshot_json;type:json;not null;comment:发布快照JSON" json:"snapshotJson"`                                              // 发布快照 JSON
-	SnapshotYAML       string    `gorm:"column:snapshot_yaml;type:mediumtext;not null;comment:发布快照YAML" json:"snapshotYaml"`                                        // 发布快照 YAML
-	Checksum           string    `gorm:"column:checksum;type:char(64);not null;comment:快照SHA256" json:"checksum"`                                                   // 快照 SHA256
-	BaseReleaseID      uint64    `gorm:"column:base_release_id;type:bigint unsigned;not null;default:0;comment:来源发布ID" json:"baseReleaseId"`                        // 来源发布 ID
-	RestartRequired    bool      `gorm:"column:restart_required;type:tinyint(1);not null;default:0;comment:是否需要重启" json:"restartRequired"`                          // 是否需要重启
-	RestartReason      string    `gorm:"column:restart_reason;type:varchar(500);not null;default:'';comment:重启原因" json:"restartReason"`                             // 重启原因
-	Remark             string    `gorm:"column:remark;type:varchar(500);not null;default:'';comment:发布备注" json:"remark"`                                            // 发布备注
-	PublishedByAdminID int       `gorm:"column:published_by_admin_id;type:int unsigned;not null;default:0;comment:发布管理员ID" json:"publishedByAdminId"`               // 发布管理员 ID
-	PublishedByName    string    `gorm:"column:published_by_name;type:varchar(64);not null;default:'';comment:发布管理员账号" json:"publishedByName"`                      // 发布管理员账号
-	PublishedAt        time.Time `gorm:"column:published_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;index:idx_published;comment:发布时间" json:"publishedAt"` // 发布时间
-	CreatedAt          time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                         // 创建时间
+	ID                 uint64    `gorm:"column:id;type:bigint unsigned;primaryKey;autoIncrement:true;comment:主键ID" json:"id"`                                      // 主键 ID
+	VersionNo          uint64    `gorm:"column:version_no;type:bigint unsigned;not null;uniqueIndex:uk_version_no;comment:发布版本号" json:"versionNo"`                 // 发布版本号
+	SnapshotJSON       string    `gorm:"column:snapshot_json;type:json;not null;comment:发布快照JSON" json:"snapshotJson"`                                             // 发布快照 JSON
+	SnapshotYAML       string    `gorm:"column:snapshot_yaml;type:mediumtext;not null;comment:发布快照YAML" json:"snapshotYaml"`                                       // 发布快照 YAML
+	Checksum           string    `gorm:"column:checksum;type:char(64);not null;comment:快照SHA256" json:"checksum"`                                                  // 快照 SHA256
+	BaseReleaseID      uint64    `gorm:"column:base_release_id;type:bigint unsigned;not null;default:0;comment:来源发布ID" json:"baseReleaseId"`                       // 来源发布 ID
+	RestartRequired    bool      `gorm:"column:restart_required;type:tinyint(1);not null;default:0;comment:是否需要重启" json:"restartRequired"`                         // 是否需要重启
+	RestartReason      string    `gorm:"column:restart_reason;type:varchar(500);not null;default:'';comment:重启原因" json:"restartReason"`                            // 重启原因
+	Remark             string    `gorm:"column:remark;type:varchar(500);not null;default:'';comment:发布备注" json:"remark"`                                           // 发布备注
+	PublishedByAdminID int       `gorm:"column:published_by_admin_id;type:int unsigned;not null;default:0;comment:发布管理员ID" json:"publishedByAdminId"`              // 发布管理员 ID
+	PublishedByName    string    `gorm:"column:published_by_name;type:varchar(64);not null;default:'';comment:发布管理员账号" json:"publishedByName"`                     // 发布管理员账号
+	PublishedAt        time.Time `gorm:"column:published_at;type:datetime;not null;default:CURRENT_TIMESTAMP;index:idx_published;comment:发布时间" json:"publishedAt"` // 发布时间
+	CreatedAt          time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                         // 创建时间
 }
 
 // TableName 返回运行配置发布表名。
@@ -72,8 +72,8 @@ type RuntimeTaskPeriodic struct {
 	Remark           string      `gorm:"column:remark;type:varchar(500);not null;default:'';comment:备注" json:"remark"`                                                   // 备注
 	CreatedByAdminID int         `gorm:"column:created_by_admin_id;type:int unsigned;not null;default:0;comment:创建管理员ID" json:"createdByAdminId"`                        // 创建管理员 ID
 	UpdatedByAdminID int         `gorm:"column:updated_by_admin_id;type:int unsigned;not null;default:0;comment:更新管理员ID" json:"updatedByAdminId"`                        // 更新管理员 ID
-	CreatedAt        time.Time   `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                              // 创建时间
-	UpdatedAt        time.Time   `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"`  // 更新时间
+	CreatedAt        time.Time   `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                               // 创建时间
+	UpdatedAt        time.Time   `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"`   // 更新时间
 }
 
 // TableName 返回周期任务运行配置表名。
@@ -120,8 +120,8 @@ type RuntimeArchiveJob struct {
 	Remark                  string    `gorm:"column:remark;type:varchar(500);not null;default:'';comment:备注" json:"remark"`                                                   // 备注
 	CreatedByAdminID        int       `gorm:"column:created_by_admin_id;type:int unsigned;not null;default:0;comment:创建管理员ID" json:"createdByAdminId"`                        // 创建管理员 ID
 	UpdatedByAdminID        int       `gorm:"column:updated_by_admin_id;type:int unsigned;not null;default:0;comment:更新管理员ID" json:"updatedByAdminId"`                        // 更新管理员 ID
-	CreatedAt               time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                              // 创建时间
-	UpdatedAt               time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"`  // 更新时间
+	CreatedAt               time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                               // 创建时间
+	UpdatedAt               time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"`   // 更新时间
 }
 
 // TableName 返回归档任务运行配置表名。

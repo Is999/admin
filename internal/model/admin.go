@@ -27,11 +27,11 @@ type Admin struct {
 	Status            int       `gorm:"column:status;type:tinyint;not null;default:1;comment:账户状态：1 正常，0 禁用" json:"status"`                                        // 账户状态：1 正常，0 禁用
 	Avatar            string    `gorm:"column:avatar;type:varchar(255);not null;comment:头像" json:"avatar"`                                                         // 头像
 	Description       string    `gorm:"column:description;type:varchar(255);not null;comment:简介描述" json:"description"`                                             // 简介描述
-	LastLoginTime     time.Time `gorm:"column:last_login_time;type:timestamp;not null;comment:最后登录时间" json:"last_login_time"`                                      // 最后登录时间
+	LastLoginTime     time.Time `gorm:"column:last_login_time;type:datetime;not null;comment:最后登录时间" json:"last_login_time"`                                       // 最后登录时间
 	LastLoginIP       string    `gorm:"column:last_login_ip;type:varchar(32);not null;comment:最后登录 IP" json:"last_login_ip"`                                       // 最后登录 IP
 	LastLoginIPAddr   string    `gorm:"column:last_login_ipaddr;type:varchar(255);not null;comment:最后登录 IP 归属地" json:"last_login_ipaddr"`                          // 最后登录 IP 归属地
-	CreatedAt         time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:添加时间" json:"created_at"`                        // 添加时间
-	UpdatedAt         time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`                        // 修改时间
+	CreatedAt         time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:添加时间" json:"created_at"`                         // 添加时间
+	UpdatedAt         time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`                         // 修改时间
 }
 
 // TableName 返回管理员表名。

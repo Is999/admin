@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS `admin_log` (
   `latency_ms` bigint NOT NULL DEFAULT '0' COMMENT '请求耗时ms',
   `success` tinyint(1) NOT NULL DEFAULT '1' COMMENT '是否成功',
   `error_message` varchar(500) NOT NULL DEFAULT '' COMMENT '错误信息',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (`id`),
   KEY `idx_created_at` (`created_at`),
   KEY `idx_trace_id` (`trace_id`),

@@ -36,17 +36,17 @@ type CollectorOutbox struct {
 	// Attempt 已失败重试次数。
 	Attempt int `gorm:"column:attempt;type:tinyint unsigned;not null;default:0;comment:失败重试次数" json:"attempt"`
 	// NextRunAt 下次允许处理时间。
-	NextRunAt time.Time `gorm:"column:next_run_at;type:timestamp;not null;index:idx_biz_state_next,priority:3;index:idx_state_next,priority:2;index:idx_partition_state_next,priority:3;comment:下次可处理时间" json:"nextRunAt"`
+	NextRunAt time.Time `gorm:"column:next_run_at;type:datetime;not null;index:idx_biz_state_next,priority:3;index:idx_state_next,priority:2;index:idx_partition_state_next,priority:3;comment:下次可处理时间" json:"nextRunAt"`
 	// StartedAt 最近一次开始处理时间。
-	StartedAt *time.Time `gorm:"column:started_at;type:timestamp;null;index:idx_state_started,priority:2;comment:开始处理时间" json:"startedAt,omitempty"`
+	StartedAt *time.Time `gorm:"column:started_at;type:datetime;null;index:idx_state_started,priority:2;comment:开始处理时间" json:"startedAt,omitempty"`
 	// FinishedAt 完成或死信时间。
-	FinishedAt *time.Time `gorm:"column:finished_at;type:timestamp;null;index:idx_state_finished;comment:结束时间(完成/死信)" json:"finishedAt,omitempty"`
+	FinishedAt *time.Time `gorm:"column:finished_at;type:datetime;null;index:idx_state_finished;comment:结束时间(完成/死信)" json:"finishedAt,omitempty"`
 	// LastError 最近一次失败原因摘要。
 	LastError string `gorm:"column:last_error;type:varchar(1000);not null;default:'';comment:最近一次失败原因" json:"lastError"`
 	// CreatedAt 创建时间。
-	CreatedAt time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`
+	CreatedAt time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`
 	// UpdatedAt 更新时间。
-	UpdatedAt time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;index:idx_state_updated;comment:更新时间" json:"updatedAt"`
+	UpdatedAt time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP;index:idx_state_updated;comment:更新时间" json:"updatedAt"`
 }
 
 // TableName 返回 GORM 使用的表名。

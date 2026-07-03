@@ -16,24 +16,24 @@ const TableNameAdminLog = "admin_log"
 // AdminLog 管理员操作日志。
 // 这一版除了传统审计字段，还补充了 trace/span、HTTP 结果和耗时，便于把审计记录和运行日志串起来。
 type AdminLog struct {
-	ID           int       `gorm:"column:id;type:int unsigned;primaryKey;autoIncrement:true" json:"id"`                                                                // 日志主键 ID
-	UserID       int       `gorm:"column:user_id;type:int unsigned;not null;comment:用户 ID" json:"user_id"`                                                             // 操作管理员 ID
-	UserName     string    `gorm:"column:user_name;type:varchar(20);not null;index:idx_user_name,priority:1;comment:用户账户" json:"user_name"`                            // 操作管理员账号
-	Action       string    `gorm:"column:action;type:varchar(100);not null;index:idx_action,priority:1;default:0;comment:动作名称" json:"action"`                          // 审计动作名称
-	Route        string    `gorm:"column:route;type:varchar(255);not null;comment:路由名称" json:"route"`                                                                  // 请求路由
-	Method       string    `gorm:"column:method;type:varchar(255);not null;comment:模块/类/方法" json:"method"`                                                             // 处理方法标识
-	Describe     string    `gorm:"column:describe;type:varchar(255);not null;comment:描述" json:"describe"`                                                              // 操作描述
-	Data         string    `gorm:"column:data;type:text;comment:操作数据" json:"data"`                                                                                     // 审计数据快照
-	IP           string    `gorm:"column:ip;type:varchar(64);not null;comment:IP 地址" json:"ip"`                                                                        // 客户端 IP 地址
-	Ipaddr       string    `gorm:"column:ipaddr;type:varchar(100);not null;comment:IP 地区信息" json:"ipaddr"`                                                             // IP 地区信息
-	TraceID      string    `gorm:"column:trace_id;type:varchar(64);not null;default:'';index:idx_trace_id,priority:1;comment:Trace ID" json:"trace_id"`                // Trace ID
-	SpanID       string    `gorm:"column:span_id;type:varchar(32);not null;default:'';comment:Span ID" json:"span_id"`                                                 // Span ID
-	HTTPStatus   int       `gorm:"column:http_status;type:int;not null;default:200;comment:HTTP 状态码" json:"http_status"`                                               // HTTP 状态码
-	BizCode      int       `gorm:"column:biz_code;type:int;not null;default:0;comment:业务码" json:"biz_code"`                                                            // 业务响应码
-	LatencyMS    int64     `gorm:"column:latency_ms;type:bigint;not null;default:0;comment:请求耗时毫秒" json:"latency_ms"`                                                  // 请求耗时（毫秒）
-	Success      bool      `gorm:"column:success;type:tinyint(1);not null;default:1;comment:是否成功" json:"success"`                                                      // 是否成功
-	ErrorMessage string    `gorm:"column:error_message;type:varchar(500);not null;default:'';comment:错误信息" json:"error_message"`                                       // 错误摘要
-	CreatedAt    time.Time `gorm:"column:created_at;type:timestamp;not null;index:idx_created_at,priority:1;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"` // 创建时间
+	ID           int       `gorm:"column:id;type:int unsigned;primaryKey;autoIncrement:true" json:"id"`                                                               // 日志主键 ID
+	UserID       int       `gorm:"column:user_id;type:int unsigned;not null;comment:用户 ID" json:"user_id"`                                                            // 操作管理员 ID
+	UserName     string    `gorm:"column:user_name;type:varchar(20);not null;index:idx_user_name,priority:1;comment:用户账户" json:"user_name"`                           // 操作管理员账号
+	Action       string    `gorm:"column:action;type:varchar(100);not null;index:idx_action,priority:1;default:0;comment:动作名称" json:"action"`                         // 审计动作名称
+	Route        string    `gorm:"column:route;type:varchar(255);not null;comment:路由名称" json:"route"`                                                                 // 请求路由
+	Method       string    `gorm:"column:method;type:varchar(255);not null;comment:模块/类/方法" json:"method"`                                                            // 处理方法标识
+	Describe     string    `gorm:"column:describe;type:varchar(255);not null;comment:描述" json:"describe"`                                                             // 操作描述
+	Data         string    `gorm:"column:data;type:text;comment:操作数据" json:"data"`                                                                                    // 审计数据快照
+	IP           string    `gorm:"column:ip;type:varchar(64);not null;comment:IP 地址" json:"ip"`                                                                       // 客户端 IP 地址
+	Ipaddr       string    `gorm:"column:ipaddr;type:varchar(100);not null;comment:IP 地区信息" json:"ipaddr"`                                                            // IP 地区信息
+	TraceID      string    `gorm:"column:trace_id;type:varchar(64);not null;default:'';index:idx_trace_id,priority:1;comment:Trace ID" json:"trace_id"`               // Trace ID
+	SpanID       string    `gorm:"column:span_id;type:varchar(32);not null;default:'';comment:Span ID" json:"span_id"`                                                // Span ID
+	HTTPStatus   int       `gorm:"column:http_status;type:int;not null;default:200;comment:HTTP 状态码" json:"http_status"`                                              // HTTP 状态码
+	BizCode      int       `gorm:"column:biz_code;type:int;not null;default:0;comment:业务码" json:"biz_code"`                                                           // 业务响应码
+	LatencyMS    int64     `gorm:"column:latency_ms;type:bigint;not null;default:0;comment:请求耗时毫秒" json:"latency_ms"`                                                 // 请求耗时（毫秒）
+	Success      bool      `gorm:"column:success;type:tinyint(1);not null;default:1;comment:是否成功" json:"success"`                                                     // 是否成功
+	ErrorMessage string    `gorm:"column:error_message;type:varchar(500);not null;default:'';comment:错误信息" json:"error_message"`                                      // 错误摘要
+	CreatedAt    time.Time `gorm:"column:created_at;type:datetime;not null;index:idx_created_at,priority:1;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"` // 创建时间
 }
 
 // TableName 返回管理员审计日志表名。

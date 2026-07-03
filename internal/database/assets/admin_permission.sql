@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS `admin_permission` (
   `type` tinyint NOT NULL DEFAULT '0' COMMENT '类型: 0查看, 1新增, 2修改, 3删除, 4目录, 5菜单, 6页面, 7按钮, 8其它',
   `description` varchar(255) NOT NULL DEFAULT '' COMMENT '描述',
   `status` tinyint unsigned NOT NULL DEFAULT '1' COMMENT '状态：1 启用；0 禁用',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_uuid` (`uuid`),
   KEY `idx_title` (`title`)

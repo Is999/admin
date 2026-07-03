@@ -20,8 +20,8 @@ CREATE TABLE IF NOT EXISTS `runtime_task_periodic` (
   `remark` varchar(500) NOT NULL DEFAULT '' COMMENT '备注',
   `created_by_admin_id` int unsigned NOT NULL DEFAULT '0' COMMENT '创建管理员ID',
   `updated_by_admin_id` int unsigned NOT NULL DEFAULT '0' COMMENT '更新管理员ID',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_name` (`name`),
   KEY `idx_workflow_enabled_sort` (`workflow`,`enabled`,`sort_order`)

@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS `secret_key` (
   `sign_status` tinyint NOT NULL DEFAULT '1' COMMENT '签名验签状态：1启用，0停用',
   `crypto_status` tinyint NOT NULL DEFAULT '1' COMMENT '加密解密状态：1启用，0停用',
   `remark` varchar(255) NOT NULL DEFAULT '' COMMENT '备注',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uuid` (`uuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='秘钥';

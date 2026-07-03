@@ -18,8 +18,8 @@ type SecretKeyVersion struct {
 	RSAPrivateKeyServerRef string    `gorm:"column:rsa_private_key_server_ref;type:varchar(500);not null;comment:服务端 RSA 私钥文件绝对路径" json:"rsa_private_key_server_ref"`                       // 服务端 RSA 私钥文件绝对路径
 	Status                 int       `gorm:"column:status;type:tinyint;not null;default:1;comment:版本状态：1启用，0停用" json:"status"`                                                              // 版本状态：1启用，0停用
 	Remark                 string    `gorm:"column:remark;type:varchar(255);not null;comment:版本备注" json:"remark"`                                                                           // 版本备注
-	CreatedAt              time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                            // 创建时间
-	UpdatedAt              time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`                                            // 修改时间
+	CreatedAt              time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                             // 创建时间
+	UpdatedAt              time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`                                             // 修改时间
 }
 
 // TableName 返回秘钥版本表名。

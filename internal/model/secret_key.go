@@ -19,8 +19,8 @@ type SecretKey struct {
 	SignStatus    int       `gorm:"column:sign_status;type:tinyint;not null;default:1;comment:签名验签状态：1启用，0停用" json:"sign_status"`          // 签名验签状态：1启用，0停用
 	CryptoStatus  int       `gorm:"column:crypto_status;type:tinyint;not null;default:1;comment:加密解密状态：1启用，0停用" json:"crypto_status"`      // 加密解密状态：1启用，0停用
 	Remark        string    `gorm:"column:remark;type:varchar(255);not null;comment:备注" json:"remark"`                                     // 备注
-	CreatedAt     time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`    // 创建时间
-	UpdatedAt     time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`    // 修改时间
+	CreatedAt     time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`     // 创建时间
+	UpdatedAt     time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`     // 修改时间
 }
 
 // TableName 返回秘钥配置表名。

@@ -11,11 +11,11 @@ CREATE TABLE IF NOT EXISTS `admin` (
   `status` tinyint NOT NULL DEFAULT '1' COMMENT '账户状态: 1正常, 0禁用',
   `avatar` varchar(255) NOT NULL DEFAULT '' COMMENT '头像',
   `description` varchar(255) NOT NULL DEFAULT '' COMMENT '简介描述',
-  `last_login_time` timestamp NOT NULL COMMENT '最后登录时间',
+  `last_login_time` datetime NOT NULL COMMENT '最后登录时间',
   `last_login_ip` varchar(32) NOT NULL DEFAULT '' COMMENT '最后登录 IP',
   `last_login_ipaddr` varchar(255) NOT NULL DEFAULT '' COMMENT '最后登录 IP 归属地',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '添加时间',
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '添加时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='管理员';

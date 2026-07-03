@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS `schema_migrations` (
   `name` varchar(128) NOT NULL DEFAULT '' COMMENT '迁移名称',
   `asset` varchar(255) NOT NULL DEFAULT '' COMMENT '迁移资产路径',
   `checksum` char(64) NOT NULL DEFAULT '' COMMENT '迁移SQL SHA256',
-  `applied_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '执行时间',
+  `applied_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '执行时间',
   PRIMARY KEY (`version`),
   UNIQUE KEY `uk_schema_migrations_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据库迁移版本表';

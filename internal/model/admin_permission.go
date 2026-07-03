@@ -18,8 +18,8 @@ type AdminPermission struct {
 	Type        int       `gorm:"column:type;type:tinyint;not null;comment:类型: 0查看, 1新增, 2修改, 3删除, 4目录, 5菜单, 6页面, 7按钮, 8其它" json:"type"` // 类型: 0查看, 1新增, 2修改, 3删除, 4目录, 5菜单, 6页面, 7按钮, 8其它
 	Description string    `gorm:"column:description;type:varchar(255);not null;comment:描述" json:"description"`                           // 描述
 	Status      int       `gorm:"column:status;type:tinyint unsigned;not null;default:1;comment:状态：1 启用；0 禁用" json:"status"`             // 状态：1 启用；0 禁用
-	CreatedAt   time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`    // 创建时间
-	UpdatedAt   time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`    // 修改时间
+	CreatedAt   time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`     // 创建时间
+	UpdatedAt   time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`     // 修改时间
 }
 
 // TableName 返回管理员权限表名。

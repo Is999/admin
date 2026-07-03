@@ -48,8 +48,8 @@ type AdminMessage struct {
 	HandledStatus      int        `gorm:"column:handled_status;type:tinyint unsigned;not null;default:0;index:idx_handled_status,priority:1;comment:处理状态(0未处理1已处理)" json:"handledStatus"` // 处理状态
 	HandledByAdminID   int        `gorm:"column:handled_by_admin_id;type:int unsigned;not null;default:0;comment:处理人管理员ID" json:"handledByAdminId"`                                       // 处理人管理员ID
 	HandledByAdminName string     `gorm:"column:handled_by_admin_name;type:varchar(20);not null;default:'';comment:处理人账号快照" json:"handledByAdminName"`                                    // 处理人账号快照
-	HandledAt          *time.Time `gorm:"column:handled_at;type:timestamp;default:null;comment:处理时间" json:"handledAt"`                                                                    // 处理时间
-	CreatedAt          time.Time  `gorm:"column:created_at;type:timestamp;not null;index:idx_created_at,priority:1;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`             // 创建时间
+	HandledAt          *time.Time `gorm:"column:handled_at;type:datetime;default:null;comment:处理时间" json:"handledAt"`                                                                     // 处理时间
+	CreatedAt          time.Time  `gorm:"column:created_at;type:datetime;not null;index:idx_created_at,priority:1;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`              // 创建时间
 }
 
 // TableName 返回管理员消息主表表名。
@@ -63,10 +63,10 @@ type AdminMessageReceiver struct {
 	MessageID       int64      `gorm:"column:message_id;type:bigint unsigned;not null;index:idx_message_id,priority:1;comment:消息ID" json:"messageId"`                                                         // 消息 ID
 	ReceiverAdminID int        `gorm:"column:receiver_admin_id;type:int unsigned;not null;index:idx_receiver_state,priority:1;index:idx_receiver_deleted,priority:1;comment:接收人管理员ID" json:"receiverAdminId"` // 接收人管理员 ID
 	ReadStatus      int        `gorm:"column:read_status;type:tinyint unsigned;not null;default:0;index:idx_receiver_state,priority:2;comment:是否已读(0未读1已读)" json:"readStatus"`                                // 是否已读
-	ReadAt          *time.Time `gorm:"column:read_at;type:timestamp;default:null;comment:已读时间" json:"readAt"`                                                                                                 // 已读时间
+	ReadAt          *time.Time `gorm:"column:read_at;type:datetime;default:null;comment:已读时间" json:"readAt"`                                                                                                  // 已读时间
 	DeleteStatus    int        `gorm:"column:delete_status;type:tinyint unsigned;not null;default:0;index:idx_receiver_deleted,priority:2;comment:是否删除(0未删1已删)" json:"deleteStatus"`                          // 是否删除
-	DeletedAt       *time.Time `gorm:"column:deleted_at;type:timestamp;default:null;comment:删除时间" json:"deletedAt"`                                                                                           // 删除时间
-	CreatedAt       time.Time  `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                                                    // 创建时间
+	DeletedAt       *time.Time `gorm:"column:deleted_at;type:datetime;default:null;comment:删除时间" json:"deletedAt"`                                                                                            // 删除时间
+	CreatedAt       time.Time  `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                                                     // 创建时间
 }
 
 // TableName 返回管理员消息收件箱表名。

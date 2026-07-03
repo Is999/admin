@@ -40,10 +40,10 @@ type User struct {
 	Phone        string    `gorm:"column:phone;type:varchar(32);not null;default:'';index:idx_user_phone;comment:手机号" json:"phone"`                                                 // 手机号
 	Avatar       string    `gorm:"column:avatar;type:varchar(255);not null;default:'';comment:头像" json:"avatar"`                                                                    // 头像
 	Status       int       `gorm:"column:status;type:tinyint;not null;default:1;index:idx_user_status_id,priority:1;comment:状态：1 正常，0 禁用" json:"status"`                            // 状态：1 正常，0 禁用
-	LastLoginAt  time.Time `gorm:"column:last_login_at;type:timestamp;comment:最后登录时间" json:"last_login_at"`                                                                         // 最后登录时间
+	LastLoginAt  time.Time `gorm:"column:last_login_at;type:datetime;comment:最后登录时间" json:"last_login_at"`                                                                          // 最后登录时间
 	LastLoginIP  string    `gorm:"column:last_login_ip;type:varchar(45);not null;default:'';comment:最后登录 IP" json:"last_login_ip"`                                                  // 最后登录 IP
-	CreatedAt    time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                              // 创建时间
-	UpdatedAt    time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"`                                              // 更新时间
+	CreatedAt    time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                               // 创建时间
+	UpdatedAt    time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"`                                               // 更新时间
 }
 
 // UserAccount 表示业务用户全局账号索引，负责 username 唯一性和物理表定位。
@@ -53,8 +53,8 @@ type UserAccount struct {
 	UserID          int64     `gorm:"column:user_id;type:bigint;not null;uniqueIndex:uk_user_account_user_id;index:idx_user_account_shard_user,priority:2;index:idx_user_account_route_shard_user,priority:3;comment:业务用户雪花 ID" json:"userId"` // 业务用户雪花 ID
 	ShardNo         int       `gorm:"column:shard_no;type:int;not null;index:idx_user_account_shard_user,priority:1;index:idx_user_account_route_shard_user,priority:2;comment:ID 哈希分片，CRC32(id字符串)%1024" json:"shardNo"`                      // 逻辑分片号
 	RouteShardCount int       `gorm:"column:route_shard_count;type:smallint unsigned;not null;default:1;index:idx_user_account_route_shard_user,priority:1;comment:当前物理用户表数量：1/2/4/.../1024" json:"routeShardCount"`                           // 当前物理表数量
-	CreatedAt       time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                                                                                                       // 创建时间
-	UpdatedAt       time.Time `gorm:"column:updated_at;type:timestamp;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"`                                                                           // 更新时间
+	CreatedAt       time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"createdAt"`                                                                                                        // 创建时间
+	UpdatedAt       time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;comment:更新时间" json:"updatedAt"`                                                                            // 更新时间
 }
 
 // TableName 返回业务用户表名。

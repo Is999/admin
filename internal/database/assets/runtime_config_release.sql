@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS `runtime_config_release` (
   `remark` varchar(500) NOT NULL DEFAULT '' COMMENT '发布备注',
   `published_by_admin_id` int unsigned NOT NULL DEFAULT '0' COMMENT '发布管理员ID',
   `published_by_name` varchar(64) NOT NULL DEFAULT '' COMMENT '发布管理员账号',
-  `published_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发布时间',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `published_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发布时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_version_no` (`version_no`),
   KEY `idx_published` (`published_at`)

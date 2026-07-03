@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS `admin_role` (
   `status` tinyint NOT NULL DEFAULT '1' COMMENT '状态：1正常，0禁用',
   `describe` varchar(255) NOT NULL DEFAULT '' COMMENT '描述',
   `is_delete` tinyint NOT NULL DEFAULT '0' COMMENT '是否删除: 1删除(关联有用户或下级角色不能删除)',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_title` (`title`),
   KEY `idx_pid` (`pid`)

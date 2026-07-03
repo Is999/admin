@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS `sys_config` (
   `pid` int unsigned NOT NULL DEFAULT '0' COMMENT '上级ID',
   `pids` varchar(255) NOT NULL DEFAULT '' COMMENT '上级ID(族谱)',
   `version` int unsigned NOT NULL DEFAULT '0' COMMENT '版本号',
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_uuid` (`uuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='参数配置表';

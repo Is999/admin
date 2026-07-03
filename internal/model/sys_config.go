@@ -20,8 +20,8 @@ type SysConfig struct {
 	Pid       int       `gorm:"column:pid;type:int unsigned;not null;comment:上级ID" json:"pid"`                                                                                                                    // 上级ID
 	Pids      string    `gorm:"column:pids;type:varchar(255);not null;comment:上级ID(族谱)" json:"pids"`                                                                                                              // 上级ID(族谱)
 	Version   int       `gorm:"column:version;type:int unsigned;not null;comment:版本号" json:"version"`                                                                                                             // 版本号
-	CreatedAt time.Time `gorm:"column:created_at;type:timestamp;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                                                               // 创建时间
-	UpdatedAt time.Time `gorm:"column:updated_at;type:timestamp;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"`                                                                                        // 更新时间
+	CreatedAt time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                                                                // 创建时间
+	UpdatedAt time.Time `gorm:"column:updated_at;type:datetime;default:CURRENT_TIMESTAMP;comment:更新时间" json:"updated_at"`                                                                                         // 更新时间
 }
 
 // TableName 返回系统配置表名。

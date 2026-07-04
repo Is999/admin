@@ -16,38 +16,40 @@ const (
 
 // TaskDailyReport 描述任务系统日报通知内容。
 type TaskDailyReport struct {
-	ServiceName           string                 // 服务名
-	Environment           string                 // 运行环境
-	AppID                 string                 // 站点/应用 ID
-	WindowStart           time.Time              // 统计窗口开始时间
-	WindowEnd             time.Time              // 统计窗口结束时间
-	GeneratedAt           time.Time              // 报告生成时间
-	TotalTaskExecutions   int                    // 周期来源任务执行总数
-	SuccessTaskExecutions int                    // 成功任务数
-	FailedTaskExecutions  int                    // 失败任务数
-	PeriodicTriggerTotal  int                    // 周期触发入口任务总数
-	PeriodicTriggerOK     int                    // 周期触发入口成功数
-	PeriodicTriggerFailed int                    // 周期触发入口失败数
-	NodeTaskTotal         int                    // 周期工作流节点任务总数
-	WorkflowTotal         int                    // 工作流实例总数
-	WorkflowSuccess       int                    // 成功工作流实例数
-	WorkflowFailed        int                    // 失败工作流实例数
-	WorkflowRunning       int                    // 运行中工作流实例数
-	WorkflowUnknown       int                    // 未知工作流实例数
-	TraceTotalCount       int64                  // 处理总量
-	TraceReadCount        int64                  // 读取数量
-	TraceWriteCount       int64                  // 写入数量
-	TraceDeleteCount      int64                  // 删除数量
-	TraceErrorCount       int64                  // 错误数量
-	AverageDurationMS     int64                  // 平均耗时毫秒
-	MaxDurationMS         int64                  // 最大耗时毫秒
-	Queues                []TaskDailyReportQueue // 队列摘要
-	PeriodicTasks         []TaskDailyReportItem  // 周期任务摘要
-	Workflows             []TaskDailyReportItem  // 工作流摘要
-	FailureTasks          []TaskDailyReportTask  // 失败任务明细
-	SlowTasks             []TaskDailyReportTask  // 慢任务明细
-	Truncated             bool                   // 是否截断统计
-	RetentionWarning      string                 // 保留时间不足提示
+	ServiceName           string                      // 服务名
+	Environment           string                      // 运行环境
+	AppID                 string                      // 站点/应用 ID
+	WindowStart           time.Time                   // 统计窗口开始时间
+	WindowEnd             time.Time                   // 统计窗口结束时间
+	GeneratedAt           time.Time                   // 报告生成时间
+	TotalTaskExecutions   int                         // 周期来源任务执行总数
+	SuccessTaskExecutions int                         // 成功任务数
+	FailedTaskExecutions  int                         // 失败任务数
+	PeriodicTriggerTotal  int                         // 周期触发入口任务总数
+	PeriodicTriggerOK     int                         // 周期触发入口成功数
+	PeriodicTriggerFailed int                         // 周期触发入口失败数
+	NodeTaskTotal         int                         // 周期工作流节点任务总数
+	WorkflowTotal         int                         // 工作流实例总数
+	WorkflowSuccess       int                         // 成功工作流实例数
+	WorkflowFailed        int                         // 失败工作流实例数
+	WorkflowRunning       int                         // 运行中工作流实例数
+	WorkflowUnknown       int                         // 未知工作流实例数
+	TraceTotalCount       int64                       // 处理总量
+	TraceReadCount        int64                       // 读取数量
+	TraceWriteCount       int64                       // 写入数量
+	TraceDeleteCount      int64                       // 删除数量
+	TraceErrorCount       int64                       // 错误数量
+	AverageDurationMS     int64                       // 平均耗时毫秒
+	MaxDurationMS         int64                       // 最大耗时毫秒
+	Queues                []TaskDailyReportQueue      // 队列摘要
+	PeriodicTasks         []TaskDailyReportItem       // 周期任务摘要
+	Workflows             []TaskDailyReportItem       // 工作流摘要
+	TimeBuckets           []TaskDailyReportTimeBucket // 小时时间段分布摘要
+	FailureTasks          []TaskDailyReportTask       // 失败任务明细
+	SlowTasks             []TaskDailyReportTask       // 慢任务明细
+	TraceErrorTasks       []TaskDailyReportTask       // 处理量错误任务明细
+	Truncated             bool                        // 是否截断统计
+	RetentionWarning      string                      // 保留时间不足提示
 }
 
 // TaskDailyReportQueue 描述队列维度日报摘要。
@@ -84,19 +86,39 @@ type TaskDailyReportItem struct {
 
 // TaskDailyReportTask 描述日报中的任务明细。
 type TaskDailyReportTask struct {
-	ID           string // Asynq 任务 ID
-	Name         string // 任务展示名
-	Type         string // 任务类型
-	State        string // 任务状态
-	Queue        string // 队列
-	PeriodicName string // 周期任务名称
-	WorkflowID   string // 工作流实例 ID
-	WorkflowName string // 工作流名称
-	WorkflowNode string // 工作流节点
-	StartedAt    string // 开始时间
-	FinishedAt   string // 完成或失败时间
-	DurationMS   int64  // 耗时毫秒
-	Error        string // 错误摘要
+	ID           string   // Asynq 任务 ID
+	Name         string   // 任务展示名
+	Type         string   // 任务类型
+	State        string   // 任务状态
+	Queue        string   // 队列
+	PeriodicName string   // 周期任务名称
+	WorkflowID   string   // 工作流实例 ID
+	WorkflowName string   // 工作流名称
+	WorkflowNode string   // 工作流节点
+	StartedAt    string   // 开始时间
+	FinishedAt   string   // 完成或失败时间
+	DurationMS   int64    // 耗时毫秒
+	Error        string   // 错误摘要
+	TraceErrors  int64    // 执行统计中的隔离错误数量
+	TraceDetails []string // 执行统计错误明细
+}
+
+// TaskDailyReportTimeBucket 描述日报小时分布摘要。
+type TaskDailyReportTimeBucket struct {
+	StartAt           string // 时间段开始，RFC3339
+	EndAt             string // 时间段结束，RFC3339
+	TaskExecutions    int    // 任务执行数
+	Success           int    // 成功任务数
+	Failed            int    // 失败任务数
+	Triggers          int    // 周期触发任务数
+	NodeTasks         int    // 工作流节点任务数
+	TraceTotalCount   int64  // 处理总量
+	TraceReadCount    int64  // 读取数量
+	TraceWriteCount   int64  // 写入数量
+	TraceDeleteCount  int64  // 删除数量
+	TraceErrorCount   int64  // 隔离错误数量
+	AverageDurationMS int64  // 平均耗时毫秒
+	MaxDurationMS     int64  // 最大耗时毫秒
 }
 
 // SendTaskDailyReport 发送任务系统运行日报。
@@ -133,6 +155,9 @@ func (n *Notifier) formatTaskDailyReportCard(report TaskDailyReport) messageCard
 	if focus := taskDailyReportFocusLines(report); len(focus) > 0 {
 		elements = append(elements, cardMarkdown("**重点关注**\n%s", strings.Join(focus, "\n")))
 	}
+	if len(report.TimeBuckets) > 0 {
+		elements = append(elements, cardMarkdown("**高峰时段**\n%s", strings.Join(taskDailyReportTimeBucketLines(report.TimeBuckets), "\n")))
+	}
 	if len(report.FailureTasks) > 0 {
 		elements = append(elements, cardMarkdown("**失败明细**\n%s", strings.Join(n.taskDailyReportFailureLines(report.FailureTasks), "\n")))
 	}
@@ -142,6 +167,9 @@ func (n *Notifier) formatTaskDailyReportCard(report TaskDailyReport) messageCard
 	)
 	if len(report.SlowTasks) > 0 {
 		elements = append(elements, cardMarkdown("**慢任务 Top**\n%s", strings.Join(taskDailyReportSlowLines(report.SlowTasks), "\n")))
+	}
+	if len(report.TraceErrorTasks) > 0 {
+		elements = append(elements, cardMarkdown("**处理异常 Top**\n%s", strings.Join(taskDailyReportTraceErrorLines(report.TraceErrorTasks), "\n")))
 	}
 	elements = append(elements, cardMarkdown("**处理建议**\n%s", strings.Join(taskDailyReportAdviceLines(report), "\n")))
 	if n.atAll && (report.FailedTaskExecutions > 0 || report.WorkflowFailed > 0) {
@@ -165,7 +193,7 @@ func taskDailyReportCardTitle(report TaskDailyReport) string {
 	if report.FailedTaskExecutions > 0 || report.WorkflowFailed > 0 {
 		return "P3 任务运行日报 | 存在失败"
 	}
-	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 || report.Truncated || strings.TrimSpace(report.RetentionWarning) != "" {
+	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 || report.TraceErrorCount > 0 || report.Truncated || strings.TrimSpace(report.RetentionWarning) != "" {
 		return "P3 任务运行日报 | 需关注"
 	}
 	return "P3 任务运行日报 | 正常"
@@ -176,7 +204,7 @@ func taskDailyReportCardTemplate(report TaskDailyReport) string {
 	if report.FailedTaskExecutions > 0 || report.WorkflowFailed > 0 {
 		return "red"
 	}
-	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 || report.Truncated || strings.TrimSpace(report.RetentionWarning) != "" {
+	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 || report.TraceErrorCount > 0 || report.Truncated || strings.TrimSpace(report.RetentionWarning) != "" {
 		return "orange"
 	}
 	return "green"
@@ -210,6 +238,9 @@ func taskDailyReportFocusLines(report TaskDailyReport) []string {
 	}
 	if warning := strings.TrimSpace(report.RetentionWarning); warning != "" {
 		lines = append(lines, "- 数据完整性："+warning)
+	}
+	if report.TraceErrorCount > 0 {
+		lines = append(lines, "- 处理异常：隔离错误 "+formatInt64(report.TraceErrorCount)+"，详见处理异常 Top")
 	}
 	if report.Truncated {
 		lines = append(lines, "- 统计已截断：请缩小窗口或提高 completed 保留时间后复核")
@@ -319,6 +350,146 @@ func taskDailyReportSlowLines(items []TaskDailyReportTask) []string {
 	return lines
 }
 
+// taskDailyReportTraceErrorLines 生成处理量错误任务 Top 展示行。
+func taskDailyReportTraceErrorLines(items []TaskDailyReportTask) []string {
+	if len(items) == 0 {
+		return []string{"- 无处理异常任务"}
+	}
+	limit := minInt(len(items), taskDailyReportCardDetailLimit)
+	lines := make([]string, 0, limit)
+	for idx := 0; idx < limit; idx++ {
+		item := items[idx]
+		name := cardValue(item.Name, item.Type)
+		parts := []string{
+			strconv.Itoa(idx+1) + ". " + shortCardText(name, 72),
+			"错 " + formatInt64(item.TraceErrors),
+		}
+		if at := taskDailyReportTaskTime(item); at != "" {
+			parts = append(parts, "时间 "+at)
+		}
+		if item.WorkflowName != "" || item.WorkflowNode != "" {
+			parts = append(parts, "工作流 "+shortCardText(joinNonEmpty("/", item.WorkflowName, item.WorkflowNode), 80))
+		}
+		if len(item.TraceDetails) > 0 {
+			parts = append(parts, "明细 "+shortCardText(strings.Join(item.TraceDetails, "，"), 96))
+		}
+		lines = append(lines, "- "+strings.Join(parts, "；"))
+	}
+	if len(items) > limit {
+		lines = append(lines, "- 其余 "+strconv.Itoa(len(items)-limit)+" 条已折叠")
+	}
+	return lines
+}
+
+// taskDailyReportTimeBucketLines 生成小时分布中的高峰时段摘要。
+func taskDailyReportTimeBucketLines(items []TaskDailyReportTimeBucket) []string {
+	if len(items) == 0 {
+		return []string{"- 无时间分布数据"}
+	}
+	lines := make([]string, 0, 4)
+	if bucket, ok := maxTimeBucketBy(items, func(item TaskDailyReportTimeBucket) int64 {
+		return int64(item.TaskExecutions)
+	}); ok && bucket.TaskExecutions > 0 {
+		lines = append(lines, "- 任务高峰："+timeBucketWindow(bucket)+"｜"+timeBucketTaskText(bucket))
+	}
+	if bucket, ok := maxTimeBucketBy(items, func(item TaskDailyReportTimeBucket) int64 {
+		return item.TraceTotalCount
+	}); ok && bucket.TraceTotalCount > 0 {
+		lines = append(lines, "- 处理量高峰："+timeBucketWindow(bucket)+"｜"+timeBucketTraceText(bucket))
+	}
+	if bucket, ok := maxTimeBucketBy(items, func(item TaskDailyReportTimeBucket) int64 {
+		return item.TraceErrorCount
+	}); ok && bucket.TraceErrorCount > 0 {
+		lines = append(lines, "- 错误高峰："+timeBucketWindow(bucket)+"｜错 "+formatInt64(bucket.TraceErrorCount)+" / 执行 "+strconv.Itoa(bucket.TaskExecutions))
+	}
+	if bucket, ok := maxTimeBucketBy(items, func(item TaskDailyReportTimeBucket) int64 {
+		return item.MaxDurationMS
+	}); ok && bucket.MaxDurationMS > 0 {
+		lines = append(lines, "- 最慢时段："+timeBucketWindow(bucket)+"｜均 "+durationMSText(bucket.AverageDurationMS)+" / 最长 "+durationMSText(bucket.MaxDurationMS))
+	}
+	if len(lines) == 0 {
+		return []string{"- 窗口内未发现可展示的高峰时段"}
+	}
+	return lines
+}
+
+// maxTimeBucketBy 返回指定指标最大的时间段。
+func maxTimeBucketBy(items []TaskDailyReportTimeBucket, value func(TaskDailyReportTimeBucket) int64) (TaskDailyReportTimeBucket, bool) {
+	if len(items) == 0 || value == nil {
+		return TaskDailyReportTimeBucket{}, false
+	}
+	best := items[0]
+	bestValue := value(best)
+	for _, item := range items[1:] {
+		itemValue := value(item)
+		if itemValue > bestValue {
+			best = item
+			bestValue = itemValue
+		}
+	}
+	return best, true
+}
+
+// timeBucketTaskText 格式化任务数高峰摘要。
+func timeBucketTaskText(item TaskDailyReportTimeBucket) string {
+	parts := []string{
+		"执行 " + strconv.Itoa(item.TaskExecutions),
+		"触发 " + strconv.Itoa(item.Triggers),
+		"节点 " + strconv.Itoa(item.NodeTasks),
+	}
+	if item.Failed > 0 {
+		parts = append(parts, "失败 "+strconv.Itoa(item.Failed))
+	}
+	return strings.Join(parts, " / ")
+}
+
+// timeBucketTraceText 格式化处理量高峰摘要。
+func timeBucketTraceText(item TaskDailyReportTimeBucket) string {
+	return "总 " + formatInt64(item.TraceTotalCount) +
+		" / 读 " + formatInt64(item.TraceReadCount) +
+		" / 写 " + formatInt64(item.TraceWriteCount) +
+		" / 删 " + formatInt64(item.TraceDeleteCount) +
+		" / 错 " + formatInt64(item.TraceErrorCount)
+}
+
+// timeBucketWindow 格式化小时时间段。
+func timeBucketWindow(item TaskDailyReportTimeBucket) string {
+	start, startOK := parseCardTime(item.StartAt)
+	end, endOK := parseCardTime(item.EndAt)
+	if startOK && endOK {
+		if start.Format("2006-01-02") == end.Format("2006-01-02") {
+			return start.Format("2006-01-02 15:04") + "~" + end.Format("15:04")
+		}
+		return formatCardTime(start) + " ~ " + formatCardTime(end)
+	}
+	return cardValue(joinNonEmpty(" ~ ", item.StartAt, item.EndAt), "-")
+}
+
+// parseCardTime 解析卡片字段中的 RFC3339 时间。
+func parseCardTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	return parsed, err == nil
+}
+
+// taskDailyReportTaskTime 返回任务完成或开始时间，优先按卡片分钟粒度格式化。
+func taskDailyReportTaskTime(item TaskDailyReportTask) string {
+	raw := strings.TrimSpace(item.FinishedAt)
+	if raw == "" {
+		raw = strings.TrimSpace(item.StartedAt)
+	}
+	if raw == "" {
+		return ""
+	}
+	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		return formatCardTime(parsed)
+	}
+	return raw
+}
+
 // taskDailyReportAdviceLines 生成日报处理建议列表。
 func taskDailyReportAdviceLines(report TaskDailyReport) []string {
 	rawItems := taskDailyReportAdvice(report)
@@ -339,6 +510,9 @@ func taskDailyReportStatus(report TaskDailyReport) string {
 	}
 	if report.WorkflowRunning > 0 {
 		return "存在跨窗口仍在运行的工作流，请观察是否超时"
+	}
+	if report.TraceErrorCount > 0 {
+		return "存在处理量隔离错误，请查看处理异常 Top"
 	}
 	return "周期任务与工作流运行正常"
 }
@@ -384,8 +558,13 @@ func taskDailyReportAdvice(report TaskDailyReport) []string {
 	if report.Truncated {
 		advice = append(advice, "统计结果已达到聚合上限，请缩小窗口或提高任务 completed 保留时间后复核。")
 	}
+	if report.TraceErrorCount > 0 {
+		advice = append(advice, "处理量存在隔离错误，请按处理异常 Top 的任务名、工作流和时间进入任务中心检索详情。")
+	}
 	if report.FailedTaskExecutions > 0 || report.WorkflowFailed > 0 {
 		advice = append(advice, "按失败明细中的任务ID或工作流ID进入任务中心检索执行日志，确认依赖、数据影响范围和是否需要人工重试。")
+	} else if report.TraceErrorCount > 0 {
+		advice = append(advice, "当前窗口无终态失败；先确认处理异常 Top 是否需要数据补偿或重跑。")
 	} else {
 		advice = append(advice, "当前窗口无终态失败；继续观察慢任务 Top 和队列积压变化即可。")
 	}

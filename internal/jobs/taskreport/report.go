@@ -3,12 +3,14 @@ package taskreport
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"admin/common/i18n"
 	"admin/helper"
 	"admin/internal/requestctx"
+	taskstats "admin/internal/task/stats"
 	"admin/internal/task/taskwire"
 	"admin/internal/types"
 
@@ -19,12 +21,16 @@ import (
 const (
 	// reportPageSize 表示单轮读取 Asynq 任务详情的上限。
 	reportPageSize = 100
-	// reportDefaultMaxItems 限制日报最多聚合的周期来源任务数，避免 Redis 扫描失控。
-	reportDefaultMaxItems = 2000
 	// reportTopLimit 控制 Lark 日报中明细列表的最大条数。
 	reportTopLimit = 8
-	// reportMaxPages 控制日报按队列状态翻页的最大页数。
-	reportMaxPages = 50
+	// reportPagePauseEvery 控制跨页扫描的让出频率，避免长窗口统计连续压 Redis。
+	reportPagePauseEvery = 10
+	// reportPagePause 表示跨页扫描让出时间。
+	reportPagePause = 20 * time.Millisecond
+	// reportTimeBucket 表示日报时间分布聚合粒度。
+	reportTimeBucket = time.Hour
+	// reportTraceDetailLimit 控制单个错误任务展示的统计明细数量。
+	reportTraceDetailLimit = 3
 )
 
 // QueueManager 描述任务运行日报读取任务系统数据所需的最小能力。
@@ -40,40 +46,42 @@ type ReportRequest struct {
 	WindowStart time.Time // 统计窗口开始时间，默认取执行时间往前 24 小时
 	WindowEnd   time.Time // 统计窗口结束时间，默认取任务执行时间
 	GeneratedAt time.Time // 报告生成时间；为空时使用当前时间
-	MaxItems    int       // 最大聚合任务数；<=0 时使用默认上限
+	PageSize    int       // 单页读取任务详情数量；<=0 时使用默认批量
 }
 
 // Report 汇总一个统计窗口内周期任务和工作流执行情况。
 type Report struct {
-	WindowStart           time.Time         // 统计窗口开始时间
-	WindowEnd             time.Time         // 统计窗口结束时间
-	GeneratedAt           time.Time         // 报告生成时间
-	TotalTaskExecutions   int               // 周期来源任务执行总数，包含触发任务与节点任务
-	SuccessTaskExecutions int               // 成功任务数
-	FailedTaskExecutions  int               // 失败任务数
-	PeriodicTriggerTotal  int               // 周期触发入口任务总数
-	PeriodicTriggerOK     int               // 周期触发入口成功数
-	PeriodicTriggerFailed int               // 周期触发入口失败数
-	NodeTaskTotal         int               // 周期工作流节点任务总数
-	WorkflowTotal         int               // 周期来源工作流实例数
-	WorkflowSuccess       int               // 成功工作流实例数
-	WorkflowFailed        int               // 失败工作流实例数
-	WorkflowRunning       int               // 仍在运行的工作流实例数
-	WorkflowUnknown       int               // 状态已过期或无法确认的工作流实例数
-	TraceTotalCount       int64             // 任务执行统计中累计处理总量
-	TraceReadCount        int64             // 读取数量
-	TraceWriteCount       int64             // 写入数量，包含 insert/update/upsert
-	TraceDeleteCount      int64             // 删除数量
-	TraceErrorCount       int64             // 隔离错误数量
-	AverageDurationMS     int64             // 周期来源任务平均耗时
-	MaxDurationMS         int64             // 周期来源任务最大耗时
-	QueueSummaries        []QueueSummary    // 队列维度摘要
-	PeriodicTasks         []PeriodicSummary // 周期任务维度摘要
-	Workflows             []WorkflowSummary // 工作流维度摘要
-	FailureTasks          []TaskSummary     // 失败任务明细
-	SlowTasks             []TaskSummary     // 慢任务明细
-	Truncated             bool              // 是否因上限截断了统计明细
-	RetentionWarning      string            // 保留时间不足提示
+	WindowStart           time.Time           // 统计窗口开始时间
+	WindowEnd             time.Time           // 统计窗口结束时间
+	GeneratedAt           time.Time           // 报告生成时间
+	TotalTaskExecutions   int                 // 周期来源任务执行总数，包含触发任务与节点任务
+	SuccessTaskExecutions int                 // 成功任务数
+	FailedTaskExecutions  int                 // 失败任务数
+	PeriodicTriggerTotal  int                 // 周期触发入口任务总数
+	PeriodicTriggerOK     int                 // 周期触发入口成功数
+	PeriodicTriggerFailed int                 // 周期触发入口失败数
+	NodeTaskTotal         int                 // 周期工作流节点任务总数
+	WorkflowTotal         int                 // 周期来源工作流实例数
+	WorkflowSuccess       int                 // 成功工作流实例数
+	WorkflowFailed        int                 // 失败工作流实例数
+	WorkflowRunning       int                 // 仍在运行的工作流实例数
+	WorkflowUnknown       int                 // 状态已过期或无法确认的工作流实例数
+	TraceTotalCount       int64               // 任务执行统计中累计处理总量
+	TraceReadCount        int64               // 读取数量
+	TraceWriteCount       int64               // 写入数量，包含 insert/update/upsert
+	TraceDeleteCount      int64               // 删除数量
+	TraceErrorCount       int64               // 隔离错误数量
+	AverageDurationMS     int64               // 周期来源任务平均耗时
+	MaxDurationMS         int64               // 周期来源任务最大耗时
+	QueueSummaries        []QueueSummary      // 队列维度摘要
+	PeriodicTasks         []PeriodicSummary   // 周期任务维度摘要
+	Workflows             []WorkflowSummary   // 工作流维度摘要
+	TimeBuckets           []TimeBucketSummary // 小时时间段分布摘要
+	FailureTasks          []TaskSummary       // 失败任务明细
+	SlowTasks             []TaskSummary       // 慢任务明细
+	TraceErrorTasks       []TaskSummary       // 处理量错误任务明细
+	Truncated             bool                // 是否因外部保护截断了统计明细
+	RetentionWarning      string              // 保留时间不足提示
 }
 
 // QueueSummary 描述队列在日报窗口内和当前时刻的摘要。
@@ -126,48 +134,75 @@ type WorkflowSummary struct {
 
 // TaskSummary 描述日报中的任务明细。
 type TaskSummary struct {
-	ID           string // Asynq 任务 ID
-	Name         string // 任务展示名
-	Type         string // 任务类型
-	State        string // 任务状态
-	Queue        string // 队列
-	PeriodicName string // 周期任务名称
-	WorkflowID   string // 工作流实例 ID
-	WorkflowName string // 工作流名称
-	WorkflowNode string // 工作流节点
-	StartedAt    string // 开始时间
-	FinishedAt   string // 完成或失败时间
-	DurationMS   int64  // 耗时毫秒
-	Error        string // 错误摘要
+	ID           string   // Asynq 任务 ID
+	Name         string   // 任务展示名
+	Type         string   // 任务类型
+	State        string   // 任务状态
+	Queue        string   // 队列
+	PeriodicName string   // 周期任务名称
+	WorkflowID   string   // 工作流实例 ID
+	WorkflowName string   // 工作流名称
+	WorkflowNode string   // 工作流节点
+	StartedAt    string   // 开始时间
+	FinishedAt   string   // 完成或失败时间
+	DurationMS   int64    // 耗时毫秒
+	Error        string   // 错误摘要
+	TraceErrors  int64    // 执行统计中的隔离错误数量
+	TraceDetails []string // 执行统计错误明细
 }
 
-// workflowStatus 记录单个工作流实例在统计窗口内的最终状态。
+// TimeBucketSummary 描述一个时间段内的任务与处理量分布。
+type TimeBucketSummary struct {
+	StartAt           string // 时间段开始，RFC3339
+	EndAt             string // 时间段结束，RFC3339
+	TaskExecutions    int    // 任务执行数
+	Success           int    // 成功任务数
+	Failed            int    // 失败任务数
+	Triggers          int    // 周期触发任务数
+	NodeTasks         int    // 工作流节点任务数
+	TraceTotalCount   int64  // 处理总量
+	TraceReadCount    int64  // 读取数量
+	TraceWriteCount   int64  // 写入数量，包含 insert/update/upsert
+	TraceDeleteCount  int64  // 删除数量
+	TraceErrorCount   int64  // 隔离错误数量
+	AverageDurationMS int64  // 平均耗时毫秒
+	MaxDurationMS     int64  // 最大耗时毫秒
+}
+
+// workflowStatus 是日报聚合时读取到的工作流状态快照。
 type workflowStatus struct {
 	Name   string // 工作流展示名称
 	Status string // 工作流当前状态
 }
 
-// reportWindow 表示日报统计窗口和是否需要时间过滤。
+// reportWindow 表示日报统计窗口，按左闭右开边界过滤任务。
 type reportWindow struct {
 	start    time.Time // 窗口开始时间
 	end      time.Time // 窗口结束时间
 	hasRange bool      // 是否启用窗口过滤
 }
 
-// periodicAgg 聚合单个周期任务在窗口内的执行次数和耗时。
+// periodicAgg 暂存单个周期配置的执行统计。
 type periodicAgg struct {
 	item       PeriodicSummary // 对外输出的周期任务摘要
 	durationMS int64           // 参与平均耗时计算的总毫秒数
 	durationN  int64           // 参与平均耗时计算的样本数
 }
 
-// workflowAgg 聚合单个工作流在窗口内的实例状态和节点耗时。
+// workflowAgg 暂存同名工作流下多个实例的执行统计。
 type workflowAgg struct {
 	item       WorkflowSummary     // 对外输出的工作流摘要
 	ids        map[string]struct{} // 已计入的工作流实例 ID，避免重复计数
 	statuses   map[string]string   // 工作流实例 ID 到最终状态的映射
 	durationMS int64               // 参与平均耗时计算的总毫秒数
 	durationN  int64               // 参与平均耗时计算的样本数
+}
+
+// timeBucketAgg 暂存单个小时时间段内的任务统计。
+type timeBucketAgg struct {
+	item       TimeBucketSummary // 对外输出的时间段摘要
+	durationMS int64             // 参与平均耗时计算的总毫秒数
+	durationN  int64             // 参与平均耗时计算的样本数
 }
 
 // Service 构建任务系统运行日报。
@@ -203,27 +238,21 @@ func (s *Service) Build(ctx context.Context, req ReportRequest) (Report, error) 
 		return Report{}, errors.Tag(err)
 	}
 	items := make([]types.TaskItem, 0)
-	truncated := false
 	for _, summary := range queueSummaries {
 		for _, state := range []string{"archived", "completed"} {
-			if len(items) >= req.MaxItems {
-				truncated = true
-				break
-			}
-			stateItems, stateTruncated, err := s.stateItems(ctx, summary.Name, state, window, req.MaxItems-len(items))
+			stateItems, err := s.stateItems(ctx, summary.Name, state, window, req.PageSize)
 			if err != nil {
 				return Report{}, errors.Tag(err)
 			}
 			items = append(items, stateItems...)
-			truncated = truncated || stateTruncated
 		}
 	}
 	statuses := s.workflowStatuses(ctx, items)
 	warning := s.retentionWarning(ctx, req.WindowStart, req.WindowEnd)
-	return buildReport(req, queueSummaries, items, statuses, truncated, warning), nil
+	return buildReport(req, queueSummaries, items, statuses, false, warning), nil
 }
 
-// normalizeRequest 补齐日报窗口、生成时间和最大聚合数量默认值。
+// normalizeRequest 补齐日报窗口、生成时间和分页批量默认值。
 func normalizeRequest(req ReportRequest) ReportRequest {
 	now := req.GeneratedAt
 	if now.IsZero() {
@@ -235,8 +264,8 @@ func normalizeRequest(req ReportRequest) ReportRequest {
 	if req.GeneratedAt.IsZero() {
 		req.GeneratedAt = now
 	}
-	if req.MaxItems <= 0 {
-		req.MaxItems = reportDefaultMaxItems
+	if req.PageSize <= 0 {
+		req.PageSize = reportPageSize
 	}
 	return req
 }
@@ -277,26 +306,28 @@ func (s *Service) queueSummaries(ctx context.Context) ([]QueueSummary, error) {
 	return result, nil
 }
 
-// stateItems 分页读取指定状态下周期来源任务，并按窗口和上限截断。
-func (s *Service) stateItems(ctx context.Context, queueName string, state string, window reportWindow, limit int) ([]types.TaskItem, bool, error) {
-	if limit <= 0 {
-		return nil, true, nil
+// stateItems 分页读取指定状态下周期来源任务，直到覆盖整个统计窗口。
+func (s *Service) stateItems(ctx context.Context, queueName string, state string, window reportWindow, pageSize int) ([]types.TaskItem, error) {
+	if pageSize <= 0 {
+		pageSize = reportPageSize
 	}
 	result := make([]types.TaskItem, 0)
-	truncated := false
-	for page := 1; page <= reportMaxPages; page++ {
+	for page := 1; ; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, errors.Tag(err)
+		}
 		resp, err := s.manager.ListTasks(ctx, &types.ListTaskItemsReq{
 			Queue:     queueName,
 			State:     state,
 			Page:      page,
-			PageSize:  reportPageSize,
+			PageSize:  pageSize,
 			StartTime: formatWindowTime(window.start),
 			EndTime:   formatWindowTime(window.end),
 		})
 		if err != nil {
-			return nil, false, errors.Tag(err)
+			return nil, errors.Tag(err)
 		}
-		if resp == nil || len(resp.Tasks) == 0 {
+		if resp == nil {
 			break
 		}
 		for _, item := range resp.Tasks {
@@ -304,16 +335,41 @@ func (s *Service) stateItems(ctx context.Context, queueName string, state string
 				continue
 			}
 			result = append(result, item)
-			if len(result) >= limit {
-				return result, true, nil
-			}
 		}
-		if len(resp.Tasks) < reportPageSize || int64(page*reportPageSize) >= resp.Total {
-			return result, false, nil
+		if reportPageDone(resp, page, pageSize) {
+			break
 		}
-		truncated = page == reportMaxPages
+		if err := pauseReportPage(ctx, page); err != nil {
+			return nil, errors.Tag(err)
+		}
 	}
-	return result, truncated, nil
+	return result, nil
+}
+
+// reportPageDone 判断当前页是否已经覆盖状态集合的全部结果。
+func reportPageDone(resp *types.TaskListResp, page int, pageSize int) bool {
+	if resp == nil {
+		return true
+	}
+	if resp.Total <= 0 {
+		return len(resp.Tasks) == 0 || len(resp.Tasks) < pageSize
+	}
+	return int64(page*pageSize) >= resp.Total
+}
+
+// pauseReportPage 在长窗口扫描中按页轻量让出，避免维护任务连续占用 Redis。
+func pauseReportPage(ctx context.Context, page int) error {
+	if reportPagePauseEvery <= 0 || reportPagePause <= 0 || page%reportPagePauseEvery != 0 {
+		return nil
+	}
+	timer := time.NewTimer(reportPagePause)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // reportContains 使用左闭右开窗口，避免边界任务被相邻两次日报重复统计。
@@ -395,6 +451,7 @@ func buildReport(req ReportRequest, queues []QueueSummary, items []types.TaskIte
 	}
 	periodicAggs := make(map[string]*periodicAgg)
 	workflowAggs := make(map[string]*workflowAgg)
+	timeBucketAggs := make(map[string]*timeBucketAgg)
 	workflowIDs := make(map[string]string)
 	var totalDurationMS int64
 	var totalDurationN int64
@@ -429,6 +486,10 @@ func buildReport(req ReportRequest, queues []QueueSummary, items []types.TaskIte
 			report.SlowTasks = append(report.SlowTasks, task)
 		}
 		addTraceCounts(&report, item)
+		if task.TraceErrors > 0 {
+			report.TraceErrorTasks = append(report.TraceErrorTasks, task)
+		}
+		addTimeBucket(timeBucketAggs, task, item)
 		queuePos := ensureQueue(&report, queueIndex, task.Queue)
 		addQueueTask(&report.QueueSummaries[queuePos], item)
 		addPeriodic(periodicAggs, task, item)
@@ -451,6 +512,12 @@ func buildReport(req ReportRequest, queues []QueueSummary, items []types.TaskIte
 			agg.item.AverageMS = agg.durationMS / agg.durationN
 		}
 		report.PeriodicTasks = append(report.PeriodicTasks, agg.item)
+	}
+	for _, agg := range timeBucketAggs {
+		if agg.durationN > 0 {
+			agg.item.AverageDurationMS = agg.durationMS / agg.durationN
+		}
+		report.TimeBuckets = append(report.TimeBuckets, agg.item)
 	}
 	sortReport(&report)
 	return report
@@ -634,6 +701,94 @@ func addTraceCounts(report *Report, item types.TaskItem) {
 	report.TraceErrorCount += item.ExecutionTrace.ErrorCount
 }
 
+// addTimeBucket 将单条任务计入小时时间段分布。
+func addTimeBucket(aggs map[string]*timeBucketAgg, task TaskSummary, item types.TaskItem) {
+	taskAt, ok := taskBucketTime(task)
+	if !ok {
+		return
+	}
+	bucketStart := taskAt.Truncate(reportTimeBucket)
+	bucketEnd := bucketStart.Add(reportTimeBucket)
+	key := bucketStart.Format(time.RFC3339)
+	agg := aggs[key]
+	if agg == nil {
+		agg = &timeBucketAgg{item: TimeBucketSummary{
+			StartAt: bucketStart.Format(time.RFC3339),
+			EndAt:   bucketEnd.Format(time.RFC3339),
+		}}
+		aggs[key] = agg
+	}
+	agg.item.TaskExecutions++
+	if task.State == asynq.TaskStateArchived.String() {
+		agg.item.Failed++
+	} else {
+		agg.item.Success++
+	}
+	if item.TaskType == taskwire.TypeWorkflowTrigger {
+		agg.item.Triggers++
+	} else {
+		agg.item.NodeTasks++
+	}
+	if task.DurationMS > 0 {
+		agg.durationMS += task.DurationMS
+		agg.durationN++
+		if task.DurationMS > agg.item.MaxDurationMS {
+			agg.item.MaxDurationMS = task.DurationMS
+		}
+	}
+	if item.ExecutionTrace == nil {
+		return
+	}
+	agg.item.TraceTotalCount += item.ExecutionTrace.TotalCount
+	agg.item.TraceReadCount += item.ExecutionTrace.ReadCount
+	agg.item.TraceWriteCount += item.ExecutionTrace.InsertCount + item.ExecutionTrace.UpdateCount + item.ExecutionTrace.UpsertCount
+	agg.item.TraceDeleteCount += item.ExecutionTrace.DeleteCount
+	agg.item.TraceErrorCount += item.ExecutionTrace.ErrorCount
+}
+
+// taskBucketTime 返回任务参与时间分布聚合的时间点。
+func taskBucketTime(task TaskSummary) (time.Time, bool) {
+	raw := taskTime(task)
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+// taskTraceErrorCount 返回任务执行统计中的隔离错误数量。
+func taskTraceErrorCount(snapshot *taskstats.Snapshot) int64 {
+	if snapshot == nil {
+		return 0
+	}
+	return snapshot.ErrorCount
+}
+
+// taskTraceErrorDetails 提取错误动作明细，便于日报直接定位异常对象。
+func taskTraceErrorDetails(snapshot *taskstats.Snapshot) []string {
+	if snapshot == nil || snapshot.ErrorCount <= 0 {
+		return nil
+	}
+	result := make([]string, 0, reportTraceDetailLimit)
+	for _, detail := range snapshot.Details {
+		if detail.Action != taskstats.ActionError || detail.Count <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(detail.Name)
+		if name == "" {
+			name = taskstats.DetailNameDefault
+		}
+		result = append(result, name+" "+strconv.FormatInt(detail.Count, 10))
+		if len(result) >= reportTraceDetailLimit {
+			break
+		}
+	}
+	return result
+}
+
 // taskFromItem 将任务列表项转换为日报明细项。
 func taskFromItem(item types.TaskItem) TaskSummary {
 	return TaskSummary{
@@ -650,6 +805,8 @@ func taskFromItem(item types.TaskItem) TaskSummary {
 		FinishedAt:   taskFinishedAt(item),
 		DurationMS:   item.DurationMS,
 		Error:        strings.TrimSpace(item.LastErr),
+		TraceErrors:  taskTraceErrorCount(item.ExecutionTrace),
+		TraceDetails: taskTraceErrorDetails(item.ExecutionTrace),
 	}
 }
 
@@ -732,6 +889,9 @@ func sortReport(report *Report) {
 	sort.Slice(report.Workflows, func(i, j int) bool {
 		return workflowLess(report.Workflows[i], report.Workflows[j])
 	})
+	sort.Slice(report.TimeBuckets, func(i, j int) bool {
+		return report.TimeBuckets[i].StartAt < report.TimeBuckets[j].StartAt
+	})
 	sort.Slice(report.FailureTasks, func(i, j int) bool {
 		return taskTimeAfter(taskTime(report.FailureTasks[i]), taskTime(report.FailureTasks[j]))
 	})
@@ -742,10 +902,18 @@ func sortReport(report *Report) {
 		}
 		return taskTimeAfter(taskTime(left), taskTime(right))
 	})
+	sort.Slice(report.TraceErrorTasks, func(i, j int) bool {
+		left, right := report.TraceErrorTasks[i], report.TraceErrorTasks[j]
+		if left.TraceErrors != right.TraceErrors {
+			return left.TraceErrors > right.TraceErrors
+		}
+		return taskTimeAfter(taskTime(left), taskTime(right))
+	})
 	report.PeriodicTasks = limitPeriodics(report.PeriodicTasks)
 	report.Workflows = limitWorkflows(report.Workflows)
 	report.FailureTasks = limitTasks(report.FailureTasks)
 	report.SlowTasks = limitTasks(report.SlowTasks)
+	report.TraceErrorTasks = limitTasks(report.TraceErrorTasks)
 }
 
 // periodicLess 定义周期摘要排序：失败数、执行数、最近时间、名称。

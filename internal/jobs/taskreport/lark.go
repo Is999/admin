@@ -72,8 +72,10 @@ func ToLarkReport(cfg config.Config, report Report) larkx.TaskDailyReport {
 	result.Queues = toLarkQueues(report.QueueSummaries)
 	result.PeriodicTasks = toLarkPeriodicItems(report.PeriodicTasks)
 	result.Workflows = toLarkWorkflowItems(report.Workflows)
+	result.TimeBuckets = toLarkTimeBuckets(report.TimeBuckets)
 	result.FailureTasks = toLarkTasks(report.FailureTasks)
 	result.SlowTasks = toLarkTasks(report.SlowTasks)
+	result.TraceErrorTasks = toLarkTasks(report.TraceErrorTasks)
 	return result
 }
 
@@ -141,6 +143,30 @@ func toLarkWorkflowItems(items []WorkflowSummary) []larkx.TaskDailyReportItem {
 	return result
 }
 
+// toLarkTimeBuckets 转换小时分布摘要为 Lark 日报字段。
+func toLarkTimeBuckets(items []TimeBucketSummary) []larkx.TaskDailyReportTimeBucket {
+	result := make([]larkx.TaskDailyReportTimeBucket, 0, len(items))
+	for _, item := range items {
+		result = append(result, larkx.TaskDailyReportTimeBucket{
+			StartAt:           item.StartAt,
+			EndAt:             item.EndAt,
+			TaskExecutions:    item.TaskExecutions,
+			Success:           item.Success,
+			Failed:            item.Failed,
+			Triggers:          item.Triggers,
+			NodeTasks:         item.NodeTasks,
+			TraceTotalCount:   item.TraceTotalCount,
+			TraceReadCount:    item.TraceReadCount,
+			TraceWriteCount:   item.TraceWriteCount,
+			TraceDeleteCount:  item.TraceDeleteCount,
+			TraceErrorCount:   item.TraceErrorCount,
+			AverageDurationMS: item.AverageDurationMS,
+			MaxDurationMS:     item.MaxDurationMS,
+		})
+	}
+	return result
+}
+
 // toLarkTasks 转换任务明细为 Lark 日报明细项。
 func toLarkTasks(items []TaskSummary) []larkx.TaskDailyReportTask {
 	result := make([]larkx.TaskDailyReportTask, 0, len(items))
@@ -159,6 +185,8 @@ func toLarkTasks(items []TaskSummary) []larkx.TaskDailyReportTask {
 			FinishedAt:   item.FinishedAt,
 			DurationMS:   item.DurationMS,
 			Error:        item.Error,
+			TraceErrors:  item.TraceErrors,
+			TraceDetails: append([]string(nil), item.TraceDetails...),
 		})
 	}
 	return result

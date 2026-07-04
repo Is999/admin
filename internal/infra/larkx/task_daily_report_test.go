@@ -52,6 +52,8 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 		WorkflowTotal:         4,
 		WorkflowSuccess:       3,
 		WorkflowFailed:        1,
+		TraceTotalCount:       10,
+		TraceErrorCount:       7,
 		AverageDurationMS:     1200,
 		MaxDurationMS:         3500,
 		Queues: []TaskDailyReportQueue{{
@@ -88,6 +90,22 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 			Success:        0,
 			Failed:         1,
 		}},
+		TimeBuckets: []TaskDailyReportTimeBucket{{
+			StartAt:           "2026-06-30T09:00:00+08:00",
+			EndAt:             "2026-06-30T10:00:00+08:00",
+			TaskExecutions:    4,
+			Success:           3,
+			Failed:            1,
+			Triggers:          1,
+			NodeTasks:         3,
+			TraceTotalCount:   10,
+			TraceReadCount:    2,
+			TraceWriteCount:   3,
+			TraceDeleteCount:  1,
+			TraceErrorCount:   7,
+			AverageDurationMS: 1200,
+			MaxDurationMS:     3500,
+		}},
 		FailureTasks: []TaskDailyReportTask{{
 			ID:           "task-1",
 			Name:         "user_report.recalc_today/recalc_today",
@@ -107,6 +125,16 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 			Queue:        "maintenance",
 			WorkflowName: "user_report.recalc_today",
 			DurationMS:   3500,
+		}},
+		TraceErrorTasks: []TaskDailyReportTask{{
+			Name:         "user_tag.delta.refresh/sync_kafka",
+			State:        "completed",
+			Queue:        "maintenance",
+			WorkflowName: "user_tag.delta.refresh",
+			WorkflowNode: "sync_kafka",
+			FinishedAt:   "2026-06-30T09:57:00+08:00",
+			TraceErrors:  7,
+			TraceDetails: []string{"kafka_outbox 7"},
 		}},
 		RetentionWarning: "completed_retention_seconds 不大于统计窗口",
 	})
@@ -137,8 +165,15 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 		"**总览**",
 		"- 周期触发：4 次，成功 3，失败 1",
 		"- 工作流：4 个，成功 3，失败 1",
+		"- 处理量：总 10，读 0，写 0，删 0，错 7",
 		"**重点关注**",
 		"- 失败：任务 1，工作流 1",
+		"- 处理异常：隔离错误 7",
+		"**高峰时段**",
+		"任务高峰：2026-06-30 09:00~10:00｜执行 4 / 触发 1 / 节点 3 / 失败 1",
+		"处理量高峰：2026-06-30 09:00~10:00｜总 10 / 读 2 / 写 3 / 删 1 / 错 7",
+		"错误高峰：2026-06-30 09:00~10:00｜错 7 / 执行 4",
+		"最慢时段：2026-06-30 09:00~10:00｜均 1.2s / 最长 3.5s",
 		"**失败明细**",
 		"错误 db timeout query killed",
 		"**周期任务 Top**",
@@ -146,8 +181,12 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 		"**工作流 Top**",
 		"user_report.recalc_today｜实例 1 / 成功 0 / 失败 1 / 运行 0",
 		"**慢任务 Top**",
+		"**处理异常 Top**",
+		"user_tag.delta.refresh/sync_kafka；错 7；时间 2026-06-30 09:57",
+		"明细 kafka_outbox 7",
 		"**处理建议**",
 		"- 数据完整性：completed_retention_seconds 不大于统计窗口",
+		"处理量存在隔离错误",
 		`<at id=all></at>`,
 	} {
 		if !strings.Contains(text, want) {
@@ -176,5 +215,49 @@ func TestTaskDailyReportAtAllsWorkflowFailure(t *testing.T) {
 	text := cardTextContent(card)
 	if !strings.Contains(text, `<at id=all></at>`) {
 		t.Fatalf("expected workflow failure to at all:\n%s", text)
+	}
+}
+
+// TestTaskDailyReportTraceErrorsNeedAttention 验证处理量隔离错误会进入需关注卡片。
+func TestTaskDailyReportTraceErrorsNeedAttention(t *testing.T) {
+	notifier := &Notifier{
+		atAll:        true,
+		maxErrorByte: defaultMaxErrorBytes,
+		now:          func() time.Time { return time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC) },
+	}
+	card := notifier.formatTaskDailyReportCard(TaskDailyReport{
+		ServiceName:          "admin",
+		Environment:          "prod",
+		WindowStart:          time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC),
+		WindowEnd:            time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC),
+		TraceTotalCount:      20,
+		TraceErrorCount:      2,
+		WorkflowTotal:        1,
+		WorkflowSuccess:      1,
+		PeriodicTriggerTotal: 1,
+		PeriodicTriggerOK:    1,
+		TraceErrorTasks: []TaskDailyReportTask{{
+			Name:         "user_tag.runtime.cleanup/runtime_cleanup",
+			WorkflowName: "user_tag.runtime.cleanup",
+			WorkflowNode: "runtime_cleanup",
+			FinishedAt:   "2026-06-30T09:50:00Z",
+			TraceErrors:  2,
+		}},
+	})
+	if card.Header == nil || card.Header.Template != "orange" || card.Header.Title.Content != "P3 任务运行日报 | 需关注" {
+		t.Fatalf("trace error card header unexpected: %+v", card.Header)
+	}
+	text := cardTextContent(card)
+	if strings.Contains(text, `<at id=all></at>`) {
+		t.Fatalf("trace error should not at all without terminal failure:\n%s", text)
+	}
+	for _, want := range []string{
+		"**状态**：存在处理量隔离错误",
+		"**处理异常 Top**",
+		"user_tag.runtime.cleanup/runtime_cleanup；错 2；时间 2026-06-30 09:50",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("card text missing %q:\n%s", want, text)
+		}
 	}
 }

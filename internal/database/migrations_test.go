@@ -2,6 +2,7 @@ package database
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -253,8 +254,25 @@ func TestMigrationAssetsDMLStyle(t *testing.T) {
 	}
 }
 
+// TestMigrationSeedInsertIDsAscending 确保显式主键 seed 按自增 id 递增排列。
+func TestMigrationSeedInsertIDsAscending(t *testing.T) {
+	for _, item := range DefaultMigrations() {
+		assertSeedInsertIDsAscending(t, item.Asset, item.SQL)
+	}
+}
+
 // TestPermissionMigrationAssetsConsolidated 确保权限增量不再散落到多个 SQL 文件。
 func TestPermissionMigrationAssetsConsolidated(t *testing.T) {
+	assets, err := MigrationAssetNames()
+	if err != nil {
+		t.Fatalf("MigrationAssetNames() error = %v", err)
+	}
+	for _, asset := range assets {
+		if strings.HasPrefix(asset, "document_permission") && asset != "document_permission_seed.sql" {
+			t.Fatalf("document permission SQL must stay consolidated in document_permission_seed.sql, found fragmented asset: %s", asset)
+		}
+	}
+
 	documentPermissionAssets := 0
 	for _, item := range DefaultMigrations() {
 		if strings.HasPrefix(item.Asset, "document_permission") {
@@ -270,6 +288,40 @@ func TestPermissionMigrationAssetsConsolidated(t *testing.T) {
 	if documentPermissionAssets != 1 {
 		t.Fatalf("document permission migration asset count = %d, want 1", documentPermissionAssets)
 	}
+}
+
+// assertSeedInsertIDsAscending 检查同一资产同一表内带 id 的 seed 行顺序。
+func assertSeedInsertIDsAscending(t *testing.T, asset string, sql string) {
+	t.Helper()
+	insertRe := regexp.MustCompile("(?i)^INSERT\\s+(?:IGNORE\\s+)?INTO\\s+`([^`]+)`\\s*\\(([^)]*)\\)\\s+VALUES\\s*\\((\\d+)\\s*,")
+	lastIDByTable := make(map[string]int64)
+	lastLineByTable := make(map[string]int)
+	for lineNo, line := range strings.Split(sql, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		matches := insertRe.FindStringSubmatch(trimmed)
+		if len(matches) != 4 || !insertColumnsStartWithID(matches[2]) {
+			continue
+		}
+		id, err := strconv.ParseInt(matches[3], 10, 64)
+		if err != nil {
+			t.Fatalf("%s line %d seed id parse failed: %v", asset, lineNo+1, err)
+		}
+		table := matches[1]
+		if lastID, ok := lastIDByTable[table]; ok && id <= lastID {
+			t.Fatalf("%s table %s seed id order drift at line %d: id=%d after id=%d at line %d; append by auto-increment id order", asset, table, lineNo+1, id, lastID, lastLineByTable[table])
+		}
+		lastIDByTable[table] = id
+		lastLineByTable[table] = lineNo + 1
+	}
+}
+
+// insertColumnsStartWithID 判断 INSERT 列清单是否显式以主键 id 开头。
+func insertColumnsStartWithID(columns string) bool {
+	columns = strings.TrimSpace(columns)
+	return strings.HasPrefix(columns, "`id`,") || columns == "`id`"
 }
 
 // TestPendingMigrations 确保已登记版本不会再次进入待执行列表。

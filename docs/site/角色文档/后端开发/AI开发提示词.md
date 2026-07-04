@@ -42,7 +42,9 @@
 4. 原生 SQL / Lua 必须作为 `*.sql.tmpl` 或 `.lua` 代码资产，通过 `go:embed` 加载。
 5. SQL / Lua 调用前必须通过 `embedasset.StripLeadingLineComments` 或当前包 helper 剥离文件头注释。
 6. 禁止在 Go 文件中内联多行 SQL / Lua。
-7. 禁止在线接口无界扫描高基数 Redis Key；必须使用精确 Key、索引集合、白名单模板或异步任务。
+7. 文档权限只维护 `internal/database/assets/document_permission_seed.sql` 和 `internal/routealias/docs.go`；禁止为单篇文档新增 `document_permission_*.sql` 或 `sync_document_permission_*` 迁移。已上线环境由发布单手动执行新增 `INSERT IGNORE` 并刷新权限缓存。
+8. SQL seed 显式保留自增主键 `id` 时，新增行必须按 `id` 递增放在对应位置，禁止按业务相似性插入到中间。
+9. 禁止在线接口无界扫描高基数 Redis Key；必须使用精确 Key、索引集合、白名单模板或异步任务。
 
 五、错误处理
 1. 错误必须使用 github.com/Is999/go-utils/errors 包装。

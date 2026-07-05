@@ -19,12 +19,9 @@ func (m *Manager) workflowUniqueLockTTL() time.Duration {
 }
 
 // workflowRetention 返回工作流元数据在 Redis 中的保留时长。
+// 工作流状态与成功任务查询窗口保持一致，避免两个保留配置互相漂移。
 func (m *Manager) workflowRetention() time.Duration {
-	seconds := m.CurrentConfig().WorkflowRetentionSeconds
-	if seconds <= 0 {
-		seconds = 86400
-	}
-	return time.Duration(seconds) * time.Second
+	return m.completedRetention()
 }
 
 // completedRetention 返回已完成任务在 Asynq 中的保留时长。

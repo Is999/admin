@@ -1,11 +1,10 @@
-CREATE TABLE IF NOT EXISTS `collector_outbox` (
+CREATE TABLE IF NOT EXISTS `collector_failed_event` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',
-  `event_id` varchar(64) NOT NULL DEFAULT '' COMMENT '事件ID(幂等键)',
+  `event_id` varchar(64) NOT NULL DEFAULT '' COMMENT '事件ID(同业务幂等键)',
   `biz_type` varchar(100) NOT NULL DEFAULT '' COMMENT '业务类型',
   `partition_key` varchar(128) NOT NULL DEFAULT '' COMMENT '分区Key(冲突域)',
   `payload` text NOT NULL COMMENT '事件负载(JSON)',
-  `transport` varchar(16) NOT NULL DEFAULT 'db' COMMENT '来源/载体:kafka|redis|db',
-  `state` tinyint unsigned NOT NULL DEFAULT '0' COMMENT '状态:0待处理,1处理中,2完成,3重试,4死信',
+  `state` tinyint unsigned NOT NULL DEFAULT '0' COMMENT '状态:0待重试,1重试中,2重试成功,3延迟重试,4死信',
   `attempt` tinyint unsigned NOT NULL DEFAULT '0' COMMENT '失败重试次数',
   `next_run_at` datetime NOT NULL COMMENT '下次可处理时间',
   `started_at` datetime NULL DEFAULT NULL COMMENT '开始处理时间',
@@ -14,12 +13,11 @@ CREATE TABLE IF NOT EXISTS `collector_outbox` (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_event_id` (`event_id`),
+  UNIQUE KEY `uk_biz_event_id` (`biz_type`,`event_id`),
   KEY `idx_biz_state_next` (`biz_type`,`state`,`next_run_at`),
   KEY `idx_state_next` (`state`,`next_run_at`),
   KEY `idx_state_started` (`state`,`started_at`),
   KEY `idx_state_finished` (`state`,`finished_at`),
   KEY `idx_state_updated` (`state`,`updated_at`),
-  KEY `idx_transport_state` (`transport`,`state`),
   KEY `idx_partition_state_next` (`partition_key`,`state`,`next_run_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='通用收集器Outbox(兜底重试/死信)';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='通用收集器失败事件(重试/死信)';

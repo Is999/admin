@@ -24,6 +24,16 @@ const (
 	taskRuntimeSegment = "runtime"
 )
 
+// Collector Redis key 根前缀和运行段集中维护。
+const (
+	// collectorRedisRoot 表示 Collector 自管 key 的二级业务前缀。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由具体 Collector key 的调用方 TTL 控制。
+	collectorRedisRoot = "collector"
+	// collectorIdempotencySegment 表示 Collector 单任务 EventID 幂等去重 key 段。
+	// Redis 类型：String，TTL 过期规则：由 Collector 幂等终态 TTL 或处理中租约 TTL 控制。
+	collectorIdempotencySegment = "idempotency"
+)
+
 // Asynq Redis key 片段集中维护。
 const (
 	// taskAsynqRedisRoot 表示 Asynq 框架固定 Redis 根前缀。

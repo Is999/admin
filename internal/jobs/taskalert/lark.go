@@ -79,8 +79,8 @@ func CollectorRuntimeAlert(alert collectorx.RuntimeAlert) svc.TaskRuntimeAlert {
 		kind = svc.TaskRuntimeAlertKindCollectorWorkerFailed
 	}
 	taskType := ""
-	if transport := strings.TrimSpace(alert.Transport); transport != "" {
-		taskType = "collector:" + transport
+	if channel := strings.TrimSpace(alert.Channel); channel != "" {
+		taskType = "collector:" + channel
 	}
 	uniqueKey := collectorAlertUniqueKey(kind, alert)
 	return svc.TaskRuntimeAlert{
@@ -106,15 +106,15 @@ func collectorAlertUniqueKey(kind string, alert collectorx.RuntimeAlert) string 
 		return bizType
 	}
 	operation := strings.TrimSpace(alert.Operation)
-	transport := strings.TrimSpace(alert.Transport)
-	if operation != "" && transport != "" {
-		return operation + ":" + transport
+	channel := strings.TrimSpace(alert.Channel)
+	if operation != "" && channel != "" {
+		return operation + ":" + channel
 	}
 	if operation != "" {
 		return operation
 	}
-	if transport != "" {
-		return transport
+	if channel != "" {
+		return channel
 	}
 	return strings.TrimSpace(kind)
 }

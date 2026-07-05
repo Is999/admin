@@ -222,50 +222,59 @@ kafka:
     # 用户标签事件 Topic。
     user_tag: "203_user_tag_event"
 
-# 通用收集器；Kafka/Redis 不可用时落 DB outbox。
-# 批次按压测调整，running 租约需大于单批处理耗时。
+# 通用收集器；正常链路只走 Kafka，DB 只保存失败账本。
+# 批次按压测调整，running 租约需大于单批失败重试耗时。
 collector:
   # 是否启用通用收集器。
-  enabled: false
-  # 载体：auto、kafka、redis、db；失败落 DB outbox。
-  transport: "auto"
-  # Kafka 载体配置。
+  enabled: true
+  # Kafka 正常链路配置。
   kafka:
-    # 是否启用 Kafka 载体。
-    enabled: false
-    # broker、批次和写超时默认继承顶层 kafka。
-    # Collector 事件主题名。
-    topic: "admin_collector_events"
-    # Collector 消费组 ID。
-    group_id: "admin_collector"
+    # broker、写入批次和写超时默认继承顶层 kafka。
+    # Kafka producer 写入批次大小，不表示业务 Processor 批量触发规则。
+    write_batch_size: 500
+    # Kafka producer 写入批次等待时间，单位毫秒。
+    write_batch_wait_milliseconds: 20
     # Kafka 读超时时间，单位秒。
     read_timeout: 10
-  # Redis Stream 载体配置。
-  redis:
-    # 是否启用 Redis Stream 载体。
+  # 未单独配置 bizType 时的默认任务策略。
+  default_task:
+    # 默认 Kafka Topic；具体任务建议按 bizType 单独配置。
+    topic: "admin_collector_events"
+    # 默认 Kafka 消费组；同 Topic 下所有任务必须使用同一个 group_id。
+    group_id: "admin_collector"
+    # 同 bizType 最大聚合条数。
+    batch_size: 500
+    # 同 bizType 未满批时最大等待时间，单位毫秒。
+    batch_wait_milliseconds: 2000
+  # Redis 单任务 EventID 幂等去重配置。
+  idempotency:
+    # 默认是否启用 Redis 去重；具体任务可通过 tasks.<bizType>.idempotency_enabled 覆盖，同 bizType 内按 EventID 去重。
     enabled: false
-    # Redis Stream 业务名称，运行时自动转成 app:{app_id}:collector:events。
-    stream: "collector:events"
-    # Redis Stream 消费组名称。
-    group: "collector"
-    # 消费者名前缀，实例后缀自动追加。
-    consumer: "collector"
-    # Redis Stream 最大长度近似值，<=0 不裁剪。
-    max_len: 100000
-    # XREADGROUP 阻塞等待时长，单位毫秒。
-    block_ms: 1000
-    # 单次读取或认领消息数量。
-    count: 500
-  # DB outbox 兜底消费配置。
-  db:
-    # 单轮领取事件上限。
+    # 成功和失败终态去重保留时间，单位秒。
+    ttl_seconds: 3600
+    # 处理中占用租约时间，单位秒；Worker 异常退出后到期允许 Kafka 重投。
+    processing_ttl_seconds: 600
+    # 单次 Redis Pipeline 最大命令数，兼容单节点和 Cluster，避免大批次拖慢 Redis。
+    pipeline_batch_size: 200
+  # 失败账本重试配置，仅处理 Kafka 消费处理失败后的事件。
+  failure_retry:
+    # 单轮领取失败事件上限。
     runner_batch_size: 500
-    # DB worker 轮询间隔，单位秒。
+    # 失败重试轮询间隔，单位秒。
     runner_interval_seconds: 1
-    # running 事件租约时间，单位秒。
+    # running 失败事件租约时间，单位秒。
     running_lease_seconds: 600
     # 最大失败重试次数。
     max_retry_times: 8
+  # 按 bizType 扩展任务配置；key 必须等于 Event.BizType。
+  tasks:
+    # 管理员审计日志按 200 条或 3 秒触发一次批量入库。
+    admin_log.audit:
+      topic: "admin_collector_admin_log_events"
+      group_id: "admin_collector_admin_log"
+      batch_size: 200
+      batch_wait_milliseconds: 3000
+      idempotency_enabled: true
 
 # Debezium CDC 消费器，仅 worker 模式启动。
 cdc:
@@ -350,8 +359,6 @@ task:
   group_max_delay_seconds: 20
   # 单次聚合最大任务数。
   group_max_size: 100
-  # 工作流状态保留时长，单位秒。
-  workflow_retention_seconds: 86400
   # 调度器配置。
   scheduler:
     # 是否启用调度器 leader。

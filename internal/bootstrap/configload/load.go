@@ -12,6 +12,9 @@ import (
 
 // Load 读取并解析配置文件，供启动期和热加载复用。
 func Load(file string) (config.Config, error) {
+	if err := rejectDeprecatedCollectorConfig(file); err != nil {
+		return config.Config{}, errors.Tag(err)
+	}
 	c, err := loadBaseConfig(file)
 	if err != nil {
 		return config.Config{}, errors.Tag(err)
@@ -44,8 +47,8 @@ func inheritCollectorKafkaCommon(c *config.Config) {
 	if len(c.Collector.Kafka.Brokers) == 0 && len(c.Kafka.Brokers) > 0 {
 		c.Collector.Kafka.Brokers = append([]string(nil), c.Kafka.Brokers...)
 	}
-	if c.Collector.Kafka.BatchSize <= 0 {
-		c.Collector.Kafka.BatchSize = c.Kafka.BatchSize
+	if c.Collector.Kafka.WriteBatchSize <= 0 {
+		c.Collector.Kafka.WriteBatchSize = c.Kafka.BatchSize
 	}
 	if c.Collector.Kafka.WriteTimeout <= 0 {
 		c.Collector.Kafka.WriteTimeout = c.Kafka.WriteTimeout

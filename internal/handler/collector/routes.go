@@ -11,7 +11,7 @@ func RouteSpecs() []shared.RouteSpec {
 	return []shared.RouteSpec{
 		{
 			Method:      http.MethodGet,
-			Path:        "/api/collector/overview", // 查询Collector概览。
+			Path:        "/api/collector/overview", // 查询Collector观测概览。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.CollectorOverview,
 			Description: shared.CollectorOverview.Describe,
@@ -19,27 +19,27 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
-			Path:        "/api/collector/tasks", // 查询Collector任务。
+			Path:        "/api/collector/failures", // 查询Collector失败事件。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.CollectorTaskList,
-			Description: shared.CollectorTaskList.Describe,
-			Handler:     ListCollectorTasksHandler,
+			Meta:        shared.CollectorFailureList,
+			Description: shared.CollectorFailureList.Describe,
+			Handler:     ListCollectorFailuresHandler,
 		},
 		{
 			Method:      http.MethodPost,
-			Path:        "/api/collector/run", // 手动执行Collector。
+			Path:        "/api/collector/failures/run", // 手动执行Collector失败重试。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.CollectorRun,
-			Description: shared.CollectorRun.Describe,
+			Meta:        shared.CollectorFailureRun,
+			Description: shared.CollectorFailureRun.Describe,
 			Handler:     RunCollectorHandler,
 		},
 		{
 			Method:      http.MethodPost,
-			Path:        "/api/collector/tasks/retry", // 手动重试Collector任务。
+			Path:        "/api/collector/failures/retry", // 手动重试Collector失败事件。
 			Access:      shared.RouteAccessAuth,
-			Meta:        shared.CollectorRetry,
-			Description: shared.CollectorRetry.Describe,
-			Handler:     RetryCollectorTasksHandler,
+			Meta:        shared.CollectorFailureRetry,
+			Description: shared.CollectorFailureRetry.Describe,
+			Handler:     RetryCollectorFailuresHandler,
 		},
 	}
 }

@@ -124,17 +124,25 @@ func TestBusinessUIDMigrationAssetsCarryShardNo(t *testing.T) {
 	}
 }
 
-// TestCollectorOutboxBaselineIndexes 确保收集器概览索引内置在基线 DDL。
-func TestCollectorOutboxBaselineIndexes(t *testing.T) {
-	sql := migrationSQLByAsset(t, "collector_outbox.sql")
+// TestCollectorFailedEventBaselineIndexes 确保收集器概览索引内置在基线 DDL。
+func TestCollectorFailedEventBaselineIndexes(t *testing.T) {
+	sql := migrationSQLByAsset(t, "collector_failed_event.sql")
 	for _, want := range []string{
+		"UNIQUE KEY `uk_biz_event_id` (`biz_type`,`event_id`)",
 		"KEY `idx_state_finished` (`state`,`finished_at`)",
 		"KEY `idx_state_updated` (`state`,`updated_at`)",
-		"KEY `idx_transport_state` (`transport`,`state`)",
+		"KEY `idx_state_next` (`state`,`next_run_at`)",
+		"KEY `idx_partition_state_next` (`partition_key`,`state`,`next_run_at`)",
 	} {
 		if !strings.Contains(sql, want) {
-			t.Fatalf("collector_outbox baseline missing overview index %q", want)
+			t.Fatalf("collector_failed_event baseline missing overview index %q", want)
 		}
+	}
+	if strings.Contains(sql, "`transport`") {
+		t.Fatal("collector_failed_event baseline should not keep removed transport column")
+	}
+	if strings.Contains(sql, "UNIQUE KEY `uk_event_id`") {
+		t.Fatal("collector_failed_event baseline should not use global event_id unique key")
 	}
 }
 

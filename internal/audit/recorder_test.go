@@ -10,6 +10,17 @@ import (
 	"admin/internal/requestctx"
 )
 
+type fakeAdminLogEnqueuer struct {
+	eventIDs []string         // 已投递的 Collector 事件 ID
+	rows     []model.AdminLog // 已投递的审计日志
+}
+
+func (f *fakeAdminLogEnqueuer) EnqueueAdminLog(_ context.Context, eventID string, row model.AdminLog) error {
+	f.eventIDs = append(f.eventIDs, eventID)
+	f.rows = append(f.rows, row)
+	return nil
+}
+
 // TestSerializeMasksSensitiveFields 验证审计序列化时会自动脱敏密码、token、MFA 秘钥等敏感字段。
 func TestSerializeMasksSensitiveFields(t *testing.T) {
 	payload := Serialize(map[string]any{
@@ -29,7 +40,7 @@ func TestSerializeMasksSensitiveFields(t *testing.T) {
 	}
 }
 
-// TestBuildLogEntryUsesRequestMeta 验证审计落库前会自动合并请求链路元数据，并继承 trace、用户和响应结果。
+// TestBuildLogEntryUsesRequestMeta 验证审计投递前会自动合并请求链路元数据，并继承 trace、用户和响应结果。
 func TestBuildLogEntryUsesRequestMeta(t *testing.T) {
 	ctx, _ := requestctx.New(context.Background())
 	requestctx.SetTrace(ctx, "trace-1", "span-1")
@@ -66,5 +77,39 @@ func TestBuildLogEntryUsesRequestMeta(t *testing.T) {
 	}
 	if strings.Contains(entry.Data, "secret") {
 		t.Fatalf("expected sanitized data, got %s", entry.Data)
+	}
+}
+
+// TestRecorderRecordEnqueuesAdminLog 验证统一审计入口只投递 Collector，不直接执行单条 DB 写入。
+func TestRecorderRecordEnqueuesAdminLog(t *testing.T) {
+	recorder := NewRecorder(nil, 1024)
+	enqueuer := &fakeAdminLogEnqueuer{}
+	recorder.SetEnqueuer(enqueuer)
+
+	if err := recorder.Record(context.Background(), Event{
+		Action:   model.ActionAdminLogQuery,
+		Route:    "admin.log.query",
+		Method:   "QueryAdminLogHandler",
+		Describe: "查询管理员操作日志",
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	if len(enqueuer.rows) != 1 {
+		t.Fatalf("期望投递 1 条审计日志，实际 %d", len(enqueuer.rows))
+	}
+	if len(enqueuer.eventIDs) != 1 || !strings.HasPrefix(enqueuer.eventIDs[0], adminLogEventIDPrefix) || len(enqueuer.eventIDs[0]) > 64 {
+		t.Fatalf("投递 event_id 不符合预期: %+v", enqueuer.eventIDs)
+	}
+	if enqueuer.rows[0].Route != "admin.log.query" {
+		t.Fatalf("投递审计日志不符合预期: %+v", enqueuer.rows[0])
+	}
+}
+
+// TestRecorderRecordRequiresCollector 验证未注入 Collector 时不会回退到同步单条写库。
+func TestRecorderRecordRequiresCollector(t *testing.T) {
+	recorder := NewRecorder(nil, 1024)
+	err := recorder.Record(context.Background(), Event{Action: model.ActionAdminLogQuery})
+	if err == nil || !strings.Contains(err.Error(), "Collector 未初始化") {
+		t.Fatalf("Record() error = %v, want Collector 未初始化", err)
 	}
 }

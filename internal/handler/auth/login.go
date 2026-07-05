@@ -7,6 +7,7 @@ import (
 
 	i18n "admin/common/i18n"
 	"admin/internal/audit"
+	"admin/internal/infra/loggerx"
 	adminlogic "admin/internal/logic/admin"
 	messagelogic "admin/internal/logic/message"
 	"admin/internal/model"
@@ -15,6 +16,7 @@ import (
 	"admin/internal/types"
 
 	"github.com/Is999/go-utils"
+	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/rest/httpx"
 )
 
@@ -122,5 +124,10 @@ func recordAuthAudit(recorder *audit.Recorder, ctx context.Context, event audit.
 	if !success {
 		event.ErrorMessage = errorMessage
 	}
-	_ = recorder.Record(ctx, event)
+	if err := recorder.Record(ctx, event); err != nil {
+		loggerx.Errorw(ctx, "管理员认证审计投递失败", err,
+			logx.Field("action", event.Action),
+			logx.Field("route", event.Route),
+		)
+	}
 }

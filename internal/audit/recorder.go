@@ -2,19 +2,31 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"admin/helper"
 	"admin/internal/model"
 	"admin/internal/requestctx"
 
+	"github.com/Is999/go-utils/errors"
 	"gorm.io/gorm"
-	"gorm.io/plugin/dbresolver"
+)
+
+const (
+	adminLogEventIDPrefix      = "admin_log:audit:" // 审计日志 Collector 事件 ID 前缀
+	adminLogEventIDHashBytes   = 16                 // 事件 ID 哈希字节数，控制总长小于 Collector 64 字符限制
+	defaultAuditLogBodyMaxSize = 8192               // 审计详情默认最大字节数
 )
 
 // Event 描述一次待写入 admin_log 的审计事件，显式字段会优先覆盖请求元数据中的同名信息。
 type Event struct {
+	EventID      string               // 事件幂等 ID；为空时由 recorder 生成
 	Action       model.AdminLogAction // 审计动作
 	Route        string               // 路由别名
 	Method       string               // 处理方法标识
@@ -31,31 +43,64 @@ type Event struct {
 	SpanID       string               // Span ID
 }
 
+// AdminLogEnqueuer 约束审计日志写入 Collector 的最小能力。
+type AdminLogEnqueuer interface {
+	EnqueueAdminLog(context.Context, string, model.AdminLog) error
+}
+
 // Recorder 负责把请求上下文中的链路元数据与显式事件字段合并后落到 admin_log。
 type Recorder struct {
-	db              *gorm.DB // 数据库连接实例，用于将审计日志持久化
-	logBodyMaxBytes int      // 审计日志请求体的最大截断长度，防止超大请求拖垮数据库
+	mu              sync.RWMutex     // 保护 Collector 写入器切换
+	enqueuer        AdminLogEnqueuer // Collector 投递入口，正常链路不直接写 DB
+	logBodyMaxBytes int              // 审计日志请求体的最大截断长度，防止超大请求拖垮数据库
 }
 
 // NewRecorder 创建审计记录器，同时约束审计详情最大长度，避免大对象或敏感信息失控落库。
-func NewRecorder(db *gorm.DB, logBodyMaxBytes int) *Recorder {
+func NewRecorder(_ *gorm.DB, logBodyMaxBytes int) *Recorder {
 	if logBodyMaxBytes <= 0 {
-		logBodyMaxBytes = 8192
+		logBodyMaxBytes = defaultAuditLogBodyMaxSize
 	}
 	return &Recorder{
-		db:              db,
 		logBodyMaxBytes: logBodyMaxBytes,
 	}
 }
 
-// Record 是统一审计入口，所有登录、登出、CRUD 操作都应通过这里写入审计表。
-func (r *Recorder) Record(ctx context.Context, event Event) error {
-	if r == nil || r.db == nil {
+// SetEnqueuer 设置审计日志 Collector 投递入口，启动期由 Collector 组件注入。
+func (r *Recorder) SetEnqueuer(enqueuer AdminLogEnqueuer) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.enqueuer = enqueuer
+}
+
+// currentEnqueuer 返回当前 Collector 投递入口。
+func (r *Recorder) currentEnqueuer() AdminLogEnqueuer {
+	if r == nil {
 		return nil
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.enqueuer
+}
 
-	// 审计日志属于强一致写链路，固定写入主库，避免主从延迟影响后台追踪查询。
-	return model.CreateAdminLog(r.db.WithContext(ctx).Clauses(dbresolver.Write), new(r.buildLogEntry(ctx, event)))
+// Record 是统一审计入口，所有登录、登出、CRUD 操作都应通过这里写入审计表。
+func (r *Recorder) Record(ctx context.Context, event Event) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	enqueuer := r.currentEnqueuer()
+	if enqueuer == nil {
+		return errors.Errorf("审计日志 Collector 未初始化")
+	}
+
+	entry := r.buildLogEntry(ctx, event)
+	eventID := helper.FirstNonEmptyString(event.EventID, buildAdminLogEventID(entry, entry.CreatedAt))
+	return enqueuer.EnqueueAdminLog(ctx, eventID, entry)
 }
 
 // buildLogEntry 以显式事件字段优先，请求元数据兜底，确保即使业务层只传最少信息也能串起链路。
@@ -65,8 +110,9 @@ func (r *Recorder) buildLogEntry(ctx context.Context, event Event) model.AdminLo
 	if event.Success == nil {
 		success = inferSuccess(meta, event)
 	}
+	now := time.Now()
 
-	return model.AdminLog{
+	entry := model.AdminLog{
 		UserID:       firstPositive(event.UserID, userIDFromMeta(meta)),
 		UserName:     helper.FirstNonEmptyString(event.UserName, userNameFromMeta(meta)),
 		Action:       string(event.Action),
@@ -83,8 +129,26 @@ func (r *Recorder) buildLogEntry(ctx context.Context, event Event) model.AdminLo
 		LatencyMS:    latencyFromMeta(meta),
 		Success:      success,
 		ErrorMessage: helper.FirstNonEmptyString(event.ErrorMessage, errorMessageFromMeta(meta)),
-		CreatedAt:    time.Now(),
+		CreatedAt:    now,
 	}
+	return entry
+}
+
+// buildAdminLogEventID 基于本次审计快照生成稳定长度的幂等 ID，供开启幂等的 Collector 任务去重。
+func buildAdminLogEventID(entry model.AdminLog, at time.Time) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		strconv.Itoa(entry.UserID),
+		entry.UserName,
+		entry.Action,
+		entry.Route,
+		entry.Method,
+		entry.TraceID,
+		entry.SpanID,
+		entry.IP,
+		strconv.FormatInt(entry.LatencyMS, 10),
+		at.Format(time.RFC3339Nano),
+	}, "|")))
+	return adminLogEventIDPrefix + hex.EncodeToString(sum[:adminLogEventIDHashBytes])
 }
 
 // inferSuccess 在业务未显式声明成功状态时，根据请求结果自动推断审计成功与否。

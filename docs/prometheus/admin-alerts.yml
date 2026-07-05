@@ -19,11 +19,20 @@ groups:
           summary: "admin Collector Processor latency is high"
           description: "Collector biz_type={{ $labels.biz_type }} P95 batch duration is above 5 seconds."
 
-      - alert: AdminCollectorOutboxFallbackSpike
-        expr: sum by (transport) (rate(admin_collector_outbox_persist_events_total[5m])) > 10
+      - alert: AdminCollectorKafkaPublishFailed
+        expr: sum(rate(admin_collector_kafka_publish_events_total{result!="success"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "admin Collector Kafka publish failed"
+          description: "Collector Kafka publish has failures in the last 5 minutes. Enqueue callers will receive errors."
+
+      - alert: AdminCollectorFailurePersistSpike
+        expr: sum by (state) (rate(admin_collector_failure_persist_events_total[5m])) > 10
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "admin Collector outbox fallback spike"
-          description: "Collector transport={{ $labels.transport }} is writing more than 10 outbox events per second."
+          summary: "admin Collector failure ledger persist spike"
+          description: "Collector state={{ $labels.state }} is writing more than 10 failure events per second."

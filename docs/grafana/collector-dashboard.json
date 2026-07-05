@@ -165,13 +165,13 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (transport) (rate(admin_collector_outbox_persist_events_total[5m]))",
-          "legendFormat": "{{transport}}",
+          "expr": "sum by (state) (rate(admin_collector_failure_persist_events_total[5m]))",
+          "legendFormat": "{{state}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Outbox 写入吞吐（按 transport）",
+      "title": "失败账本写入吞吐（按状态）",
       "type": "timeseries"
     }
   ],

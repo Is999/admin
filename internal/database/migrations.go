@@ -53,7 +53,7 @@ var defaultMigrationSpecs = []migrationSpec{
 	{version: "202606050008", name: "bootstrap_admin_role_rel", asset: "admin_role_rel.sql", bootstrapOnly: true},
 	{version: "202606050009", name: "bootstrap_archive_segment", asset: "archive_segment.sql", bootstrapOnly: true},
 	{version: "202606050010", name: "bootstrap_archive_watermark", asset: "archive_watermark.sql", bootstrapOnly: true},
-	{version: "202606050011", name: "bootstrap_collector_outbox", asset: "collector_outbox.sql", bootstrapOnly: true},
+	{version: "202606050011", name: "bootstrap_collector_failed_event", asset: "collector_failed_event.sql", bootstrapOnly: true},
 	{version: "202606050012", name: "bootstrap_secret_key", asset: "secret_key.sql", bootstrapOnly: true},
 	{version: "202606050013", name: "bootstrap_secret_key_version", asset: "secret_key_version.sql", bootstrapOnly: true},
 	{version: "202606050014", name: "bootstrap_sys_config", asset: "sys_config.sql", bootstrapOnly: true},

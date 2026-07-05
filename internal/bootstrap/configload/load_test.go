@@ -3,6 +3,7 @@ package configload
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"admin/internal/config"
@@ -36,6 +37,27 @@ func TestLoadConfigLoadsHotReload(t *testing.T) {
 	}
 }
 
+// TestLoadConfigIgnoresRemovedWorkflowRetention 确保历史工作流保留字段不影响新配置加载。
+func TestLoadConfigIgnoresRemovedWorkflowRetention(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(mainFile, []byte(minimalConfigYAML(`
+task:
+  completed_retention_seconds: 90
+  workflow_retention_seconds: 120
+`)), 0o644); err != nil {
+		t.Fatalf("写入主配置失败: %v", err)
+	}
+
+	cfg, err := Load(mainFile)
+	if err != nil {
+		t.Fatalf("历史 workflow_retention_seconds 不应导致配置加载失败: %v", err)
+	}
+	if cfg.Task.CompletedRetentionSeconds != 90 {
+		t.Fatalf("期望保留 completed_retention_seconds=90，实际为 %d", cfg.Task.CompletedRetentionSeconds)
+	}
+}
+
 // TestNormalizeBootstrapConfigUsesModeForObservability 确保观测环境复用顶层 Mode，不维护第二套环境。
 func TestNormalizeBootstrapConfigUsesModeForObservability(t *testing.T) {
 	cfg := config.Config{
@@ -66,8 +88,7 @@ kafka:
     user_tag: "user_tag_event"
 collector:
   enabled: true
-  kafka:
-    enabled: true
+  default_task:
     topic: "collector_events"
     group_id: "collector_group"
 `)), 0o644); err != nil {
@@ -80,14 +101,54 @@ collector:
 	if got := cfg.Collector.Kafka.Brokers; len(got) != 1 || got[0] != "127.0.0.1:9092" {
 		t.Fatalf("期望继承 Kafka brokers，实际为 %+v", got)
 	}
-	if cfg.Collector.Kafka.BatchSize != 321 {
-		t.Fatalf("期望继承 Kafka batch_size=321，实际为 %d", cfg.Collector.Kafka.BatchSize)
+	if cfg.Collector.Kafka.WriteBatchSize != 321 {
+		t.Fatalf("期望继承 Kafka write_batch_size=321，实际为 %d", cfg.Collector.Kafka.WriteBatchSize)
 	}
 	if cfg.Collector.Kafka.WriteTimeout != 7 {
 		t.Fatalf("期望继承 Kafka write_timeout=7，实际为 %d", cfg.Collector.Kafka.WriteTimeout)
 	}
 	if cfg.Kafka.Topics.UserTag != "user_tag_event" {
 		t.Fatalf("期望加载 Kafka 用户标签 topic，实际为 %q", cfg.Kafka.Topics.UserTag)
+	}
+}
+
+// TestLoadConfigRejectsDeprecatedCollectorTransportConfig 确保旧 Collector 多载体配置不会被静默忽略。
+func TestLoadConfigRejectsDeprecatedCollectorTransportConfig(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(mainFile, []byte(minimalConfigYAML(`
+kafka:
+  brokers:
+    - "127.0.0.1:9092"
+collector:
+  enabled: true
+  transport: "db"
+  consume_mode: "outbox"
+  kafka:
+    enabled: true
+    topic: "collector_events"
+    group_id: "collector_group"
+  redis:
+    enabled: false
+  db:
+    runner_batch_size: 500
+`)), 0o644); err != nil {
+		t.Fatalf("写入主配置失败: %v", err)
+	}
+	_, err := Load(mainFile)
+	if err == nil {
+		t.Fatal("期望旧 Collector 多载体配置返回错误，实际为 nil")
+	}
+	for _, want := range []string{"collector.transport", "collector.consume_mode", "collector.redis", "collector.db"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息缺少 %s: %v", want, err)
+		}
+	}
+	for _, field := range []string{"enabled", "topic", "group_id"} {
+		want := "collector.kafka." + field
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息缺少 %s: %v", want, err)
+		}
 	}
 }
 

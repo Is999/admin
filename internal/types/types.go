@@ -73,7 +73,7 @@ func (r *BizResult) WithError(err error) *BizResult {
 	return r
 }
 
-// WithReq 设置原始请求对象，供审计日志落库时回放关键请求参数。
+// WithReq 设置原始请求对象，供审计日志投递时回放关键请求参数。
 func (r *BizResult) WithReq(req any) *BizResult {
 	if r == nil {
 		return r

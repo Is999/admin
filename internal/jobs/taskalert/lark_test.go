@@ -317,7 +317,7 @@ func TestCollectorRuntimeAlertMapsFields(t *testing.T) {
 		Component:  "collector",
 		Operation:  "mark_dead",
 		BizType:    "cdc.admin_log.audit",
-		Transport:  "db",
+		Channel:    "kafka",
 		UniqueKey:  "",
 		Reason:     "processor failed",
 		Advice:     "人工重试",
@@ -327,7 +327,7 @@ func TestCollectorRuntimeAlertMapsFields(t *testing.T) {
 	if got.Kind != svc.TaskRuntimeAlertKindCollectorDeadEvent || got.Component != "collector" || got.Operation != "mark_dead" {
 		t.Fatalf("Collector 告警基础字段不符合预期: %+v", got)
 	}
-	if got.TaskName != "cdc.admin_log.audit" || got.TaskType != "collector:db" || got.UniqueKey != "cdc.admin_log.audit" {
+	if got.TaskName != "cdc.admin_log.audit" || got.TaskType != "collector:kafka" || got.UniqueKey != "cdc.admin_log.audit" {
 		t.Fatalf("Collector 告警任务字段不符合预期: %+v", got)
 	}
 	if !strings.Contains(got.Reason, "processor failed") || !strings.Contains(got.Reason, "影响数量=3") {

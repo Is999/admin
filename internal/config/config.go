@@ -148,44 +148,49 @@ type ArchiveConfig struct {
 	Jobs                   []ArchiveJobConfig `json:"jobs,optional"`                       // 归档任务列表
 }
 
-// CollectorKafkaConfig 定义通用收集器的 Kafka 载体配置。
+// CollectorKafkaConfig 定义通用收集器的 Kafka 正常链路配置。
 type CollectorKafkaConfig struct {
-	Enabled      bool     `json:"enabled,optional"`       // 是否启用 Kafka 载体
-	Brokers      []string `json:"brokers,optional"`       // Kafka broker 地址列表；为空时继承顶层 kafka
-	Topic        string   `json:"topic,optional"`         // Collector 事件 Topic
-	GroupID      string   `json:"group_id,optional"`      // Collector 消费组 ID
-	BatchSize    int      `json:"batch_size,optional"`    // Kafka 生产和消费批次大小；<=0 时继承顶层 kafka
-	WriteTimeout int      `json:"write_timeout,optional"` // Kafka 写入超时时间，单位秒；<=0 时继承顶层 kafka
-	ReadTimeout  int      `json:"read_timeout,optional"`  // Kafka 读取超时时间，单位秒
+	Brokers                    []string `json:"brokers,optional"`                       // Kafka broker 地址列表；为空时继承顶层 kafka
+	WriteBatchSize             int      `json:"write_batch_size,optional"`              // Kafka producer 单次写入批次大小；<=0 时继承顶层 kafka
+	WriteBatchWaitMilliseconds int      `json:"write_batch_wait_milliseconds,optional"` // Kafka producer 批次等待毫秒数
+	WriteTimeout               int      `json:"write_timeout,optional"`                 // Kafka 写入超时时间，单位秒；<=0 时继承顶层 kafka
+	ReadTimeout                int      `json:"read_timeout,optional"`                  // Kafka 读取超时时间，单位秒
 }
 
-// CollectorRedisConfig 定义通用收集器的 Redis Stream 载体配置。
-type CollectorRedisConfig struct {
-	Enabled  bool   `json:"enabled,optional"`  // 是否启用 Redis Stream 载体
-	Stream   string `json:"stream,optional"`   // Redis Stream 业务名称，运行时自动追加 app_id 前缀
-	Group    string `json:"group,optional"`    // Redis Stream 消费组
-	Consumer string `json:"consumer,optional"` // Redis Stream 消费者名前缀
-	MaxLen   int64  `json:"max_len,optional"`  // Stream 最大长度近似值，<=0 不裁剪
-	BlockMs  int64  `json:"block_ms,optional"` // XREADGROUP 阻塞等待毫秒数
-	Count    int64  `json:"count,optional"`    // 单次读取/认领消息数量
+// CollectorTaskConfig 定义单个 Collector 业务任务的本地批量聚合策略。
+type CollectorTaskConfig struct {
+	Topic                 string `json:"topic,optional"`                   // 该业务任务投递和消费的 Kafka Topic
+	GroupID               string `json:"group_id,optional"`                // 该业务任务的 Kafka 消费组；同 Topic 必须一致
+	BatchSize             int    `json:"batch_size,optional"`              // 同 bizType 单批最大事件数
+	BatchWaitMilliseconds int    `json:"batch_wait_milliseconds,optional"` // 同 bizType 未满批时最大等待毫秒数
+	IdempotencyEnabled    *bool  `json:"idempotency_enabled,optional"`     // 是否覆盖默认 Redis 单任务 EventID 去重开关
 }
 
-// CollectorDBConfig 定义通用收集器 DB outbox 消费和重试配置。
-type CollectorDBConfig struct {
-	RunnerBatchSize       int `json:"runner_batch_size,optional"`       // DB worker 单轮领取事件上限
-	RunnerIntervalSeconds int `json:"runner_interval_seconds,optional"` // DB worker 轮询间隔，单位秒
-	RunningLeaseSeconds   int `json:"running_lease_seconds,optional"`   // running 任务租约秒数，超时后自动回收重试
+// CollectorFailureRetryConfig 定义通用收集器失败账本重试配置。
+type CollectorFailureRetryConfig struct {
+	RunnerBatchSize       int `json:"runner_batch_size,optional"`       // 失败账本 worker 单轮领取事件上限
+	RunnerIntervalSeconds int `json:"runner_interval_seconds,optional"` // 失败账本 worker 轮询间隔，单位秒
+	RunningLeaseSeconds   int `json:"running_lease_seconds,optional"`   // 重试中事件租约秒数，超时后自动回收重试
 	MaxRetryTimes         int `json:"max_retry_times,optional"`         // 最大失败重试次数，达到后进入死信
 }
 
+// CollectorIdempotencyConfig 定义通用收集器 Redis 单任务幂等去重配置。
+type CollectorIdempotencyConfig struct {
+	Enabled              bool `json:"enabled,optional"`                // 默认是否启用 Redis 单任务 EventID 去重
+	TTLSeconds           int  `json:"ttl_seconds,optional"`            // 成功和失败终态去重保留秒数
+	ProcessingTTLSeconds int  `json:"processing_ttl_seconds,optional"` // 处理中占用租约秒数，超时后允许 Kafka 重投
+	PipelineBatchSize    int  `json:"pipeline_batch_size,optional"`    // 单次 Redis Pipeline 最大命令数
+}
+
 // CollectorConfig 定义通用收集器配置。
-// 业务方只投递结构化事件，Collector 负责可靠收集和批量投送。
+// 业务方只投递结构化事件，正常链路只走 Kafka，失败事件进入失败账本。
 type CollectorConfig struct {
-	Enabled   bool                 `json:"enabled,optional"`   // 是否启用通用收集器
-	Transport string               `json:"transport,optional"` // 载体：auto/kafka/redis/db
-	Kafka     CollectorKafkaConfig `json:"kafka,optional"`     // Kafka 载体配置
-	Redis     CollectorRedisConfig `json:"redis,optional"`     // Redis Stream 载体配置
-	DB        CollectorDBConfig    `json:"db,optional"`        // DB outbox 消费和重试配置
+	Enabled      bool                           `json:"enabled,optional"`       // 是否启用通用收集器
+	Kafka        CollectorKafkaConfig           `json:"kafka,optional"`         // Kafka 正常链路配置
+	DefaultTask  CollectorTaskConfig            `json:"default_task,optional"`  // 未单独配置 bizType 时的默认聚合策略
+	FailureRetry CollectorFailureRetryConfig    `json:"failure_retry,optional"` // 失败账本重试配置
+	Idempotency  CollectorIdempotencyConfig     `json:"idempotency,optional"`   // Redis 单任务 EventID 幂等去重配置
+	Tasks        map[string]CollectorTaskConfig `json:"tasks,optional"`         // 按 bizType 覆盖的聚合策略；key 为 Event.BizType
 }
 
 // CDCTopicConfig 定义单个 Debezium CDC Topic 的消费规则。
@@ -216,7 +221,7 @@ type TestScenariosConfig struct {
 // AdminLogAuditTestScenario 定义 admin_log 审核日志验证输出。
 type AdminLogAuditTestScenario struct {
 	LarkEnabled      bool     `json:"lark_enabled,optional"`      // 是否把审核日志推送到 Lark
-	CollectorEnabled bool     `json:"collector_enabled,optional"` // 是否写入 Collector outbox 并批量消费
+	CollectorEnabled bool     `json:"collector_enabled,optional"` // 是否写入 Collector Kafka 链路并批量消费
 	TraceIDPrefix    string   `json:"trace_id_prefix,optional"`   // 验证 trace_id 前缀；为空不过滤
 	Actions          []string `json:"actions,optional"`           // Lark 允许推送的审计动作；为空不过滤
 	Routes           []string `json:"routes,optional"`            // Lark 允许推送的路由别名；为空不过滤
@@ -270,7 +275,7 @@ func (c TaskPeriodicConfig) EnabledOrDefault() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// TaskQueueConfig 定义任务系统的 Worker、队列、聚合、独立 Redis 与工作流保留参数。
+// TaskQueueConfig 定义任务系统的 Worker、队列、聚合、独立 Redis 与保留参数。
 type TaskQueueConfig struct {
 	Enabled                   bool                     `json:"enabled,optional"`                     // 是否启用任务系统
 	AppID                     string                   `json:"-"`                                    // 任务系统站点命名空间
@@ -290,7 +295,6 @@ type TaskQueueConfig struct {
 	GroupGracePeriodSeconds   int                      `json:"group_grace_period_seconds,optional"`  // 聚合等待窗口（秒）
 	GroupMaxDelaySeconds      int                      `json:"group_max_delay_seconds,optional"`     // 聚合最大等待时间（秒）
 	GroupMaxSize              int                      `json:"group_max_size,optional"`              // 单次聚合最大任务数
-	WorkflowRetentionSeconds  int                      `json:"workflow_retention_seconds,optional"`  // 工作流状态保留时长（秒）
 	Scheduler                 TaskQueueSchedulerConfig `json:"scheduler,optional"`                   // 周期调度器配置
 	Periodic                  []TaskPeriodicConfig     `json:"periodic,optional"`                    // 周期任务列表
 }

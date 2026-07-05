@@ -44,7 +44,7 @@ type ServiceContext struct {
 	Audit        *audit.Recorder       // 审计日志记录器
 	Task         TaskQueue             // 任务系统接口（支持调度、DAG、队列管理）
 	ConfigReload ConfigReloadExecutor  // 配置热加载执行器，供管理接口手动触发重载
-	Collector    *collectorx.Manager   // 通用收集器（Kafka/Redis/DB outbox 回退与重试）
+	Collector    *collectorx.Manager   // 通用收集器（Kafka 正常链路与失败账本重试）
 	CDC          CDCConsumer           // CDC 消费器状态接口，未启用时为空
 }
 

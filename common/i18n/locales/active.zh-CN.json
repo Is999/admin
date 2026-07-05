@@ -176,7 +176,7 @@
   "api_runtime.status_unchanged": "状态未变更，无需同步 API 运行态",
   "api_runtime.profile_sync_warning": "资料已更新，API 资料缓存同步失败，请手动重试",
   "api_runtime.status_sync_warning": "状态已更新，API 资料缓存同步失败，请手动重试",
-  "collector.run_partial_failed": "本次执行出现失败任务，已按重试策略回写任务状态",
+  "collector.run_partial_failed": "本次失败账本重试仍有失败事件，已按重试策略回写状态",
   "collector.run_success": "执行完成",
   "admin_export.file_expired": "导出文件不存在或已失效，请重新导出",
   "user_tag.recalculate_started": "已启动 {{.Arg0}} 个标签重算任务",

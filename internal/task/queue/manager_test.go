@@ -2733,8 +2733,16 @@ func TestTaskRetentionDefaultsWhenUnset(t *testing.T) {
 	if got, want := manager.completedRetention(), 24*time.Hour; got != want {
 		t.Fatalf("未配置 completed_retention_seconds 时默认值 = %s，期望 %s", got, want)
 	}
+	if got, want := manager.workflowRetention(), manager.completedRetention(); got != want {
+		t.Fatalf("工作流保留时间应复用 completed_retention_seconds，实际 %s，期望 %s", got, want)
+	}
 	if got, want := manager.archivedRetention(), time.Duration(taskArchivedRetentionDefaultSeconds)*time.Second; got != want {
 		t.Fatalf("未配置 archived_retention_seconds 时默认值 = %s，期望 %s", got, want)
+	}
+	cfg.CompletedRetentionSeconds = 90
+	manager.UpdateConfig(cfg)
+	if got, want := manager.workflowRetention(), 90*time.Second; got != want {
+		t.Fatalf("工作流保留时间未跟随 completed_retention_seconds，实际 %s，期望 %s", got, want)
 	}
 }
 
@@ -2844,15 +2852,14 @@ func newTestManager(t *testing.T) (*Manager, func()) {
 	t.Helper()
 	server, client := newTestRedis(t)
 	cfg := config.TaskQueueConfig{
-		Enabled:                  true,
-		AppID:                    "1",
-		DefaultQueue:             QueueDefault,
-		DefaultRetry:             1,
-		DefaultTimeoutSeconds:    1,
-		DefaultUniqueTTLSeconds:  60,
-		DelayedTaskCheckSeconds:  1,
-		TaskCheckSeconds:         1,
-		WorkflowRetentionSeconds: 300,
+		Enabled:                 true,
+		AppID:                   "1",
+		DefaultQueue:            QueueDefault,
+		DefaultRetry:            1,
+		DefaultTimeoutSeconds:   1,
+		DefaultUniqueTTLSeconds: 60,
+		DelayedTaskCheckSeconds: 1,
+		TaskCheckSeconds:        1,
 		Queues: map[string]int{
 			QueueDefault:     1,
 			QueueMaintenance: 1,

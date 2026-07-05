@@ -70,33 +70,6 @@ func TestBuildCollectorBizTypeOverviewQueryKeepsUnknown(t *testing.T) {
 	}
 }
 
-// TestBuildCollectorTransportOverviewQueryKeepsUnknown 验证 transport 分布不再丢弃空来源。
-func TestBuildCollectorTransportOverviewQueryKeepsUnknown(t *testing.T) {
-	db := newCollectorDryRunDB(t)
-	now := time.Date(2026, 6, 25, 11, 15, 0, 0, time.Local)
-	rows := make([]struct {
-		Transport string `gorm:"column:transport"` // 来源通道
-	}, 0)
-
-	tx := buildCollectorTransportOverviewQuery(db, now).Find(&rows)
-	if tx.Error != nil {
-		t.Fatalf("buildCollectorTransportOverviewQuery Find() error = %v", tx.Error)
-	}
-	sqlText := tx.Statement.SQL.String()
-	for _, want := range []string{
-		"COALESCE(NULLIF(transport, ''), 'unknown') AS transport",
-		"GROUP BY COALESCE(NULLIF(transport, ''), 'unknown')",
-		"ORDER BY total_count DESC",
-	} {
-		if !strings.Contains(sqlText, want) {
-			t.Fatalf("expected %q in SQL: %s", want, sqlText)
-		}
-	}
-	if strings.Contains(sqlText, "transport <> ''") {
-		t.Fatalf("unexpected transport filter in SQL: %s", sqlText)
-	}
-}
-
 // TestBuildCollectorOverviewQueriesDoNotShareClauses 验证概览多段聚合不会复用脏 Statement。
 func TestBuildCollectorOverviewQueriesDoNotShareClauses(t *testing.T) {
 	db := newCollectorDryRunDB(t).Clauses(dbresolver.Read)
@@ -110,17 +83,17 @@ func TestBuildCollectorOverviewQueriesDoNotShareClauses(t *testing.T) {
 		t.Fatalf("buildCollectorWindowSuccessQuery Find() error = %v", err)
 	}
 
-	transportRows := make([]struct {
-		Transport string `gorm:"column:transport"` // 来源通道
+	bizTypeRows := make([]struct {
+		BizType string `gorm:"column:biz_type"` // 业务类型
 	}, 0)
-	tx := buildCollectorTransportOverviewQuery(db, now).Find(&transportRows)
+	tx := buildCollectorBizTypeOverviewQuery(db, now, since).Find(&bizTypeRows)
 	if tx.Error != nil {
-		t.Fatalf("buildCollectorTransportOverviewQuery Find() error = %v", tx.Error)
+		t.Fatalf("buildCollectorBizTypeOverviewQuery Find() error = %v", tx.Error)
 	}
 	sqlText := tx.Statement.SQL.String()
-	for _, bad := range []string{"finished_at >= ?", "updated_at >= ?", "TIMESTAMPDIFF"} {
+	for _, bad := range []string{"COUNT(*) AS success_count"} {
 		if strings.Contains(sqlText, bad) {
-			t.Fatalf("transport overview SQL was polluted by previous query %q: %s", bad, sqlText)
+			t.Fatalf("bizType overview SQL was polluted by previous query %q: %s", bad, sqlText)
 		}
 	}
 }

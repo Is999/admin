@@ -176,7 +176,7 @@
   "api_runtime.status_unchanged": "Status unchanged; API runtime sync is not needed",
   "api_runtime.profile_sync_warning": "Profile updated, but API profile cache sync failed. Please retry manually.",
   "api_runtime.status_sync_warning": "Status updated, but API profile cache sync failed. Please retry manually.",
-  "collector.run_partial_failed": "Some tasks failed in this run and were written back according to the retry policy",
+  "collector.run_partial_failed": "Some failed events still failed in this ledger retry cycle and were written back by retry policy",
   "collector.run_success": "Execution completed",
   "admin_export.file_expired": "Export file is missing or expired. Please export again.",
   "user_tag.recalculate_started": "Started {{.Arg0}} tag recalculation tasks",

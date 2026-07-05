@@ -247,14 +247,14 @@ const (
 	ActionUserTagWorkflowLeaseRelease AdminLogAction = "释放用户标签工作流互斥锁"
 
 	// 通用收集器相关。
-	// ActionCollectorOverview 查询Collector概览。
-	ActionCollectorOverview AdminLogAction = "查询Collector概览"
-	// ActionCollectorTaskList 查询Collector任务。
-	ActionCollectorTaskList AdminLogAction = "查询Collector任务"
-	// ActionCollectorRun 手动执行Collector。
-	ActionCollectorRun AdminLogAction = "手动执行Collector"
-	// ActionCollectorRetry 手动重试Collector任务。
-	ActionCollectorRetry AdminLogAction = "手动重试Collector任务"
+	// ActionCollectorOverview 查询Collector观测概览。
+	ActionCollectorOverview AdminLogAction = "查询Collector观测概览"
+	// ActionCollectorFailureList 查询Collector失败事件。
+	ActionCollectorFailureList AdminLogAction = "查询Collector失败事件"
+	// ActionCollectorFailureRun 手动执行Collector失败重试。
+	ActionCollectorFailureRun AdminLogAction = "手动执行Collector失败重试"
+	// ActionCollectorFailureRetry 手动重试Collector失败事件。
+	ActionCollectorFailureRetry AdminLogAction = "手动重试Collector失败事件"
 )
 
 // ListAdminLog 分页查询管理员日志。
@@ -307,7 +307,10 @@ func applyAdminLogOrder(db *gorm.DB, orderBy, order string) (*gorm.DB, error) {
 	return applySafeOrder(db, orderBy, order)
 }
 
-// CreateAdminLog 创建管理员操作日志记录。
-func CreateAdminLog(db *gorm.DB, m *AdminLog) error {
-	return db.Create(m).Error
+// CreateAdminLogs 批量创建管理员操作日志。
+func CreateAdminLogs(db *gorm.DB, rows []AdminLog) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return db.CreateInBatches(&rows, len(rows)).Error
 }

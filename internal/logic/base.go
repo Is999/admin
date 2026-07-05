@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	// adminLogWriteTimeout 为审计日志落库预留独立短超时，避免业务请求超时后把日志写入一并取消。
-	adminLogWriteTimeout = 2 * time.Second
+	// adminLogEnqueueTimeout 为审计日志投递 Collector 预留独立短超时，避免业务请求超时后一并取消。
+	adminLogEnqueueTimeout = 2 * time.Second
 )
 
 // BaseLogic 是所有业务 logic 的公共基座，统一封装请求上下文、日志、DB、Redis 与审计能力。
@@ -155,7 +155,7 @@ func (l *BaseLogic) GetCtxAdmin() *helper.CtxAdmin {
 	return admin
 }
 
-// AddAdminLog 通过统一审计记录器落库，避免业务代码自行开 goroutine 或重复拼装公共字段。
+// AddAdminLog 通过统一审计记录器投递 Collector，避免业务代码自行拼装公共字段。
 func (l *BaseLogic) AddAdminLog(action model.AdminLogAction, route, method, describe string, data any) {
 	ctxAdmin := l.GetCtxAdmin()
 	if ctxAdmin.ID == 0 {
@@ -177,17 +177,17 @@ func (l *BaseLogic) AddAdminLog(action model.AdminLogAction, route, method, desc
 		return
 	}
 
-	// 审计日志在 handler 响应写出后立即落库，早于 access log middleware 的 defer 收口。
+	// 审计日志在 handler 响应写出后立即投递，早于 access log middleware 的 defer 收口。
 	// 因此这里先按请求开始时间刷新一次当前耗时，避免 admin_log.latency_ms 一直使用默认 0。
 	requestctx.RefreshLatency(l.Ctx)
 
 	// 审计日志需要继承当前请求的 trace / user / route 等上下文值，但不应继续受原请求 deadline 影响。
-	// 否则主业务接近超时时，日志写库会被同一个 context 一起取消，导致“业务成功但审计缺失”。
+	// 否则主业务接近超时时，Kafka 投递会被同一个 context 一起取消，导致“业务成功但审计缺失”。
 	auditCtx := context.Background()
 	if l.Ctx != nil {
 		auditCtx = context.WithoutCancel(l.Ctx)
 	}
-	auditCtx, cancel := context.WithTimeout(auditCtx, adminLogWriteTimeout)
+	auditCtx, cancel := context.WithTimeout(auditCtx, adminLogEnqueueTimeout)
 	defer cancel()
 
 	requestctx.SetRoute(auditCtx, route)

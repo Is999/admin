@@ -15,7 +15,7 @@
 - Asynq + robfig/cron，承载 Worker、Scheduler、工作流和周期任务
 - JWT + MFA + RBAC + 审计日志，支撑后台登录态和权限链路
 - 可选签名验签、AES/RSA 加解密和路由安全清单
-- Kafka / Redis Stream / DB outbox 通用 Collector
+- Kafka-only 通用 Collector 与失败账本重试
 - OpenTelemetry Trace、Prometheus 指标和结构化访问日志
 
 ## 运行链路
@@ -120,7 +120,7 @@ admin
 - 任务系统：Asynq 队列、工作流、周期调度、任务列表、队列控制、失败归档和 Lark 告警。
 - 用户标签：full / delta / targeted / recalculate 工作流、运行期 UID 索引、事件 outbox 和排障接口。
 - 文件传输：本地或 S3 存储、服务端中转、断点续传、导出文件下载和上传策略注册。
-- Collector：支持 Kafka、Redis Stream 和 DB outbox，用于后台轻量事件采集和批量消费。
+- Collector：正常链路只走 Kafka，用于后台轻量事件采集、批量消费和失败账本重试。
 - 可观测性：提供 `/api/live`、`/api/ready`、`/api/metrics`、文档站 `/api/docs`，并配套日志、Trace、指标和告警规则。
 
 ## 分层约定

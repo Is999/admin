@@ -363,7 +363,7 @@ const (
 	MsgKeyAPIRuntimeProfileSyncWarning = "api_runtime.profile_sync_warning"
 	// MsgKeyAPIRuntimeStatusSyncWarning 表示状态已更新但 API 缓存同步失败说明 key。
 	MsgKeyAPIRuntimeStatusSyncWarning = "api_runtime.status_sync_warning"
-	// MsgKeyCollectorRunPartialFailed 表示 Collector 执行存在失败任务说明 key。
+	// MsgKeyCollectorRunPartialFailed 表示 Collector 失败账本重试仍有失败事件说明 key。
 	MsgKeyCollectorRunPartialFailed = "collector.run_partial_failed"
 	// MsgKeyCollectorRunSuccess 表示 Collector 执行完成说明 key。
 	MsgKeyCollectorRunSuccess = "collector.run_success"

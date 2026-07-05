@@ -303,7 +303,7 @@ func TestAdminLogProcessorCollectorIgnoresLarkFilters(t *testing.T) {
 		Partition: 0,
 		Offset:    13,
 		Operation: cdcx.OperationCreate,
-		After:     []byte(`{"id":13,"user_id":7,"user_name":"admin","action":"查询Collector概览","route":"collector.overview","trace_id":"trace-1","http_status":200,"biz_code":200,"success":1}`),
+		After:     []byte(`{"id":13,"user_id":7,"user_name":"admin","action":"查询Collector观测概览","route":"collector.overview","trace_id":"trace-1","http_status":200,"biz_code":200,"success":1}`),
 	})
 	if err != nil {
 		t.Fatalf("ProcessCDC() error = %v", err)
@@ -327,7 +327,7 @@ func TestAdminLogProcessorCollectorRespectsTracePrefix(t *testing.T) {
 		Partition: 0,
 		Offset:    14,
 		Operation: cdcx.OperationCreate,
-		After:     []byte(`{"id":14,"action":"查询Collector概览","route":"collector.overview","trace_id":"normal-request","success":1}`),
+		After:     []byte(`{"id":14,"action":"查询Collector观测概览","route":"collector.overview","trace_id":"normal-request","success":1}`),
 	})
 	if err != nil {
 		t.Fatalf("ProcessCDC() error = %v", err)

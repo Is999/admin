@@ -290,14 +290,14 @@ var (
 	TaskQueueResume = newAuditRouteMeta("task.queue.resume", model.ActionTaskQueueResume, "恢复任务队列")
 
 	// 通用收集器模块
-	// CollectorOverview 查询Collector概览。
-	CollectorOverview = newAuditRouteMeta("collector.overview", model.ActionCollectorOverview, "查询Collector概览")
-	// CollectorTaskList 查询Collector任务。
-	CollectorTaskList = newAuditRouteMeta("collector.task.list", model.ActionCollectorTaskList, "查询Collector任务")
-	// CollectorRun 手动执行Collector。
-	CollectorRun = newAuditRouteMeta("collector.run", model.ActionCollectorRun, "手动执行Collector")
-	// CollectorRetry 手动重试Collector任务。
-	CollectorRetry = newAuditRouteMeta("collector.task.retry", model.ActionCollectorRetry, "手动重试Collector任务")
+	// CollectorOverview 查询Collector观测概览。
+	CollectorOverview = newAuditRouteMeta("collector.overview", model.ActionCollectorOverview, "查询Collector观测概览")
+	// CollectorFailureList 查询Collector失败事件。
+	CollectorFailureList = newAuditRouteMeta("collector.failure.list", model.ActionCollectorFailureList, "查询Collector失败事件")
+	// CollectorFailureRun 手动执行Collector失败重试。
+	CollectorFailureRun = newAuditRouteMeta("collector.failure.run", model.ActionCollectorFailureRun, "手动执行Collector失败重试")
+	// CollectorFailureRetry 手动重试Collector失败事件。
+	CollectorFailureRetry = newAuditRouteMeta("collector.failure.retry", model.ActionCollectorFailureRetry, "手动重试Collector失败事件")
 
 	// 用户标签模块
 	// UserTagWorkflowTrigger 触发用户标签工作流。

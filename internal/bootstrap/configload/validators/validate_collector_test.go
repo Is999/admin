@@ -6,54 +6,111 @@ import (
 	"admin/internal/config"
 )
 
-// TestValidateBootstrapConfigRejectsInvalidCollectorTransport 确保 Collector 载体只能使用受支持枚举。
-func TestValidateBootstrapConfigRejectsInvalidCollectorTransport(t *testing.T) {
+// TestValidateBootstrapConfigRejectsEnabledCollectorWithoutKafkaBrokers 确保启用 Collector 时必须具备 Kafka broker。
+func TestValidateBootstrapConfigRejectsEnabledCollectorWithoutKafkaBrokers(t *testing.T) {
 	cfg := validAdminBootstrapConfig()
-	cfg.Collector.Transport = "amqp"
+	cfg.Collector.Enabled = true
+	cfg.Collector.DefaultTask = config.CollectorTaskConfig{Topic: "collector_events", GroupID: "collector_group"}
 	if err := ValidateCollector(cfg); err == nil {
-		t.Fatal("期望非法 collector.transport 返回错误，实际为 nil")
+		t.Fatal("期望 collector.kafka.brokers 缺失返回错误，实际为 nil")
 	}
 }
 
-// TestValidateBootstrapConfigRejectsForeignCollectorStream 确保 Collector 不会误用其它站点 Redis Stream。
-func TestValidateBootstrapConfigRejectsForeignCollectorStream(t *testing.T) {
-	cfg := validAdminBootstrapConfig()
-	cfg.AppID = "site-2"
-	cfg.Collector.Redis.Stream = "app:site-1:collector:events"
-	if err := ValidateCollector(cfg); err == nil {
-		t.Fatal("期望其它 app_id 的 collector.redis.stream 返回错误，实际为 nil")
-	}
-}
-
-// TestValidateBootstrapConfigRejectsForcedKafkaWithoutTopic 确保强制 Kafka 载体时必须具备可投递配置。
-func TestValidateBootstrapConfigRejectsForcedKafkaWithoutTopic(t *testing.T) {
+// TestValidateBootstrapConfigRejectsCollectorWithoutTaskTopic 确保启用 Collector 时必须配置任务 Topic。
+func TestValidateBootstrapConfigRejectsCollectorWithoutTaskTopic(t *testing.T) {
 	cfg := validAdminBootstrapConfig()
 	cfg.Collector = config.CollectorConfig{
-		Enabled:   true,
-		Transport: "kafka",
+		Enabled: true,
 		Kafka: config.CollectorKafkaConfig{
-			Enabled: true,
 			Brokers: []string{"127.0.0.1:9092"},
 		},
 	}
 	if err := ValidateCollector(cfg); err == nil {
-		t.Fatal("期望 collector.kafka.topic 缺失返回错误，实际为 nil")
+		t.Fatal("期望任务 topic 缺失返回错误，实际为 nil")
 	}
 }
 
-// TestValidateBootstrapConfigRejectsCollectorKafkaWithoutGroup 确保启用 Collector 后 Kafka 消费组不可缺失。
-func TestValidateBootstrapConfigRejectsCollectorKafkaWithoutGroup(t *testing.T) {
+// TestValidateBootstrapConfigRejectsCollectorTaskWithoutGroup 确保任务 Topic 必须配套消费组。
+func TestValidateBootstrapConfigRejectsCollectorTaskWithoutGroup(t *testing.T) {
 	cfg := validAdminBootstrapConfig()
 	cfg.Collector = config.CollectorConfig{
-		Enabled:   true,
-		Transport: "kafka",
+		Enabled: true,
 		Kafka: config.CollectorKafkaConfig{
-			Enabled: true,
 			Brokers: []string{"127.0.0.1:9092"},
-			Topic:   "collector_events",
+		},
+		DefaultTask: config.CollectorTaskConfig{Topic: "collector_events"},
+	}
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望 task group_id 缺失返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsCollectorTopicGroupConflict 确保同 Topic 不允许配置多个消费组。
+func TestValidateBootstrapConfigRejectsCollectorTopicGroupConflict(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Collector = config.CollectorConfig{
+		Enabled: true,
+		Kafka: config.CollectorKafkaConfig{
+			Brokers: []string{"127.0.0.1:9092"},
+		},
+		DefaultTask: config.CollectorTaskConfig{Topic: "collector_events", GroupID: "collector-a"},
+		Tasks: map[string]config.CollectorTaskConfig{
+			"user_stat": {Topic: "collector_events", GroupID: "collector-b"},
 		},
 	}
 	if err := ValidateCollector(cfg); err == nil {
-		t.Fatal("期望 collector.kafka.group_id 缺失返回错误，实际为 nil")
+		t.Fatal("期望同 Topic 多 group_id 返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsInvalidCollectorIdempotencyTTL 确保 Collector 幂等 TTL 配置自洽。
+func TestValidateBootstrapConfigRejectsInvalidCollectorIdempotencyTTL(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Collector.Idempotency.TTLSeconds = 60
+	cfg.Collector.Idempotency.ProcessingTTLSeconds = 120
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望 processing_ttl_seconds 大于 ttl_seconds 返回错误，实际为 nil")
+	}
+
+	cfg.Collector.Idempotency.ProcessingTTLSeconds = -1
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望 processing_ttl_seconds 为负数返回错误，实际为 nil")
+	}
+
+	cfg = validAdminBootstrapConfig()
+	cfg.Collector.Idempotency.PipelineBatchSize = -1
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望 pipeline_batch_size 为负数返回错误，实际为 nil")
+	}
+
+	cfg = validAdminBootstrapConfig()
+	cfg.Collector.Idempotency.PipelineBatchSize = maxCollectorIdempotencyPipelineBatchSize + 1
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望 pipeline_batch_size 超限返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsInvalidCollectorTaskPolicy 确保 Collector 任务聚合策略配置自洽。
+func TestValidateBootstrapConfigRejectsInvalidCollectorTaskPolicy(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Collector.DefaultTask.BatchSize = -1
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望 default_task.batch_size 为负数返回错误，实际为 nil")
+	}
+
+	cfg = validAdminBootstrapConfig()
+	cfg.Collector.Tasks = map[string]config.CollectorTaskConfig{
+		" ": {BatchSize: 200},
+	}
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望 collector.tasks 空 bizType 返回错误，实际为 nil")
+	}
+
+	cfg = validAdminBootstrapConfig()
+	cfg.Collector.Tasks = map[string]config.CollectorTaskConfig{
+		"admin_log": {BatchWaitMilliseconds: maxCollectorTaskBatchWaitMilliseconds + 1},
+	}
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望 task batch_wait_milliseconds 超限返回错误，实际为 nil")
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Collector 指标变量集中定义 outbox 落地、Processor 批量处理和结果统计。
+// Collector 指标变量集中定义 Kafka 投递消费、失败账本、Processor 批量处理和结果统计。
 var (
 	collectorMetricsOnce sync.Once // 保证 Collector 指标只注册一次
 	// collectorMetricBizTypeGuard 保护 Collector biz_type 指标标签白名单。
@@ -19,26 +19,56 @@ var (
 		allowed: make(map[string]struct{}),
 	}
 
-	// collectorOutboxPersistEventsTotal 统计 Collector 写入 outbox 的事件数量。
-	collectorOutboxPersistEventsTotal = prometheus.NewCounterVec(
+	// collectorKafkaPublishEventsTotal 统计 Collector Kafka 投递事件数量。
+	collectorKafkaPublishEventsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "admin",
 			Subsystem: "collector",
-			Name:      "outbox_persist_events_total",
-			Help:      "Collector 写入 outbox 的事件累计数量。",
+			Name:      "kafka_publish_events_total",
+			Help:      "Collector Kafka 投递事件累计数量。",
 		},
-		[]string{"transport"},
+		[]string{"result"},
 	)
-	// collectorOutboxPersistDuration 统计 Collector 写入 outbox 的耗时分布。
-	collectorOutboxPersistDuration = prometheus.NewHistogramVec(
+	// collectorKafkaConsumeEventsTotal 统计 Collector Kafka 消费事件数量。
+	collectorKafkaConsumeEventsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "admin",
+			Subsystem: "collector",
+			Name:      "kafka_consume_events_total",
+			Help:      "Collector Kafka 消费事件累计数量。",
+		},
+		[]string{"result"},
+	)
+	// collectorFailurePersistEventsTotal 统计 Collector 写入失败账本的事件数量。
+	collectorFailurePersistEventsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "admin",
+			Subsystem: "collector",
+			Name:      "failure_persist_events_total",
+			Help:      "Collector 写入失败账本的事件累计数量。",
+		},
+		[]string{"state"},
+	)
+	// collectorFailurePersistDuration 统计 Collector 写入失败账本的耗时分布。
+	collectorFailurePersistDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "admin",
 			Subsystem: "collector",
-			Name:      "outbox_persist_duration_seconds",
-			Help:      "Collector 批量写入 outbox 的耗时分布。",
+			Name:      "failure_persist_duration_seconds",
+			Help:      "Collector 批量写入失败账本的耗时分布。",
 			Buckets:   []float64{0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5},
 		},
-		[]string{"transport"},
+		[]string{"state"},
+	)
+	// collectorFailureDeadEventsTotal 统计 Collector 进入死信的失败事件数量。
+	collectorFailureDeadEventsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "admin",
+			Subsystem: "collector",
+			Name:      "failure_dead_events_total",
+			Help:      "Collector 进入死信的失败事件累计数量。",
+		},
+		[]string{"biz_type"},
 	)
 	// collectorProcessorBatchSize 统计 Collector Processor 单批事件数量。
 	collectorProcessorBatchSize = prometheus.NewHistogramVec(
@@ -83,8 +113,11 @@ const (
 func ensureMetricsRegistered() {
 	collectorMetricsOnce.Do(func() {
 		prometheus.MustRegister(
-			collectorOutboxPersistEventsTotal,
-			collectorOutboxPersistDuration,
+			collectorKafkaPublishEventsTotal,
+			collectorKafkaConsumeEventsTotal,
+			collectorFailurePersistEventsTotal,
+			collectorFailurePersistDuration,
+			collectorFailureDeadEventsTotal,
 			collectorProcessorBatchSize,
 			collectorProcessorBatchDuration,
 			collectorProcessorEventsTotal,
@@ -137,15 +170,42 @@ func normalizeBizTypeMetricLabel(bizType string) string {
 	return value
 }
 
-// recordOutboxPersistBatch 记录一次批量写 outbox 的事件数量和耗时。
-func recordOutboxPersistBatch(transport string, count int, duration time.Duration) {
+// recordKafkaPublish 记录 Kafka 投递结果。
+func recordKafkaPublish(result string, count int) {
 	if count <= 0 {
 		return
 	}
 	ensureMetricsRegistered()
-	label := normalizeMetricLabel(transport, collectorTransportUnknown)
-	collectorOutboxPersistEventsTotal.WithLabelValues(label).Add(float64(count))
-	collectorOutboxPersistDuration.WithLabelValues(label).Observe(duration.Seconds())
+	collectorKafkaPublishEventsTotal.WithLabelValues(normalizeMetricLabel(result, "unknown")).Add(float64(count))
+}
+
+// recordKafkaConsume 记录 Kafka 消费处理结果。
+func recordKafkaConsume(result string, count int) {
+	if count <= 0 {
+		return
+	}
+	ensureMetricsRegistered()
+	collectorKafkaConsumeEventsTotal.WithLabelValues(normalizeMetricLabel(result, "unknown")).Add(float64(count))
+}
+
+// recordFailurePersistBatch 记录一次批量写失败账本的事件数量和耗时。
+func recordFailurePersistBatch(state string, count int, duration time.Duration) {
+	if count <= 0 {
+		return
+	}
+	ensureMetricsRegistered()
+	stateLabel := normalizeMetricLabel(state, "unknown")
+	collectorFailurePersistEventsTotal.WithLabelValues(stateLabel).Add(float64(count))
+	collectorFailurePersistDuration.WithLabelValues(stateLabel).Observe(duration.Seconds())
+}
+
+// recordFailureDead 记录失败事件进入死信的数量。
+func recordFailureDead(bizType string, count int) {
+	if count <= 0 {
+		return
+	}
+	ensureMetricsRegistered()
+	collectorFailureDeadEventsTotal.WithLabelValues(normalizeBizTypeMetricLabel(bizType)).Add(float64(count))
 }
 
 // recordProcessorBatch 记录一次 Processor 批处理的批次规模、耗时和成功/失败事件数。

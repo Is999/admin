@@ -2,20 +2,19 @@ package types
 
 import "testing"
 
-// TestListCollectorTasksReqValidateNormalizesFilters 验证 Collector 列表过滤参数会在入口归一化。
-func TestListCollectorTasksReqValidateNormalizesFilters(t *testing.T) {
+// TestListCollectorFailuresReqValidateNormalizesFilters 验证 Collector 失败事件列表过滤参数会在入口归一化。
+func TestListCollectorFailuresReqValidateNormalizesFilters(t *testing.T) {
 	state := 3
-	req := &ListCollectorTasksReq{
+	req := &ListCollectorFailuresReq{
 		GetPageReq: GetPageReq{Page: 0, PageSize: 1000},
 		BizType:    " user_tag ",
-		Transport:  " KAFKA ",
 		State:      &state,
 	}
 
 	if err := req.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if req.BizType != "user_tag" || req.Transport != "kafka" {
+	if req.BizType != "user_tag" {
 		t.Fatalf("过滤参数归一化失败: %+v", req)
 	}
 	if req.Page != defaultPageNumber || req.PageSize != maxPageSize {
@@ -23,17 +22,12 @@ func TestListCollectorTasksReqValidateNormalizesFilters(t *testing.T) {
 	}
 }
 
-// TestListCollectorTasksReqValidateRejectsInvalidFilter 验证 Collector 列表过滤只接受明确状态和来源。
-func TestListCollectorTasksReqValidateRejectsInvalidFilter(t *testing.T) {
+// TestListCollectorFailuresReqValidateRejectsInvalidFilter 验证 Collector 失败事件列表只接受明确状态。
+func TestListCollectorFailuresReqValidateRejectsInvalidFilter(t *testing.T) {
 	state := 9
-	req := &ListCollectorTasksReq{State: &state}
+	req := &ListCollectorFailuresReq{State: &state}
 	if err := req.Validate(); err == nil {
 		t.Fatalf("Validate() expected invalid state error")
-	}
-
-	req = &ListCollectorTasksReq{Transport: "http"}
-	if err := req.Validate(); err == nil {
-		t.Fatalf("Validate() expected invalid transport error")
 	}
 }
 
@@ -50,10 +44,10 @@ func TestRunCollectorReqValidateCapsLimit(t *testing.T) {
 	}
 }
 
-// TestRetryCollectorTasksReqValidateNormalizesIDs 验证人工重试会去重任务 ID 并拒绝无效输入。
-func TestRetryCollectorTasksReqValidateNormalizesIDs(t *testing.T) {
+// TestRetryCollectorFailuresReqValidateNormalizesIDs 验证人工重试会去重失败事件 ID 并拒绝无效输入。
+func TestRetryCollectorFailuresReqValidateNormalizesIDs(t *testing.T) {
 	resetAttempt := false
-	req := &RetryCollectorTasksReq{
+	req := &RetryCollectorFailuresReq{
 		IDs:          []int64{3, 3, 5},
 		DelaySeconds: 60,
 		ResetAttempt: &resetAttempt,
@@ -70,9 +64,9 @@ func TestRetryCollectorTasksReqValidateNormalizesIDs(t *testing.T) {
 	}
 }
 
-// TestRetryCollectorTasksReqValidateRejectsUnsafeInput 验证人工重试拒绝空 ID、非法 ID 和负延迟。
-func TestRetryCollectorTasksReqValidateRejectsUnsafeInput(t *testing.T) {
-	cases := []*RetryCollectorTasksReq{
+// TestRetryCollectorFailuresReqValidateRejectsUnsafeInput 验证人工重试拒绝空 ID、非法 ID 和负延迟。
+func TestRetryCollectorFailuresReqValidateRejectsUnsafeInput(t *testing.T) {
+	cases := []*RetryCollectorFailuresReq{
 		{},
 		{IDs: []int64{0}},
 		{IDs: []int64{1}, DelaySeconds: -1},

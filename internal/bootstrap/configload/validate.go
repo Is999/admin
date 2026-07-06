@@ -67,8 +67,98 @@ func validateCoreConfig(c config.Config) error {
 
 // validateSnowflakeConfig 校验分布式雪花 ID worker 配置。
 func validateSnowflakeConfig(cfg config.SnowflakeConfig) error {
-	if _, err := resolveSnowflakeWorkerID(cfg); err != nil {
+	if cfg.Redis.Enabled {
+		if err := validateSnowflakeRedisConfig(cfg); err != nil {
+			return errors.Tag(err)
+		}
+	} else if _, err := resolveSnowflakeWorkerID(cfg); err != nil {
 		return errors.Tag(err)
+	}
+	if err := validateIDSegmentConfig(cfg); err != nil {
+		return errors.Tag(err)
+	}
+	return nil
+}
+
+// validateSnowflakeRedisConfig 校验 Redis 租约 node_id 分配参数。
+func validateSnowflakeRedisConfig(cfg config.SnowflakeConfig) error {
+	if cfg.WorkerID != nil {
+		return errors.Errorf("snowflake.redis.enabled=true 时不能同时配置 snowflake.worker_id")
+	}
+	redisCfg := normalizeSnowflakeRedisConfig(cfg.Redis)
+	if strings.ContainsAny(redisCfg.Scope, " \t\r\n") {
+		return errors.Errorf("snowflake.redis.scope 不能包含空白字符")
+	}
+	if redisCfg.LeaseSeconds < minSnowflakeRedisLeaseSeconds {
+		return errors.Errorf("snowflake.redis.lease_seconds 不能小于 %d", minSnowflakeRedisLeaseSeconds)
+	}
+	if redisCfg.RenewIntervalSeconds <= 0 {
+		return errors.Errorf("snowflake.redis.renew_interval_seconds 必须大于 0")
+	}
+	if redisCfg.RenewIntervalSeconds*2 >= redisCfg.LeaseSeconds {
+		return errors.Errorf("snowflake.redis.renew_interval_seconds 必须小于 lease_seconds 的一半")
+	}
+	if err := validateSnowflakeRedisNamespaces(cfg.Redis.Namespaces); err != nil {
+		return errors.Tag(err)
+	}
+	return nil
+}
+
+// validateSnowflakeRedisNamespaces 校验业务 namespace 的 node_id 池覆盖配置。
+func validateSnowflakeRedisNamespaces(items map[string]config.SnowflakeRedisNamespaceConfig) error {
+	for rawNamespace, item := range items {
+		namespace := idgen.NormalizeNamespace(rawNamespace)
+		if namespace == "" {
+			return errors.Errorf("snowflake.redis.namespaces 包含空 namespace")
+		}
+		if strings.ContainsAny(namespace, " \t\r\n") {
+			return errors.Errorf("snowflake.redis.namespaces.%s 不能包含空白字符", rawNamespace)
+		}
+		if item.NodeCount < 0 || item.NodeCount > int(idgen.SnowflakeMaxWorkerID+1) {
+			return errors.Errorf("snowflake.redis.namespaces.%s.node_count 必须在 0-%d 之间", namespace, idgen.SnowflakeMaxWorkerID+1)
+		}
+	}
+	return nil
+}
+
+// validateIDSegmentConfig 校验高吞吐业务 Redis Segment 号段配置。
+func validateIDSegmentConfig(cfg config.SnowflakeConfig) error {
+	if !cfg.Segment.Enabled {
+		return nil
+	}
+	segmentCfg := normalizeIDSegmentConfig(cfg.Segment, cfg.Redis)
+	if strings.ContainsAny(segmentCfg.Scope, " \t\r\n") {
+		return errors.Errorf("snowflake.segment.scope 不能包含空白字符")
+	}
+	if segmentCfg.AllocateTimeoutSeconds <= 0 || segmentCfg.AllocateTimeoutSeconds > maxIDSegmentAllocateTimeoutSeconds {
+		return errors.Errorf("snowflake.segment.allocate_timeout_seconds 必须在 1-%d 之间", maxIDSegmentAllocateTimeoutSeconds)
+	}
+	enabledNamespaces := 0
+	for rawNamespace, rawItem := range cfg.Segment.Namespaces {
+		namespace := idgen.NormalizeNamespace(rawNamespace)
+		if namespace == "" {
+			return errors.Errorf("snowflake.segment.namespaces 包含空 namespace")
+		}
+		if strings.ContainsAny(namespace, " \t\r\n") {
+			return errors.Errorf("snowflake.segment.namespaces.%s 不能包含空白字符", rawNamespace)
+		}
+		item := normalizeIDSegmentNamespaceConfig(rawItem)
+		if !item.Enabled {
+			continue
+		}
+		enabledNamespaces++
+		if item.Step <= 0 || item.Step > maxIDSegmentStep {
+			return errors.Errorf("snowflake.segment.namespaces.%s.step 必须在 1-%d 之间", namespace, maxIDSegmentStep)
+		}
+		if item.PrefetchThreshold < 0 || item.PrefetchThreshold >= item.Step {
+			return errors.Errorf("snowflake.segment.namespaces.%s.prefetch_threshold 必须小于 step 且不能为负数", namespace)
+		}
+		if item.Start < 0 {
+			return errors.Errorf("snowflake.segment.namespaces.%s.start 不能小于 0", namespace)
+		}
+	}
+	if enabledNamespaces == 0 {
+		return errors.Errorf("snowflake.segment.enabled=true 时必须至少启用一个 namespace")
 	}
 	return nil
 }
@@ -83,6 +173,9 @@ func resolveSnowflakeWorkerID(cfg config.SnowflakeConfig) (int64, error) {
 
 // ConfigureSnowflakeWorkerID 发布当前进程使用的雪花 ID worker 配置。
 func ConfigureSnowflakeWorkerID(cfg config.SnowflakeConfig) error {
+	if cfg.Redis.Enabled {
+		return errors.New("snowflake.redis.enabled=true 时必须通过 Redis 租约配置雪花 node_id")
+	}
 	workerID, err := resolveSnowflakeWorkerID(cfg)
 	if err != nil {
 		return errors.Tag(err)

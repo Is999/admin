@@ -84,6 +84,19 @@ func TestNextIDRequiresWorkerID(t *testing.T) {
 	}
 }
 
+// TestNextIDRejectsEmptyNamespace 验证调用方必须声明业务命名空间。
+func TestNextIDRejectsEmptyNamespace(t *testing.T) {
+	resetWorkerIDForTest()
+	t.Cleanup(resetWorkerIDForTest)
+
+	if err := ConfigureWorkerID(12); err != nil {
+		t.Fatalf("ConfigureWorkerID() error = %v", err)
+	}
+	if _, err := NextID(" "); err == nil || !strings.Contains(err.Error(), "namespace 不能为空") {
+		t.Fatalf("NextID(empty namespace) error = %v, want namespace error", err)
+	}
+}
+
 // TestNextIDUsesConfiguredWorkerID 验证配置 worker_id 会进入雪花 ID worker 段。
 func TestNextIDUsesConfiguredWorkerID(t *testing.T) {
 	resetWorkerIDForTest()
@@ -98,6 +111,20 @@ func TestNextIDUsesConfiguredWorkerID(t *testing.T) {
 	}
 	if got := snowflakeWorkerIDFromID(id); got != 12 {
 		t.Fatalf("worker id in snowflake = %d want=12", got)
+	}
+}
+
+// TestReleaseWorkerIDStopsNextID 验证 Redis 租约释放后进程不会继续使用旧 worker 发号。
+func TestReleaseWorkerIDStopsNextID(t *testing.T) {
+	resetWorkerIDForTest()
+	t.Cleanup(resetWorkerIDForTest)
+
+	if err := ConfigureWorkerID(12); err != nil {
+		t.Fatalf("ConfigureWorkerID() error = %v", err)
+	}
+	ReleaseWorkerID(12)
+	if _, err := NextID("user"); err == nil || !strings.Contains(err.Error(), "租约已释放") {
+		t.Fatalf("NextID() error = %v, want released lease error", err)
 	}
 }
 
@@ -124,8 +151,8 @@ func TestConfigureWorkerIDClearsWorkerCache(t *testing.T) {
 	}
 }
 
-// TestNextIDSharesWorkerGeneratorAcrossNamespaces 验证同一 worker 不会因命名空间拆出独立序列。
-func TestNextIDSharesWorkerGeneratorAcrossNamespaces(t *testing.T) {
+// TestNextIDIsolatesWorkerGeneratorAcrossNamespaces 验证不同业务命名空间使用独立本地生成器。
+func TestNextIDIsolatesWorkerGeneratorAcrossNamespaces(t *testing.T) {
 	resetWorkerIDForTest()
 	t.Cleanup(resetWorkerIDForTest)
 
@@ -138,16 +165,87 @@ func TestNextIDSharesWorkerGeneratorAcrossNamespaces(t *testing.T) {
 	if _, err := NextID("order"); err != nil {
 		t.Fatalf("NextID(order) error = %v", err)
 	}
-	if _, ok := workerGenerators.Load(int64(12)); !ok {
-		t.Fatal("worker generator for worker_id=12 missing")
+	if _, ok := workerGenerators.Load(snowflakeGeneratorKey{namespace: "user", workerID: 12}); !ok {
+		t.Fatal("worker generator for user namespace missing")
+	}
+	if _, ok := workerGenerators.Load(snowflakeGeneratorKey{namespace: "order", workerID: 12}); !ok {
+		t.Fatal("worker generator for order namespace missing")
 	}
 	count := 0
 	workerGenerators.Range(func(_, _ any) bool {
 		count++
 		return true
 	})
-	if count != 1 {
-		t.Fatalf("worker generator count = %d want=1", count)
+	if count != 2 {
+		t.Fatalf("worker generator count = %d want=2", count)
+	}
+}
+
+// TestConfigureWorkerIDForNamespace 验证单业务命名空间可独立绑定 worker_id。
+func TestConfigureWorkerIDForNamespace(t *testing.T) {
+	resetWorkerIDForTest()
+	t.Cleanup(resetWorkerIDForTest)
+
+	if err := ConfigureWorkerIDForNamespace("recharge.order", 21); err != nil {
+		t.Fatalf("ConfigureWorkerIDForNamespace() error = %v", err)
+	}
+	id, err := NextID("recharge.order")
+	if err != nil {
+		t.Fatalf("NextID(recharge.order) error = %v", err)
+	}
+	if got := snowflakeWorkerIDFromID(id); got != 21 {
+		t.Fatalf("worker id = %d want=21", got)
+	}
+	if _, err = NextID("withdraw.order"); err == nil || !strings.Contains(err.Error(), "worker_id 未配置") {
+		t.Fatalf("NextID(withdraw.order) error = %v, want missing worker", err)
+	}
+}
+
+// TestNextIDUsesSegmentResolver 验证启用 Segment 的业务 namespace 不依赖雪花 worker_id。
+func TestNextIDUsesSegmentResolver(t *testing.T) {
+	resetWorkerIDForTest()
+	t.Cleanup(resetWorkerIDForTest)
+
+	resolver := &fakeSegmentResolver{
+		enabled: map[string]bool{"recharge.order": true},
+		next:    1000,
+	}
+	token := ConfigureSegmentResolver(resolver)
+	t.Cleanup(func() { ClearSegmentResolver(token) })
+
+	first, err := NextID("recharge.order")
+	if err != nil {
+		t.Fatalf("NextID(segment first) error = %v", err)
+	}
+	second, err := NextID("recharge.order")
+	if err != nil {
+		t.Fatalf("NextID(segment second) error = %v", err)
+	}
+	if first != 1001 || second != 1002 {
+		t.Fatalf("segment ids = %d,%d want 1001,1002", first, second)
+	}
+	if _, ok := CurrentWorkerID("recharge.order"); ok {
+		t.Fatal("segment namespace should not configure snowflake worker")
+	}
+}
+
+// TestNextIDFallsBackToSnowflakeForNonSegmentNamespace 验证未配置 Segment 的业务仍走默认雪花策略。
+func TestNextIDFallsBackToSnowflakeForNonSegmentNamespace(t *testing.T) {
+	resetWorkerIDForTest()
+	t.Cleanup(resetWorkerIDForTest)
+
+	resolver := &fakeSegmentResolver{enabled: map[string]bool{"recharge.order": true}}
+	token := ConfigureSegmentResolver(resolver)
+	t.Cleanup(func() { ClearSegmentResolver(token) })
+	if err := ConfigureWorkerID(12); err != nil {
+		t.Fatalf("ConfigureWorkerID() error = %v", err)
+	}
+	id, err := NextID("withdraw.order")
+	if err != nil {
+		t.Fatalf("NextID(non segment) error = %v", err)
+	}
+	if got := snowflakeWorkerIDFromID(id); got != 12 {
+		t.Fatalf("worker id = %d want=12", got)
 	}
 }
 
@@ -190,4 +288,21 @@ func snowflakeWorkerIDFromID(id int64) int64 {
 // stableShardNoForTest 使用与生产一致的 CRC32 规则计算测试期望分片号。
 func stableShardNoForTest(id int64) int {
 	return int(crc32.ChecksumIEEE([]byte(strconv.FormatInt(id, 10))) % ShardMod)
+}
+
+// fakeSegmentResolver 为 NextID 策略切换测试提供内存 Segment 解析器。
+type fakeSegmentResolver struct {
+	enabled map[string]bool // enabled 标记哪些业务 namespace 启用 Segment
+	next    int64           // next 保存最后一次返回的 ID
+}
+
+// SegmentEnabled 判断测试 namespace 是否启用 Segment。
+func (f *fakeSegmentResolver) SegmentEnabled(namespace string) bool {
+	return f.enabled[namespace]
+}
+
+// SegmentID 返回递增的测试 Segment ID。
+func (f *fakeSegmentResolver) SegmentID(string) (int64, error) {
+	f.next++
+	return f.next, nil
 }

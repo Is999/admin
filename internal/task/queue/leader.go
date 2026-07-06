@@ -63,11 +63,17 @@ func (r *LeaderRunner) Start(ctx context.Context) {
 		if !isLeader {
 			ok, err := r.client.SetNX(ctx, r.key, r.instanceID, r.ttl).Result()
 			if err != nil {
-				loggerx.Errorw(ctx, "任务队列 leader 竞争失败", errors.Wrap(err, "任务队列 leader 竞争失败"))
+				loggerx.Errorw(ctx, "任务队列 leader 竞争失败", errors.Wrap(err, "竞争 scheduler leader 锁"),
+					logx.Field("key", r.key),
+					logx.Field("instance", r.instanceID),
+				)
 			} else if ok {
 				release, err = r.onAcquire(ctx)
 				if err != nil {
-					loggerx.Errorw(ctx, "任务队列 leader 启动调度器失败", errors.Wrap(err, "任务队列 leader 启动调度器失败"))
+					loggerx.Errorw(ctx, "任务队列 leader 启动调度器失败", errors.Wrap(err, "启动 scheduler leader 回调"),
+						logx.Field("key", r.key),
+						logx.Field("instance", r.instanceID),
+					)
 					_ = r.release(ctx)
 				} else {
 					isLeader = true
@@ -95,7 +101,10 @@ func (r *LeaderRunner) Start(ctx context.Context) {
 			ok, err := renewLeaderScript.Run(ctx, r.client, []string{r.key}, r.instanceID, r.ttl.Milliseconds()).Int()
 			if err != nil || ok == 0 {
 				if err != nil {
-					loggerx.Errorw(ctx, "任务队列 leader 续租失败", errors.Wrap(err, "任务队列 leader 续租失败"))
+					loggerx.Errorw(ctx, "任务队列 leader 续租失败", errors.Wrap(err, "续租 scheduler leader 锁"),
+						logx.Field("key", r.key),
+						logx.Field("instance", r.instanceID),
+					)
 				} else {
 					loggerx.Infow(ctx, "任务队列 leader 已丢失",
 						logx.Field("key", r.key),

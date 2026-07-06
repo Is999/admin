@@ -3,6 +3,7 @@ package configload
 import (
 	"testing"
 
+	"admin/common/idgen"
 	"admin/internal/config"
 )
 
@@ -33,13 +34,149 @@ func TestValidateBootstrapConfigRejectsMissingAppID(t *testing.T) {
 	}
 }
 
-// TestValidateBootstrapConfigRejectsMissingSnowflakeWorkerID 确保雪花 worker_id 缺失时启动失败。
+// TestValidateBootstrapConfigRejectsMissingSnowflakeWorkerID 确保未启用 Redis 租约时雪花 worker_id 缺失会启动失败。
 func TestValidateBootstrapConfigRejectsMissingSnowflakeWorkerID(t *testing.T) {
 	cfg := validAdminBootstrapConfig()
 	cfg.Snowflake.WorkerID = nil
 	t.Setenv("SNOWFLAKE_WORKER_ID", "")
 	if err := Validate(cfg); err == nil {
 		t.Fatal("期望 snowflake.worker_id 缺失返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigAcceptsRedisSnowflakeLease 确保 Redis 租约模式不要求静态 worker_id。
+func TestValidateBootstrapConfigAcceptsRedisSnowflakeLease(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.WorkerID = nil
+	cfg.Snowflake.Redis = config.SnowflakeRedisConfig{
+		Enabled: true,
+		Namespaces: map[string]config.SnowflakeRedisNamespaceConfig{
+			"user": {NodeCount: 10},
+		},
+	}
+	t.Setenv("SNOWFLAKE_WORKER_ID", "")
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("期望 Redis 雪花租约配置通过，实际错误为 %v", err)
+	}
+}
+
+// TestValidateBootstrapConfigRejectsInvalidSnowflakeNamespaceNodeCount 确保 namespace node_id 池大小受雪花位宽约束。
+func TestValidateBootstrapConfigRejectsInvalidSnowflakeNamespaceNodeCount(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.WorkerID = nil
+	cfg.Snowflake.Redis = config.SnowflakeRedisConfig{
+		Enabled: true,
+		Namespaces: map[string]config.SnowflakeRedisNamespaceConfig{
+			"user": {NodeCount: int(idgen.SnowflakeMaxWorkerID + 2)},
+		},
+	}
+	t.Setenv("SNOWFLAKE_WORKER_ID", "")
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望过大的 snowflake.redis namespace node_count 返回错误，实际为 nil")
+	}
+
+	cfg = validAdminBootstrapConfig()
+	cfg.Snowflake.WorkerID = nil
+	cfg.Snowflake.Redis = config.SnowflakeRedisConfig{
+		Enabled: true,
+		Namespaces: map[string]config.SnowflakeRedisNamespaceConfig{
+			"user": {NodeCount: -1},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望负数 snowflake.redis namespace node_count 返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigAcceptsIDSegmentNamespace 确保高吞吐业务可单独启用 Redis Segment 号段。
+func TestValidateBootstrapConfigAcceptsIDSegmentNamespace(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.Segment = config.IDSegmentConfig{
+		Enabled:                true,
+		Scope:                  "main",
+		AllocateTimeoutSeconds: 2,
+		Namespaces: map[string]config.IDSegmentNamespaceConfig{
+			"recharge.order": {
+				Enabled:           true,
+				Step:              10000,
+				PrefetchThreshold: 2000,
+			},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("期望合法 ID Segment 配置通过，实际错误为 %v", err)
+	}
+}
+
+// TestValidateBootstrapConfigRejectsIDSegmentWithoutNamespace 确保开启 Segment 时不能没有启用的业务 namespace。
+func TestValidateBootstrapConfigRejectsIDSegmentWithoutNamespace(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.Segment = config.IDSegmentConfig{Enabled: true}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望 ID Segment 未配置 namespace 时返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsInvalidIDSegmentOptions 确保 Segment 号段参数保持在可控范围内。
+func TestValidateBootstrapConfigRejectsInvalidIDSegmentOptions(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.Segment = config.IDSegmentConfig{
+		Enabled: true,
+		Scope:   "main scope",
+		Namespaces: map[string]config.IDSegmentNamespaceConfig{
+			"recharge.order": {Enabled: true, Step: 1000},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望 ID Segment scope 包含空白时返回错误，实际为 nil")
+	}
+
+	cfg = validAdminBootstrapConfig()
+	cfg.Snowflake.Segment = config.IDSegmentConfig{
+		Enabled: true,
+		Scope:   "main",
+		Namespaces: map[string]config.IDSegmentNamespaceConfig{
+			"recharge.order": {Enabled: true, Step: 1000, PrefetchThreshold: 1000},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望 ID Segment 预取阈值非法时返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsSnowflakeScopeWhitespace 确保部署级 scope 不能包含空白字符。
+func TestValidateBootstrapConfigRejectsSnowflakeScopeWhitespace(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.WorkerID = nil
+	cfg.Snowflake.Redis = config.SnowflakeRedisConfig{
+		Enabled: true,
+		Scope:   "main scope",
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望 snowflake.redis.scope 包含空白时返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsMixedSnowflakeModes 确保 Redis 租约模式不会被静态 worker_id 覆盖。
+func TestValidateBootstrapConfigRejectsMixedSnowflakeModes(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.Redis.Enabled = true
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望 snowflake.worker_id 与 Redis 租约混用返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsUnsafeSnowflakeLeaseInterval 确保续约间隔不能贴近租约 TTL。
+func TestValidateBootstrapConfigRejectsUnsafeSnowflakeLeaseInterval(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Snowflake.WorkerID = nil
+	cfg.Snowflake.Redis = config.SnowflakeRedisConfig{
+		Enabled:              true,
+		LeaseSeconds:         20,
+		RenewIntervalSeconds: 10,
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望不安全的雪花 Redis 续约间隔返回错误，实际为 nil")
 	}
 }
 

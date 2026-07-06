@@ -28,9 +28,41 @@ type RedisConfig struct {
 	TLSInsecureSkipVerify bool              `json:"tls_insecure_skip_verify,optional"` // 是否跳过 TLS 证书校验（仅测试/代理场景使用）
 }
 
-// SnowflakeConfig 定义基于 bwmarrin/snowflake 的分布式雪花 ID 配置。
+// SnowflakeRedisConfig 定义雪花 node_id 的 Redis 租约分配配置。
+type SnowflakeRedisConfig struct {
+	Enabled              bool                                     `json:"enabled,optional"`                // 是否使用 Redis 租约自动分配 node_id
+	Scope                string                                   `json:"scope,optional"`                  // node_id 池部署级作用域，同一套 admin/api 部署必须一致
+	LeaseSeconds         int                                      `json:"lease_seconds,optional"`          // node_id 租约 TTL，单位秒
+	RenewIntervalSeconds int                                      `json:"renew_interval_seconds,optional"` // node_id 续约间隔，单位秒
+	Namespaces           map[string]SnowflakeRedisNamespaceConfig `json:"namespaces,optional"`             // 按业务 namespace 覆盖 node_id 池大小
+}
+
+// SnowflakeRedisNamespaceConfig 定义单个业务命名空间的雪花 node_id 池策略。
+type SnowflakeRedisNamespaceConfig struct {
+	NodeCount int `json:"node_count,optional"` // 当前 namespace 可竞争的 node_id 数量；0 表示使用完整 0-1023 池
+}
+
+// IDSegmentNamespaceConfig 定义单个业务命名空间的 Redis Segment 取号策略。
+type IDSegmentNamespaceConfig struct {
+	Enabled           bool  `json:"enabled,optional"`            // 是否让该业务 namespace 使用 Redis Segment
+	Step              int64 `json:"step,optional"`               // 每次从 Redis 申请的号段长度
+	PrefetchThreshold int64 `json:"prefetch_threshold,optional"` // 本地剩余 ID 小于等于该值时异步预取下一号段
+	Start             int64 `json:"start,optional"`              // Redis 高水位初始化值；默认 0 表示首个 ID 从 1 开始
+}
+
+// IDSegmentConfig 定义高吞吐业务的 Redis Segment 本地号段配置。
+type IDSegmentConfig struct {
+	Enabled                bool                                `json:"enabled,optional"`                  // 是否启用 Redis Segment 策略
+	Scope                  string                              `json:"scope,optional"`                    // 号段高水位部署级作用域，默认继承 snowflake.redis.scope
+	AllocateTimeoutSeconds int                                 `json:"allocate_timeout_seconds,optional"` // Redis 申请号段超时时间，单位秒
+	Namespaces             map[string]IDSegmentNamespaceConfig `json:"namespaces,optional"`               // 按业务 namespace 独立配置号段策略
+}
+
+// SnowflakeConfig 定义业务 ID 生成配置，默认使用雪花，指定 namespace 可切换 Redis Segment。
 type SnowflakeConfig struct {
-	WorkerID *int64 `json:"worker_id,optional"` // 当前实例全局唯一 worker_id/node_id，范围 0-1023
+	WorkerID *int64               `json:"worker_id,optional"` // 手动指定 node_id，范围 0-1023；多实例优先使用 Redis 租约
+	Redis    SnowflakeRedisConfig `json:"redis,optional"`     // Redis 租约 node_id 分配配置
+	Segment  IDSegmentConfig      `json:"segment,optional"`   // 高吞吐业务号段配置；启用的 namespace 不再使用雪花位格式
 }
 
 // UserConfig 定义业务用户写入和后续拆表路由配置。

@@ -24,8 +24,8 @@ import (
 const (
 	// userDatabase 表示 user 业务用户表固定使用后台默认主库。
 	userDatabase svc.DBName = svc.DatabaseMain
-	// userIDNamespace 表示后台新增业务用户使用的雪花 ID 命名空间。
-	userIDNamespace = "admin.user"
+	// userIDNamespace 表示 api/admin 写同一用户表必须使用的业务命名空间。
+	userIDNamespace = "user"
 )
 
 // Logic 承载后台直连管理业务用户表的业务逻辑。

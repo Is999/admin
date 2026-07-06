@@ -29,9 +29,6 @@ type buildResources struct {
 // BuildServiceContext 统一完成基础设施初始化，避免 main 和 debug 入口各自拼装依赖导致行为漂移。
 func BuildServiceContext(ctx context.Context, c config.Config) (*svc.ServiceContext, func(context.Context) error, error) {
 	loggerx.Setup(c)
-	if err := configload.ConfigureSnowflakeWorkerID(c.Snowflake); err != nil {
-		return nil, nil, errors.Wrap(err, "配置雪花 ID worker 失败")
-	}
 
 	shutdown, err := tracing.Setup(ctx, c.Observability)
 	if err != nil {
@@ -52,6 +49,13 @@ func BuildServiceContext(ctx context.Context, c config.Config) (*svc.ServiceCont
 		return nil, nil, errors.Tag(err)
 	}
 	resources.Rds = rdb
+
+	snowflakeLease, err := configload.ConfigureSnowflakeWorker(ctx, c.Snowflake, rdb)
+	if err != nil {
+		_ = closeBuildResources(context.Background(), resources)
+		return nil, nil, errors.Wrap(err, "配置雪花 ID worker 失败")
+	}
+	resources.SnowflakeLease = snowflakeLease
 
 	kafkaProducer, err := kafkax.NewProducer(c.Kafka)
 	if err != nil {
@@ -76,6 +80,9 @@ func closeBuildResources(ctx context.Context, resources buildResources) error {
 			firstErr = errors.Tag(err)
 		}
 	}
+	if resources.SnowflakeLease != nil {
+		recordErr(resources.SnowflakeLease.Close(ctx))
+	}
 	if resources.Kafka != nil {
 		recordErr(resources.Kafka.Close())
 	}
@@ -98,11 +105,17 @@ func CloseServiceContextResources(svcCtx *svc.ServiceContext, taskRedis redis.Un
 			firstErr = errors.Tag(err)
 		}
 	}
+	if svcCtx == nil {
+		if taskRedisOwned && taskRedis != nil {
+			recordErr(taskRedis.Close())
+		}
+		return errors.Tag(firstErr)
+	}
+	if svcCtx.SnowflakeLease != nil {
+		recordErr(svcCtx.SnowflakeLease.Close(context.Background()))
+	}
 	if taskRedisOwned && taskRedis != nil {
 		recordErr(taskRedis.Close())
-	}
-	if svcCtx == nil {
-		return errors.Tag(firstErr)
 	}
 	if svcCtx.Rds != nil && (!taskRedisOwned || svcCtx.Rds != taskRedis) {
 		recordErr(svcCtx.Rds.Close())

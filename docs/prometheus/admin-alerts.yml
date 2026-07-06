@@ -36,3 +36,30 @@ groups:
         annotations:
           summary: "admin Collector failure ledger persist spike"
           description: "Collector state={{ $labels.state }} is writing more than 10 failure events per second."
+
+      - alert: AdminIDGenerateFailed
+        expr: sum by (job, instance, biz_type, strategy) (rate(admin_idgen_generated_total{result!="success"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "admin ID generation failed"
+          description: "instance={{ $labels.instance }} ID biz_type={{ $labels.biz_type }} strategy={{ $labels.strategy }} has generation failures."
+
+      - alert: AdminIDSegmentRemainingLow
+        expr: (admin_idgen_segment_remaining < 100) and on (job, instance, biz_type) (sum by (job, instance, biz_type) (rate(admin_idgen_generated_total{strategy="segment",result="success"}[10m])) > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "admin ID Segment local range is low"
+          description: "instance={{ $labels.instance }} ID Segment biz_type={{ $labels.biz_type }} local range is below 100 while still generating IDs."
+
+      - alert: AdminSnowflakeLeaseLost
+        expr: sum by (job, instance, biz_type, event) (rate(admin_idgen_snowflake_lease_events_total{event=~"lost|renew_timeout"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "admin Snowflake lease lost"
+          description: "instance={{ $labels.instance }} Snowflake biz_type={{ $labels.biz_type }} event={{ $labels.event }} detected."

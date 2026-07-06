@@ -35,10 +35,12 @@ func assertJSONStringField(t *testing.T, value any, field string) {
 	}
 }
 
+// TestUserItemMarshalSnowflakeIDAsString 验证前台用户列表 ID 以字符串输出，避免前端精度丢失。
 func TestUserItemMarshalSnowflakeIDAsString(t *testing.T) {
 	assertJSONStringField(t, UserItem{ID: testUserJSONSnowflakeID}, "id")
 }
 
+// TestUserRuntimeSyncRespMarshalUserIDAsString 验证运行期同步响应的用户 ID 以字符串输出。
 func TestUserRuntimeSyncRespMarshalUserIDAsString(t *testing.T) {
 	assertJSONStringField(t, UserRuntimeSyncResp{UserID: testUserJSONSnowflakeID}, "userId")
 }

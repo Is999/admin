@@ -102,6 +102,16 @@ var (
 		},
 		[]string{"biz_type", "result"},
 	)
+	// authSecurityEventsTotal 统计前台认证风控事件数量。
+	authSecurityEventsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "admin",
+			Subsystem: "auth_security",
+			Name:      "events_total",
+			Help:      "前台认证风控事件累计数量。",
+		},
+		[]string{"app_id", "action", "reason", "category"},
+	)
 )
 
 const (
@@ -121,6 +131,7 @@ func ensureMetricsRegistered() {
 			collectorProcessorBatchSize,
 			collectorProcessorBatchDuration,
 			collectorProcessorEventsTotal,
+			authSecurityEventsTotal,
 		)
 	})
 }
@@ -230,4 +241,16 @@ func recordProcessorBatch(bizType string, batchSize int, successCount int, failC
 	if failCount > 0 {
 		collectorProcessorEventsTotal.WithLabelValues(label, "failed").Add(float64(failCount))
 	}
+}
+
+// recordAuthSecurityEvent 记录认证风控事件聚合指标。
+func recordAuthSecurityEvent(appID string, action string, reason string) {
+	ensureMetricsRegistered()
+	normalizedReason := normalizeAuthSecurityReason(reason)
+	authSecurityEventsTotal.WithLabelValues(
+		normalizeAuthSecurityAppID(appID),
+		normalizeAuthSecurityAction(action),
+		normalizedReason,
+		normalizeAuthSecurityCategory(reason),
+	).Inc()
 }

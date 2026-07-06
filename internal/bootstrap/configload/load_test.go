@@ -112,8 +112,43 @@ collector:
 	}
 }
 
-// TestLoadConfigRejectsDeprecatedCollectorTransportConfig 确保旧 Collector 多载体配置不会被静默忽略。
-func TestLoadConfigRejectsDeprecatedCollectorTransportConfig(t *testing.T) {
+// TestLoadConfigSkipsDisabledCollectorDetailValidation 确保关闭 Collector 时不校验其子配置细节。
+func TestLoadConfigSkipsDisabledCollectorDetailValidation(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(mainFile, []byte(minimalConfigYAML(`
+kafka:
+  brokers:
+    - "127.0.0.1:9092"
+collector:
+  enabled: false
+  transport: "db"
+  consume_mode: "outbox"
+  kafka:
+    enabled: true
+    topic: "collector_events"
+    group_id: "collector_group"
+  default_task:
+    batch_size: -1
+  redis:
+    enabled: false
+  db:
+    runner_batch_size: 500
+`)), 0o644); err != nil {
+		t.Fatalf("写入主配置失败: %v", err)
+	}
+
+	cfg, err := Load(mainFile)
+	if err != nil {
+		t.Fatalf("关闭 Collector 时不应校验子配置，实际错误: %v", err)
+	}
+	if cfg.Collector.Enabled {
+		t.Fatal("期望 Collector 保持关闭")
+	}
+}
+
+// TestLoadConfigValidatesEnabledCollectorConfig 确保开启 Collector 时只按当前配置契约校验。
+func TestLoadConfigValidatesEnabledCollectorConfig(t *testing.T) {
 	dir := t.TempDir()
 	mainFile := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(mainFile, []byte(minimalConfigYAML(`
@@ -123,32 +158,20 @@ kafka:
 collector:
   enabled: true
   transport: "db"
-  consume_mode: "outbox"
   kafka:
     enabled: true
     topic: "collector_events"
     group_id: "collector_group"
-  redis:
-    enabled: false
-  db:
-    runner_batch_size: 500
 `)), 0o644); err != nil {
 		t.Fatalf("写入主配置失败: %v", err)
 	}
+
 	_, err := Load(mainFile)
 	if err == nil {
-		t.Fatal("期望旧 Collector 多载体配置返回错误，实际为 nil")
+		t.Fatal("期望开启 Collector 但缺少当前任务配置时返回错误，实际为 nil")
 	}
-	for _, want := range []string{"collector.transport", "collector.consume_mode", "collector.redis", "collector.db"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("错误信息缺少 %s: %v", want, err)
-		}
-	}
-	for _, field := range []string{"enabled", "topic", "group_id"} {
-		want := "collector.kafka." + field
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("错误信息缺少 %s: %v", want, err)
-		}
+	if !strings.Contains(err.Error(), "collector.default_task.topic") {
+		t.Fatalf("期望按当前配置契约返回任务 Topic 错误，实际为: %v", err)
 	}
 }
 

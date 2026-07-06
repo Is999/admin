@@ -29,19 +29,51 @@ const (
 )
 
 var (
-	configuredWorkerID  atomic.Int64 // configuredWorkerID 保存启动期解析通过的 worker_id，全局唯一由部署分配保证
-	snowflakeFormatOnce sync.Once    // snowflakeFormatOnce 确保 bwmarrin/snowflake 位宽只初始化一次
-	workerGenerators    sync.Map     // workerGenerators 按 worker_id 缓存进程内 ID 生成器，避免不同命名空间独立序列冲突
+	staticWorkerID       atomic.Int64          // staticWorkerID 保存静态 worker_id，主要用于手工强管控部署
+	workerResolverSeq    atomic.Uint64         // workerResolverSeq 生成动态 worker_id 解析器绑定 token
+	workerResolverMu     sync.RWMutex          // workerResolverMu 保护当前动态 worker_id 解析器
+	activeWorkerResolver workerResolverBinding // activeWorkerResolver 保存当前动态 worker_id 解析器
+	snowflakeFormatOnce  sync.Once             // snowflakeFormatOnce 确保 bwmarrin/snowflake 位宽只初始化一次
+	namespaceWorkers     sync.Map              // namespaceWorkers 按业务命名空间缓存当前进程持有的 worker_id
+	workerGenerators     sync.Map              // workerGenerators 按业务命名空间和 worker_id 缓存进程内 ID 生成器
 )
 
 func init() {
-	configuredWorkerID.Store(SnowflakeWorkerIDUnset)
+	staticWorkerID.Store(SnowflakeWorkerIDUnset)
+}
+
+// WorkerResolver 按业务命名空间分配雪花 worker_id。
+type WorkerResolver interface {
+	SnowflakeWorkerID(namespace string) (int64, error)
+}
+
+// WorkerResolverFunc 适配函数式 worker_id 解析器。
+type WorkerResolverFunc func(namespace string) (int64, error)
+
+// SnowflakeWorkerID 返回指定业务命名空间当前可用的 worker_id。
+func (f WorkerResolverFunc) SnowflakeWorkerID(namespace string) (int64, error) {
+	if f == nil {
+		return 0, errors.New("雪花 worker_id 解析器未初始化")
+	}
+	return f(namespace)
 }
 
 // Snowflake 封装成熟 bwmarrin/snowflake 节点，生成本进程内单调递增的雪花 ID。
 type Snowflake struct {
 	workerID int64             // workerID 是部署分配的分布式实例编号，必须跨实例唯一。
 	node     *bwsnowflake.Node // node 内部通过互斥锁保护同一 worker 的并发序列。
+}
+
+// snowflakeGeneratorKey 标识单个业务命名空间内的本地生成器。
+type snowflakeGeneratorKey struct {
+	namespace string // namespace 是调用方业务唯一域，如 user、recharge.order。
+	workerID  int64  // workerID 是该业务命名空间下当前实例持有的 node_id。
+}
+
+// workerResolverBinding 保存当前生效的动态 worker_id 解析器。
+type workerResolverBinding struct {
+	resolver WorkerResolver // resolver 负责按 namespace 懒分配 worker_id。
+	token    uint64         // token 用于关闭旧解析器时避免误清新解析器。
 }
 
 // NewSnowflake 创建指定 worker 的 bwmarrin/snowflake ID 生成器。
@@ -98,59 +130,187 @@ func ResolveWorkerID(configWorkerID int64) (int64, error) {
 	return workerID, nil
 }
 
-// ConfigureWorkerID 设置当前进程使用的雪花 worker_id。
+// ConfigureWorkerID 设置当前进程所有业务命名空间共享的静态 worker_id。
 func ConfigureWorkerID(workerID int64) error {
 	if err := ValidateWorkerID(workerID); err != nil {
 		return errors.Tag(err)
 	}
-	generator, err := NewSnowflake(workerID)
-	if err != nil {
-		return errors.Tag(err)
-	}
-	previous := configuredWorkerID.Swap(workerID)
-	if previous != workerID {
-		clearWorkerGenerators()
-	}
-	workerGenerators.Store(workerID, generator)
+	workerResolverMu.Lock()
+	activeWorkerResolver = workerResolverBinding{}
+	workerResolverMu.Unlock()
+	staticWorkerID.Store(workerID)
+	clearNamespaceWorkers()
+	clearWorkerGenerators()
 	return nil
 }
 
-// CurrentWorkerID 返回当前进程已配置的雪花 worker_id。
-func CurrentWorkerID() (int64, bool) {
-	workerID := configuredWorkerID.Load()
-	return workerID, workerID != SnowflakeWorkerIDUnset
+// ConfigureWorkerResolver 注册按业务命名空间动态分配 worker_id 的解析器。
+func ConfigureWorkerResolver(resolver WorkerResolver) uint64 {
+	if resolver == nil {
+		ClearWorkerResolver(0)
+		return 0
+	}
+	token := workerResolverSeq.Add(1)
+	workerResolverMu.Lock()
+	activeWorkerResolver = workerResolverBinding{resolver: resolver, token: token}
+	workerResolverMu.Unlock()
+	staticWorkerID.Store(SnowflakeWorkerIDUnset)
+	clearNamespaceWorkers()
+	clearWorkerGenerators()
+	return token
 }
 
-// NextID 返回当前进程的下一个雪花 ID；namespace 仅保留调用方业务语义，不参与 ID 位段。
+// ClearWorkerResolver 清理指定 token 对应的动态 worker_id 解析器。
+func ClearWorkerResolver(token uint64) {
+	workerResolverMu.Lock()
+	if token == 0 || activeWorkerResolver.token == token {
+		activeWorkerResolver = workerResolverBinding{}
+		staticWorkerID.Store(SnowflakeWorkerIDUnset)
+		clearNamespaceWorkers()
+		clearWorkerGenerators()
+	}
+	workerResolverMu.Unlock()
+}
+
+// ConfigureWorkerIDForNamespace 记录单个业务命名空间当前持有的 worker_id。
+func ConfigureWorkerIDForNamespace(namespace string, workerID int64) error {
+	namespace = NormalizeNamespace(namespace)
+	if namespace == "" {
+		return errors.New("雪花 ID namespace 不能为空")
+	}
+	if err := ValidateWorkerID(workerID); err != nil {
+		return errors.Tag(err)
+	}
+	if current, ok := namespaceWorkerID(namespace); ok && current != workerID {
+		clearWorkerGeneratorsForNamespace(namespace)
+	}
+	namespaceWorkers.Store(namespace, workerID)
+	return nil
+}
+
+// ReleaseWorkerID 释放当前进程持有的 worker_id，避免租约丢失后继续生成冲突 ID。
+func ReleaseWorkerID(workerID int64) {
+	if staticWorkerID.CompareAndSwap(workerID, SnowflakeWorkerIDUnset) {
+		clearNamespaceWorkersForWorker(workerID)
+		clearWorkerGeneratorsForWorker(workerID)
+		return
+	}
+	clearNamespaceWorkersForWorker(workerID)
+	clearWorkerGeneratorsForWorker(workerID)
+}
+
+// ReleaseWorkerIDForNamespace 释放单个业务命名空间持有的 worker_id。
+func ReleaseWorkerIDForNamespace(namespace string, workerID int64) {
+	namespace = NormalizeNamespace(namespace)
+	if namespace == "" {
+		return
+	}
+	if current, ok := namespaceWorkerID(namespace); ok && current == workerID {
+		namespaceWorkers.Delete(namespace)
+	}
+	workerGenerators.Delete(snowflakeGeneratorKey{namespace: namespace, workerID: workerID})
+}
+
+// CurrentWorkerID 返回当前进程指定业务命名空间已配置的 worker_id。
+func CurrentWorkerID(namespaces ...string) (int64, bool) {
+	if len(namespaces) > 0 {
+		namespace := NormalizeNamespace(namespaces[0])
+		if namespace == "" {
+			return 0, false
+		}
+		if workerID, ok := namespaceWorkerID(namespace); ok {
+			return workerID, true
+		}
+		workerID := staticWorkerID.Load()
+		return workerID, workerID != SnowflakeWorkerIDUnset
+	}
+	if workerID := staticWorkerID.Load(); workerID != SnowflakeWorkerIDUnset {
+		return workerID, true
+	}
+	var (
+		found int64
+		count int
+	)
+	namespaceWorkers.Range(func(_, value any) bool {
+		found = value.(int64)
+		count++
+		return count < 2
+	})
+	return found, count == 1
+}
+
+// NormalizeNamespace 规范化调用方业务命名空间。
+func NormalizeNamespace(namespace string) string {
+	return strings.TrimSpace(namespace)
+}
+
+// NextID 返回指定业务命名空间的下一个雪花 ID。
 func NextID(namespace string) (int64, error) {
-	workerID, err := activeWorkerID()
+	namespace = NormalizeNamespace(namespace)
+	if namespace == "" {
+		return 0, errors.New("雪花 ID namespace 不能为空")
+	}
+	if resolver, token := currentSegmentResolver(); resolver != nil && resolver.SegmentEnabled(namespace) {
+		start := time.Now()
+		id, err := nextSegmentID(namespace, resolver, token)
+		recordIDGenerate(namespace, IDStrategySegment, err, time.Since(start))
+		if err != nil {
+			return 0, errors.Tag(err)
+		}
+		return id, nil
+	}
+	start := time.Now()
+	id, err := nextSnowflakeID(namespace)
+	recordIDGenerate(namespace, IDStrategySnowflake, err, time.Since(start))
 	if err != nil {
 		return 0, errors.Tag(err)
 	}
-	if value, ok := workerGenerators.Load(workerID); ok {
+	return id, nil
+}
+
+// nextSnowflakeID 返回指定业务命名空间的下一个雪花 ID。
+func nextSnowflakeID(namespace string) (int64, error) {
+	workerID, err := activeWorkerID(namespace)
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	key := snowflakeGeneratorKey{namespace: namespace, workerID: workerID}
+	if value, ok := workerGenerators.Load(key); ok {
 		return value.(*Snowflake).NextID()
 	}
 	generator, err := NewSnowflake(workerID)
 	if err != nil {
 		return 0, errors.Tag(err)
 	}
-	actual, _ := workerGenerators.LoadOrStore(workerID, generator)
+	actual, _ := workerGenerators.LoadOrStore(key, generator)
 	return actual.(*Snowflake).NextID()
 }
 
-// activeWorkerID 返回当前可用于生成 ID 的显式 worker_id。
-func activeWorkerID() (int64, error) {
-	if workerID, ok := CurrentWorkerID(); ok {
+// activeWorkerID 返回当前 namespace 可用于生成 ID 的显式 worker_id。
+func activeWorkerID(namespace string) (int64, error) {
+	if workerID, ok := namespaceWorkerID(namespace); ok {
 		return workerID, nil
 	}
-	workerID, err := ResolveWorkerID(SnowflakeWorkerIDUnset)
-	if err != nil {
-		return 0, errors.Tag(err)
+	if resolver, token := currentWorkerResolver(); resolver != nil {
+		workerID, err := resolver.SnowflakeWorkerID(namespace)
+		if err != nil {
+			return 0, errors.Tag(err)
+		}
+		if !workerResolverActive(token) {
+			return 0, errors.Errorf("雪花 worker_id 解析器已关闭 namespace=%s", namespace)
+		}
+		if err = ConfigureWorkerIDForNamespace(namespace, workerID); err != nil {
+			return 0, errors.Tag(err)
+		}
+		return workerID, nil
 	}
-	if err := ConfigureWorkerID(workerID); err != nil {
-		return 0, errors.Tag(err)
+	if workerID := staticWorkerID.Load(); workerID != SnowflakeWorkerIDUnset {
+		if err := ConfigureWorkerIDForNamespace(namespace, workerID); err != nil {
+			return 0, errors.Tag(err)
+		}
+		return workerID, nil
 	}
-	return workerID, nil
+	return 0, errors.Errorf("雪花 worker_id 未配置或 Redis node_id 租约已释放 namespace=%s", namespace)
 }
 
 // NextID 返回当前生成器的下一个雪花 ID。
@@ -167,6 +327,47 @@ func ShardNo(id int64) int {
 	return int(checksum % ShardMod)
 }
 
+// currentWorkerResolver 返回当前动态 worker_id 解析器和绑定 token。
+func currentWorkerResolver() (WorkerResolver, uint64) {
+	workerResolverMu.RLock()
+	defer workerResolverMu.RUnlock()
+	return activeWorkerResolver.resolver, activeWorkerResolver.token
+}
+
+// workerResolverActive 判断指定 token 的动态解析器是否仍然有效。
+func workerResolverActive(token uint64) bool {
+	workerResolverMu.RLock()
+	defer workerResolverMu.RUnlock()
+	return token != 0 && activeWorkerResolver.token == token && activeWorkerResolver.resolver != nil
+}
+
+// namespaceWorkerID 返回业务命名空间当前缓存的 worker_id。
+func namespaceWorkerID(namespace string) (int64, bool) {
+	value, ok := namespaceWorkers.Load(namespace)
+	if !ok {
+		return 0, false
+	}
+	return value.(int64), true
+}
+
+// clearNamespaceWorkers 清空业务命名空间到 worker_id 的映射。
+func clearNamespaceWorkers() {
+	namespaceWorkers.Range(func(key, _ any) bool {
+		namespaceWorkers.Delete(key)
+		return true
+	})
+}
+
+// clearNamespaceWorkersForWorker 清空指定 worker_id 关联的业务命名空间映射。
+func clearNamespaceWorkersForWorker(workerID int64) {
+	namespaceWorkers.Range(func(key, value any) bool {
+		if value.(int64) == workerID {
+			namespaceWorkers.Delete(key)
+		}
+		return true
+	})
+}
+
 // clearWorkerGenerators 清空进程内 worker 生成器缓存。
 func clearWorkerGenerators() {
 	workerGenerators.Range(func(key, _ any) bool {
@@ -175,8 +376,31 @@ func clearWorkerGenerators() {
 	})
 }
 
+// clearWorkerGeneratorsForNamespace 清空指定业务命名空间的本地生成器。
+func clearWorkerGeneratorsForNamespace(namespace string) {
+	workerGenerators.Range(func(key, _ any) bool {
+		if item, ok := key.(snowflakeGeneratorKey); ok && item.namespace == namespace {
+			workerGenerators.Delete(key)
+		}
+		return true
+	})
+}
+
+// clearWorkerGeneratorsForWorker 清空指定 worker_id 关联的本地生成器。
+func clearWorkerGeneratorsForWorker(workerID int64) {
+	workerGenerators.Range(func(key, _ any) bool {
+		if item, ok := key.(snowflakeGeneratorKey); ok && item.workerID == workerID {
+			workerGenerators.Delete(key)
+		}
+		return true
+	})
+}
+
 // resetWorkerIDForTest 重置进程级 worker_id，避免测试之间相互影响。
 func resetWorkerIDForTest() {
-	configuredWorkerID.Store(SnowflakeWorkerIDUnset)
+	ClearWorkerResolver(0)
+	ClearSegmentResolver(0)
+	staticWorkerID.Store(SnowflakeWorkerIDUnset)
+	clearNamespaceWorkers()
 	clearWorkerGenerators()
 }

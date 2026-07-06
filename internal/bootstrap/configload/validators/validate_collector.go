@@ -14,19 +14,18 @@ const maxCollectorIdempotencyPipelineBatchSize = 1000 // Collector Redis 去重 
 // ValidateCollector 校验 Collector Kafka 单通道和失败账本配置是否自洽。
 func ValidateCollector(c config.Config) error {
 	cfg := c.Collector
-	if cfg.Enabled {
-		if len(nonEmptyStrings(cfg.Kafka.Brokers)) == 0 {
-			return errors.Errorf("collector.enabled=true 时必须配置 collector.kafka.brokers 或顶层 kafka.brokers")
-		}
+	if !cfg.Enabled {
+		return nil
+	}
+	if len(nonEmptyStrings(cfg.Kafka.Brokers)) == 0 {
+		return errors.Errorf("collector.enabled=true 时必须配置 collector.kafka.brokers 或顶层 kafka.brokers")
 	}
 	if err := validateCollectorTaskConfig("collector.default_task", cfg.DefaultTask); err != nil {
 		return errors.Tag(err)
 	}
 	topicGroups := make(map[string]string)
-	if cfg.Enabled {
-		if err := validateCollectorTaskRoute("collector.default_task", cfg.DefaultTask.Topic, cfg.DefaultTask.GroupID, topicGroups); err != nil {
-			return errors.Tag(err)
-		}
+	if err := validateCollectorTaskRoute("collector.default_task", cfg.DefaultTask.Topic, cfg.DefaultTask.GroupID, topicGroups); err != nil {
+		return errors.Tag(err)
 	}
 	for bizType, task := range cfg.Tasks {
 		bizType = strings.TrimSpace(bizType)
@@ -36,15 +35,13 @@ func ValidateCollector(c config.Config) error {
 		if err := validateCollectorTaskConfig("collector.tasks."+bizType, task); err != nil {
 			return errors.Tag(err)
 		}
-		if cfg.Enabled {
-			topic := firstNonEmpty(task.Topic, cfg.DefaultTask.Topic)
-			groupID := firstNonEmpty(task.GroupID, cfg.DefaultTask.GroupID)
-			if err := validateCollectorTaskRoute("collector.tasks."+bizType, topic, groupID, topicGroups); err != nil {
-				return errors.Tag(err)
-			}
+		topic := firstNonEmpty(task.Topic, cfg.DefaultTask.Topic)
+		groupID := firstNonEmpty(task.GroupID, cfg.DefaultTask.GroupID)
+		if err := validateCollectorTaskRoute("collector.tasks."+bizType, topic, groupID, topicGroups); err != nil {
+			return errors.Tag(err)
 		}
 	}
-	if cfg.Enabled && len(topicGroups) == 0 {
+	if len(topicGroups) == 0 {
 		return errors.Errorf("collector.enabled=true 时必须配置 collector.default_task.topic 或 collector.tasks.<bizType>.topic")
 	}
 	if cfg.Idempotency.TTLSeconds < 0 {

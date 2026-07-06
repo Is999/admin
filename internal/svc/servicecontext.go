@@ -24,28 +24,35 @@ type SiteDatabases struct {
 // Dependencies 表示 ServiceContext 运行所需的外部依赖集合。
 // 该结构只承载已经初始化完成的资源引用，初始化顺序、失败回滚和关闭策略仍由 bootstrap 生命周期管理。
 type Dependencies struct {
-	SiteDBs SiteDatabases         // 主库与可选扩展库连接集合
-	Kafka   *kafkax.Producer      // Kafka 生产者，用户标签事件同步使用
-	Rds     redis.UniversalClient // Redis 客户端，频控、锁和任务队列等链路复用
-	Audit   *audit.Recorder       // 审计日志记录器，后台敏感操作统一落审计
+	SiteDBs        SiteDatabases         // 主库与可选扩展库连接集合
+	Kafka          *kafkax.Producer      // Kafka 生产者，用户标签事件同步使用
+	Rds            redis.UniversalClient // Redis 客户端，频控、锁和任务队列等链路复用
+	Audit          *audit.Recorder       // 审计日志记录器，后台敏感操作统一落审计
+	SnowflakeLease SnowflakeLease        // 雪花 node_id Redis 租约
+}
+
+// SnowflakeLease 约束雪花 node_id 租约的关闭能力。
+type SnowflakeLease interface {
+	Close(context.Context) error
 }
 
 // ServiceContext 将外部依赖集中管理：
 // - SiteDBs: 主库与可选扩展库连接集合
 // - Rds: Redis（频控、计数、最后发言时间等）
 type ServiceContext struct {
-	configValue  atomic.Value          // 当前生效的配置快照，供运行期按原子方式读取
-	reloadValue  atomic.Value          // 配置热加载运行状态快照，供管理接口和日志复用
-	storageValue atomic.Value          // 文件存储运行时缓存，保存 *StorageRuntime
-	uploadValue  atomic.Value          // 文件上传运行时缓存，保存 *FileTransferRuntime
-	SiteDBs      SiteDatabases         // 主库与可选扩展库连接集合
-	Kafka        *kafkax.Producer      // Kafka 生产者，未启用时为空
-	Rds          redis.UniversalClient // Redis 客户端（兼容单机/集群）
-	Audit        *audit.Recorder       // 审计日志记录器
-	Task         TaskQueue             // 任务系统接口（支持调度、DAG、队列管理）
-	ConfigReload ConfigReloadExecutor  // 配置热加载执行器，供管理接口手动触发重载
-	Collector    *collectorx.Manager   // 通用收集器（Kafka 正常链路与失败账本重试）
-	CDC          CDCConsumer           // CDC 消费器状态接口，未启用时为空
+	configValue    atomic.Value          // 当前生效的配置快照，供运行期按原子方式读取
+	reloadValue    atomic.Value          // 配置热加载运行状态快照，供管理接口和日志复用
+	storageValue   atomic.Value          // 文件存储运行时缓存，保存 *StorageRuntime
+	uploadValue    atomic.Value          // 文件上传运行时缓存，保存 *FileTransferRuntime
+	SiteDBs        SiteDatabases         // 主库与可选扩展库连接集合
+	Kafka          *kafkax.Producer      // Kafka 生产者，未启用时为空
+	Rds            redis.UniversalClient // Redis 客户端（兼容单机/集群）
+	Audit          *audit.Recorder       // 审计日志记录器
+	SnowflakeLease SnowflakeLease        // 雪花 node_id Redis 租约
+	Task           TaskQueue             // 任务系统接口（支持调度、DAG、队列管理）
+	ConfigReload   ConfigReloadExecutor  // 配置热加载执行器，供管理接口手动触发重载
+	Collector      *collectorx.Manager   // 通用收集器（Kafka 正常链路与失败账本重试）
+	CDC            CDCConsumer           // CDC 消费器状态接口，未启用时为空
 }
 
 // CDCConsumer 约束 CDC 消费器对业务层暴露的最小能力。
@@ -96,10 +103,11 @@ type HotReloadStatus struct {
 // NewServiceContext 只接收已经初始化完成的依赖，避免把初始化细节继续堆到 ServiceContext 内部。
 func NewServiceContext(c config.Config, deps Dependencies) *ServiceContext {
 	svcCtx := &ServiceContext{
-		SiteDBs: deps.SiteDBs,
-		Kafka:   deps.Kafka,
-		Rds:     deps.Rds,
-		Audit:   deps.Audit,
+		SiteDBs:        deps.SiteDBs,
+		Kafka:          deps.Kafka,
+		Rds:            deps.Rds,
+		Audit:          deps.Audit,
+		SnowflakeLease: deps.SnowflakeLease,
 	}
 	svcCtx.UpdateConfig(c)
 	svcCtx.UpdateHotReloadStatus(HotReloadStatus{LastStatus: "idle"})
@@ -115,10 +123,11 @@ func (s *ServiceContext) ScopedWithContext(ctx context.Context) *ServiceContext 
 		return nil
 	}
 	scoped := &ServiceContext{
-		SiteDBs: s.SiteDBs.WithContext(ctx),
-		Kafka:   s.Kafka,
-		Rds:     s.Rds,
-		Audit:   s.Audit,
+		SiteDBs:        s.SiteDBs.WithContext(ctx),
+		Kafka:          s.Kafka,
+		Rds:            s.Rds,
+		Audit:          s.Audit,
+		SnowflakeLease: s.SnowflakeLease,
 	}
 	scoped.configValue.Store(s.CurrentConfig())
 	scoped.Task = s.Task

@@ -19,21 +19,56 @@ run_mode: 7
 
 # 站点/应用 ID，例如 1。
 app_id: "1"
-# 全局应用密钥；使用强随机字符串。
-app_key: "3768559472499dbdfa97a1f2707402f781bfe874c81e14c8542a5734e180a43b"
+# 应用密钥仅供本地示例使用，部署前必须替换。
+app_key: "dnmp-local-admin-app-key-please-change"
 
-# 基于 github.com/bwmarrin/snowflake 的分布式雪花 ID；所有会写 user 表的 admin/api 实例 worker_id 必须全局唯一。
+# 基于 github.com/bwmarrin/snowflake 的分布式雪花 ID；多实例通过 Redis 租约自动分配 node_id。
 snowflake:
-  # 本地 admin 固定使用 512，避免和 api 本地 worker_id=1 冲突；成熟库不会自动分配 worker_id。
-  worker_id: 512
+  # Redis node_id 租约配置；生产多实例建议开启。
+  redis:
+    # 是否启用 Redis 租约自动分配 node_id。
+    enabled: true
+    # node_id 租约作用域；同一套 admin/api 部署必须一致。
+    scope: "main"
+    # node_id 租约 TTL，单位秒。
+    lease_seconds: 120
+    # node_id 租约续期间隔，单位秒，必须小于 lease_seconds。
+    renew_interval_seconds: 30
+    # 按业务 namespace 限制可竞争 node_id 池大小；未配置时使用完整 0-1023。
+    namespaces:
+      # 用户 ID 生成统一限制为 10 个 node_id；api/admin 写同一用户表必须一致。
+      user:
+        # 当前 namespace 可竞争的 node_id 数量，取值 1-1024；0 表示完整池。
+        node_count: 10
+  # 高吞吐业务可按 namespace 启用 Redis Segment 本地号段；默认关闭，普通业务继续走雪花。
+  segment:
+    # 是否启用 Redis Segment 本地号段策略。
+    enabled: false
+    # Segment 高水位作用域，默认与 snowflake.redis.scope 保持一致。
+    scope: "main"
+    # Redis 申请号段超时时间，单位秒。
+    allocate_timeout_seconds: 2
+    # 按业务 namespace 配置号段策略；空对象表示未启用具体业务。
+    namespaces: {}
+    # 示例：
+    # namespaces:
+    #   recharge.order:
+    #     # 是否让该业务 namespace 使用 Redis Segment。
+    #     enabled: true
+    #     # 每次从 Redis 申请的号段长度。
+    #     step: 10000
+    #     # 本地剩余号段低于该阈值时预取下一段。
+    #     prefetch_threshold: 2000
+    #     # Redis 高水位初始化值；0 表示首个 ID 从 1 开始。
+    #     start: 0
 
 # 业务用户写入路由；本地保持单表，拆分演练需先创建目标物理表。
 user:
   # 新增业务用户默认物理表数量，仅支持 1/2/4/8/16/32/64/128/256/512/1024。
   route_shard_count: 1
 
-# JWT 密钥，请替换为强随机字符串。
-jwt_secret: "65aad1b2cd6e3293fca3f0cc0a9b96a82c57b1c88b716c29e251890553650fbe"
+# JWT 密钥仅供本地示例使用，部署前必须替换。
+jwt_secret: "please-change-this-admin-jwt-secret"
 # JWT 过期时间，单位秒。
 jwt_expires_in: 86400
 
@@ -259,10 +294,27 @@ collector:
   tasks:
     # 管理员审计日志按 200 条或 3 秒触发一次批量入库。
     admin_log.audit:
+      # Kafka Topic。
       topic: "admin_collector_admin_log_events"
+      # Kafka 消费组；同 Topic 下任务必须保持一致。
       group_id: "admin_collector_admin_log"
+      # 同 bizType 最大聚合条数。
       batch_size: 200
+      # 同 bizType 未满批时最大等待时间，单位毫秒。
       batch_wait_milliseconds: 3000
+      # 是否覆盖全局 Redis EventID 去重开关。
+      idempotency_enabled: true
+    # 前台 API 认证风控事件按 500 条或 2 秒触发一次指标聚合。
+    auth.security:
+      # Kafka Topic。
+      topic: "api_collector_auth_security_events"
+      # Kafka 消费组；同 Topic 下任务必须保持一致。
+      group_id: "admin_collector_auth_security"
+      # 同 bizType 最大聚合条数。
+      batch_size: 500
+      # 同 bizType 未满批时最大等待时间，单位毫秒。
+      batch_wait_milliseconds: 2000
+      # 是否覆盖全局 Redis EventID 去重开关。
       idempotency_enabled: true
 
 # Debezium CDC 消费器，仅 worker 模式启动。
@@ -285,9 +337,11 @@ cdc:
   dead_letter_topic: "admin_cdc_dead_letter"
   # Topic 规则。
   topics:
-    # admin_log 操作日志。
+    # 是否启用 admin_log 操作日志 Topic 规则。
     - enabled: true
+      # Debezium Topic 名称。
       topic: "dnmp-admin.admin.admin_log"
+      # 业务表名，用于路由到对应处理器。
       table: "admin.admin_log"
 
 # 任务系统与调度器配置。
@@ -377,7 +431,9 @@ archive:
 # otlp_endpoint 为启动期连接配置，变更后需重启。
 # go-zero 内置 Telemetry；默认交给 observability 接管。
 Telemetry:
+  # 是否关闭 go-zero 内置 Telemetry，避免与 observability 重复上报。
   Disabled: true
+# 日志、链路追踪和审计相关可观测性配置。
 observability:
   # 可观测性服务名。
   service_name: "admin"

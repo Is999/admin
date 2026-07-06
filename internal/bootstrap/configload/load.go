@@ -12,9 +12,6 @@ import (
 
 // Load 读取并解析配置文件，供启动期和热加载复用。
 func Load(file string) (config.Config, error) {
-	if err := rejectDeprecatedCollectorConfig(file); err != nil {
-		return config.Config{}, errors.Tag(err)
-	}
 	c, err := loadBaseConfig(file)
 	if err != nil {
 		return config.Config{}, errors.Tag(err)

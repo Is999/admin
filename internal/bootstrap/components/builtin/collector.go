@@ -29,6 +29,9 @@ func newCollector() core.Component {
 		if err = manager.RegisterProcessor(audit.AdminLogCollectorBizType, audit.NewAdminLogBatchProcessor(state.ServiceContext.WriteDB(svc.DatabaseMain))); err != nil {
 			return errors.Tag(err)
 		}
+		if err = manager.RegisterProcessor(collectorx.BizTypeAuthSecurity, collectorx.NewAuthSecurityProcessor()); err != nil {
+			return errors.Tag(err)
+		}
 		if state.ServiceContext.Audit != nil {
 			state.ServiceContext.Audit.SetEnqueuer(audit.NewCollectorWriter(manager))
 		}

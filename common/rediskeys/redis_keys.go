@@ -106,6 +106,16 @@ const (
 
 // Redis Key 模板集中维护，业务代码只能按模板精确读写。
 const (
+	// SnowflakeNodeLease 表示跨 admin/api 共享的雪花 node_id 租约 key 模板。
+	// Redis 类型：String(owner)，TTL 过期规则：按 snowflake.redis.lease_seconds 自动过期并由实例续约。
+	// 参数依次为部署级 scope、业务 namespace、node_id；该 key 不追加 app_id 前缀，确保同一业务统一互斥。
+	SnowflakeNodeLease = "snowflake:node:%s:%s:%d"
+
+	// IDSegmentCounter 表示跨 admin/api 共享的业务号段高水位 key 模板。
+	// Redis 类型：String(integer)，TTL 过期规则：无 TTL；每次按业务 namespace 使用 INCRBY 分配本地号段。
+	// 参数依次为部署级 scope、业务 namespace；该 key 不追加 app_id 前缀，确保同一业务统一递增。
+	IDSegmentCounter = "idgen:segment:%s:%s"
+
 	// AdminInfo 表示管理员信息缓存业务段模板。
 	// Redis 类型：Hash，TTL 过期规则：无固定 TTL，按业务更新或删除精确失效。
 	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。

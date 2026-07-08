@@ -65,9 +65,10 @@ type SnowflakeConfig struct {
 	Segment  IDSegmentConfig      `json:"segment,optional"`   // 高吞吐业务号段配置；启用的 namespace 不再使用雪花位格式
 }
 
-// UserConfig 定义业务用户写入和后续拆表路由配置。
+// UserConfig 定义业务用户写入路由和后台导出策略配置。
 type UserConfig struct {
-	RouteShardCount int `json:"route_shard_count,optional,default=1"` // 新增业务用户默认物理表数量：1/2/4/.../1024
+	RouteShardCount int   `json:"route_shard_count,optional,default=1"` // 新增业务用户默认物理表数量：1/2/4/.../1024
+	ExportSplitRows int64 `json:"export_split_rows,optional"`           // 用户列表单个 Excel 文件最大导出行数，默认 500000
 }
 
 // SecuritySecretKeyVersionConfig 定义配置文件中的单个秘钥版本材料。
@@ -359,7 +360,7 @@ type RuntimeConfigSourceConfig struct {
 // APIServiceConfig 定义 admin 访问前台 API 内网运维接口的配置。
 type APIServiceConfig struct {
 	InternalBaseURL string `json:"internal_base_url,optional"` // API 内网地址，仅 admin 后端调用
-	OpsToken        string `json:"ops_token,optional"`         // API 内网运维令牌，只在后端请求头使用
+	OpsToken        string `json:"ops_token,optional"`         // API 内网运维令牌，也是 HMAC 签名密钥
 	TimeoutSeconds  int    `json:"timeout_seconds,optional"`   // API 内网调用超时秒数，默认 5
 }
 

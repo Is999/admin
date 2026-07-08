@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -38,18 +39,23 @@ func NewLogic(r *http.Request, svcCtx *svc.ServiceContext) *Logic {
 	return &Logic{AdminLogic: adminlogic.NewAdminLogic(r, svcCtx)}
 }
 
+// NewLogicWithContext 创建绑定任意上下文的前台用户管理逻辑对象。
+func NewLogicWithContext(ctx context.Context, svcCtx *svc.ServiceContext) *Logic {
+	return &Logic{AdminLogic: &adminlogic.AdminLogic{BaseLogic: corelogic.NewBaseLogicWithContext(ctx, svcCtx)}}
+}
+
 // List 分页查询前台用户列表。
 func (l *Logic) List(req *types.UserListReq) *types.BizResult {
 	db, err := l.userReadDB()
 	if err != nil {
 		return l.userDBError("UserLogic.List 前台用户库未配置", err)
 	}
-	useAccountList, err := l.useUserAccountList(db)
+	useIdentityList, err := l.useUserIdentityList(db)
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 判断业务用户分表状态失败").ToBizResult()
 	}
-	if useAccountList {
-		return l.listByUserAccount(db, req)
+	if useIdentityList {
+		return l.listByUserIdentity(db, req)
 	}
 	dbq := db.Model(&model.User{})
 	if req.ID > 0 {
@@ -62,10 +68,18 @@ func (l *Logic) List(req *types.UserListReq) *types.BizResult {
 		dbq = dbq.Where("username LIKE ?", req.Username+"%")
 	}
 	if req.Email != "" {
-		dbq = dbq.Where("email LIKE ?", req.Email+"%")
+		emailHash, err := model.UserContactIdentityHash(model.UserIdentityTypeEmail, req.Email, l.Svc.CurrentConfig().AppKey)
+		if err != nil {
+			return types.ParamErrorResult(err).WithError(err)
+		}
+		dbq = dbq.Where("email_hash = ?", emailHash)
 	}
 	if req.Phone != "" {
-		dbq = dbq.Where("phone LIKE ?", req.Phone+"%")
+		phoneHash, err := model.UserContactIdentityHash(model.UserIdentityTypePhone, req.Phone, l.Svc.CurrentConfig().AppKey)
+		if err != nil {
+			return types.ParamErrorResult(err).WithError(err)
+		}
+		dbq = dbq.Where("phone_hash = ?", phoneHash)
 	}
 	if req.Status != nil {
 		dbq = dbq.Where("status = ?", *req.Status)
@@ -84,36 +98,65 @@ func (l *Logic) List(req *types.UserListReq) *types.BizResult {
 		WithData(types.ListResp[types.UserItem]{List: items, Total: total})
 }
 
-// listByUserAccount 在物理分表阶段通过账号索引分页定位用户，避免扫描所有分表。
-func (l *Logic) listByUserAccount(db *gorm.DB, req *types.UserListReq) *types.BizResult {
-	if err := validateUserAccountListReq(req); err != nil {
+// listByUserIdentity 在物理分表阶段通过身份索引定位用户，避免扫描所有分表。
+func (l *Logic) listByUserIdentity(db *gorm.DB, req *types.UserListReq) *types.BizResult {
+	if err := validateUserIdentityListReq(req); err != nil {
 		return types.ParamErrorResult(err).WithError(err)
 	}
-	dbq := db.Model(&model.UserAccount{})
+	identityType := model.UserIdentityTypeUsername
+	identityHash := ""
+	var err error
+	if req.Email != "" {
+		identityType = model.UserIdentityTypeEmail
+		identityHash, err = model.UserContactIdentityHash(identityType, req.Email, l.Svc.CurrentConfig().AppKey)
+		if err != nil {
+			return types.ParamErrorResult(err).WithError(err)
+		}
+	} else if req.Phone != "" {
+		identityType = model.UserIdentityTypePhone
+		identityHash, err = model.UserContactIdentityHash(identityType, req.Phone, l.Svc.CurrentConfig().AppKey)
+		if err != nil {
+			return types.ParamErrorResult(err).WithError(err)
+		}
+	}
+	tableName, err := model.UserIdentityTableName(identityType)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 获取用户身份索引表失败").ToBizResult()
+	}
+	dbq := db.Model(&model.UserIdentity{}).Table(userIdentityListTableName(tableName, identityType, req.Username))
 	if req.ID > 0 {
 		dbq = dbq.Where("user_id = ?", req.ID)
 	}
 	if req.ShardNo != nil {
-		dbq = dbq.Where("shard_no = ?", *req.ShardNo)
+		dbq = dbq.Where("user_shard_no = ?", *req.ShardNo)
 	}
-	if req.Username != "" {
-		dbq = dbq.Where("username LIKE ?", req.Username+"%")
+	if identityHash != "" {
+		dbq = dbq.Where("identity_hash = ?", identityHash)
+	} else if req.Username != "" {
+		dbq = dbq.Where("identity_value LIKE ?", strings.ToLower(req.Username)+"%")
 	}
-	accounts, total, err := model.List[model.UserAccount](dbq, req.Page, req.PageSize, userAccountOrderField(req.OrderBy), corelogic.NormalizedOrderDirection(req.Order))
-	if err != nil {
-		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 查询前台用户账号索引失败").ToBizResult()
+	orderField := userIdentityOrderField(req.OrderBy, identityType)
+	orderDirection := corelogic.NormalizedOrderDirection(req.Order)
+	var identities []model.UserIdentity
+	if err := dbq.Order(orderField + " " + orderDirection).Limit(req.PageSize).Find(&identities).Error; err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 查询前台用户身份索引失败").ToBizResult()
 	}
-	items := make([]types.UserItem, 0, len(accounts))
-	for _, account := range accounts {
-		row, err := model.FindUserByAccount(db, &account)
+	items := make([]types.UserItem, 0, len(identities))
+	for index := range identities {
+		identities[index].IdentityType = identityType
+		identity := identities[index]
+		row, err := model.FindUserByIdentityRow(db, &identity)
 		if err != nil {
-			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 读取前台用户 ID[%d]失败", account.UserID).ToBizResult()
+			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 读取前台用户 ID[%d]失败", identity.UserID).ToBizResult()
+		}
+		if req.Username != "" && !strings.HasPrefix(strings.ToLower(row.Username), strings.ToLower(req.Username)) {
+			continue
 		}
 		items = append(items, userModelToItem(*row))
 	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(types.ListResp[types.UserItem]{List: items, Total: total})
+		WithData(types.ListResp[types.UserItem]{List: items, Total: int64(len(items)), Meta: types.UserListMeta{ExactTotal: false}})
 }
 
 // Get 查询前台用户详情。
@@ -136,12 +179,13 @@ func (l *Logic) Create(req *types.CreateUserReq) *types.BizResult {
 	if err != nil {
 		return l.userDBError("UserLogic.Create 前台用户库未配置", err)
 	}
-	exists, err := model.FindUserByUsername(db, req.Username)
+	privacySecret := l.Svc.CurrentConfig().AppKey
+	exists, err := model.FindUserIdentity(db, model.UserIdentityTypeUsername, model.UserIdentityProviderLocal, req.Username, privacySecret)
 	if err != nil {
-		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.Create 查询前台用户名[%s]失败", req.Username).ToBizResult()
+		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.Create 查询前台用户身份[%s]失败", req.Username).ToBizResult()
 	}
 	if exists != nil {
-		return userAlreadyExistsResult(req.Username, errors.New("前台用户名已存在"))
+		return userAlreadyExistsResult(req.Username, errors.New("前台用户身份已存在"))
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(req.Password)), bcrypt.DefaultCost)
 	if err != nil {
@@ -174,7 +218,7 @@ func (l *Logic) Create(req *types.CreateUserReq) *types.BizResult {
 		row.Nickname = row.Username
 	}
 	routeShardCount := l.Svc.CurrentConfig().User.RouteShardCount
-	if err = model.CreateUserWithAccount(db, row, routeShardCount, "last_login_at"); err != nil {
+	if err = model.CreateUserWithIdentities(db, row, routeShardCount, privacySecret, "last_login_at"); err != nil {
 		if corelogic.IsMySQLDuplicateEntryError(err) {
 			return userAlreadyExistsResult(req.Username, err)
 		}
@@ -212,7 +256,7 @@ func (l *Logic) Update(req *types.UpdateUserReq) *types.BizResult {
 			return l.userDBError("UserLogic.Update 前台用户库未配置", err)
 		}
 		updates["updated_at"] = time.Now()
-		if err = model.UpdateUser(db, req.ID, updates); err != nil {
+		if err = model.UpdateUserProfileWithIdentities(db, req.ID, updates, l.Svc.CurrentConfig().AppKey); err != nil {
 			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.Update 更新前台用户 ID[%d]失败", req.ID).ToBizResult()
 		}
 		row, err = l.getUser(req.ID)
@@ -413,9 +457,9 @@ func userOrderField(orderBy string) string {
 	case "shardNo":
 		return "shard_no"
 	case "email":
-		return "email"
+		return "email_hash"
 	case "phone":
-		return "phone"
+		return "phone_hash"
 	case "status":
 		return "status"
 	case "lastLoginAt":
@@ -429,25 +473,42 @@ func userOrderField(orderBy string) string {
 	}
 }
 
-// userAccountOrderField 把前端排序字段映射到账号索引表字段。
-func userAccountOrderField(orderBy string) string {
+// userIdentityOrderField 把前端排序字段映射到身份索引表字段。
+func userIdentityOrderField(orderBy string, identityType string) string {
 	switch strings.TrimSpace(orderBy) {
 	case "username":
-		return "username"
+		if identityType != model.UserIdentityTypeUsername {
+			return "user_id"
+		}
+		return "identity_value"
 	case "shardNo":
-		return "shard_no"
+		return "user_shard_no"
 	default:
 		return "user_id"
 	}
 }
 
-// validateUserAccountListReq 校验分表阶段账号索引列表支持的过滤和排序边界。
-func validateUserAccountListReq(req *types.UserListReq) error {
+// userIdentityListTableName 返回分表列表身份表名；用户名左前缀搜索固定提示唯一索引，避免大表路径退化全扫。
+func userIdentityListTableName(tableName string, identityType string, username string) string {
+	if identityType == model.UserIdentityTypeUsername && strings.TrimSpace(username) != "" {
+		return tableName + " FORCE INDEX (uk_user_identity_value)"
+	}
+	return tableName
+}
+
+// validateUserIdentityListReq 校验分表阶段身份索引列表支持的过滤和排序边界。
+func validateUserIdentityListReq(req *types.UserListReq) error {
 	if req == nil {
 		return errors.New("用户列表请求为空")
 	}
-	if strings.TrimSpace(req.Email) != "" || strings.TrimSpace(req.Phone) != "" || req.Status != nil {
-		return errors.New("用户分表阶段列表仅支持按 ID、shardNo、username 查询，email/phone/status 请接入搜索或后台索引")
+	if req.Page > 1 {
+		return errors.New("用户分表阶段列表不支持深分页，请使用 ID、用户名、邮箱或手机号缩小查询范围")
+	}
+	if strings.TrimSpace(req.Email) != "" && strings.TrimSpace(req.Phone) != "" {
+		return errors.New("用户分表阶段列表不支持同时按邮箱和手机号查询")
+	}
+	if req.Status != nil {
+		return errors.New("用户分表阶段列表不支持按状态筛选，避免扫描所有用户分表")
 	}
 	switch strings.TrimSpace(req.OrderBy) {
 	case "", "id", "username", "shardNo":
@@ -457,15 +518,15 @@ func validateUserAccountListReq(req *types.UserListReq) error {
 	}
 }
 
-// useUserAccountList 判断当前请求是否应使用账号索引驱动的分表列表路径。
-func (l *Logic) useUserAccountList(db *gorm.DB) (bool, error) {
+// useUserIdentityList 判断当前请求是否应使用身份索引驱动的分表列表路径。
+func (l *Logic) useUserIdentityList(db *gorm.DB) (bool, error) {
 	if l == nil || l.Svc == nil {
 		return false, nil
 	}
 	if l.Svc.CurrentConfig().User.RouteShardCount > model.UserRouteShardCountDefault {
 		return true, nil
 	}
-	return model.HasSplitUserAccounts(db)
+	return model.HasSplitUserIdentities(db)
 }
 
 // buildUserProfileUpdates 生成前台用户资料更新字段。
@@ -493,8 +554,8 @@ func userModelToItem(row model.User) types.UserItem {
 		ShardNo:     row.ShardNo,
 		Username:    row.Username,
 		Nickname:    row.Nickname,
-		Email:       row.Email,
-		Phone:       row.Phone,
+		EmailMasked: row.EmailMasked,
+		PhoneMasked: row.PhoneMasked,
 		Avatar:      row.Avatar,
 		Status:      row.Status,
 		LastLoginAt: corelogic.FormatDateTime(row.LastLoginAt),

@@ -41,7 +41,7 @@ func hotReloadRestartSpecs() []hotReloadRestartSpec {
 		valueRestartSpec("user.route_shard_count", func(cfg config.Config) any {
 			return cfg.User.RouteShardCount
 		}, preserveBefore(func(effective *config.Config, before config.Config) {
-			effective.User = before.User
+			effective.User.RouteShardCount = before.User.RouteShardCount
 		})),
 		valueRestartSpec("run_mode", func(cfg config.Config) any {
 			return cfg.RunMode

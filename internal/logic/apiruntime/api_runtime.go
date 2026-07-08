@@ -3,6 +3,9 @@ package apiruntime
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -30,6 +33,12 @@ const (
 	apiRuntimeMaxTimeoutSeconds = 30
 	// apiRuntimeOpsTokenHeader 表示 API 运维接口令牌请求头。
 	apiRuntimeOpsTokenHeader = "X-Ops-Token"
+	// apiRuntimeOpsTimestampHeader 表示 API 运维请求签名时间戳。
+	apiRuntimeOpsTimestampHeader = "X-Ops-Timestamp"
+	// apiRuntimeOpsBodySHA256Header 表示 API 运维请求体 SHA256 摘要。
+	apiRuntimeOpsBodySHA256Header = "X-Ops-Body-SHA256"
+	// apiRuntimeOpsSignatureHeader 表示 API 运维请求 HMAC-SHA256 签名。
+	apiRuntimeOpsSignatureHeader = "X-Ops-Signature"
 	// apiDocsMaxResponseBytes 限制单个 API 文档资源最大响应，避免代理异常大文件。
 	apiDocsMaxResponseBytes = 4 << 20
 	// apiRuntimeMaxResponseBytes 限制 API 运维接口 JSON 响应，配置快照允许超过 1MiB。
@@ -332,21 +341,24 @@ func requestAPI[T any](ctx context.Context, c *Client, method string, path strin
 	return &decoded.Data, nil
 }
 
-// buildAPIRequest 构造带运维令牌的 API 内网 HTTP 请求。
+// buildAPIRequest 构造带运维令牌和 HMAC 签名的 API 内网 HTTP 请求。
 func buildAPIRequest(ctx context.Context, c *Client, method string, path string, payload any) (*http.Request, error) {
 	var body io.Reader
+	var bodyBytes []byte
 	if payload != nil {
 		raw, err := json.Marshal(payload)
 		if err != nil {
 			return nil, errors.Wrap(err, "序列化 API 内网请求失败")
 		}
-		body = bytes.NewReader(raw)
+		bodyBytes = raw
+		body = bytes.NewReader(bodyBytes)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return nil, errors.Wrap(err, "创建 API 内网请求失败")
 	}
 	req.Header.Set(apiRuntimeOpsTokenHeader, c.token)
+	signAPIRequest(req, c.token, bodyBytes)
 	if locale := localeFromContext(ctx); locale != "" {
 		req.Header.Set("Accept-Language", locale)
 	}
@@ -354,6 +366,33 @@ func buildAPIRequest(ctx context.Context, c *Client, method string, path string,
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return req, nil
+}
+
+// signAPIRequest 为 API 内网请求追加 HMAC 签名头。
+func signAPIRequest(req *http.Request, token string, body []byte) {
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	bodyHash := apiRequestBodySHA256(body)
+	req.Header.Set(apiRuntimeOpsTimestampHeader, timestamp)
+	req.Header.Set(apiRuntimeOpsBodySHA256Header, bodyHash)
+	req.Header.Set(apiRuntimeOpsSignatureHeader, signAPIRequestText(token, req.Method, req.URL.RequestURI(), timestamp, bodyHash))
+}
+
+// apiRequestBodySHA256 返回 API 内网请求体 SHA256 十六进制摘要。
+func apiRequestBodySHA256(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+// signAPIRequestText 按 API 运维接口约定生成 HMAC-SHA256 签名。
+func signAPIRequestText(secret string, method string, requestURI string, timestamp string, bodyHash string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(strings.Join([]string{
+		strings.ToUpper(strings.TrimSpace(method)),
+		requestURI,
+		timestamp,
+		bodyHash,
+	}, "\n")))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // localeFromContext 读取当前请求语言，用于 admin 代理 API 内网接口时透传多语言偏好。

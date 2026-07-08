@@ -241,6 +241,10 @@ const (
 	MsgKeyTaskRegistryTypeAdminExportDesc = "task.registry.type.admin_export.desc"
 	// MsgKeyTaskRegistryTypeAdminExportHint 表示管理员导出任务使用提示 key。
 	MsgKeyTaskRegistryTypeAdminExportHint = "task.registry.type.admin_export.hint"
+	// MsgKeyTaskRegistryTypeUserExportDesc 表示前台用户导出任务说明 key。
+	MsgKeyTaskRegistryTypeUserExportDesc = "task.registry.type.user_export.desc"
+	// MsgKeyTaskRegistryTypeUserExportHint 表示前台用户导出任务使用提示 key。
+	MsgKeyTaskRegistryTypeUserExportHint = "task.registry.type.user_export.hint"
 	// MsgKeyTaskRegistryTypeUserTagDesc 表示用户标签任务说明 key。
 	MsgKeyTaskRegistryTypeUserTagDesc = "task.registry.type.user_tag.desc"
 	// MsgKeyTaskRegistryTypeUserTagHint 表示用户标签任务使用提示 key。
@@ -369,6 +373,8 @@ const (
 	MsgKeyCollectorRunSuccess = "collector.run_success"
 	// MsgKeyAdminExportFileExpired 表示导出文件失效说明 key。
 	MsgKeyAdminExportFileExpired = "admin_export.file_expired"
+	// MsgKeyUserExportFileExpired 表示前台用户导出文件失效说明 key。
+	MsgKeyUserExportFileExpired = "user_export.file_expired"
 	// MsgKeyUserTagRecalculateStarted 表示用户标签重算任务已启动说明 key。
 	MsgKeyUserTagRecalculateStarted = "user_tag.recalculate_started"
 	// MsgKeyDependencyUnavailable 表示核心依赖不可用的文案 key。

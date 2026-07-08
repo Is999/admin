@@ -26,6 +26,30 @@ func RouteSpecs() []shared.RouteSpec {
 			Handler:     CreateHandler,
 		},
 		{
+			Method:      http.MethodPost,
+			Path:        "/api/users/exports", // 异步导出前台用户列表。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.UserExportTrigger,
+			Description: shared.UserExportTrigger.Describe,
+			Handler:     TriggerExportHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/users/exports/status/:jobId", // 查询前台用户导出进度。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.UserExportStatus,
+			Description: shared.UserExportStatus.Describe,
+			Handler:     GetExportStatusHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/users/exports/download/:jobId", // 下载前台用户导出文件。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.UserExportDownload,
+			Description: shared.UserExportDownload.Describe,
+			Handler:     DownloadExportHandler,
+		},
+		{
 			Method:      http.MethodGet,
 			Path:        "/api/users/:id", // 查询前台用户详情。
 			Access:      shared.RouteAccessAuth,

@@ -315,6 +315,21 @@ const (
 	// `%s` 位置填充导出条件指纹。
 	AdminExportRequestLock = "admin:export:request:lock:%s"
 
+	// UserExportJob 表示前台用户列表导出任务状态缓存键模板。
+	// Redis 类型：String（JSON 文本），TTL 过期规则：按用户导出任务状态 TTL 自动过期。
+	// `%s` 位置填充导出任务 jobId。
+	UserExportJob = "user:export:job:%s"
+
+	// UserExportRequestIndex 表示前台用户导出条件到任务 ID 的复用索引。
+	// Redis 类型：String，TTL 过期规则：由调用方 TTL 或业务精确删除控制。
+	// `%s` 位置填充导出条件指纹。
+	UserExportRequestIndex = "user:export:request:%s"
+
+	// UserExportRequestLock 表示前台用户导出条件互斥锁 key 模板。
+	// Redis 类型：String（由 redsync 管理），TTL 过期规则：由 redsync 锁 TTL 控制，到期自动释放。
+	// `%s` 位置填充导出条件指纹。
+	UserExportRequestLock = "user:export:request:lock:%s"
+
 	// FileTransferUploadSession 表示断点续传上传会话缓存键模板。
 	// Redis 类型：String（JSON 文本），TTL 过期规则：按上传会话 TTL 自动过期，上传进度刷新时续期。
 	// `%s` 位置填充 uploadId。

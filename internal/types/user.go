@@ -187,14 +187,19 @@ type UserItem struct {
 	ShardNo     int    `json:"shardNo"`     // ID 哈希分片，来源 CRC32(id字符串)%1024，便于分表和分片游标查询
 	Username    string `json:"username"`    // 用户名
 	Nickname    string `json:"nickname"`    // 昵称
-	Email       string `json:"email"`       // 邮箱
-	Phone       string `json:"phone"`       // 手机号
+	EmailMasked string `json:"emailMasked"` // 邮箱脱敏展示值
+	PhoneMasked string `json:"phoneMasked"` // 手机号脱敏展示值
 	Avatar      string `json:"avatar"`      // 头像
 	Status      int    `json:"status"`      // 状态：1 正常，0 禁用
 	LastLoginAt string `json:"lastLoginAt"` // 最后登录时间
 	LastLoginIP string `json:"lastLoginIP"` // 最后登录 IP
 	CreatedAt   string `json:"createdAt"`   // 创建时间
 	UpdatedAt   string `json:"updatedAt"`   // 更新时间
+}
+
+// UserListMeta 表示业务用户列表的附加分页口径。
+type UserListMeta struct {
+	ExactTotal bool `json:"exactTotal"` // 是否返回精确总数；分表阶段为 false，避免实时 COUNT
 }
 
 // UserRuntimeSyncResp 表示 admin 调用 API 运行态同步后的回执。

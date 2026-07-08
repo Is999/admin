@@ -38,6 +38,33 @@ func TestUserPhysicalTableName(t *testing.T) {
 	}
 }
 
+// TestUserIdentityTableName 验证身份类型稳定路由到独立物理表。
+func TestUserIdentityTableName(t *testing.T) {
+	tests := []struct {
+		identityType string // identityType 表示身份类型。
+		want         string // want 表示期望物理表。
+	}{
+		{identityType: UserIdentityTypeUsername, want: TableNameUserIdentityUsername},
+		{identityType: UserIdentityTypeEmail, want: TableNameUserIdentityEmail},
+		{identityType: UserIdentityTypePhone, want: TableNameUserIdentityPhone},
+		{identityType: UserIdentityTypeOAuth, want: TableNameUserIdentityOAuth},
+	}
+	for _, tt := range tests {
+		t.Run(tt.identityType, func(t *testing.T) {
+			got, err := UserIdentityTableName(tt.identityType)
+			if err != nil {
+				t.Fatalf("UserIdentityTableName() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("UserIdentityTableName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if _, err := UserIdentityTableName("unknown"); err == nil {
+		t.Fatal("期望非法身份类型返回错误")
+	}
+}
+
 // TestUserPhysicalTableNameRejectsInvalidRoute 验证路由数量只能按 2 的幂平滑拆分。
 func TestUserPhysicalTableNameRejectsInvalidRoute(t *testing.T) {
 	if _, err := UserPhysicalTableName(1, 3); err == nil {
@@ -48,19 +75,22 @@ func TestUserPhysicalTableNameRejectsInvalidRoute(t *testing.T) {
 	}
 }
 
-// TestUserAccountTableNameRejectsMismatchedShardNo 验证账号索引不会接受错误分片号。
-func TestUserAccountTableNameRejectsMismatchedShardNo(t *testing.T) {
+// TestUserIdentityTableNameRejectsMismatchedShardNo 验证身份索引不会接受错误分片号。
+func TestUserIdentityTableNameRejectsMismatchedShardNo(t *testing.T) {
 	userID := int64(123456789)
-	account := &UserAccount{
-		UserID:          userID,
-		ShardNo:         idgen.ShardNo(userID),
-		RouteShardCount: 1024,
+	identity := &UserIdentity{
+		IdentityType:        UserIdentityTypeUsername,
+		Provider:            UserIdentityProviderLocal,
+		IdentityValue:       "demo_user",
+		UserID:              userID,
+		UserShardNo:         idgen.ShardNo(userID),
+		UserRouteShardCount: 1024,
 	}
-	want, err := UserPhysicalTableName(account.ShardNo, account.RouteShardCount)
+	want, err := UserPhysicalTableName(identity.UserShardNo, identity.UserRouteShardCount)
 	if err != nil {
 		t.Fatalf("UserPhysicalTableName() error = %v", err)
 	}
-	got, err := account.UserTableName()
+	got, err := identity.UserTableName()
 	if err != nil {
 		t.Fatalf("UserTableName() error = %v", err)
 	}
@@ -68,9 +98,9 @@ func TestUserAccountTableNameRejectsMismatchedShardNo(t *testing.T) {
 		t.Fatalf("UserTableName() = %q, want %q", got, want)
 	}
 
-	account.ShardNo = (account.ShardNo + 1) % userRouteShardMod
-	if _, err := account.UserTableName(); err == nil {
-		t.Fatal("期望账号索引 shard_no 与 user_id 不一致时返回错误")
+	identity.UserShardNo = (identity.UserShardNo + 1) % userRouteShardMod
+	if _, err := identity.UserTableName(); err == nil {
+		t.Fatal("期望身份索引 user_shard_no 与 user_id 不一致时返回错误")
 	}
 }
 
@@ -81,34 +111,38 @@ func TestSafeUserUpdatesRejectsImmutableFields(t *testing.T) {
 		"shard_no":      12,
 		"username":      "changed",
 		"password_hash": "unsafe",
-		"email":         "ok@example.com",
+		"email":         "raw@example.com",
+		"email_hash":    " hash ",
 	}, false)
-	for _, key := range []string{"id", "shard_no", "username", "password_hash"} {
+	for _, key := range []string{"id", "shard_no", "username", "password_hash", "email"} {
 		if _, ok := got[key]; ok {
 			t.Fatalf("safeUserUpdates() should reject %s: %+v", key, got)
 		}
 	}
-	if got["email"] != "ok@example.com" {
-		t.Fatalf("safeUserUpdates() should keep email: %+v", got)
+	if got["email_hash"] != "hash" {
+		t.Fatalf("safeUserUpdates() should keep secure email fields: %+v", got)
 	}
 }
 
-// TestSplitUserAccountQueryUsesIndexedProbe 验证分表状态探测只按 route_shard_count 索引取一行。
-func TestSplitUserAccountQueryUsesIndexedProbe(t *testing.T) {
+// TestSplitUserIdentityQueryUsesIndexedProbe 验证分表状态探测只按 user_route_shard_count 索引取一行。
+func TestSplitUserIdentityQueryUsesIndexedProbe(t *testing.T) {
 	db := newUserDryRunDB(t)
-	stmt := splitUserAccountQuery(db).Find(&[]int{}).Statement
+	stmt := splitUserIdentityQuery(db).Find(&[]int{}).Statement
 	sqlText := stmt.SQL.String()
-	if !strings.Contains(sqlText, "FROM `user_account`") {
-		t.Fatalf("splitUserAccountQuery() sql = %q, want user_account", sqlText)
+	if !strings.Contains(sqlText, "FROM `user_identity_username`") {
+		t.Fatalf("splitUserIdentityQuery() sql = %q, want user_identity_username", sqlText)
 	}
-	if !strings.Contains(sqlText, "route_shard_count > ?") {
-		t.Fatalf("splitUserAccountQuery() sql = %q, want route_shard_count predicate", sqlText)
+	if !strings.Contains(sqlText, "user_route_shard_count > ?") {
+		t.Fatalf("splitUserIdentityQuery() sql = %q, want user_route_shard_count predicate", sqlText)
+	}
+	if strings.Contains(sqlText, "identity_type") {
+		t.Fatalf("splitUserIdentityQuery() sql = %q, should not use redundant identity_type predicate", sqlText)
 	}
 	if !strings.Contains(sqlText, "LIMIT ?") {
-		t.Fatalf("splitUserAccountQuery() sql = %q, want single-row probe", sqlText)
+		t.Fatalf("splitUserIdentityQuery() sql = %q, want single-row probe", sqlText)
 	}
 	if strings.Contains(strings.ToLower(sqlText), "count(") {
-		t.Fatalf("splitUserAccountQuery() sql = %q, should not count large table", sqlText)
+		t.Fatalf("splitUserIdentityQuery() sql = %q, should not count large table", sqlText)
 	}
 }
 

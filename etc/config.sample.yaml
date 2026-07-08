@@ -62,10 +62,12 @@ snowflake:
     #     # Redis 高水位初始化值；0 表示首个 ID 从 1 开始。
     #     start: 0
 
-# 业务用户写入路由；提升前必须完成 user_account 回填、目标表创建和多实例同步重启。
+# 业务用户写入路由；提升前必须完成联系方式安全字段、user_identity_* 回填、目标表创建和多实例同步重启。
 user:
   # 新增业务用户默认物理表数量，仅支持 1/2/4/8/16/32/64/128/256/512/1024。
   route_shard_count: 1
+  # 用户列表导出单个 Excel 文件最大行数，超过后按编号拆分多个文件。
+  export_split_rows: 500000
 
 # JWT 密钥，请替换为强随机字符串。
 jwt_secret: "replace-with-strong-secret"
@@ -115,7 +117,7 @@ runtime_config:
 api_service:
   # API 内网地址，仅 admin 后端调用。
   internal_base_url: "http://127.0.0.1:8890"
-  # API ops.config_reload_token 对应的运维令牌。
+  # API ops.config_reload_token 对应的运维令牌，也是 API 内网 HMAC 密钥。
   ops_token: ""
   # API 内网调用超时秒数。
   timeout_seconds: 5

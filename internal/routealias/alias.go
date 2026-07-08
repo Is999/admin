@@ -101,6 +101,12 @@ const (
 	UserPasswordReset Alias = "user.password.reset"
 	// UserRuntimeSync 表示同步前台用户 API 运行态路由别名。
 	UserRuntimeSync Alias = "user.runtime.sync"
+	// UserExport 表示异步导出前台用户列表路由别名。
+	UserExport Alias = "user.export"
+	// UserExportStatus 表示查询前台用户导出进度路由别名。
+	UserExportStatus Alias = "user.export.status"
+	// UserExportDownload 表示下载前台用户导出文件路由别名。
+	UserExportDownload Alias = "user.export.download"
 	// APIRuntimeConfigReloadStatus 表示查询 API 配置热加载状态路由别名。
 	APIRuntimeConfigReloadStatus Alias = "api_runtime.config_reload.status"
 	// APIRuntimeConfigReloadItems 表示查询 API 运行态配置项路由别名。

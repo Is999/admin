@@ -143,7 +143,7 @@ admin
 | HTTP 路由 | `internal/handler/routes.go:builtinRouteModuleSpecs` + 各模块 `RouteSpecs` | 真实路由、RouteContract、访问日志降噪和文档校验都从路由规格派生 |
 | RouteMeta | `internal/handler/shared/route_meta.go:DefaultRouteMetas` | 路由别名、中文说明和审计动作集中登记 |
 | 路由安全清单 | `internal/handler/route_security_manifest.go:DefaultRouteSecurityManifest` | 汇总 method、path、chain 和字段级签名加密策略，用于文档和前端同步 |
-| 任务插件 | `internal/bootstrap/components/builtin/task.go:DefaultTaskPluginSpecs` + `internal/jobs/plugins.go:PluginSpecs` | core、archive、admin_export、task_report、user_tag 和维护任务插件从规格派生 |
+| 任务插件 | `internal/bootstrap/components/builtin/task.go:DefaultTaskPluginSpecs` + `internal/jobs/plugins.go:PluginSpecs` | core、archive、excel_export、task_report、user_tag 和维护任务插件从规格派生 |
 | 运行时扩展 | 各能力归属包 `RuntimeRegistrySpecs` | `pkg/storage`、`internal/logic/file`、`internal/infra/collectorx` 分别声明自身扩展入口 |
 | 数据库迁移 | `internal/database/migrations.go:defaultMigrationSpecs` | 迁移版本、名称、SQL 资产和 bootstrap-only 边界集中登记 |
 | Redis Key | `common/rediskeys` | Key 模板集中定义并带静态检查，业务代码不散落高基数字符串 |

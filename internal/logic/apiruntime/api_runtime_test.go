@@ -3,11 +3,13 @@ package apiruntime
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	i18n "admin/common/i18n"
 	"admin/internal/config"
@@ -37,8 +39,13 @@ func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 		if got := r.Header.Get("Accept-Language"); got != i18n.LocaleZHCN {
 			t.Fatalf("Accept-Language = %q, want %q", got, i18n.LocaleZHCN)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
-			t.Fatalf("Decode payload failed: %v", err)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll payload failed: %v", err)
+		}
+		assertAPIRequestSigned(t, r, "ops-token", body)
+		if err := json.Unmarshal(body, &gotPayload); err != nil {
+			t.Fatalf("Unmarshal payload failed: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status":  true,
@@ -114,6 +121,7 @@ func TestConfigReloadItemsUsesInternalOpsRoute(t *testing.T) {
 		if got := r.Header.Get(apiRuntimeOpsTokenHeader); got != "ops-token" {
 			t.Fatalf("%s = %q, want ops-token", apiRuntimeOpsTokenHeader, got)
 		}
+		assertAPIRequestSigned(t, r, "ops-token", nil)
 		query := r.URL.Query()
 		if query.Get("keyword") != "security" || query.Get("page") != "2" || query.Get("pageSize") != "50" || query.Get("sensitiveOnly") != "true" {
 			t.Fatalf("query = %s, want keyword/security page/2 pageSize/50 sensitiveOnly/true", r.URL.RawQuery)
@@ -159,6 +167,47 @@ func TestConfigReloadItemsUsesInternalOpsRoute(t *testing.T) {
 	}
 	if resp == nil || resp.Keyword != "security" || resp.Total != 1 || len(resp.Items) != 1 || resp.Items[0].Path != "security.app_key" {
 		t.Fatalf("response = %+v, want one security config item", resp)
+	}
+}
+
+// TestRunConfigReloadUsesSignedInternalOpsRoute 验证手动热加载会使用 POST 空 body 签名访问 API 内网接口。
+func TestRunConfigReloadUsesSignedInternalOpsRoute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/internal/system/config-reload/run" {
+			t.Fatalf("path = %s, want /internal/system/config-reload/run", r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll payload failed: %v", err)
+		}
+		if len(body) != 0 {
+			t.Fatalf("body = %q, want empty", string(body))
+		}
+		assertAPIRequestSigned(t, r, "ops-token", body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  true,
+			"code":    1000,
+			"message": "ok",
+			"data": map[string]any{
+				"enabled": true,
+				"running": false,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(config.APIServiceConfig{
+		InternalBaseURL: server.URL,
+		OpsToken:        "ops-token",
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err = client.RunConfigReload(context.Background()); err != nil {
+		t.Fatalf("RunConfigReload() error = %v", err)
 	}
 }
 
@@ -212,6 +261,7 @@ func TestDocsAssetUsesInternalOpsRoute(t *testing.T) {
 		if got := r.Header.Get(apiRuntimeOpsTokenHeader); got != "ops-token" {
 			t.Fatalf("%s = %q, want ops-token", apiRuntimeOpsTokenHeader, got)
 		}
+		assertAPIRequestSigned(t, r, "ops-token", nil)
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		_, _ = w.Write([]byte("# 认证接口"))
@@ -258,5 +308,32 @@ func TestNewClientValidatesRequiredConfig(t *testing.T) {
 	}
 	if _, err := NewClient(config.APIServiceConfig{InternalBaseURL: "://bad", OpsToken: "token"}); err == nil {
 		t.Fatal("NewClient() should reject invalid base url")
+	}
+}
+
+// assertAPIRequestSigned 验证 admin 发出的 API 内网请求携带 token 与 HMAC 签名。
+func assertAPIRequestSigned(t *testing.T, r *http.Request, token string, body []byte) {
+	t.Helper()
+	if got := r.Header.Get(apiRuntimeOpsTokenHeader); got != token {
+		t.Fatalf("%s = %q, want %q", apiRuntimeOpsTokenHeader, got, token)
+	}
+	timestamp := r.Header.Get(apiRuntimeOpsTimestampHeader)
+	if timestamp == "" {
+		t.Fatalf("%s is empty", apiRuntimeOpsTimestampHeader)
+	}
+	seconds, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		t.Fatalf("%s = %q parse error: %v", apiRuntimeOpsTimestampHeader, timestamp, err)
+	}
+	if delta := time.Since(time.Unix(seconds, 0)); delta < -time.Minute || delta > time.Minute {
+		t.Fatalf("%s = %q outside test window", apiRuntimeOpsTimestampHeader, timestamp)
+	}
+	bodyHash := apiRequestBodySHA256(body)
+	if got := r.Header.Get(apiRuntimeOpsBodySHA256Header); got != bodyHash {
+		t.Fatalf("%s = %q, want %q", apiRuntimeOpsBodySHA256Header, got, bodyHash)
+	}
+	wantSignature := signAPIRequestText(token, r.Method, r.URL.RequestURI(), timestamp, bodyHash)
+	if got := r.Header.Get(apiRuntimeOpsSignatureHeader); got != wantSignature {
+		t.Fatalf("%s = %q, want %q", apiRuntimeOpsSignatureHeader, got, wantSignature)
 	}
 }

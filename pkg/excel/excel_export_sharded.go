@@ -40,6 +40,7 @@ type StreamExportShardedOptions[T any, C any, S any] struct {
 	SheetName           string                  // 工作表名称
 	Header              []any                   // 表头
 	HeaderStyle         *excelize.Style         // 表头样式
+	SheetRowLimit       int                     // 单工作表最大行数，包含表头
 	BatchSize           int                     // 每批读取数量
 	MaxConcurrentShards int                     // 最大并发分片数
 	ChunkBufferSize     int                     // 单分片结果缓冲大小
@@ -76,6 +77,13 @@ func WithStreamExportHeader[T any, C any, S any](header []any) StreamExportShard
 func WithStreamExportHeaderStyle[T any, C any, S any](headerStyle *excelize.Style) StreamExportShardedOpt[T, C, S] {
 	return func(opt *StreamExportShardedOptions[T, C, S]) {
 		opt.HeaderStyle = headerStyle
+	}
+}
+
+// WithStreamExportSheetRowLimit 设置单工作表最大行数，包含表头。
+func WithStreamExportSheetRowLimit[T any, C any, S any](sheetRowLimit int) StreamExportShardedOpt[T, C, S] {
+	return func(opt *StreamExportShardedOptions[T, C, S]) {
+		opt.SheetRowLimit = sheetRowLimit
 	}
 }
 
@@ -227,7 +235,10 @@ func StreamExportSharded[T any, C any, S any](ctx context.Context, opt StreamExp
 		opt.ProgressMinRows = 0
 	}
 	// sheetRowLimit 表示本次导出的单表行数边界，异常配置回退到官方上限，避免突破 Excel 文件格式限制。
-	sheetRowLimit := streamExportSheetRowLimit
+	sheetRowLimit := opt.SheetRowLimit
+	if sheetRowLimit <= 0 {
+		sheetRowLimit = streamExportSheetRowLimit
+	}
 	if sheetRowLimit <= 0 || sheetRowLimit > MaxExcelSheetRows {
 		sheetRowLimit = MaxExcelSheetRows
 	}

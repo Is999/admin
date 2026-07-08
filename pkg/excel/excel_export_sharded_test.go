@@ -35,6 +35,7 @@ func TestApplyStreamExportShardedOpts(t *testing.T) {
 		WithStreamExportMaxConcurrentShards[shardedExportRow, int, shardedExportShard](6),
 		WithStreamExportChunkBufferSize[shardedExportRow, int, shardedExportShard](8),
 		WithStreamExportMaxPendingChunks[shardedExportRow, int, shardedExportShard](12),
+		WithStreamExportSheetRowLimit[shardedExportRow, int, shardedExportShard](1000),
 		WithStreamExportProgressThrottle[shardedExportRow, int, shardedExportShard](time.Second, 500),
 	)
 	if got.SheetName != "导出表" {
@@ -51,6 +52,9 @@ func TestApplyStreamExportShardedOpts(t *testing.T) {
 	}
 	if got.MaxPendingChunks != 12 {
 		t.Fatalf("MaxPendingChunks 未正确应用: got=%d", got.MaxPendingChunks)
+	}
+	if got.SheetRowLimit != 1000 {
+		t.Fatalf("SheetRowLimit 未正确应用: got=%d", got.SheetRowLimit)
 	}
 	if got.ProgressMinInterval != time.Second || got.ProgressMinRows != 500 {
 		t.Fatalf("进度节流配置未正确应用: got=%v/%d", got.ProgressMinInterval, got.ProgressMinRows)

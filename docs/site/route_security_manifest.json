@@ -400,6 +400,49 @@
       "responseCipher": []
     },
     {
+      "alias": "user.export",
+      "method": "POST",
+      "path": "/api/users/exports",
+      "access": "auth",
+      "describe": "异步导出前台用户列表",
+      "requestSign": [
+        "id",
+        "shardNo",
+        "username",
+        "email",
+        "phone",
+        "status"
+      ],
+      "requestCipher": [
+        "email",
+        "phone"
+      ],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.export.status",
+      "method": "GET",
+      "path": "/api/users/exports/status/:jobId",
+      "access": "auth",
+      "describe": "查询前台用户导出进度",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "user.export.download",
+      "method": "GET",
+      "path": "/api/users/exports/download/:jobId",
+      "access": "auth",
+      "describe": "下载前台用户导出文件",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
       "alias": "user.info",
       "method": "GET",
       "path": "/api/users/:id",

@@ -93,6 +93,12 @@ const (
 	ActionUserPasswordReset AdminLogAction = "重置前台用户密码"
 	// ActionUserRuntimeSync 同步前台用户运行态。
 	ActionUserRuntimeSync AdminLogAction = "同步前台用户运行态"
+	// ActionUserExport 导出前台用户列表。
+	ActionUserExport AdminLogAction = "导出前台用户列表"
+	// ActionUserExportStatus 查询前台用户导出进度。
+	ActionUserExportStatus AdminLogAction = "查询前台用户导出进度"
+	// ActionUserExportDownload 下载前台用户导出文件。
+	ActionUserExportDownload AdminLogAction = "下载前台用户导出文件"
 	// ActionAPIRuntimeConfigReloadStatus 查询 API 配置热加载状态。
 	ActionAPIRuntimeConfigReloadStatus AdminLogAction = "查询API配置热加载状态"
 	// ActionAPIRuntimeConfigReloadItems 查询 API 运行态配置项。

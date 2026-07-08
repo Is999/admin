@@ -171,6 +171,11 @@ var RouteSecurityPolicies = map[routealias.Alias]RouteSecurityPolicy{
 	routealias.UserRuntimeSync: {
 		RequestSign: []string{"profile", "sessions", "twoStepKey", "twoStepValue"},
 	},
+	// user.export 表示前台用户列表导出接口：查询条件参与签名，邮箱和手机号条件字段级加密。
+	routealias.UserExport: {
+		RequestSign:   []string{"id", "shardNo", "username", "email", "phone", "status"},
+		RequestCipher: []string{"email", "phone"},
+	},
 	// api_runtime.config_reload.run 表示触发 API 配置热加载接口：二次确认票据必须参与签名。
 	routealias.APIRuntimeConfigReloadRun: {
 		RequestSign: []string{"twoStepKey", "twoStepValue"},

@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	minAdminJWTSecretLength    = 16 // JWT 密钥最小长度，避免明显弱配置启动
-	defaultUserRouteShardCount = 1  // 业务用户默认保持单张物理表
+	minAdminJWTSecretLength    = 16      // JWT 密钥最小长度，避免明显弱配置启动
+	defaultUserRouteShardCount = 1       // 业务用户默认保持单张物理表
+	defaultUserExportSplitRows = 500000  // 用户导出默认单文件最大行数
+	maxUserExportSplitRows     = 1048575 // Excel 单 Sheet 扣除表头后的最大数据行数
 )
 
 // Validate 校验启动与热加载阶段必须立即失败的基础配置。
@@ -185,10 +187,16 @@ func ConfigureSnowflakeWorkerID(cfg config.SnowflakeConfig) error {
 
 // validateUserConfig 校验业务用户默认物理表数量，防止后台写入路由不可迁移。
 func validateUserConfig(cfg config.UserConfig) error {
-	if cfg.RouteShardCount == 0 || validUserRouteShardCount(cfg.RouteShardCount) {
-		return nil
+	if cfg.RouteShardCount != 0 && !validUserRouteShardCount(cfg.RouteShardCount) {
+		return errors.Errorf("user.route_shard_count 仅支持 1/2/4/8/16/32/64/128/256/512/1024")
 	}
-	return errors.Errorf("user.route_shard_count 仅支持 1/2/4/8/16/32/64/128/256/512/1024")
+	if cfg.ExportSplitRows < 0 {
+		return errors.Errorf("user.export_split_rows 不能小于 0")
+	}
+	if cfg.ExportSplitRows > maxUserExportSplitRows {
+		return errors.Errorf("user.export_split_rows 不能大于 %d", maxUserExportSplitRows)
+	}
+	return nil
 }
 
 // validUserRouteShardCount 判断业务用户物理表数量是否能平分 1024 逻辑分片。

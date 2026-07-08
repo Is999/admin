@@ -29,9 +29,9 @@ func PluginSpecs() []taskruntime.PluginSpec {
 		{
 			Name:        exportjob.PluginName,
 			File:        "internal/jobs/export/plugin.go",
-			Method:      "jobs.AdminExportPlugin / exportjob.Setup",
-			Description: "注册管理员列表异步导出 handler",
-			Build:       AdminExportPlugin,
+			Method:      "jobs.ExcelExportPlugin / exportjob.Setup",
+			Description: "注册列表异步导出 handler",
+			Build:       ExcelExportPlugin,
 		},
 		{
 			Name:        taskreporttask.PluginName,
@@ -72,8 +72,8 @@ func ArchivePlugin() taskruntime.Plugin {
 	})
 }
 
-// AdminExportPlugin 创建管理员列表异步导出任务插件。
-func AdminExportPlugin() taskruntime.Plugin {
+// ExcelExportPlugin 创建列表异步导出任务插件。
+func ExcelExportPlugin() taskruntime.Plugin {
 	return taskruntime.NewPluginFunc(exportjob.PluginName, func(runtime *taskruntime.Runtime) error {
 		return exportjob.Setup(runtime)
 	})

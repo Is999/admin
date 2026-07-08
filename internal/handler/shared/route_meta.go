@@ -136,6 +136,12 @@ var (
 	UserPasswordReset = newAuditRouteMeta(routealias.UserPasswordReset, model.ActionUserPasswordReset, "重置前台用户密码")
 	// UserRuntimeSync 同步前台用户 API 运行态。
 	UserRuntimeSync = newAuditRouteMeta(routealias.UserRuntimeSync, model.ActionUserRuntimeSync, "同步前台用户API运行态")
+	// UserExportTrigger 异步导出前台用户列表。
+	UserExportTrigger = newAuditRouteMeta(routealias.UserExport, model.ActionUserExport, "异步导出前台用户列表")
+	// UserExportStatus 查询前台用户导出进度。
+	UserExportStatus = newAuditRouteMeta(routealias.UserExportStatus, model.ActionUserExportStatus, "查询前台用户导出进度")
+	// UserExportDownload 下载前台用户导出文件。
+	UserExportDownload = newAuditRouteMeta(routealias.UserExportDownload, model.ActionUserExportDownload, "下载前台用户导出文件")
 	// APIRuntimeConfigReloadStatus 查询 API 配置热加载状态。
 	APIRuntimeConfigReloadStatus = newAuditRouteMeta(routealias.APIRuntimeConfigReloadStatus, model.ActionAPIRuntimeConfigReloadStatus, "查询API配置热加载状态")
 	// APIRuntimeConfigReloadItems 查询 API 运行态配置项。

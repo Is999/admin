@@ -66,6 +66,8 @@ snowflake:
 user:
   # 新增业务用户默认物理表数量，仅支持 1/2/4/8/16/32/64/128/256/512/1024。
   route_shard_count: 1
+  # 用户列表导出单个 Excel 文件最大行数，超过后按编号拆分多个文件。
+  export_split_rows: 500000
 
 # JWT 密钥仅供本地示例使用，部署前必须替换。
 jwt_secret: "please-change-this-admin-jwt-secret"
@@ -115,7 +117,7 @@ runtime_config:
 api_service:
   # API 内网地址，仅 admin 后端调用。
   internal_base_url: "http://gozero-api:8888"
-  # API ops.config_reload_token 对应的运维令牌。
+  # API ops.config_reload_token 对应的运维令牌，也是 API 内网 HMAC 密钥。
   ops_token: ""
   # API 内网调用超时秒数。
   timeout_seconds: 5

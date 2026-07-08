@@ -3,11 +3,15 @@ package user
 import (
 	"net/http"
 
+	i18n "admin/common/i18n"
 	"admin/internal/handler/shared"
 	apiruntimelogic "admin/internal/logic/apiruntime"
 	userlogic "admin/internal/logic/user"
 	"admin/internal/svc"
 	"admin/internal/types"
+	"admin/pkg/transfer"
+
+	"github.com/zeromicro/go-zero/rest/httpx"
 )
 
 // ListHandler 查询前台用户列表。
@@ -64,6 +68,73 @@ func SyncRuntimeHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		logicObj := userlogic.NewLogic(r, sCtx)
 		return logicObj, logicObj.SyncRuntime(req)
 	})(sCtx)
+}
+
+// TriggerExportHandler 提交前台用户列表异步导出任务。
+func TriggerExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.UserExportReq](shared.UserExportTrigger, func(r *http.Request, sCtx *svc.ServiceContext, req *types.UserExportReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
+		return logicObj, logicObj.TriggerExport(req)
+	})(sCtx)
+}
+
+// GetExportStatusHandler 查询前台用户列表异步导出进度。
+func GetExportStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.UserExportJobReq](shared.UserExportStatus, func(r *http.Request, sCtx *svc.ServiceContext, req *types.UserExportJobReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := userlogic.NewLogic(r, sCtx)
+		return logicObj, logicObj.GetExportStatus(req)
+	})(sCtx)
+}
+
+// DownloadExportHandler 下载已生成的前台用户导出文件。
+func DownloadExportHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.UserExportJobReq
+		if err := httpx.Parse(r, &req); err != nil {
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
+			return
+		}
+
+		logicObj := userlogic.NewLogic(r, sCtx)
+		logMeta := shared.ActionLogParamFromMeta(shared.UserExportDownload)
+		status, resp := logicObj.PrepareExportDownload(&req)
+		if resp != nil {
+			resp.WithReq(&req)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
+			return
+		}
+
+		if logMeta != nil {
+			logicObj.AddAdminLog(logMeta.Action, logMeta.Route, logMeta.Method, logMeta.Describe, &req)
+		}
+
+		objectStream, err := logicObj.OpenExportDownloadObject(status, r.Header.Get("Range"))
+		if err != nil {
+			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+				"DownloadExportHandler 打开前台用户导出对象失败").ToBizResult()
+			resp.WithReq(&req)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
+			return
+		}
+		defer objectStream.Reader.Close()
+
+		if err := transfer.ServeStream(
+			w,
+			r,
+			objectStream.Reader,
+			status.FileName,
+			status.ContentType,
+			objectStream.ContentLength,
+			"attachment",
+			objectStream.AcceptRanges,
+			objectStream.ContentRange,
+		); err != nil {
+			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+				"DownloadExportHandler 输出前台用户导出文件[%s]失败", status.FileName).ToBizResult()
+			resp.WithReq(&req)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
+		}
+	}
 }
 
 // APIRuntimeReloadStatusHandler 查询 API 配置热加载状态。

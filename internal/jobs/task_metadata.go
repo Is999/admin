@@ -33,6 +33,13 @@ func taskTypeDisplaySpecs() []taskqueue.TaskTypeDisplaySpec {
 			ManualRecommended: true,
 		},
 		{
+			TaskType:          types.UserExportTaskType,
+			DescriptionKey:    i18n.MsgKeyTaskRegistryTypeUserExportDesc,
+			UsageHintKey:      i18n.MsgKeyTaskRegistryTypeUserExportHint,
+			PayloadExample:    "{\n  \"jobId\": \"job-demo-002\",\n  \"operatorId\": 1,\n  \"operatorName\": \"admin\",\n  \"request\": {\n    \"username\": \"codex_test\"\n  }\n}",
+			ManualRecommended: true,
+		},
+		{
 			TaskTypePrefix: "user_tag:",
 			DescriptionKey: i18n.MsgKeyTaskRegistryTypeUserTagDesc,
 			UsageHintKey:   i18n.MsgKeyTaskRegistryTypeUserTagHint,

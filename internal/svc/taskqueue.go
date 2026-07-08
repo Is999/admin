@@ -46,6 +46,8 @@ const (
 	TaskRuntimeAlertKindCacheRefreshEnqueueFailed = "cache_refresh_enqueue_failed"
 	// TaskRuntimeAlertKindAdminExcelExportFailed 表示管理员 Excel 异步导出任务失败。
 	TaskRuntimeAlertKindAdminExcelExportFailed = "admin_excel_export_failed"
+	// TaskRuntimeAlertKindUserExcelExportFailed 表示前台用户 Excel 异步导出任务失败。
+	TaskRuntimeAlertKindUserExcelExportFailed = "user_excel_export_failed"
 	// TaskRuntimeAlertKindCollectorEnqueueFailed 表示 Collector Kafka 投递失败。
 	TaskRuntimeAlertKindCollectorEnqueueFailed = "collector_enqueue_failed"
 	// TaskRuntimeAlertKindCollectorWorkerFailed 表示 Collector 后台消费链路失败。

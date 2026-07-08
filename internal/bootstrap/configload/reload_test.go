@@ -114,6 +114,7 @@ func TestBuildReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 		},
 		User: config.UserConfig{
 			RouteShardCount: 1,
+			ExportSplitRows: 500000,
 		},
 		Redis: config.RedisConfig{
 			Addrs: []string{"127.0.0.1:6379"},
@@ -138,6 +139,7 @@ func TestBuildReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 	after.AppKey = "new-key"
 	after.Snowflake.WorkerID = int64Ptr(513)
 	after.User.RouteShardCount = 2
+	after.User.ExportSplitRows = 250000
 	after.Redis = config.RedisConfig{Addrs: []string{"127.0.0.1:6380"}}
 	after.Task.DefaultQueue = "new-queue"
 	after.Task.Periodic = []config.TaskPeriodicConfig{
@@ -158,6 +160,9 @@ func TestBuildReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 	}
 	if effective.User.RouteShardCount != before.User.RouteShardCount {
 		t.Fatalf("期望用户写入分表路由保持原值，实际为 %+v", effective.User)
+	}
+	if effective.User.ExportSplitRows != after.User.ExportSplitRows {
+		t.Fatalf("期望用户导出拆分阈值刷新为新值，实际为 %+v", effective.User)
 	}
 	if effective.Task.DefaultQueue != before.Task.DefaultQueue {
 		t.Fatalf("期望任务运行时配置保持原值，实际 default_queue=%s", effective.Task.DefaultQueue)

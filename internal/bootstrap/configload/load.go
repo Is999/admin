@@ -37,6 +37,9 @@ func Normalize(c *config.Config) {
 	if c.User.RouteShardCount <= 0 {
 		c.User.RouteShardCount = defaultUserRouteShardCount
 	}
+	if c.User.ExportSplitRows <= 0 {
+		c.User.ExportSplitRows = defaultUserExportSplitRows
+	}
 }
 
 // inheritCollectorKafkaCommon 让 Collector Kafka 复用顶层 Kafka 公共连接参数。

@@ -198,6 +198,19 @@ func TestValidateBootstrapConfigRejectsInvalidUserRouteShardCount(t *testing.T) 
 	}
 }
 
+// TestValidateBootstrapConfigRejectsInvalidUserExportSplitRows 确保用户导出拆分阈值不能为负。
+func TestValidateBootstrapConfigRejectsInvalidUserExportSplitRows(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.User.ExportSplitRows = -1
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望非法 user.export_split_rows 返回错误，实际为 nil")
+	}
+	cfg.User.ExportSplitRows = maxUserExportSplitRows + 1
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望过大的 user.export_split_rows 返回错误，实际为 nil")
+	}
+}
+
 // TestValidateTaskRedisConfigRejectsPartial 确保 task.redis 半配置不会静默回退到主 Redis。
 func TestValidateTaskRedisConfigRejectsPartial(t *testing.T) {
 	if err := ValidateTaskRedisConfig(config.RedisConfig{DB: 3}); err == nil {
@@ -214,6 +227,9 @@ func TestNormalizeBootstrapConfigDefaultsUserRouteShardCount(t *testing.T) {
 	Normalize(&cfg)
 	if cfg.User.RouteShardCount != defaultUserRouteShardCount {
 		t.Fatalf("route_shard_count = %d, want %d", cfg.User.RouteShardCount, defaultUserRouteShardCount)
+	}
+	if cfg.User.ExportSplitRows != defaultUserExportSplitRows {
+		t.Fatalf("export_split_rows = %d, want %d", cfg.User.ExportSplitRows, defaultUserExportSplitRows)
 	}
 }
 

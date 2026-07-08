@@ -101,6 +101,7 @@ func TestNormalizeAuthSecurityCategory(t *testing.T) {
 		{name: "auth", reason: AuthSecurityReasonInvalidPassword, want: authSecurityCategoryAuth},
 		{name: "token", reason: AuthSecurityReasonTokenInvalid, want: authSecurityCategoryToken},
 		{name: "rate limit", reason: AuthSecurityReasonLoginIPRateLimited, want: authSecurityCategoryRateLimit},
+		{name: "identity rate limit", reason: AuthSecurityReasonLoginIdentityRateLimited, want: authSecurityCategoryRateLimit},
 		{name: "security client", reason: AuthSecurityReasonSignatureFailed, want: authSecurityCategorySecurityClient},
 		{name: "security config", reason: AuthSecurityReasonSecurityKeyUnavailable, want: authSecurityCategorySecurityConfig},
 		{name: "payload limit", reason: AuthSecurityReasonSecurityPayloadTooLarge, want: authSecurityCategorySecurityPayloadLimit},

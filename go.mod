@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/Is999/go-utils v1.26.26
-	github.com/Is999/table-cache v1.26.0
+	github.com/Is999/table-cache v1.26.1
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25

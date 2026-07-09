@@ -5,6 +5,7 @@ import (
 	"admin/internal/requestctx"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -88,6 +89,10 @@ const (
 	fieldShardIndex = "shard_index"
 	// fieldShardTotal 表示分片总数，来源于任务负载，用于判断分片配置是否完整。
 	fieldShardTotal = "shard_total"
+	// fieldLatencyMS 表示请求、任务或下游调用耗时毫秒数。
+	fieldLatencyMS = "latency_ms"
+	// fieldSuccess 表示请求或任务是否成功。
+	fieldSuccess = "success"
 
 	// FieldIntervalSeconds 表示轮询、调度或重试间隔秒数。
 	FieldIntervalSeconds = "interval_seconds"
@@ -97,14 +102,42 @@ const (
 	FieldWindowEndUnix = "window_end_unix"
 )
 
+// publicLogFieldNames 仅保留跨请求、任务和错误排障共用的顶层检索字段。
+// 路径、SQL、payload 和统计量等详情写入 content，避免日志平台字段膨胀。
+var publicLogFieldNames = map[string]struct{}{
+	fieldTraceID:     {},
+	fieldSpanID:      {},
+	fieldRoute:       {},
+	fieldHTTPMethod:  {},
+	fieldIP:          {},
+	fieldUserID:      {},
+	fieldHTTPStatus:  {},
+	fieldBizCode:     {},
+	fieldError:       {},
+	fieldErrorChain:  {},
+	fieldErrorCaller: {},
+	fieldCaller:      {},
+	fieldLogCaller:   {},
+	fieldTaskID:      {},
+	fieldWorkflowID:  {},
+	fieldMode:        {},
+	fieldNode:        {},
+	fieldShard:       {},
+	fieldShardIndex:  {},
+	fieldShardTotal:  {},
+	fieldLatencyMS:   {},
+	fieldSuccess:     {},
+}
+
 // Setup 初始化 go-zero 日志，并在文件输出模式下额外镜像到 stdout 方便容器采集。
 func Setup(c config.Config) {
 	if shouldMoveBuiltinCaller(c.Log.FieldKeys.CallerKey) {
 		c.Log.FieldKeys.CallerKey = fieldLogCaller
 	}
 	logx.MustSetup(c.Log)
+	wrapCurrentLogWriter()
 	if strings.EqualFold(c.Log.Mode, "file") {
-		logx.AddWriter(logx.NewWriter(os.Stdout))
+		logx.AddWriter(wrapLogWriter(logx.NewWriter(os.Stdout)))
 	}
 	// 显式初始化 go-utils 错误链路追踪配置，保证日志、JSON 与错误行为在启动阶段统一收口。
 	errors.SetStackDepth(32)
@@ -113,6 +146,105 @@ func Setup(c config.Config) {
 		utils.WithJSON(jsoniter.Marshal, jsoniter.Unmarshal),
 		utils.WithLogger(newGoUtilsLogger(nil)),
 	)
+}
+
+// callerDedupWriter 过滤 go-zero 自动追加且与业务 caller 重复的 log_caller。
+type callerDedupWriter struct {
+	inner logx.Writer
+}
+
+// wrapCurrentLogWriter 为当前 logx writer 增加 caller 去重能力。
+func wrapCurrentLogWriter() {
+	current := logx.Reset()
+	if current == nil {
+		return
+	}
+	logx.SetWriter(wrapLogWriter(current))
+}
+
+// wrapLogWriter 包装日志 writer，避免重复包装。
+func wrapLogWriter(w logx.Writer) logx.Writer {
+	if w == nil {
+		return nil
+	}
+	if _, ok := w.(*callerDedupWriter); ok {
+		return w
+	}
+	return &callerDedupWriter{inner: w}
+}
+
+// Alert 写入告警日志。
+func (w *callerDedupWriter) Alert(v any) {
+	w.inner.Alert(v)
+}
+
+// Close 关闭底层日志 writer。
+func (w *callerDedupWriter) Close() error {
+	return w.inner.Close()
+}
+
+// Debug 写入调试日志。
+func (w *callerDedupWriter) Debug(v any, fields ...logx.LogField) {
+	w.inner.Debug(v, dedupeLogCallerFields(fields)...)
+}
+
+// Error 写入错误日志。
+func (w *callerDedupWriter) Error(v any, fields ...logx.LogField) {
+	w.inner.Error(v, dedupeLogCallerFields(fields)...)
+}
+
+// Info 写入信息日志。
+func (w *callerDedupWriter) Info(v any, fields ...logx.LogField) {
+	w.inner.Info(v, dedupeLogCallerFields(fields)...)
+}
+
+// Severe 写入严重错误日志。
+func (w *callerDedupWriter) Severe(v any) {
+	w.inner.Severe(v)
+}
+
+// Slow 写入慢日志。
+func (w *callerDedupWriter) Slow(v any, fields ...logx.LogField) {
+	w.inner.Slow(v, dedupeLogCallerFields(fields)...)
+}
+
+// Stack 写入堆栈日志。
+func (w *callerDedupWriter) Stack(v any) {
+	w.inner.Stack(v)
+}
+
+// Stat 写入统计日志。
+func (w *callerDedupWriter) Stat(v any, fields ...logx.LogField) {
+	w.inner.Stat(v, dedupeLogCallerFields(fields)...)
+}
+
+// dedupeLogCallerFields 在 caller 与 log_caller 相同时删除 log_caller。
+func dedupeLogCallerFields(fields []logx.LogField) []logx.LogField {
+	caller := logFieldString(fields, fieldCaller)
+	logCaller := logFieldString(fields, fieldLogCaller)
+	if caller == "" || logCaller == "" || caller != logCaller {
+		return fields
+	}
+	deduped := make([]logx.LogField, 0, len(fields)-1)
+	removed := false
+	for _, field := range fields {
+		if !removed && field.Key == fieldLogCaller && strings.TrimSpace(fmt.Sprint(field.Value)) == logCaller {
+			removed = true
+			continue
+		}
+		deduped = append(deduped, field)
+	}
+	return deduped
+}
+
+// logFieldString 读取日志字段的字符串值。
+func logFieldString(fields []logx.LogField, key string) string {
+	for _, field := range fields {
+		if field.Key == key {
+			return strings.TrimSpace(fmt.Sprint(field.Value))
+		}
+	}
+	return ""
 }
 
 // goUtilsLogger 把 github.com/Is999/go-utils 的结构化日志接口适配到 go-zero logx。
@@ -458,7 +590,8 @@ func Errorw(ctx context.Context, msg string, err error, fields ...logx.LogField)
 func errorw(ctx context.Context, skip int, msg string, err error, fields ...logx.LogField) {
 	fields = appendLogFields(fields, ErrorFields(err)...)
 	fields = appendErrorCallerFields(fields, err, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, normalizeCallerSkip(skip)).Errorw(msg, fields...)
+	msg, fields = splitLogFields(msg, appendContextFields(ctx, fields))
+	LoggerWithCallerSkip(normalizeCallerSkip(skip)).Errorw(msg, fields...)
 }
 
 // ErrorTextw 统一输出只有错误文本的错误日志，并自动补齐 error 与 error_chain 字段。
@@ -470,7 +603,8 @@ func ErrorTextw(ctx context.Context, msg string, errorText string, fields ...log
 func errorTextw(ctx context.Context, skip int, msg string, errorText string, fields ...logx.LogField) {
 	fields = appendLogFields(fields, ErrorTextFields(errorText)...)
 	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, normalizeCallerSkip(skip)).Errorw(msg, fields...)
+	msg, fields = splitLogFields(msg, appendContextFields(ctx, fields))
+	LoggerWithCallerSkip(normalizeCallerSkip(skip)).Errorw(msg, fields...)
 }
 
 // ErrorwSkip 统一输出带 caller skip 的错误日志，适用于 GORM、适配器等封装层。
@@ -496,7 +630,8 @@ func InfowSkip(ctx context.Context, skip int, msg string, fields ...logx.LogFiel
 // infow 写入信息日志，并统一补充业务 caller 字段。
 func infow(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
 	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, normalizeCallerSkip(skip)).Infow(msg, fields...)
+	msg, fields = splitLogFields(msg, appendContextFields(ctx, fields))
+	LoggerWithCallerSkip(normalizeCallerSkip(skip)).Infow(msg, fields...)
 }
 
 // Debugw 统一输出调试日志，并自动绑定上下文中的 trace/task/workflow 字段。
@@ -512,7 +647,8 @@ func DebugwSkip(ctx context.Context, skip int, msg string, fields ...logx.LogFie
 // debugw 写入调试日志，并统一补充业务 caller 字段。
 func debugw(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
 	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, normalizeCallerSkip(skip)).Debugw(msg, fields...)
+	msg, fields = splitLogFields(msg, appendContextFields(ctx, fields))
+	LoggerWithCallerSkip(normalizeCallerSkip(skip)).Debugw(msg, fields...)
 }
 
 // Sloww 统一输出慢操作日志，并自动绑定上下文中的 trace/task/workflow 字段。
@@ -528,7 +664,104 @@ func SlowwSkip(ctx context.Context, skip int, msg string, fields ...logx.LogFiel
 // sloww 写入慢操作日志，并统一补充业务 caller 字段。
 func sloww(ctx context.Context, skip int, msg string, fields ...logx.LogField) {
 	fields = appendCallerField(fields, callerLocation(runtimeCallerSkip(skip)))
-	loggerFor(ctx, normalizeCallerSkip(skip)).Sloww(msg, fields...)
+	msg, fields = splitLogFields(msg, appendContextFields(ctx, fields))
+	LoggerWithCallerSkip(normalizeCallerSkip(skip)).Sloww(msg, fields...)
+}
+
+// appendContextFields 先补上下文字段，再追加调用点字段，保证调用点的事件结果优先。
+func appendContextFields(ctx context.Context, fields []logx.LogField) []logx.LogField {
+	return appendLogFields(FieldsFromContext(ctx), fields...)
+}
+
+// splitLogFields 将非公共字段折叠进 content，减少日志平台动态字段数量。
+func splitLogFields(msg string, fields []logx.LogField) (string, []logx.LogField) {
+	if len(fields) == 0 {
+		return msg, nil
+	}
+	publicFields := make([]logx.LogField, 0, len(fields))
+	details := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field.Key = strings.TrimSpace(field.Key)
+		if field.Key == "" {
+			field.Key = "field"
+		}
+		if isPublicLogField(field.Key) {
+			publicFields = append(publicFields, field)
+			continue
+		}
+		details = append(details, formatLogDetail(field))
+	}
+	if len(details) == 0 {
+		return msg, publicFields
+	}
+	msg = strings.TrimSpace(msg)
+	detailText := strings.Join(details, " ")
+	if msg == "" {
+		return detailText, publicFields
+	}
+	return msg + " | " + detailText, publicFields
+}
+
+// publicLogFields 过滤出允许写入顶层索引的公共字段，供直接绑定 logx context 的场景复用。
+func publicLogFields(fields []logx.LogField) []logx.LogField {
+	if len(fields) == 0 {
+		return nil
+	}
+	publicFields := make([]logx.LogField, 0, len(fields))
+	for _, field := range fields {
+		field.Key = strings.TrimSpace(field.Key)
+		if field.Key == "" || !isPublicLogField(field.Key) {
+			continue
+		}
+		publicFields = append(publicFields, field)
+	}
+	return publicFields
+}
+
+// isPublicLogField 判断字段是否属于公共检索字段。
+func isPublicLogField(key string) bool {
+	_, ok := publicLogFieldNames[key]
+	return ok
+}
+
+// formatLogDetail 把单个非公共字段格式化成稳定的 key=value 文本。
+func formatLogDetail(field logx.LogField) string {
+	return field.Key + "=" + formatLogValue(field.Value)
+}
+
+// formatLogValue 将字段值转换成单行文本，复杂值优先使用 JSON 保真。
+func formatLogValue(value any) string {
+	switch val := value.(type) {
+	case nil:
+		return "null"
+	case string:
+		return formatLogString(val)
+	case error:
+		return formatLogString(val.Error())
+	case fmt.Stringer:
+		return formatLogString(val.String())
+	default:
+		raw, err := json.Marshal(val)
+		if err == nil {
+			return string(raw)
+		}
+		return formatLogString(fmt.Sprint(val))
+	}
+}
+
+// formatLogString 将字符串压成单行，必要时加 JSON 引号避免空格和等号歧义。
+func formatLogString(value string) string {
+	value = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(value))
+	if value == "" {
+		return `""`
+	}
+	if strings.ContainsAny(value, " =\"'{}[],:|") {
+		raw, err := json.Marshal(value)
+		if err == nil {
+			return string(raw)
+		}
+	}
+	return value
 }
 
 // appendLogFields 统一复制并追加日志字段，避免调用方直接复用底层切片导致字段串写。
@@ -692,17 +925,9 @@ func normalizeCallerSkip(skip int) int {
 	return loggerxCallerSkip + positiveSkip(skip)
 }
 
-// loggerFor 返回带上下文字段和 caller skip 的 logx logger。
-func loggerFor(ctx context.Context, skip int) logx.Logger {
-	if ctx == nil {
-		return LoggerWithCallerSkip(skip)
-	}
-	return logx.WithContext(BindContext(ctx)).WithCallerSkip(positiveSkip(skip))
-}
-
 // BindContext 将当前请求字段绑定进 logx context，后续 logx.WithContext(ctx) 会自动带上这些字段。
 func BindContext(ctx context.Context) context.Context {
-	fields := FieldsFromContext(ctx)
+	fields := publicLogFields(FieldsFromContext(ctx))
 	if len(fields) == 0 {
 		return ctx
 	}

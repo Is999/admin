@@ -21,7 +21,7 @@ import (
 func TestInfowCallerUsesBusinessCallSite(t *testing.T) {
 	var buffer bytes.Buffer
 	previousWriter := logx.Reset()
-	logx.SetWriter(logx.NewWriter(&buffer))
+	logx.SetWriter(wrapLogWriter(logx.NewWriter(&buffer)))
 	logx.SetLevel(logx.InfoLevel)
 	t.Cleanup(func() {
 		logx.SetWriter(previousWriter)
@@ -36,6 +36,8 @@ func TestInfowCallerUsesBusinessCallSite(t *testing.T) {
 	if strings.Contains(output, "loggerx/logger.go:") {
 		t.Fatalf("caller should not point to loggerx wrapper, got %s", output)
 	}
+	entry := decodeLogEntry(t, output)
+	assertEntryMissing(t, entry, fieldLogCaller)
 }
 
 // logInfoCallerProbe 从独立函数触发日志，模拟业务代码调用 loggerx.Infow 的栈层。
@@ -47,7 +49,7 @@ func logInfoCallerProbe(ctx context.Context) {
 func TestInfowSkipUsesOuterCallSite(t *testing.T) {
 	var buffer bytes.Buffer
 	previousWriter := logx.Reset()
-	logx.SetWriter(logx.NewWriter(&buffer))
+	logx.SetWriter(wrapLogWriter(logx.NewWriter(&buffer)))
 	logx.SetLevel(logx.InfoLevel)
 	t.Cleanup(func() {
 		logx.SetWriter(previousWriter)
@@ -78,7 +80,7 @@ func logInfoCallerSkipInnerProbe(ctx context.Context) {
 func TestGoUtilsLoggerCallerUsesSourceCallSite(t *testing.T) {
 	var buffer bytes.Buffer
 	previousWriter := logx.Reset()
-	logx.SetWriter(logx.NewWriter(&buffer))
+	logx.SetWriter(wrapLogWriter(logx.NewWriter(&buffer)))
 	logx.SetLevel(logx.InfoLevel)
 	t.Cleanup(func() {
 		logx.SetWriter(previousWriter)
@@ -101,6 +103,142 @@ func logGoUtilsInfoCallerProbe() string {
 	expected := shortCaller(file, line+2)
 	newGoUtilsLogger(nil).Info("go-utils caller probe")
 	return expected
+}
+
+// TestInfowMovesDetailFieldsToContent 验证非公共字段进入 content，不再扩散成日志平台顶层字段。
+func TestInfowMovesDetailFieldsToContent(t *testing.T) {
+	var buffer bytes.Buffer
+	previousWriter := logx.Reset()
+	logx.SetWriter(wrapLogWriter(logx.NewWriter(&buffer)))
+	logx.SetLevel(logx.InfoLevel)
+	t.Cleanup(func() {
+		logx.SetWriter(previousWriter)
+		logx.SetLevel(logx.InfoLevel)
+	})
+
+	ctx := requestctx.WithMeta(context.Background(), &requestctx.Meta{
+		TraceID:    "trace-1",
+		Route:      "user.detail",
+		Method:     "GET",
+		Path:       "/api/users/7",
+		ClientIP:   "127.0.0.1",
+		UserID:     7,
+		UserName:   "tester",
+		BizMessage: "成功",
+	})
+	Infow(ctx, "字段收口",
+		logx.Field(fieldHTTPStatus, 200),
+		logx.Field("detail", "select * from demo"),
+		logx.Field("bytes", 128),
+	)
+
+	entry := decodeLogEntry(t, buffer.String())
+	assertEntryValue(t, entry, fieldTraceID, "trace-1")
+	assertEntryValue(t, entry, fieldRoute, "user.detail")
+	assertEntryValue(t, entry, fieldHTTPMethod, "GET")
+	assertEntryValue(t, entry, fieldIP, "127.0.0.1")
+	assertEntryValue(t, entry, fieldHTTPStatus, "200")
+	assertEntryValue(t, entry, fieldUserID, "7")
+	assertEntryMissing(t, entry, "detail")
+	assertEntryMissing(t, entry, "bytes")
+	assertEntryMissing(t, entry, fieldPath)
+	assertEntryMissing(t, entry, fieldUserName)
+	assertEntryMissing(t, entry, fieldBizMessage)
+	assertEntryMissing(t, entry, fieldLogCaller)
+	content := fmt.Sprint(entry["content"])
+	for _, want := range []string{`detail="select * from demo"`, "bytes=128", "path=/api/users/7", "user_name=tester", "biz_message=成功"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content should contain %q, got %s", want, content)
+		}
+	}
+}
+
+// TestBindContextKeepsOnlyPublicFields 验证原始 logx context 绑定不会重新扩散非公共字段。
+func TestBindContextKeepsOnlyPublicFields(t *testing.T) {
+	var buffer bytes.Buffer
+	previousWriter := logx.Reset()
+	logx.SetWriter(wrapLogWriter(logx.NewWriter(&buffer)))
+	logx.SetLevel(logx.InfoLevel)
+	t.Cleanup(func() {
+		logx.SetWriter(previousWriter)
+		logx.SetLevel(logx.InfoLevel)
+	})
+
+	ctx := requestctx.WithMeta(context.Background(), &requestctx.Meta{
+		TraceID:    "trace-1",
+		Route:      "user.detail",
+		Method:     "GET",
+		Path:       "/api/users/7",
+		ClientIP:   "127.0.0.1",
+		UserID:     7,
+		UserName:   "tester",
+		BizMessage: "成功",
+		TaskName:   "refresh-cache",
+	})
+	logx.WithContext(BindContext(ctx)).Info("原始 logx 绑定字段")
+
+	entry := decodeLogEntry(t, buffer.String())
+	assertEntryValue(t, entry, fieldTraceID, "trace-1")
+	assertEntryValue(t, entry, fieldRoute, "user.detail")
+	assertEntryValue(t, entry, fieldHTTPMethod, "GET")
+	assertEntryValue(t, entry, fieldIP, "127.0.0.1")
+	assertEntryValue(t, entry, fieldUserID, "7")
+	assertEntryMissing(t, entry, fieldPath)
+	assertEntryMissing(t, entry, fieldUserName)
+	assertEntryMissing(t, entry, fieldBizMessage)
+	assertEntryMissing(t, entry, fieldTaskName)
+}
+
+// TestExplicitFieldsOverrideContextFields 验证调用点字段优先于上下文默认值。
+func TestExplicitFieldsOverrideContextFields(t *testing.T) {
+	var buffer bytes.Buffer
+	previousWriter := logx.Reset()
+	logx.SetWriter(wrapLogWriter(logx.NewWriter(&buffer)))
+	logx.SetLevel(logx.InfoLevel)
+	t.Cleanup(func() {
+		logx.SetWriter(previousWriter)
+		logx.SetLevel(logx.InfoLevel)
+	})
+
+	ctx := requestctx.WithMeta(context.Background(), &requestctx.Meta{
+		TraceID:    "trace-1",
+		HTTPStatus: 200,
+		BizCode:    1,
+	})
+	Errorw(ctx, "显式字段覆盖", stderrors.New("invalid sign"),
+		logx.Field(fieldHTTPStatus, 401),
+		logx.Field(fieldBizCode, 20001),
+	)
+
+	entry := decodeLogEntry(t, buffer.String())
+	assertEntryValue(t, entry, fieldHTTPStatus, "401")
+	assertEntryValue(t, entry, fieldBizCode, "20001")
+	assertEntryValue(t, entry, fieldError, "invalid sign")
+	assertEntryContains(t, entry, fieldErrorChain, "invalid sign")
+	assertEntryMissing(t, entry, fieldLogCaller)
+}
+
+// TestDedupeLogCallerFieldsKeepsDifferentCaller 验证错误源和打印点不同的时候保留 log_caller。
+func TestDedupeLogCallerFieldsKeepsDifferentCaller(t *testing.T) {
+	fields := dedupeLogCallerFields([]logx.LogField{
+		logx.Field(fieldCaller, "logic/user.go:10"),
+		logx.Field(fieldLogCaller, "middleware/recover.go:20"),
+	})
+
+	got := fieldsToMap(fields)
+	assertFieldValue(t, got, fieldCaller, "logic/user.go:10")
+	assertFieldValue(t, got, fieldLogCaller, "middleware/recover.go:20")
+}
+
+// TestCallerDedupWriterRemovesSameLogCaller 验证 Setup 安装的 writer 包装器会去掉重复 log_caller。
+func TestCallerDedupWriterRemovesSameLogCaller(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := wrapLogWriter(logx.NewWriter(&buffer))
+	writer.Info("writer caller 去重", logx.Field(fieldCaller, "logic/user.go:10"), logx.Field(fieldLogCaller, "logic/user.go:10"))
+
+	entry := decodeLogEntry(t, buffer.String())
+	assertEntryValue(t, entry, fieldCaller, "logic/user.go:10")
+	assertEntryMissing(t, entry, fieldLogCaller)
 }
 
 // TestErrorFieldsIncludeTraceAndCaller 验证错误字段包含可检索的链路文本和错误源位置。
@@ -287,5 +425,54 @@ func assertFieldValue(t *testing.T, fields map[string]string, key, want string) 
 	}
 	if got != want {
 		t.Fatalf("expected key %q to be %q, got %q", key, want, got)
+	}
+}
+
+// decodeLogEntry 解析 go-zero JSON 日志首行。
+func decodeLogEntry(t *testing.T, output string) map[string]any {
+	t.Helper()
+	line := strings.TrimSpace(output)
+	if idx := strings.IndexByte(line, '\n'); idx >= 0 {
+		line = line[:idx]
+	}
+	if line == "" {
+		t.Fatal("expected log output")
+	}
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(line), &entry); err != nil {
+		t.Fatalf("decode log entry failed: %v, output=%s", err, output)
+	}
+	return entry
+}
+
+// assertEntryValue 断言 JSON 日志字段存在且值匹配。
+func assertEntryValue(t *testing.T, entry map[string]any, key, want string) {
+	t.Helper()
+	got, ok := entry[key]
+	if !ok {
+		t.Fatalf("expected entry key %q to exist", key)
+	}
+	if fmt.Sprint(got) != want {
+		t.Fatalf("expected entry key %q to be %q, got %q", key, want, fmt.Sprint(got))
+	}
+}
+
+// assertEntryContains 断言 JSON 日志字段存在且包含指定文本。
+func assertEntryContains(t *testing.T, entry map[string]any, key, want string) {
+	t.Helper()
+	got, ok := entry[key]
+	if !ok {
+		t.Fatalf("expected entry key %q to exist", key)
+	}
+	if !strings.Contains(fmt.Sprint(got), want) {
+		t.Fatalf("expected entry key %q to contain %q, got %q", key, want, fmt.Sprint(got))
+	}
+}
+
+// assertEntryMissing 断言 JSON 日志没有输出指定顶层字段。
+func assertEntryMissing(t *testing.T, entry map[string]any, key string) {
+	t.Helper()
+	if _, ok := entry[key]; ok {
+		t.Fatalf("expected entry key %q to be folded into content, entry=%v", key, entry)
 	}
 }

@@ -119,13 +119,13 @@ func (m *SignatureMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) ht
 
 // logRequestHeaders 在签名失败时输出完整请求头和错误链路，便于核对真实入站头与浏览器发出的差异。
 func (m *SignatureMiddleware) logRequestHeaders(r *http.Request, appID string, signatureType string, err error) {
-	fields := append(loggerx.FieldsFromContext(r.Context()),
+	fields := []logx.LogField{
 		logx.Field("app_id", strings.TrimSpace(appID)),
 		logx.Field("signature_type", strings.ToUpper(strings.TrimSpace(signatureType))),
 		logx.Field("request_headers", cloneRequestHeaders(r.Header)),
 		logx.Field("trace_id_header", r.Header.Values(requestctx.HeaderTraceID)),
 		logx.Field("timestamp_header", r.Header.Values(requestctx.HeaderTimestamp)),
-	)
+	}
 	loggerx.Errorw(r.Context(), "签名 请求头", err, fields...)
 }
 
@@ -328,10 +328,10 @@ func (m *SignatureMiddleware) fail(w http.ResponseWriter, r *http.Request, httpS
 	if signatureType == "" {
 		signatureType = security.SignatureTypeRSA
 	}
-	fields := append(loggerx.FieldsFromContext(r.Context()),
+	fields := []logx.LogField{
 		logx.Field("http_status", httpStatus),
 		logx.Field("biz_code", code),
-	)
+	}
 	loggerx.Errorw(r.Context(), "签名 处理失败", err, fields...)
 	m.logRequestHeaders(r, appID, signatureType, err)
 	helper.NewJSONResp(r.Context(), w).

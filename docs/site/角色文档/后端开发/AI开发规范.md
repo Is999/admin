@@ -98,8 +98,8 @@ if err != nil {
 - 日志统一使用 `loggerx.Infow`、`loggerx.Debugw`、`loggerx.Errorw`。
 - 正常流程只打印关键节点，不刷屏。
 - `error` 级日志只在最外层打印一次；底层通过错误返回和错误包装保留上下文。
-- 任务系统、收集器和批处理日志必须包含链路字段，例如 `workflow_id`、`mode`、`node`、`shard`、`task_id`、`event_id`。
-- 日志字段类型必须稳定；时间窗口和间隔字段使用带单位的字段名，例如 `window_start_unix`、`interval_seconds`。
+- 顶层结构化字段只保留公共检索维度，例如 `trace_id`、`route`、`user_id`、`http_status`、`biz_code`、`error`、`error_chain`、`task_id`、`workflow_id`、`mode`、`node`、`shard`；其它细节交给 `loggerx` 写入 `content`。
+- 日志字段类型必须稳定；时间窗口和间隔细节使用带单位的字段名，例如 `window_start_unix`、`interval_seconds`。
 
 ```go
 loggerx.Infow(ctx, "工作流节点开始处理",

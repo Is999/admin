@@ -1277,10 +1277,10 @@ func (m *Manager) handleTaskError(ctx context.Context, task *asynq.Task, err err
 	maxRetry, _ := asynq.GetMaxRetry(ctx)
 	taskID, _ := asynq.GetTaskID(ctx)
 	meta := workflowTaskMetaFromTask(task)
-	fields := append(loggerx.FieldsFromContext(ctx),
+	fields := []logx.LogField{
 		logx.Field("retried", retried),
 		logx.Field("max_retry", maxRetry),
-	)
+	}
 	fields = append(fields, taskLogFields(task)...)
 	fields = append(fields, taskStatsLogFields(m.readTaskRuntime(ctx, taskID).ExecutionTrace)...)
 	loggerx.Errorw(ctx, "任务处理失败", err, fields...)

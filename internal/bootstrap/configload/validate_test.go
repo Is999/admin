@@ -481,6 +481,15 @@ func TestValidateBootstrapConfigAcceptsUserRouteShardCount(t *testing.T) {
 	}
 }
 
+// TestValidateBootstrapConfigRejectsInvalidUserTagShards 验证标签结果物理分片和固定桶配置不会静默降级。
+func TestValidateBootstrapConfigRejectsInvalidUserTagShards(t *testing.T) {
+	cfg := validAdminBootstrapConfig()
+	cfg.Workflows.UserTag.ResultShardTotal = 3
+	if err := Validate(cfg); err == nil {
+		t.Fatal("期望非法 result_shard_total 返回错误")
+	}
+}
+
 // TestValidateBootstrapConfigRejectsInvalidUserExportSplitRows 确保用户导出拆分阈值不能为负。
 func TestValidateBootstrapConfigRejectsInvalidUserExportSplitRows(t *testing.T) {
 	cfg := validAdminBootstrapConfig()

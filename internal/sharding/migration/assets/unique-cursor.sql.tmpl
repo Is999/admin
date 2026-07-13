@@ -1,0 +1,12 @@
+-- 用途：确认分页游标由单列主键或唯一索引约束，避免批量翻页跳行。
+SELECT COUNT(*)
+FROM (
+  SELECT index_name
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = ?
+    AND non_unique = 0
+  GROUP BY index_name
+  HAVING COUNT(*) = 1
+    AND MAX(column_name) = ?
+) AS unique_cursor_indexes;

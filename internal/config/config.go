@@ -285,6 +285,7 @@ type UserTagConfig struct {
 	DefaultShardTotal  int  `json:"default_shard_total,optional"`  // 默认工作流任务分片数，小量数据建议从 1 开始
 	DefaultBatchSize   int  `json:"default_batch_size,optional"`   // 默认游标扫描批次大小
 	DefaultWorkerCount int  `json:"default_worker_count,optional"` // 节点内部 worker 默认值
+	ResultShardTotal   int  `json:"result_shard_total,optional"`   // 标签结果物理表数量，仅支持 1/2/4/.../1024
 	DiffBatchSize      int  `json:"diff_batch_size,optional"`      // 标签差异解析批次大小
 	EventBatchSize     int  `json:"event_batch_size,optional"`     // 事件 outbox 派发批次大小
 }

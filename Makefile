@@ -4,7 +4,7 @@ VERSION ?= dev
 PACKAGE := dist/$(APP)-$(VERSION).tar.gz
 LDFLAGS ?= -s -w -X main.buildVersion=$(VERSION)
 DOCKER_COMPOSE ?= docker compose
-INTEGRATION_MYSQL_DSN ?= root:password@tcp(127.0.0.1:3310)/admin?charset=utf8mb4&parseTime=true&loc=Local
+INTEGRATION_MYSQL_DSN ?= root:password@tcp(127.0.0.1:3310)/admin?charset=utf8mb4&parseTime=true&loc=Local&readTimeout=5s&writeTimeout=5s
 INTEGRATION_REDIS_ADDRS ?= 127.0.0.1:6390
 INTEGRATION_REDIS_CLUSTER_ADDRS ?= 127.0.0.1:6391,127.0.0.1:6392,127.0.0.1:6393
 INTEGRATION_REDIS_CLUSTER_ADDR_MAP ?= redis-cluster-1:7001=127.0.0.1:6391,redis-cluster-2:7002=127.0.0.1:6392,redis-cluster-3:7003=127.0.0.1:6393
@@ -92,6 +92,7 @@ integration-test: integration-env-up
 	INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' go test -count=1 -tags=integration ./internal/audit
 	INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' go test -count=1 -tags=integration ./internal/infra/collectorx
 	INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' go test -count=1 -tags=integration ./internal/jobs/archive
+	INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' go test -count=1 ./internal/sharding/migration
 
 MIGRATE_CONFIG ?= ./etc/config.yaml
 

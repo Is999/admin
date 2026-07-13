@@ -86,13 +86,16 @@ cmd/admin
 
 ## 目录结构
 
+本分支由 Admin/API 根据固定逻辑桶和当前物理表数量计算真实表名；`cmd/tableshard` 与 `internal/sharding` 是应用内扩容主链路，Proxy 相关目录仅保留为方案对照和历史迁移资产。
+
 ```text
 admin
 ├── cmd                       # 二进制入口
 │   ├── admin                 # HTTP / Worker / Scheduler 组合启动入口
 │   ├── migrate               # 数据库迁移命令入口
 │   ├── shardbackfill         # 固定 shard_no 分批回填、断点续跑和全量校验工具
-│   └── shardingctl           # 生成可审查的 ShardingSphere DistSQL 规则
+│   ├── shardingctl           # 保留的 ShardingSphere DistSQL 规则生成工具
+│   └── tableshard            # 应用内物理表规划、在线复制、校验和清理入口
 ├── common                    # 跨包公共契约：业务码、常量、i18n、Redis Key、嵌入资产、运行态配置
 ├── docs                      # 文档站、接口文档、运维手册、监控资产
 │   ├── site
@@ -105,10 +108,10 @@ admin
 │   ├── prometheus            # Prometheus 告警规则
 │   ├── grafana               # Grafana 面板
 │   └── handler.go            # 文档站资源读取入口
-├── deploy                    # 发布、集成环境和候选分表部署资产
+├── deploy                    # 发布、集成环境和保留的 Proxy 方案资产
 │   ├── docker                # Admin 容器镜像
 │   ├── integration           # 本地集成依赖编排
-│   ├── shardingsphere        # Proxy 候选方案镜像、配置模板、DistSQL 和迁移 SQL
+│   ├── shardingsphere        # 保留的 Proxy 镜像、配置模板、DistSQL 和迁移 SQL
 │   └── systemd               # 控制面和 Worker 服务单元
 ├── etc                       # 配置模板和运行期配置拆分
 │   └── config.d              # runtime.yaml 等运行期大列表配置
@@ -123,11 +126,11 @@ admin
 │   ├── jobs                  # 归档、导出、用户标签等后台任务实现
 │   ├── logic                 # 用例编排、规则校验、事务边界、缓存和运行配置
 │   ├── middleware            # 鉴权、签名、加解密、内网限制、访问日志、Recover
-│   ├── model                 # GORM Model、表名、数据访问和运行态模型
+│   ├── model                 # GORM Model、身份目录、物理表定位和数据访问
 │   ├── requestctx            # 链路字段、调用方、任务和 trace 元数据
 │   ├── routealias            # 路由别名常量
 │   ├── security              # 路由字段级签名、加密、大小限制和测试向量
-│   ├── sharding              # 固定桶物理表数量校验和稳定表名映射
+│   ├── sharding              # 固定桶物理表计划、扩容区间和在线迁移实现
 │   ├── svc                   # ServiceContext 与基础设施依赖聚合
 │   ├── task                  # Asynq 队列、工作流、任务插件运行时和进度统计
 │   └── types                 # API 请求、响应、列表项和参数校验

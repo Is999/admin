@@ -1,0 +1,6 @@
+-- 用途：确认源物理表使用支持事务和行锁的 InnoDB。
+SELECT engine
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_name = ?
+  AND table_type = 'BASE TABLE';

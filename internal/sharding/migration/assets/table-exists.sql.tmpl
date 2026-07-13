@@ -1,0 +1,6 @@
+-- 用途：只读确认当前数据库中的物理表是否存在。
+SELECT COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+  AND table_name = ?
+  AND table_type = 'BASE TABLE';

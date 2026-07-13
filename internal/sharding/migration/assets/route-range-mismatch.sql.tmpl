@@ -1,0 +1,7 @@
+-- 用途：通过固定桶前导索引检查物理表是否混入计划范围外数据。
+SELECT EXISTS(
+  SELECT 1
+  FROM {{TABLE}}
+  WHERE {{SHARD}} < ? OR {{SHARD}} > ?
+  LIMIT 1
+);

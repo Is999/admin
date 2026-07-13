@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS `user_tag_0` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',
   `uid` bigint unsigned NOT NULL COMMENT '用户 ID',
-  `shard_no` int NOT NULL DEFAULT 0 COMMENT 'uid取模1024分片',
+  `shard_no` int NOT NULL DEFAULT 0 COMMENT 'CRC32(uid字符串)%1024固定逻辑桶',
   `tag_type` int NOT NULL COMMENT '标签类型',
   `tag_source` tinyint NOT NULL DEFAULT 0 COMMENT '标签来源：0系统 1人工',
   `tag_data` int NOT NULL DEFAULT 0 COMMENT '标签附加数据',
@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS `user_tag_0` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_uid_tag_type` (`uid`, `tag_type`),
   KEY `idx_shard_uid` (`shard_no`, `uid`),
+  KEY `idx_shard_id` (`shard_no`, `id`),
   KEY `idx_tag_type_uid` (`tag_type`, `uid`),
   KEY `idx_tag_type_shard_uid` (`tag_type`, `shard_no`, `uid`),
   KEY `idx_updated_at` (`updated_at`)

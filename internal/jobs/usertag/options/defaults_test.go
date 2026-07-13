@@ -17,12 +17,13 @@ func TestNewDefaultsStartsFromSinglePhysicalResultShard(t *testing.T) {
 	}
 }
 
-// TestNewDefaultsKeepsLogicalResultTable 验证工作分片数不会改变 Proxy 逻辑结果表。
-func TestNewDefaultsKeepsLogicalResultTable(t *testing.T) {
+// TestNewDefaultsUsesIndependentResultShardConfig 验证标签结果表可独立配置物理分片数。
+func TestNewDefaultsUsesIndependentResultShardConfig(t *testing.T) {
 	got := NewDefaults(config.UserTagConfig{
 		DefaultShardTotal: 8,
+		ResultShardTotal:  128,
 	})
-	if got.ShardTotal != 8 || got.ResultShardTotal != 1 {
+	if got.ShardTotal != 8 || got.ResultShardTotal != 128 {
 		t.Fatalf("unexpected defaults: %+v", got)
 	}
 }

@@ -1,0 +1,12 @@
+-- 用途：按单个固定桶检查 UID 合法性和固定桶公式，避免一次扫描整张物理表。
+SELECT EXISTS(
+  SELECT 1
+  FROM {{TABLE}}
+  WHERE {{SHARD}} = ?
+    AND (
+      {{UID}} <= 0
+      OR {{UID}} > 9223372036854775807
+      OR {{SHARD}} <> MOD(CRC32(CAST({{UID}} AS CHAR)), 1024)
+    )
+  LIMIT 1
+);

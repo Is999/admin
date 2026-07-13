@@ -1,0 +1,8 @@
+-- 用途：确认 UID、固定桶或分页游标是非空整数类型。
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = ?
+  AND column_name = ?
+  AND is_nullable = 'NO'
+  AND data_type IN ('tinyint', 'smallint', 'mediumint', 'int', 'bigint');

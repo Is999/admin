@@ -149,6 +149,11 @@ func hotReloadRestartSpecs() []hotReloadRestartSpec {
 		}, preserveBefore(func(effective *config.Config, before config.Config) {
 			effective.Workflows.UserTag.Enabled = before.Workflows.UserTag.Enabled
 		})),
+		valueRestartSpec("workflows.user_tag.result_shard_total", func(cfg config.Config) any {
+			return cfg.Workflows.UserTag.ResultShardTotal
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.Workflows.UserTag.ResultShardTotal = before.Workflows.UserTag.ResultShardTotal
+		})),
 	}
 }
 

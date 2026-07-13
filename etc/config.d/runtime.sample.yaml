@@ -50,6 +50,8 @@ workflows:
     default_batch_size: 2000
     # 节点内部 worker 默认值。
     default_worker_count: 4
+    # 用户标签结果物理表数量，独立于 user，仅支持 1/2/4/.../1024。
+    result_shard_total: 1
     # 标签差异解析批次大小。
     diff_batch_size: 10000
     # 事件 outbox 派发批次大小。

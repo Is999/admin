@@ -1,0 +1,6 @@
+-- 用途：只读确认源物理表包含迁移必需字段。
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = ?
+  AND column_name = ?;

@@ -5,7 +5,7 @@ import "admin/internal/config"
 const (
 	// defaultShardTotal 是用户标签工作流默认任务分片数。
 	defaultShardTotal = 1
-	// defaultResultShardTotal 是主线逻辑结果表的固定数量。
+	// defaultResultShardTotal 是标签结果表默认物理分片数。
 	defaultResultShardTotal = 1
 	// defaultBatchSize 是默认游标批次大小。
 	defaultBatchSize = 2000
@@ -20,7 +20,7 @@ const (
 // Defaults 定义 usertag 运行默认值。
 type Defaults struct {
 	ShardTotal       int  // 工作流默认分片数
-	ResultShardTotal int  // 逻辑结果表数量
+	ResultShardTotal int  // 标签结果物理分片数
 	BatchSize        int  // 游标扫描批次大小
 	WorkerCount      int  // 节点内部 worker 数
 	DiffBatchSize    int  // 标签差异处理批次大小
@@ -32,7 +32,7 @@ type Defaults struct {
 func NewDefaults(cfg config.UserTagConfig) Defaults {
 	return Defaults{
 		ShardTotal:       boundedPositiveOr(cfg.DefaultShardTotal, defaultShardTotal, MaxShardTotal),
-		ResultShardTotal: defaultResultShardTotal,
+		ResultShardTotal: positiveOr(cfg.ResultShardTotal, defaultResultShardTotal),
 		BatchSize:        boundedPositiveOr(cfg.DefaultBatchSize, defaultBatchSize, MaxBatchSize),
 		WorkerCount:      boundedPositiveOr(cfg.DefaultWorkerCount, defaultWorkerCount, MaxWorkerCount),
 		DiffBatchSize:    boundedPositiveOr(cfg.DiffBatchSize, defaultDiffBatchSize, MaxBatchSize),

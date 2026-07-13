@@ -96,6 +96,7 @@ func TestHotReloadRestartSpecsValid(t *testing.T) {
 		"cdc",
 		"observability",
 		"workflows.user_tag.enabled",
+		"workflows.user_tag.result_shard_total",
 	}
 	if len(specs) != len(wantReasons) {
 		t.Fatalf("热加载重启边界数量不符合预期: got=%d want=%d", len(specs), len(wantReasons))
@@ -188,6 +189,7 @@ func TestBuildReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 			UserTag: config.UserTagConfig{
 				Enabled:           false,
 				DefaultShardTotal: 8,
+				ResultShardTotal:  1,
 			},
 		},
 	}
@@ -233,6 +235,7 @@ func TestBuildReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 	}
 	after.Workflows.UserTag.Enabled = true
 	after.Workflows.UserTag.DefaultShardTotal = 16
+	after.Workflows.UserTag.ResultShardTotal = 2
 
 	effective := BuildReloadEffectiveConfig(before, after)
 	if effective.RestConf.Port != before.RestConf.Port || effective.RunMode != before.RunMode {
@@ -267,6 +270,9 @@ func TestBuildReloadEffectiveConfigPreservesRestartOnlyFields(t *testing.T) {
 	}
 	if effective.Workflows.UserTag.DefaultShardTotal != after.Workflows.UserTag.DefaultShardTotal {
 		t.Fatalf("期望用户标签运行参数刷新为新值，实际为 %d", effective.Workflows.UserTag.DefaultShardTotal)
+	}
+	if effective.Workflows.UserTag.ResultShardTotal != before.Workflows.UserTag.ResultShardTotal {
+		t.Fatalf("期望用户标签结果物理路由保持原值，实际为 %d", effective.Workflows.UserTag.ResultShardTotal)
 	}
 	if effective.AppKey != before.AppKey {
 		t.Fatalf("期望数据密钥保持原值，实际 app_key=%s", effective.AppKey)

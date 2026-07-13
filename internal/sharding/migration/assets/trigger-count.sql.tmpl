@@ -1,0 +1,5 @@
+-- 用途：拒绝 CREATE TABLE LIKE 不会复制的源表触发器，避免切流后行为漂移。
+SELECT COUNT(*)
+FROM information_schema.triggers
+WHERE trigger_schema = DATABASE()
+  AND event_object_table = ?;

@@ -6,6 +6,17 @@ import (
 	"admin/common/idgen"
 )
 
+// TestUserTagPhysicalTableName 验证用户标签独立按固定桶路由物理表。
+func TestUserTagPhysicalTableName(t *testing.T) {
+	table, err := UserTagPhysicalTableName(700, 4)
+	if err != nil {
+		t.Fatalf("UserTagPhysicalTableName() error = %v", err)
+	}
+	if table != "user_tag_b0512" {
+		t.Fatalf("UserTagPhysicalTableName() = %q, want user_tag_b0512", table)
+	}
+}
+
 // TestUserTagModelShardGuards 验证所有 UID 用户标签表只接受统一固定逻辑桶。
 func TestUserTagModelShardGuards(t *testing.T) {
 	uid := int64(1024)

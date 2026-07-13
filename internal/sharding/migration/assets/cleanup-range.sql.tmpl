@@ -1,0 +1,12 @@
+-- 用途：切流观察期结束后按唯一游标小批删除旧表已迁移固定桶。
+DELETE FROM {{SOURCE}}
+WHERE {{CURSOR}} IN (
+  SELECT {{CURSOR}}
+  FROM (
+    SELECT {{CURSOR}}
+    FROM {{SOURCE}}
+    WHERE {{SHARD}} BETWEEN ? AND ?
+    ORDER BY {{SHARD}}, {{CURSOR}}
+    LIMIT ?
+  ) AS cleanup_page
+);

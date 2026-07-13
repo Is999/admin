@@ -14,15 +14,22 @@ func TestShardPlanRoutesUID(t *testing.T) {
 	}
 }
 
-// TestResultTableUsesCurrentRoute 验证标签结果表由当前分表策略统一解析。
-func TestResultTableUsesCurrentRoute(t *testing.T) {
-	plan := NewShardPlanWithResult(8, 1024)
-	table, err := plan.ResultTable(12345)
+// TestResultTableUsesIndependentPhysicalCount 验证标签结果表不跟随 user 物理分片数。
+func TestResultTableUsesIndependentPhysicalCount(t *testing.T) {
+	plan := NewShardPlanWithResult(8, 4)
+	var uid int64
+	for candidate := int64(1); candidate < 100000; candidate++ {
+		if idgen.ShardNo(candidate) >= 768 {
+			uid = candidate
+			break
+		}
+	}
+	table, err := plan.ResultTable(uid)
 	if err != nil {
 		t.Fatalf("ResultTable() error = %v", err)
 	}
-	if table != "user_tag" {
-		t.Fatalf("ResultTable() = %q, want user_tag", table)
+	if table != "user_tag_b0768" {
+		t.Fatalf("ResultTable() = %q, want user_tag_b0768", table)
 	}
 }
 

@@ -1,0 +1,6 @@
+-- 用途：只读确认新物理表尚未承载数据，命中一行即停止。
+SELECT EXISTS(
+  SELECT 1
+  FROM {{TABLE}}
+  LIMIT 1
+);

@@ -36,6 +36,9 @@ func Validate(c config.Config) error {
 	if err := validateUserConfig(c.User); err != nil {
 		return errors.Tag(err)
 	}
+	if err := validateUserTagConfig(c.Workflows.UserTag); err != nil {
+		return errors.Tag(err)
+	}
 	if err := validateFileStorageConfig(c.FileStorage); err != nil {
 		return errors.Tag(err)
 	}
@@ -385,7 +388,7 @@ func ConfigureSnowflakeWorkerID(cfg config.SnowflakeConfig) error {
 	return idgen.ConfigureWorkerID(workerID)
 }
 
-// validateUserConfig 校验用户物理分片数和后台导出配置。
+// validateUserConfig 校验用户物理分片数和导出边界。
 func validateUserConfig(cfg config.UserConfig) error {
 	if cfg.RouteShardCount != 0 && !sharding.ValidCount(cfg.RouteShardCount) {
 		return errors.Errorf("user.route_shard_count 仅支持 1/2/4/8/16/32/64/128/256/512/1024")
@@ -395,6 +398,14 @@ func validateUserConfig(cfg config.UserConfig) error {
 	}
 	if cfg.ExportSplitRows > maxUserExportSplitRows {
 		return errors.Errorf("user.export_split_rows 不能大于 %d", maxUserExportSplitRows)
+	}
+	return nil
+}
+
+// validateUserTagConfig 校验用户标签独立物理分片配置。
+func validateUserTagConfig(cfg config.UserTagConfig) error {
+	if cfg.ResultShardTotal != 0 && !sharding.ValidCount(cfg.ResultShardTotal) {
+		return errors.Errorf("workflows.user_tag.result_shard_total 仅支持 1/2/4/8/16/32/64/128/256/512/1024")
 	}
 	return nil
 }

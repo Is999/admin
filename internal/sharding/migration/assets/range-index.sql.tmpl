@@ -1,0 +1,10 @@
+-- 用途：只读确认源表存在以固定桶和唯一游标开头的迁移索引。
+SELECT COUNT(*)
+FROM (
+  SELECT index_name
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = ?
+  GROUP BY index_name
+  HAVING SUBSTRING_INDEX(GROUP_CONCAT(column_name ORDER BY seq_in_index), ',', 2) = CONCAT(?, ',', ?)
+) AS matched_indexes;

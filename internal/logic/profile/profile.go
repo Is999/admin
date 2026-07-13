@@ -4,6 +4,7 @@ import (
 	corelogic "admin/internal/logic"
 	adminlogic "admin/internal/logic/admin"
 	cachelogic "admin/internal/logic/cache"
+	filelogic "admin/internal/logic/file"
 	rbaclogic "admin/internal/logic/rbac"
 	securitylogic "admin/internal/logic/security"
 	"net/http"
@@ -33,49 +34,6 @@ func NewProfileLogic(r *http.Request, svcCtx *svc.ServiceContext) *ProfileLogic 
 	}
 }
 
-// Login 前端 `/user/login` 登录接口，返回 token 与用户资料。
-func (l *ProfileLogic) Login(req *types.ProfileLoginReq) *types.BizResult {
-	return l.login(req, true)
-}
-
-// BuildSecretVerifyAccount 前端“绑定 MFA 前验证账号密码”的登录接口。
-func (l *ProfileLogic) BuildSecretVerifyAccount(req *types.ProfileLoginReq) *types.BizResult {
-	return l.login(req, false)
-}
-
-// login 承担登录与账号密码预校验的公共流程，可按场景决定是否强制校验图形验证码。
-func (l *ProfileLogic) login(req *types.ProfileLoginReq, requireCaptcha bool) *types.BizResult {
-	if req == nil {
-		return types.ParamErrorResult(errors.Errorf("登录请求不能为空"))
-	}
-	loginReq := &types.LoginReq{
-		Username:   req.Username,
-		Captcha:    req.Captcha,
-		Key:        req.Key,
-		Password:   req.Password,
-		SecureCode: req.SecureCode,
-		IP:         l.ClientIP(),
-	}
-	adminLogic := &adminlogic.AdminLogic{BaseLogic: l.BaseLogic}
-	if requireCaptcha {
-		captchaResp := adminLogic.VerifyLoginCaptcha(loginReq.Key, loginReq.Captcha)
-		if captchaResp.IsFailure() {
-			return captchaResp
-		}
-	}
-	loginResp := adminLogic.Login(loginReq)
-	if loginResp == nil || loginResp.IsFailure() {
-		return loginResp
-	}
-	data, ok := loginResp.Data.(*types.ProfileLoginResp)
-	if !ok || data == nil || strings.TrimSpace(data.Token) == "" || data.User == nil {
-		return types.NewBizResult(codes.ServerError).
-			SetI18nMessage(i18n.MsgKeyInternalError).
-			WithError(errors.Errorf("ProfileLogic.Login 账号[%s]返回登录资料为空", loginReq.Username))
-	}
-	return loginResp
-}
-
 // Mine 返回当前登录管理员的个人信息。
 func (l *ProfileLogic) Mine() *types.BizResult {
 	admin, err := l.currentAdmin()
@@ -100,6 +58,7 @@ func (l *ProfileLogic) Permissions() *types.BizResult {
 		return types.Unauthorized(i18n.MsgKeyNeedLogin).ToBizResult()
 	}
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
+	disabledScenarios := securityLogic.MFADisabledScenarios()
 	roleIDs, err := securityLogic.EnabledRoleIDs(admin.ID)
 	if err != nil {
 		return types.NewBizResult(codes.DBError).
@@ -130,7 +89,7 @@ func (l *ProfileLogic) Permissions() *types.BizResult {
 			SuperUserRole:            superUserRole,
 			Roles:                    roles,
 			Permissions:              permissions,
-			CheckMFAScenariosDisable: securityLogic.MFADisabledScenarios(),
+			CheckMFAScenariosDisable: disabledScenarios,
 		})
 }
 
@@ -140,7 +99,7 @@ func (l *ProfileLogic) CheckSecure(req *types.ProfileCheckSecureReq) *types.BizR
 	if err != nil {
 		return l.adminFetchErrorResult("ProfileLogic.CheckSecure", err)
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(admin.PasswordWithSalt(req.Secure))); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(req.Secure)); err != nil {
 		return types.NewBizResult(codes.InvalidPassword).
 			SetI18nMessage(i18n.MsgKeyInvalidPassword).
 			WithData(&types.BoolResp{IsOk: false})
@@ -224,12 +183,12 @@ func (l *ProfileLogic) UpdatePassword(req *types.ProfilePasswordReq) *types.BizR
 			return l.mfaResultByError(err)
 		}
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(admin.PasswordWithSalt(req.PasswordOld))); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(req.PasswordOld)); err != nil {
 		return types.NewBizResult(codes.InvalidPassword).
 			SetI18nMessage(i18n.MsgKeyInvalidPassword).
 			WithError(corelogic.WrapLogicError(err, "ProfileLogic.UpdatePassword 当前密码校验失败"))
 	}
-	password, err := bcrypt.GenerateFromPassword([]byte(admin.PasswordWithSalt(req.PasswordNew)), bcrypt.DefaultCost)
+	password, err := bcrypt.GenerateFromPassword([]byte(req.PasswordNew), bcrypt.DefaultCost)
 	if err != nil {
 		return types.NewBizResult(codes.ServerError).
 			SetI18nMessage(i18n.MsgKeyInternalError).
@@ -244,9 +203,10 @@ func (l *ProfileLogic) UpdatePassword(req *types.ProfilePasswordReq) *types.BizR
 			SetI18nMessage(i18n.MsgKeyDBError).
 			WithError(errors.Wrapf(err, "ProfileLogic.UpdatePassword 更新管理员ID[%d]密码失败", admin.ID))
 	}
-	cachelogic.InvalidateAdminRelationCachePreserveSession(l.BaseLogic, admin.ID)
+	cacheErr := cachelogic.InvalidateAdminRelationCachePreserveSession(l.BaseLogic, admin.ID)
 	l.syncCurrentAdminNeedResetPassword(admin.ID, 0)
 	l.syncLoginMFAAfterPasswordUpdate(admin)
+	l.logPreservedSessionCacheInvalidationError("ProfileLogic.UpdatePassword", admin.ID, cacheErr)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -261,24 +221,25 @@ func (l *ProfileLogic) syncLoginMFAAfterPasswordUpdate(admin *model.Admin) {
 	if admin.NeedResetPassword != 1 {
 		return
 	}
-	_ = securitylogic.NewSecurityLogic(l.Ctx, l.Svc).MarkLoginMFACompleted(admin.ID)
+	if err := securitylogic.NewSecurityLogic(l.Ctx, l.Svc).MarkLoginMFACompleted(admin.ID); err != nil {
+		corelogic.LogWrappedError(l.Logger, err, "ProfileLogic.syncLoginMFAAfterPasswordUpdate 同步管理员ID[%d]登录MFA标记失败", admin.ID)
+	}
 }
 
 // syncCurrentAdminNeedResetPassword 立即同步当前会话缓存里的强制改密状态，
 // 避免个人中心改密成功后，紧接着请求 `/auth/profile` 仍命中未刷新的 `admin:info` 值。
 func (l *ProfileLogic) syncCurrentAdminNeedResetPassword(adminID int, needResetPassword int) {
-	if adminID <= 0 {
+	l.syncCurrentAdminSessionFields(adminID, map[string]any{"needResetPassword": needResetPassword})
+}
+
+// syncCurrentAdminSessionFields 只更新仍存在的当前登录态字段；会话已被登出或撤销时保持缺失，不使用旧 token 重建。
+func (l *ProfileLogic) syncCurrentAdminSessionFields(adminID int, fields map[string]any) {
+	if adminID <= 0 || len(fields) == 0 {
 		return
 	}
-	cacheLogic := cachelogic.NewCacheLogic(l.Ctx, l.Svc)
-	if err := cacheLogic.SetAdminInfoByField(adminID, "needResetPassword", needResetPassword); err == nil {
-		return
+	if err := cachelogic.NewCacheLogic(l.Ctx, l.Svc).SetAdminInfoFields(adminID, fields); err != nil {
+		corelogic.LogWrappedError(l, err, "ProfileLogic.syncCurrentAdminSessionFields 同步管理员ID[%d]当前会话字段失败", adminID)
 	}
-	token := strings.TrimSpace(l.AccessToken())
-	if token == "" {
-		return
-	}
-	_, _ = cacheLogic.RebuildAdminInfo(adminID, token)
 }
 
 // UpdateMine 更新当前登录管理员的基础资料。
@@ -286,6 +247,17 @@ func (l *ProfileLogic) UpdateMine(req *types.ProfileUpdateReq) *types.BizResult 
 	admin, err := l.currentAdmin()
 	if err != nil {
 		return l.adminFetchErrorResult("ProfileLogic.UpdateMine", err)
+	}
+	fileTransferLogic := filelogic.NewFileTransferLogicWithContext(l.Ctx, l.Svc)
+	avatar, err := fileTransferLogic.ValidateAdminAvatar(req.Avatar)
+	if err != nil {
+		return types.ParamErrorResult(err).
+			WithError(errors.Wrapf(err, "ProfileLogic.UpdateMine 管理员ID[%d]头像校验失败", admin.ID))
+	}
+	req.Avatar = avatar
+	if err := fileTransferLogic.ScheduleReplacedAdminAvatarCleanup(admin.Avatar, req.Avatar); err != nil {
+		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+			"ProfileLogic.UpdateMine 管理员ID[%d]旧头像清理任务投递失败", admin.ID).ToBizResult()
 	}
 	updates := map[string]any{
 		// 个人中心基础资料页按整表单提交，后端这里直接按归一化后的当前值落库，
@@ -302,7 +274,15 @@ func (l *ProfileLogic) UpdateMine(req *types.ProfileUpdateReq) *types.BizResult 
 			SetI18nMessage(i18n.MsgKeyDBError).
 			WithError(errors.Wrapf(err, "ProfileLogic.UpdateMine 更新管理员ID[%d]资料失败", admin.ID))
 	}
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, admin.ID)
+	cacheErr := cachelogic.InvalidateAdminRelationCachePreserveSession(l.BaseLogic, admin.ID)
+	l.syncCurrentAdminSessionFields(admin.ID, map[string]any{
+		"avatar":      req.Avatar,
+		"description": req.Description,
+		"email":       req.Email,
+		"phone":       req.Phone,
+		"realName":    req.RealName,
+	})
+	l.logPreservedSessionCacheInvalidationError("ProfileLogic.UpdateMine", admin.ID, cacheErr)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -316,7 +296,12 @@ func (l *ProfileLogic) UpdateMFAStatus(req *types.ProfileMFAStatusReq) *types.Bi
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
 	switch req.Status() {
 	case 0:
-		if securityLogic.ForceLoginMFAEnabled() && admin.MfaStatus == 1 {
+		forceMFA, configErr := securityLogic.ForceLoginMFAEnabled()
+		if configErr != nil {
+			return types.ServerError(i18n.MsgKeyInternalErrorFormat, configErr,
+				"ProfileLogic.UpdateMFAStatus 读取强制MFA配置失败").ToBizResult()
+		}
+		if forceMFA && admin.MfaStatus == 1 {
 			return types.NewBizResult(codes.Forbidden).
 				SetI18nMessage(i18n.MsgKeyMFAForceEnabledDisallowDisable).
 				WithError(errors.Errorf("ProfileLogic.UpdateMFAStatus 管理员ID[%d]系统已开启强制启用MFA，禁止停用", admin.ID))
@@ -354,9 +339,10 @@ func (l *ProfileLogic) UpdateMFAStatus(req *types.ProfileMFAStatusReq) *types.Bi
 			SetI18nMessage(i18n.MsgKeyDBError).
 			WithError(errors.Wrapf(err, "ProfileLogic.UpdateMFAStatus 更新管理员ID[%d]MFA状态失败", admin.ID))
 	}
-	cachelogic.InvalidateAdminRelationCachePreserveSession(l.BaseLogic, admin.ID)
-	l.rebuildCurrentAdminSessionCache(admin.ID)
+	cacheErr := cachelogic.InvalidateAdminRelationCachePreserveSession(l.BaseLogic, admin.ID)
+	l.syncCurrentAdminSessionFields(admin.ID, map[string]any{"mfaStatus": req.Status()})
 	l.syncLoginMFAAfterStatusUpdate(securityLogic, admin, req.Status())
+	l.logPreservedSessionCacheInvalidationError("ProfileLogic.UpdateMFAStatus", admin.ID, cacheErr)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -367,20 +353,9 @@ func (l *ProfileLogic) syncLoginMFAAfterStatusUpdate(securityLogic *securitylogi
 	if admin == nil || securityLogic == nil {
 		return
 	}
-	_ = securityLogic.MarkLoginMFACompleted(admin.ID)
-}
-
-// rebuildCurrentAdminSessionCache 使用当前请求携带的 token 立即重建登录态缓存，
-// 避免个人中心更新资料后立刻跳转其它页面时命中 admin:info 刚被删除的短暂窗口。
-func (l *ProfileLogic) rebuildCurrentAdminSessionCache(adminID int) {
-	if adminID <= 0 {
-		return
+	if err := securityLogic.MarkLoginMFACompleted(admin.ID); err != nil {
+		corelogic.LogWrappedError(l.Logger, err, "ProfileLogic.syncLoginMFAAfterStatusUpdate 同步管理员ID[%d]登录MFA标记失败", admin.ID)
 	}
-	token := strings.TrimSpace(l.AccessToken())
-	if token == "" {
-		return
-	}
-	_, _ = cachelogic.NewCacheLogic(l.Ctx, l.Svc).RebuildAdminInfo(adminID, token)
 }
 
 // UpdateMFASecureKey 修改当前登录管理员的 MFA 秘钥。
@@ -414,8 +389,9 @@ func (l *ProfileLogic) UpdateMFASecureKey(req *types.ProfileMFASecretReq) *types
 			SetI18nMessage(i18n.MsgKeyDBError).
 			WithError(errors.Wrapf(err, "ProfileLogic.UpdateMFASecureKey 更新管理员ID[%d]MFA秘钥失败", admin.ID))
 	}
-	cachelogic.InvalidateAdminRelationCachePreserveSession(l.BaseLogic, admin.ID)
-	l.rebuildCurrentAdminSessionCache(admin.ID)
+	cacheErr := cachelogic.InvalidateAdminRelationCachePreserveSession(l.BaseLogic, admin.ID)
+	l.syncCurrentAdminSessionFields(admin.ID, map[string]any{"mfaStatus": 1})
+	l.logPreservedSessionCacheInvalidationError("ProfileLogic.UpdateMFASecureKey", admin.ID, cacheErr)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -438,7 +414,6 @@ func (l *ProfileLogic) RefreshMFASecretKey(req *types.ProfileMFASecretRefreshReq
 			SetI18nMessage(i18n.MsgKeyInternalError).
 			WithError(errors.Wrapf(err, "ProfileLogic.RefreshMFASecretKey 刷新管理员ID[%d]MFA绑定地址失败", admin.ID))
 	}
-	l.rebuildCurrentAdminSessionCache(admin.ID)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess).
 		WithData(&types.MFAURLResp{BuildMFAURL: buildURL})
@@ -450,17 +425,37 @@ func (l *ProfileLogic) UpdateAvatar(req *types.ProfileAvatarReq) *types.BizResul
 	if err != nil {
 		return l.adminFetchErrorResult("ProfileLogic.UpdateAvatar", err)
 	}
+	fileTransferLogic := filelogic.NewFileTransferLogicWithContext(l.Ctx, l.Svc)
+	avatar, err := fileTransferLogic.ValidateAdminAvatar(req.Avatar)
+	if err != nil {
+		return types.ParamErrorResult(err).
+			WithError(errors.Wrapf(err, "ProfileLogic.UpdateAvatar 管理员ID[%d]头像校验失败", admin.ID))
+	}
+	if err := fileTransferLogic.ScheduleReplacedAdminAvatarCleanup(admin.Avatar, avatar); err != nil {
+		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+			"ProfileLogic.UpdateAvatar 管理员ID[%d]旧头像清理任务投递失败", admin.ID).ToBizResult()
+	}
 	if err := l.Svc.WriteDB(svc.DatabaseMain).Model(&model.Admin{}).Where("id = ?", admin.ID).Updates(map[string]any{
-		"avatar":     strings.TrimSpace(req.Avatar),
+		"avatar":     avatar,
 		"updated_at": time.Now(),
 	}).Error; err != nil {
 		return types.NewBizResult(codes.DBError).
 			SetI18nMessage(i18n.MsgKeyDBError).
 			WithError(errors.Wrapf(err, "ProfileLogic.UpdateAvatar 更新管理员ID[%d]头像失败", admin.ID))
 	}
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, admin.ID)
+	cacheErr := cachelogic.InvalidateAdminRelationCachePreserveSession(l.BaseLogic, admin.ID)
+	l.syncCurrentAdminSessionFields(admin.ID, map[string]any{"avatar": avatar})
+	l.logPreservedSessionCacheInvalidationError("ProfileLogic.UpdateAvatar", admin.ID, cacheErr)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
+}
+
+// logPreservedSessionCacheInvalidationError 记录自助变更后的缓存失效失败；数据库已提交且当前会话按设计保留。
+func (l *ProfileLogic) logPreservedSessionCacheInvalidationError(action string, adminID int, err error) {
+	if err == nil {
+		return
+	}
+	corelogic.LogWrappedError(l.Logger, err, "%s 管理员ID[%d]关系缓存失效失败，数据库变更已提交且当前会话保留", action, adminID)
 }
 
 // BuildMFASecretKeyURL 为指定管理员生成 MFA 绑定地址。
@@ -477,13 +472,12 @@ func (l *ProfileLogic) BuildMFASecretKeyURL(req *types.IDPathReq) *types.BizResu
 			WithError(errors.Wrapf(err, "ProfileLogic.BuildMFASecretKeyURL 查询管理员ID[%d]失败", req.ID))
 	}
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
-	buildURL := ""
-	var err error
-	if admin.MfaStatus != 1 || !securityLogic.HasUsableAdminMFASecret(&admin) {
-		buildURL, err = securityLogic.BuildFreshAdminMFAURL(&admin)
-	} else {
-		buildURL, err = securityLogic.BuildAdminMFAURL(&admin)
+	if admin.MfaStatus == 1 && securityLogic.HasUsableAdminMFASecret(&admin) {
+		return types.NewBizResult(codes.Forbidden).
+			SetI18nMessage(i18n.MsgKeyAuthFailed).
+			WithError(errors.Errorf("ProfileLogic.BuildMFASecretKeyURL 管理员ID[%d]已启用MFA，不允许读取现有绑定秘钥", req.ID))
 	}
+	buildURL, err := securityLogic.BuildFreshAdminMFAURL(&admin)
 	if err != nil {
 		return types.NewBizResult(codes.ServerError).
 			SetI18nMessage(i18n.MsgKeyInternalError).
@@ -526,7 +520,12 @@ func (l *ProfileLogic) UpdateAccountMFAStatus(req *types.AdminMFAStatusReq) *typ
 			"ProfileLogic.UpdateAccountMFAStatus 校验管理员ID[%d]可管理范围失败", req.ID).ToBizResult()
 	}
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
-	if securityLogic.NeedOperateMFATwoStep(securitylogic.MFAScenarioStatus) {
+	needTwoStep, err := securityLogic.NeedOperateMFATwoStep(securitylogic.MFAScenarioStatus)
+	if err != nil {
+		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+			"ProfileLogic.UpdateAccountMFAStatus 读取MFA策略失败").ToBizResult()
+	}
+	if needTwoStep {
 		if err := securityLogic.VerifyMFATwoStepTicket(currentAdmin.ID, securitylogic.MFAScenarioStatus, req.TwoStepKey, req.TwoStepValue); err != nil {
 			return l.mfaResultByError(err)
 		}
@@ -540,7 +539,10 @@ func (l *ProfileLogic) UpdateAccountMFAStatus(req *types.AdminMFAStatusReq) *typ
 			SetI18nMessage(i18n.MsgKeyDBError).
 			WithError(errors.Wrapf(err, "ProfileLogic.UpdateAccountMFAStatus 更新管理员ID[%d]MFA状态失败", req.ID))
 	}
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
+	if err := cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"ProfileLogic.UpdateAccountMFAStatus 管理员ID[%d]缓存失效失败", req.ID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -613,7 +615,11 @@ func (l *ProfileLogic) resolveEnableMFASecret(admin *model.Admin, requestSecret 
 // requireScenarioTwoStep 在当前场景需要 MFA 时校验二次校验票据。
 func (l *ProfileLogic) requireScenarioTwoStep(admin *model.Admin, scenario int, key string, value string) error {
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
-	if !securityLogic.NeedMFATwoStep(admin, scenario) {
+	needTwoStep, err := securityLogic.NeedMFATwoStep(admin, scenario)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if !needTwoStep {
 		return nil
 	}
 	return securityLogic.VerifyMFATwoStepTicket(admin.ID, scenario, key, value)

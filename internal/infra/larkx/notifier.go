@@ -31,7 +31,7 @@ const (
 
 // Notifier 负责向 Lark 群机器人发送告警。
 type Notifier struct {
-	webhookURL   string           // Lark webhook URL
+	webhookURL   string           // Lark 机器人回调地址
 	secret       string           // Lark 签名密钥
 	atAll        bool             // 是否 @所有人
 	maxErrorByte int              // 错误摘要最大字节数

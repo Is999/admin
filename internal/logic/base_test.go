@@ -63,11 +63,14 @@ func TestBaseLogicRedisHelpersScopeLogicalKeys(t *testing.T) {
 	if profile.ID != 1 {
 		t.Fatalf("RdsGetJSONObj() ID = %d, want 1", profile.ID)
 	}
-	if err := logic.RdsDelKeys("demo:profile:1"); err != nil {
+	if err := client.Set(context.Background(), "app:site-a:demo:profile:2", "value", 0).Err(); err != nil {
+		t.Fatalf("Set(second key) error = %v", err)
+	}
+	if err := logic.RdsDelKeys("demo:profile:1", "demo:profile:2"); err != nil {
 		t.Fatalf("RdsDelKeys() error = %v", err)
 	}
-	if server.Exists("app:site-a:demo:profile:1") {
-		t.Fatal("期望删除 app_id 命名空间下的 Redis key")
+	if server.Exists("app:site-a:demo:profile:1") || server.Exists("app:site-a:demo:profile:2") {
+		t.Fatal("期望 pipeline 删除全部 app_id 命名空间 Redis key")
 	}
 }
 

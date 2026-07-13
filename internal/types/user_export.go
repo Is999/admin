@@ -21,6 +21,8 @@ const (
 	UserExportStatusFailed = excel.StatusFailed
 	// UserExportTaskType 表示前台用户列表导出的后台任务类型。
 	UserExportTaskType = "user:export"
+	// UserExportCleanupTaskType 表示前台用户导出文件的延迟清理任务类型。
+	UserExportCleanupTaskType = "user:export:cleanup"
 )
 
 // UserExportReq 表示前台用户列表导出请求；筛选条件与列表页保持一致，但不携带分页参数。
@@ -101,6 +103,12 @@ type UserExportTaskPayload struct {
 	OperatorID   int           `json:"operatorId"`             // 发起导出的管理员 ID
 	OperatorName string        `json:"operatorName,omitempty"` // 发起导出的管理员账号
 	Request      UserExportReq `json:"request"`                // 导出筛选条件快照
+}
+
+// UserExportCleanupTaskPayload 表示前台用户导出文件延迟清理任务负载。
+type UserExportCleanupTaskPayload struct {
+	JobID      string   `json:"jobId"`      // 导出任务 ID
+	ObjectKeys []string `json:"objectKeys"` // 需要删除的统一存储对象 key
 }
 
 // UserExportFileItem 表示前台用户导出的单个文件分片。

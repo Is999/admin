@@ -12,12 +12,13 @@ CREATE TABLE IF NOT EXISTS `admin` (
   `avatar` varchar(255) NOT NULL DEFAULT '' COMMENT '头像',
   `description` varchar(255) NOT NULL DEFAULT '' COMMENT '简介描述',
   `last_login_time` datetime NOT NULL COMMENT '最后登录时间',
-  `last_login_ip` varchar(32) NOT NULL DEFAULT '' COMMENT '最后登录 IP',
+  `last_login_ip` varchar(45) NOT NULL DEFAULT '' COMMENT '最后登录 IP',
   `last_login_ipaddr` varchar(255) NOT NULL DEFAULT '' COMMENT '最后登录 IP 归属地',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '添加时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_name` (`name`)
+  UNIQUE KEY `uk_name` (`name`),
+  KEY `idx_avatar` (`avatar`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='管理员';
 
-INSERT IGNORE INTO `admin` (`id`, `name`, `real_name`, `password`, `need_reset_password`, `email`, `phone`, `mfa_secure_key`, `mfa_status`, `status`, `avatar`, `description`, `last_login_time`, `last_login_ip`, `last_login_ipaddr`, `created_at`, `updated_at`) VALUES (1, 'super999', 'super999', '$2a$10$r2EqJD4OlrT2ref2uEh7ROCk..HNUu3s.mMp9ujRHeNf4v/bKuhUq', 1, '', '', '', 0, 1, '', '超级管理员', '2026-05-06 02:17:05', '127.0.0.1', '', '2022-03-21 21:54:26', '2026-05-06 15:46:07');
+INSERT IGNORE INTO `admin` (`id`, `name`, `real_name`, `password`, `need_reset_password`, `email`, `phone`, `mfa_secure_key`, `mfa_status`, `status`, `avatar`, `description`, `last_login_time`, `last_login_ip`, `last_login_ipaddr`, `created_at`, `updated_at`) VALUES (1, 'super999', 'super999', '$2y$10$ory3FZfUy1VExaUHmEkeluYtVtP/4CiCCfeSPfD12T9dbpWqO52Eq', 1, '', '', '', 0, 1, '', '超级管理员', '2026-05-06 02:17:05', '127.0.0.1', '', '2022-03-21 21:54:26', '2026-05-06 15:46:07');

@@ -142,7 +142,10 @@ func (l *AdminPermissionLogic) Create(req *types.SavePermissionReq) *types.BizRe
 			"AdminPermissionLogic.Create 创建权限[%s]失败", req.Title).ToBizResult()
 	}
 
-	l.refreshPermissionRelatedCache(req.Module)
+	if err := l.refreshPermissionRelatedCache(); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.AddSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"AdminPermissionLogic.Create RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.AddSuccess).
 		SetI18nMessage(i18n.MsgKeyAddSuccess)
 }
@@ -217,7 +220,10 @@ func (l *AdminPermissionLogic) Update(req *types.SavePermissionReq) *types.BizRe
 			"AdminPermissionLogic.Update 更新权限ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	l.refreshPermissionRelatedCache(permission.Module, req.Module)
+	if err := l.refreshPermissionRelatedCache(); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"AdminPermissionLogic.Update RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -254,7 +260,10 @@ func (l *AdminPermissionLogic) UpdateStatus(req *types.PermissionStatusReq) *typ
 			"AdminPermissionLogic.UpdateStatus 权限ID[%d]不存在", req.ID).ToBizResult()
 	}
 
-	l.refreshPermissionRelatedCache(permission.Module)
+	if err := l.refreshPermissionRelatedCache(); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"AdminPermissionLogic.UpdateStatus RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyStatusChangeOK)
 }
@@ -266,7 +275,6 @@ func (l *AdminPermissionLogic) Delete(req *types.IDPathReq) *types.BizResult {
 			ToBizResult().
 			WithError(errors.Wrapf(err, "AdminPermissionLogic.Delete 权限ID[%d]超出可操作范围", req.ID))
 	}
-	routeAliases := make([]string, 0)
 	if err := l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
 		var permissionIDs []int
 		if err := freshTxStatement(tx).Model(&model.AdminPermission{}).
@@ -281,11 +289,6 @@ func (l *AdminPermissionLogic) Delete(req *types.IDPathReq) *types.BizResult {
 		}
 		if err := l.ensurePermissionsWithinManageScope(permissionIDs); err != nil {
 			return errors.Tag(err)
-		}
-		if err := freshTxStatement(tx).Model(&model.AdminPermission{}).
-			Where("id IN ?", permissionIDs).
-			Pluck("module", &routeAliases).Error; err != nil {
-			return errors.Wrapf(err, "查询权限ID[%d]子树模块失败", req.ID)
 		}
 		if err := tx.Where("permission_id IN ?", permissionIDs).Delete(&model.AdminRolePermissionRel{}).Error; err != nil {
 			return errors.Wrap(err, "清理角色权限关系失败")
@@ -307,7 +310,10 @@ func (l *AdminPermissionLogic) Delete(req *types.IDPathReq) *types.BizResult {
 			"AdminPermissionLogic.Delete 删除权限ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	l.refreshPermissionRelatedCache(routeAliases...)
+	if err := l.refreshPermissionRelatedCache(); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.DeleteSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"AdminPermissionLogic.Delete RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.DeleteSuccess).
 		SetI18nMessage(i18n.MsgKeyDeleteSuccess)
 }
@@ -664,74 +670,25 @@ func (l *AdminPermissionLogic) nextPermissionUUID() string {
 }
 
 // refreshPermissionRelatedCache 清理权限相关缓存，确保下次读取重建最新权限数据。
-func (l *AdminPermissionLogic) refreshPermissionRelatedCache(routeAliases ...string) {
-	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
-	if err != nil {
-		corelogic.LogWrappedError(l, err, "AdminPermissionLogic.refreshPermissionRelatedCache 初始化表缓存管理器失败")
-		manager = nil
-	}
+func (l *AdminPermissionLogic) refreshPermissionRelatedCache() error {
+	// firstErr 保留首个缓存同步错误，同时继续清理其他独立缓存。
+	var firstErr error
 	coreKeys := []string{keys.PermissionTree, keys.PermissionModule, keys.PermissionUUID}
-	if manager != nil {
-		for _, key := range coreKeys {
-			physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, key)
-			if err := manager.DeleteByKey(l.Ctx, physicalKey); err != nil && !cachelogic.IsTableCacheTargetNotFound(err) {
-				corelogic.LogWrappedError(l, err, "AdminPermissionLogic.refreshPermissionRelatedCache 清理权限缓存key[%s]失败", key)
-			}
+	if err := cachelogic.DeleteRedisKeysExactBatches(l.BaseLogic, "AdminPermissionLogic.refreshPermissionRelatedCache 删除权限核心缓存", cachelogic.TableCachePhysicalKeys(l.BaseLogic, coreKeys...)); err != nil {
+		firstErr = err
+	}
+	if err := cachelogic.InvalidateAllRolePermissionCache(l.BaseLogic); err != nil {
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
-	cachelogic.DeleteRedisKeysExactBatches(l.BaseLogic, "AdminPermissionLogic.refreshPermissionRelatedCache 删除权限核心缓存", cachelogic.TableCachePhysicalKeys(l.BaseLogic, coreKeys...))
-	l.deleteRoutePermissionCandidateCache(routeAliases...)
-	cachelogic.InvalidateAllRolePermissionCache(l.BaseLogic)
-	cachelogic.InvalidateAllAdminPermissionCache(l.BaseLogic)
+	if err := cachelogic.InvalidateAllAdminPermissionCache(l.BaseLogic); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return errors.Tag(firstErr)
 }
 
-// RefreshPermissionRelatedCache 清理权限树、角色权限、管理员权限和路由候选权限缓存。
-func (l *AdminPermissionLogic) RefreshPermissionRelatedCache(routeAliases ...string) {
-	l.refreshPermissionRelatedCache(routeAliases...)
-}
-
-// deleteRoutePermissionCandidateCache 精确删除路由候选权限缓存，避免使用通配前缀 SCAN。
-func (l *AdminPermissionLogic) deleteRoutePermissionCandidateCache(routeAliases ...string) {
-	aliases := l.routePermissionCandidateAliases(routeAliases...)
-	cacheKeys := make([]string, 0, len(aliases)+1)
-	for _, alias := range aliases {
-		cacheKeys = append(cacheKeys, fmt.Sprintf(keys.RoutePermissionIDs, alias))
-	}
-	cacheKeys = append(cacheKeys, keys.RoutePermissionAliasIndex)
-	cachelogic.DeleteRedisKeysExactBatches(l.BaseLogic, "AdminPermissionLogic.deleteRoutePermissionCandidateCache 删除路由候选权限缓存", cachelogic.TableCachePhysicalKeys(l.BaseLogic, cacheKeys...))
-}
-
-// routePermissionCandidateAliases 合并显式变更模块、已访问索引和当前权限模块，覆盖正向与空值缓存。
-func (l *AdminPermissionLogic) routePermissionCandidateAliases(routeAliases ...string) []string {
-	aliases := make([]string, 0, len(routeAliases))
-	aliases = append(aliases, routeAliases...)
-	if l.Redis() != nil {
-		for _, indexKey := range cachelogic.TableCachePhysicalKeys(l.BaseLogic, keys.RoutePermissionAliasIndex) {
-			indexedAliases, err := l.Redis().SMembers(l.Ctx, indexKey).Result()
-			if err != nil {
-				corelogic.LogWrappedError(l, err, "AdminPermissionLogic.routePermissionCandidateAliases 读取路由候选权限索引失败 key=%s", indexKey)
-				continue
-			}
-			aliases = append(aliases, indexedAliases...)
-		}
-	}
-	readDB, err := cachelogic.TableCacheReadDB(l.BaseLogic, svc.DatabaseMain, "main")
-	if err != nil {
-		corelogic.LogWrappedError(l, err, "AdminPermissionLogic.routePermissionCandidateAliases 获取admin读库失败")
-		return helper.UniqueNonEmptyStrings(aliases)
-	}
-	var modules []string
-	// 当前启用权限 module 可枚举出正在使用的路由候选缓存；显式参数负责覆盖被删除或被禁用的原 module。
-	if err := readDB.WithContext(l.Ctx).
-		Model(&model.AdminPermission{}).
-		Select("module").
-		Where("status = 1").
-		Where("module <> ''").
-		Order("id ASC").
-		Pluck("module", &modules).Error; err != nil {
-		corelogic.LogWrappedError(l, err, "AdminPermissionLogic.routePermissionCandidateAliases 查询启用权限模块失败")
-		return helper.UniqueNonEmptyStrings(aliases)
-	}
-	aliases = append(aliases, modules...)
-	return helper.UniqueNonEmptyStrings(aliases)
+// RefreshPermissionRelatedCache 清理权限树、角色权限和管理员权限缓存。
+func (l *AdminPermissionLogic) RefreshPermissionRelatedCache() error {
+	return l.refreshPermissionRelatedCache()
 }

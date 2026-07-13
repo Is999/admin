@@ -82,6 +82,30 @@ func TestTaskMetadataPluginRegistersDailySummaryMeta(t *testing.T) {
 	}
 }
 
+// TestFileUploadCleanupPluginRegistersHandler 验证上传对象清理任务已接入默认任务运行时。
+func TestFileUploadCleanupPluginRegistersHandler(t *testing.T) {
+	count := 0
+	for _, spec := range PluginSpecs() {
+		if spec.Name == FileUploadCleanupPluginName {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("上传对象清理插件规格数量=%d，期望=1", count)
+	}
+	runtime, manager, cleanup := newTestRuntime(t, config.Config{})
+	defer cleanup()
+
+	if err := runtime.RegisterPlugins(FileUploadCleanupPlugin()); err != nil {
+		t.Fatalf("注册上传对象清理插件失败: %v", err)
+	}
+	if !taskTypeRegistered(manager, types.FileUploadCleanupTaskType) {
+		t.Fatalf("未注册上传对象清理 handler %s，当前清单=%+v",
+			types.FileUploadCleanupTaskType, manager.ListRegisteredTaskTypes(context.Background()))
+	}
+}
+
+// newTestRuntime 创建使用内存 Redis 的任务运行时，并返回统一清理函数。
 func newTestRuntime(t *testing.T, cfg config.Config) (*taskruntime.Runtime, *taskqueue.Manager, func()) {
 	t.Helper()
 	server := miniredis.RunT(t)
@@ -105,6 +129,7 @@ func newTestRuntime(t *testing.T, cfg config.Config) (*taskruntime.Runtime, *tas
 	return runtime, manager, cleanup
 }
 
+// userTagEnabledConfig 返回启用用户标签工作流的最小测试配置。
 func userTagEnabledConfig() config.Config {
 	return config.Config{
 		Workflows: config.WorkflowsConfig{
@@ -113,11 +138,13 @@ func userTagEnabledConfig() config.Config {
 	}
 }
 
+// taskTypeRegistered 判断指定任务类型是否已注册。
 func taskTypeRegistered(manager *taskqueue.Manager, taskType string) bool {
 	_, ok := registeredTaskTypeItem(manager, taskType)
 	return ok
 }
 
+// workflowRegistered 判断指定工作流是否已注册。
 func workflowRegistered(manager *taskqueue.Manager, workflowName string) bool {
 	for _, item := range manager.ListRegisteredWorkflows(context.Background()) {
 		if item.Name == workflowName {
@@ -127,6 +154,7 @@ func workflowRegistered(manager *taskqueue.Manager, workflowName string) bool {
 	return false
 }
 
+// registeredTaskTypeItem 查找指定任务类型的注册元数据。
 func registeredTaskTypeItem(manager *taskqueue.Manager, taskType string) (types.TaskTypeRegistryItem, bool) {
 	for _, candidate := range manager.ListRegisteredTaskTypes(context.Background()) {
 		if candidate.TaskType != taskType {

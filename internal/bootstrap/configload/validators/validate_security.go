@@ -91,12 +91,12 @@ func validateSecretKeyVersion(prefix string, index int, cfg config.SecuritySecre
 			return errors.Errorf("%s 启用加解密时必须配置 aes_iv 或 aes_iv_ref", name)
 		}
 	}
-	if signStatus != 0 {
+	if signStatus != 0 || cryptoStatus != 0 {
 		if strings.TrimSpace(cfg.RSAPublicKeyUser) == "" && strings.TrimSpace(cfg.RSAPublicKeyUserRef) == "" {
-			return errors.Errorf("%s 启用签名时必须配置 rsa_public_key_user 或 rsa_public_key_user_ref", name)
+			return errors.Errorf("%s 启用签名或加解密时必须配置 rsa_public_key_user 或 rsa_public_key_user_ref", name)
 		}
 		if strings.TrimSpace(cfg.RSAPrivateKeyServer) == "" && strings.TrimSpace(cfg.RSAPrivateKeyServerRef) == "" {
-			return errors.Errorf("%s 启用签名时必须配置 rsa_private_key_server 或 rsa_private_key_server_ref", name)
+			return errors.Errorf("%s 启用签名或加解密时必须配置 rsa_private_key_server 或 rsa_private_key_server_ref", name)
 		}
 	}
 	return nil
@@ -118,7 +118,7 @@ func securitySecretKeyTouched(cfg config.SecuritySecretKeyConfig) bool {
 		strings.TrimSpace(cfg.StableVersion) != "" ||
 		strings.TrimSpace(cfg.GrayVersion) != "" ||
 		strings.TrimSpace(cfg.GraySalt) != "" ||
-		(cfg.SignStatus != 0 && cfg.SignStatus != 1) ||
-		(cfg.CryptoStatus != 0 && cfg.CryptoStatus != 1) ||
+		cfg.SignStatus != 0 ||
+		cfg.CryptoStatus != 0 ||
 		len(cfg.Versions) > 0
 }

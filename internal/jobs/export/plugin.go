@@ -41,11 +41,29 @@ func Setup(runtime Runtime) error {
 	})); err != nil {
 		return errors.Tag(err)
 	}
-	return runtime.RegisterHandler(types.UserExportTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+	if err := runtime.RegisterHandler(types.UserExportTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 		var payload types.UserExportTaskPayload
 		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 			return errors.Wrap(err, "解析前台用户导出任务载荷失败")
 		}
 		return userlogic.NewLogicWithContext(ctx, svcCtx).RunExportTask(&payload)
+	})); err != nil {
+		return errors.Tag(err)
+	}
+	if err := runtime.RegisterHandler(types.AdminExportCleanupTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+		var payload types.AdminExportCleanupTaskPayload
+		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+			return errors.Wrap(err, "解析管理员导出文件清理任务载荷失败")
+		}
+		return adminlogic.NewAdminExportLogicWithContext(ctx, svcCtx).CleanupExportFile(&payload)
+	})); err != nil {
+		return errors.Tag(err)
+	}
+	return runtime.RegisterHandler(types.UserExportCleanupTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+		var payload types.UserExportCleanupTaskPayload
+		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+			return errors.Wrap(err, "解析前台用户导出文件清理任务载荷失败")
+		}
+		return userlogic.NewLogicWithContext(ctx, svcCtx).CleanupExportFiles(&payload)
 	}))
 }

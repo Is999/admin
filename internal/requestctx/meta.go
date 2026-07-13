@@ -2,6 +2,7 @@ package requestctx
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"time"
 )
@@ -18,34 +19,36 @@ type metaKey struct{}
 
 // Meta 保存一次请求在应用内传播的链路与审计元数据。
 type Meta struct {
-	StartedAt     time.Time // 请求元数据创建时间，用于审计日志在 access log defer 前计算当前真实耗时
-	TraceID       string    // 链路追踪 ID（trace_id），用于串联整条请求链路
-	SpanID        string    // 当前服务内处理片段 ID（span_id），用于定位本服务节点
-	Route         string    // 统一路由别名（如 user_tag.workflow.trigger），用于权限/审计/日志对齐
-	Method        string    // HTTP 方法（GET/POST/PUT/DELETE 等）
-	Path          string    // HTTP 请求路径（URL Path）
-	ClientIP      string    // 客户端 IP（优先真实来源 IP）
-	Locale        string    // 请求语言（如 zh-CN/en-US），用于响应多语言翻译
-	UserID        int       // 当前操作人 ID（登录后写入）
-	UserName      string    // 当前操作人名称（登录后写入）
-	AccessToken   string    // 当前请求携带的访问令牌（仅在本次请求上下文中传播）
-	HTTPStatus    int       // HTTP 状态码（统一响应出口回填）
-	BizCode       int       // 业务状态码（common/codes 中定义）
-	BizMessage    string    // 业务响应文案（已按 locale 解析后的最终文案）
-	LatencyMS     int64     // 请求总耗时（毫秒）
-	ErrorMessage  string    // 错误信息（失败时写入，供日志与审计检索）
-	ErrorCause    error     // 原始错误对象（失败时写入，供 trace 和内部日志复用）
-	SkipAccessLog bool      // 是否跳过普通访问日志，供健康探针和高频轮询接口降噪
-	TaskID        string    // 当前异步任务 ID（Asynq task id）
-	TaskType      string    // 当前异步任务类型（如 workflow:trigger）
-	TaskName      string    // 当前异步任务名称/脚本名称，优先用于日志和管理后台识别
-	TaskQueue     string    // 当前异步任务所属队列
-	WorkflowID    string    // 当前工作流实例 ID，用于串联多个 DAG 节点
-	WorkflowName  string    // 当前工作流名称（如 cache.refresh）
-	WorkflowNode  string    // 当前工作流节点名称（如 refresh.batch）
-	Mode          string    // 当前业务运行模式（如 full/delta/targeted），用于任务链路检索
-	ShardIndex    int       // 当前工作流分片索引，从 0 开始
-	ShardTotal    int       // 当前工作流总分片数
+	StartedAt              time.Time // 请求元数据创建时间，用于审计日志在 access log defer 前计算当前真实耗时
+	TraceID                string    // 链路追踪 ID（trace_id），用于串联整条请求链路
+	SpanID                 string    // 当前服务内处理片段 ID（span_id），用于定位本服务节点
+	Route                  string    // 统一路由别名（如 user_tag.workflow.trigger），用于权限/审计/日志对齐
+	Method                 string    // HTTP 方法（GET/POST/PUT/DELETE 等）
+	Path                   string    // HTTP 请求路径（URL Path）
+	ClientIP               string    // 客户端 IP（优先真实来源 IP）
+	ClientIPRegion         string    // 当前客户端 IP 的离线归属地，供同一请求审计复用
+	ClientIPRegionResolved bool      // 是否已查询当前 IP，空结果也需防止重复解析
+	Locale                 string    // 请求语言（如 zh-CN/en-US），用于响应多语言翻译
+	UserID                 int       // 当前操作人 ID（登录后写入）
+	UserName               string    // 当前操作人名称（登录后写入）
+	AccessToken            string    // 当前请求携带的访问令牌（仅在本次请求上下文中传播）
+	HTTPStatus             int       // HTTP 状态码（统一响应出口回填）
+	BizCode                int       // 业务状态码（common/codes 中定义）
+	BizMessage             string    // 业务响应文案（已按 locale 解析后的最终文案）
+	LatencyMS              int64     // 请求总耗时（毫秒）
+	ErrorMessage           string    // 错误信息（失败时写入，供日志与审计检索）
+	ErrorCause             error     // 原始错误对象（失败时写入，供 trace 和内部日志复用）
+	SkipAccessLog          bool      // 是否跳过普通访问日志，供健康探针和高频轮询接口降噪
+	TaskID                 string    // 当前异步任务 ID（Asynq task id）
+	TaskType               string    // 当前异步任务类型（如 workflow:trigger）
+	TaskName               string    // 当前异步任务名称/脚本名称，优先用于日志和管理后台识别
+	TaskQueue              string    // 当前异步任务所属队列
+	WorkflowID             string    // 当前工作流实例 ID，用于串联多个 DAG 节点
+	WorkflowName           string    // 当前工作流名称（如 cache.refresh）
+	WorkflowNode           string    // 当前工作流节点名称（如 refresh.batch）
+	Mode                   string    // 当前业务运行模式（如 full/delta/targeted），用于任务链路检索
+	ShardIndex             int       // 当前工作流分片索引，从 0 开始
+	ShardTotal             int       // 当前工作流总分片数
 }
 
 // New 为请求创建统一元数据容器，后续中间件、logic、审计都围绕这一份状态读写。
@@ -112,7 +115,7 @@ func SetRequest(ctx context.Context, method, path, clientIP string) {
 			meta.Path = path
 		}
 		if clientIP != "" {
-			meta.ClientIP = clientIP
+			setClientIP(meta, clientIP)
 		}
 	}
 }
@@ -134,9 +137,50 @@ func SetUser(ctx context.Context, userID int, userName, clientIP string) {
 			meta.UserName = userName
 		}
 		if clientIP != "" {
-			meta.ClientIP = clientIP
+			setClientIP(meta, clientIP)
 		}
 	}
+}
+
+// SetClientIPRegion 缓存当前请求 IP 的离线归属地，避免登录与审计重复查询。
+func SetClientIPRegion(ctx context.Context, clientIP, region string) {
+	clientIP = NormalizeClientIP(clientIP)
+	if clientIP == "" {
+		return
+	}
+	if meta := FromContext(ctx); meta != nil && clientIP == meta.ClientIP {
+		meta.ClientIPRegion = strings.TrimSpace(region)
+		meta.ClientIPRegionResolved = true
+	}
+}
+
+// NormalizeClientIP 把可信来源解析出的地址统一为无 zone、无 IPv4 映射的标准文本。
+func NormalizeClientIP(ip string) string {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return ""
+	}
+	addr = addr.Unmap()
+	if addr.Zone() != "" {
+		addr = addr.WithZone("")
+	}
+	return addr.String()
+}
+
+// setClientIP 更新客户端 IP；IP 变化时同步清除旧归属地状态。
+func setClientIP(meta *Meta, clientIP string) {
+	if meta == nil {
+		return
+	}
+	clientIP = NormalizeClientIP(clientIP)
+	if clientIP == "" {
+		return
+	}
+	if meta.ClientIP != clientIP {
+		meta.ClientIPRegion = ""
+		meta.ClientIPRegionResolved = false
+	}
+	meta.ClientIP = clientIP
 }
 
 // SetAccessToken 仅在当前请求链路内保存 token，避免业务层再从 header 反复解析。

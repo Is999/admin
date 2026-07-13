@@ -185,7 +185,10 @@ func (l *SecretKeyLogic) Create(req *types.SaveSecretKeyReq) *types.BizResult {
 			"SecretKeyLogic.Create 创建秘钥[%s]失败", req.UUID).ToBizResult()
 	}
 
-	_ = l.RenewSecretKeyCache(req.UUID)
+	if err := l.RenewSecretKeyCache(req.UUID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.AddSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"SecretKeyLogic.Create AppID[%s]缓存同步失败", req.UUID)
+	}
 	return types.NewBizResult(codes.AddSuccess).
 		SetI18nMessage(i18n.MsgKeyAddSuccess)
 }
@@ -283,7 +286,10 @@ func (l *SecretKeyLogic) Update(req *types.SaveSecretKeyReq) *types.BizResult {
 			"SecretKeyLogic.Update 更新秘钥ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	_ = l.RenewSecretKeyCache(oldRow.UUID)
+	if err := l.RenewSecretKeyCache(oldRow.UUID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"SecretKeyLogic.Update AppID[%s]缓存同步失败", oldRow.UUID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -330,7 +336,10 @@ func (l *SecretKeyLogic) UpdateStatus(req *types.SecretKeyStatusReq) *types.BizR
 		return types.DBError(i18n.MsgKeyDBErrorFormat, err,
 			"SecretKeyLogic.UpdateStatus 更新秘钥ID[%d]状态失败", req.ID).ToBizResult()
 	}
-	_ = l.RenewSecretKeyCache(row.UUID)
+	if err := l.RenewSecretKeyCache(row.UUID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"SecretKeyLogic.UpdateStatus AppID[%s]缓存同步失败", row.UUID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -419,7 +428,11 @@ func (l *SecretKeyLogic) requireSecretKeyMFATwoStep(twoStepKey string, twoStepVa
 		return types.Nil
 	}
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
-	if !securityLogic.NeedOperateMFATwoStep(securitylogic.MFAScenarioSecretKeyManage) {
+	needTwoStep, err := securityLogic.NeedOperateMFATwoStep(securitylogic.MFAScenarioSecretKeyManage)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if !needTwoStep {
 		return nil
 	}
 	return securityLogic.VerifyMFATwoStepTicket(ctxAdmin.ID, securitylogic.MFAScenarioSecretKeyManage, twoStepKey, twoStepValue)

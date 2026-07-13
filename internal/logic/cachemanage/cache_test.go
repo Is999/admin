@@ -388,6 +388,12 @@ func TestMatchSearchTemplateTarget(t *testing.T) {
 	if adminTarget == nil || adminTarget.templateKey != wantAdminTemplate {
 		t.Fatalf("matchSearchTemplateTarget(admin_profile:*) = %+v, want %s", adminTarget, wantAdminTemplate)
 	}
+	runtimeReleaseTemplate := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RuntimeConfigReleasePattern)
+	runtimeReleasePattern := strings.Replace(runtimeReleaseTemplate, "{releaseID}", "*", 1)
+	runtimeReleaseTarget := logicObj.matchSearchTemplateTarget(runtimeReleasePattern)
+	if runtimeReleaseTarget == nil || runtimeReleaseTarget.templateKey != runtimeReleaseTemplate {
+		t.Fatalf("matchSearchTemplateTarget(%s) = %+v, want %s", runtimeReleasePattern, runtimeReleaseTarget, runtimeReleaseTemplate)
+	}
 	if got := logicObj.matchSearchTemplateTarget("permission_tree"); got != nil {
 		t.Fatalf("matchSearchTemplateTarget(permission_tree) = %+v, want nil", got)
 	}
@@ -458,6 +464,43 @@ func TestCacheTemplateDefinitionsUsePhysicalKeys(t *testing.T) {
 		}
 		if !strings.HasPrefix(target.templateKey, prefix) {
 			t.Fatalf("search template %s should use prefix %s", target.templateKey, prefix)
+		}
+	}
+}
+
+// TestAdminPermissionTemplatesSupportWarmup 验证管理员权限 ID 与权限码缓存均可从零预热。
+func TestAdminPermissionTemplatesSupportWarmup(t *testing.T) {
+	logicObj := &SystemCacheLogic{
+		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{})),
+	}
+	wants := map[string]bool{
+		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.AdminPermissionIDsPattern):   false,
+		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.AdminPermissionUUIDsPattern): false,
+	}
+	for _, target := range logicObj.warmupTemplateTargets() {
+		if _, ok := wants[target.templateKey]; ok {
+			wants[target.templateKey] = true
+		}
+	}
+	for templateKey, found := range wants {
+		if !found {
+			t.Fatalf("admin permission warmup target %s not found", templateKey)
+		}
+	}
+}
+
+// TestCacheItemWarmupCapabilityMatchesWhitelist 验证页面只为后端预热白名单展示操作。
+func TestCacheItemWarmupCapabilityMatchesWhitelist(t *testing.T) {
+	logicObj := &SystemCacheLogic{
+		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{})),
+	}
+	for _, item := range logicObj.cacheItems() {
+		want := logicObj.matchWarmupTemplateTarget(item.Key) != nil
+		if item.WarmupSupported != want {
+			t.Fatalf("cache item %s warmupSupported=%v, want %v", item.Index, item.WarmupSupported, want)
+		}
+		if item.Index == "runtime_config_release" && item.WarmupSupported {
+			t.Fatal("runtime_config_release should not expose bulk warmup")
 		}
 	}
 }
@@ -581,6 +624,13 @@ func TestValidateSearchPatternRejectsUnknownWildcard(t *testing.T) {
 	}
 	if err := logicObj.validateSearchPattern("config_uuid:*"); err != nil {
 		t.Fatalf("期望已登记模板搜索放行，实际 error = %v", err)
+	}
+	runtimeReleasePattern := strings.Replace(
+		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RuntimeConfigReleasePattern),
+		"{releaseID}", "*", 1,
+	)
+	if err := logicObj.validateSearchPattern(runtimeReleasePattern); err != nil {
+		t.Fatalf("期望运行配置发布快照模板搜索放行，实际 error = %v", err)
 	}
 	if err := logicObj.validateSearchPattern("permission_tree"); err != nil {
 		t.Fatalf("期望精确 key 搜索放行，实际 error = %v", err)

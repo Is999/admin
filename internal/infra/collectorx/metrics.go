@@ -70,6 +70,16 @@ var (
 		},
 		[]string{"biz_type"},
 	)
+	// collectorLeaseRenewTotal 统计 Redis 幂等和失败账本租约续期结果。
+	collectorLeaseRenewTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "admin",
+			Subsystem: "collector",
+			Name:      "lease_renew_total",
+			Help:      "Collector 所有权租约续期累计次数。",
+		},
+		[]string{"lease", "result"},
+	)
 	// collectorProcessorBatchSize 统计 Collector Processor 单批事件数量。
 	collectorProcessorBatchSize = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -128,12 +138,22 @@ func ensureMetricsRegistered() {
 			collectorFailurePersistEventsTotal,
 			collectorFailurePersistDuration,
 			collectorFailureDeadEventsTotal,
+			collectorLeaseRenewTotal,
 			collectorProcessorBatchSize,
 			collectorProcessorBatchDuration,
 			collectorProcessorEventsTotal,
 			authSecurityEventsTotal,
 		)
 	})
+}
+
+// recordLeaseRenew 记录所有权租约续期结果。
+func recordLeaseRenew(lease string, result string) {
+	ensureMetricsRegistered()
+	collectorLeaseRenewTotal.WithLabelValues(
+		normalizeMetricLabel(lease, "unknown"),
+		normalizeMetricLabel(result, "unknown"),
+	).Inc()
 }
 
 // normalizeMetricLabel 统一规整指标 label，避免空值和无序输入污染指标维度。

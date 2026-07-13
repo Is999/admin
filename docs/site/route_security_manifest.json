@@ -30,7 +30,9 @@
         "secureCode"
       ],
       "responseSign": [
-        "token"
+        "token",
+        "user.phone",
+        "user.buildMFAURL"
       ],
       "responseCipher": [
         "token",
@@ -85,36 +87,12 @@
       "requestSign": [],
       "requestCipher": [],
       "responseSign": [
-        "token"
-      ],
-      "responseCipher": [
-        "token"
-      ]
-    },
-    {
-      "alias": "auth.verify_account",
-      "method": "POST",
-      "path": "/api/auth/verify-account",
-      "access": "public",
-      "describe": "验证账号并生成MFA绑定信息",
-      "requestSign": [
-        "username",
-        "password",
-        "secureCode",
-        "key",
-        "captcha"
-      ],
-      "requestCipher": [
-        "password",
-        "secureCode"
-      ],
-      "responseSign": [
-        "token"
+        "token",
+        "phone"
       ],
       "responseCipher": [
         "token",
-        "user.phone",
-        "user.buildMFAURL"
+        "phone"
       ]
     },
     {
@@ -125,7 +103,10 @@
       "describe": "获取当前管理员资料",
       "requestSign": [],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": [
+        "phone",
+        "buildMFAURL"
+      ],
       "responseCipher": [
         "phone",
         "buildMFAURL"
@@ -161,8 +142,12 @@
         "secure",
         "mfaSecureKey"
       ],
-      "responseSign": [],
-      "responseCipher": []
+      "responseSign": [
+        "buildMFAURL"
+      ],
+      "responseCipher": [
+        "buildMFAURL"
+      ]
     },
     {
       "alias": "admin.list",
@@ -221,6 +206,8 @@
         "phone",
         "password",
         "mfaSecureKey",
+        "avatar",
+        "description",
         "twoStepKey",
         "twoStepValue"
       ],
@@ -329,18 +316,18 @@
       "access": "auth",
       "describe": "编辑管理员",
       "requestSign": [
-        "username",
         "realName",
         "email",
         "phone",
+        "avatar",
+        "description",
         "password",
-        "mfaSecureKey",
+        "isUpdateRoles",
         "twoStepKey",
         "twoStepValue"
       ],
       "requestCipher": [
         "password",
-        "mfaSecureKey",
         "twoStepKey",
         "twoStepValue"
       ],
@@ -585,8 +572,12 @@
       "describe": "生成管理员MFA绑定地址",
       "requestSign": [],
       "requestCipher": [],
-      "responseSign": [],
-      "responseCipher": []
+      "responseSign": [
+        "buildMFAURL"
+      ],
+      "responseCipher": [
+        "buildMFAURL"
+      ]
     },
     {
       "alias": "profile.update_password",
@@ -682,8 +673,12 @@
       "describe": "个人中心重新生成MFA秘钥",
       "requestSign": [],
       "requestCipher": [],
-      "responseSign": [],
-      "responseCipher": []
+      "responseSign": [
+        "buildMFAURL"
+      ],
+      "responseCipher": [
+        "buildMFAURL"
+      ]
     },
     {
       "alias": "profile.update_avatar",
@@ -974,6 +969,17 @@
       "responseCipher": []
     },
     {
+      "alias": "cache.server.info",
+      "method": "GET",
+      "path": "/api/caches/metrics",
+      "access": "auth",
+      "describe": "查看表缓存运行指标",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
       "alias": "cache.key.info",
       "method": "GET",
       "path": "/api/caches/key-info",
@@ -1069,7 +1075,14 @@
       "describe": "查询秘钥详情",
       "requestSign": [],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": [
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "versionList"
+      ],
       "responseCipher": [
         "aesKeyRef",
         "aesIvRef",
@@ -1378,6 +1391,17 @@
       "path": "/api/admin-messages/sent",
       "access": "auth",
       "describe": "查询管理员已发送消息",
+      "requestSign": [],
+      "requestCipher": [],
+      "responseSign": [],
+      "responseCipher": []
+    },
+    {
+      "alias": "message.receiver_options",
+      "method": "GET",
+      "path": "/api/admin-messages/receiver-options",
+      "access": "auth",
+      "describe": "查询管理员消息可用收件人选项",
       "requestSign": [],
       "requestCipher": [],
       "responseSign": [],

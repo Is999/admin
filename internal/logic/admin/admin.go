@@ -7,6 +7,7 @@ import (
 	"admin/helper"
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
+	filelogic "admin/internal/logic/file"
 	rbaclogic "admin/internal/logic/rbac"
 	securitylogic "admin/internal/logic/security"
 	"fmt"
@@ -16,14 +17,22 @@ import (
 	"time"
 
 	"admin/internal/model"
+	"admin/internal/requestctx"
 	"admin/internal/svc"
 	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
 	tablecache "github.com/Is999/table-cache"
 	"github.com/golang-jwt/jwt/v4"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+)
+
+const (
+	// adminLoginDummyPasswordHash 用于不存在账号的等时 bcrypt 校验，避免通过响应耗时枚举管理员账号。
+	adminLoginDummyPasswordHash = "$2y$10$ory3FZfUy1VExaUHmEkeluYtVtP/4CiCCfeSPfD12T9dbpWqO52Eq"
 )
 
 // AdminLogic 承载管理员登录、会话、账号创建和权限码查询等核心逻辑。
@@ -45,6 +54,15 @@ func buildAdminInfoCache(admin *model.Admin, token string) *types.AdminInfo {
 
 // Login 校验管理员账号密码，更新登录态并写入缓存会话信息。
 func (l *AdminLogic) Login(req *types.LoginReq) *types.BizResult {
+	if err := securitylogic.NewSecurityLogic(l.Ctx, l.Svc).CheckAdminLoginIP(req.IP); err != nil {
+		if errors.Is(err, securitylogic.ErrAdminIPNotAllowed) {
+			return types.Forbidden(i18n.MsgKeyAdminIPNotAllowed).
+				ToBizResult().
+				WithError(err)
+		}
+		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+			"AdminLogic.Login 校验登录IP失败").ToBizResult()
+	}
 	// 登录属于强一致鉴权链路，必须直接查主库，避免主从延迟导致禁用/改密状态未及时生效。
 	admin, err := model.FindUserByName(l.Svc.WriteDB(svc.DatabaseMain), req.Username)
 	if err != nil {
@@ -53,15 +71,13 @@ func (l *AdminLogic) Login(req *types.LoginReq) *types.BizResult {
 	}
 
 	if admin == nil {
-		return types.NotFound(i18n.MsgKeyAccountPwdInvalid, nil,
-			"AdminLogic.Login 账号[%s]不存在", req.Username).ToBizResult()
+		// 账号不存在时仍执行固定哈希校验，使失败路径耗时接近，避免通过响应时间枚举管理员账号。
+		_ = bcrypt.CompareHashAndPassword([]byte(adminLoginDummyPasswordHash), []byte(req.Password))
+		return invalidAdminPasswordResult(errors.Errorf("AdminLogic.Login 账号[%s]不存在", req.Username))
 	}
 
-	// 比较密码
-	if err = bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(admin.PasswordWithSalt(req.Password))); err != nil {
-		return types.NewBizResult(codes.InvalidPassword).
-			SetI18nMessage(i18n.MsgKeyInvalidPassword).
-			WithError(errors.Errorf("AdminLogic.Login 账号[%s]密码错误", req.Username))
+	if err = bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(req.Password)); err != nil {
+		return invalidAdminPasswordResult(errors.Errorf("AdminLogic.Login 账号[%s]密码错误", req.Username))
 	}
 
 	// 检查用户状态
@@ -71,15 +87,16 @@ func (l *AdminLogic) Login(req *types.LoginReq) *types.BizResult {
 			WithError(errors.Errorf("AdminLogic.Login 账号[%s]已被禁用", req.Username))
 	}
 
-	// 更新最后登录时间和 IP
-	admin.LastLoginIP = req.IP
+	// 更新最后登录时间、IP 与离线归属地；归属地查询异常不影响登录主流程。
+	l.setLastLoginIP(admin, req.IP)
 	admin.LastLoginTime = time.Now()
 	admin.UpdatedAt = time.Now()
 
 	update := map[string]any{
-		"last_login_time": admin.LastLoginTime,
-		"last_login_ip":   admin.LastLoginIP,
-		"updated_at":      admin.UpdatedAt,
+		"last_login_time":   admin.LastLoginTime,
+		"last_login_ip":     admin.LastLoginIP,
+		"last_login_ipaddr": admin.LastLoginIPAddr,
+		"updated_at":        admin.UpdatedAt,
 	}
 	if err = model.UpdateAdmin(l.Svc.WriteDB(svc.DatabaseMain), admin.ID, update); err != nil {
 		return types.DBError(i18n.MsgKeyInternalErrorFormat, err,
@@ -101,7 +118,6 @@ func (l *AdminLogic) Login(req *types.LoginReq) *types.BizResult {
 		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 			"AdminLogic.Login 账号[%s]缓存用户信息失败", req.Username).ToBizResult()
 	}
-	_ = cacheLogic.ClearAdminLogoutToken(admin.ID)
 
 	userInfo, err := securitylogic.NewSecurityLogic(l.Ctx, l.Svc).BuildProfileInfo(admin, token)
 	if err != nil {
@@ -117,17 +133,33 @@ func (l *AdminLogic) Login(req *types.LoginReq) *types.BizResult {
 		})
 }
 
+// setLastLoginIP 同步更新最后登录 IP 与其归属地；未启用或未命中时清空旧归属地。
+func (l *AdminLogic) setLastLoginIP(admin *model.Admin, ip string) {
+	ip = requestctx.NormalizeClientIP(ip)
+	admin.LastLoginIP = ip
+	admin.LastLoginIPAddr = ""
+	if ip != "" && l.Svc.IPRegion != nil {
+		admin.LastLoginIPAddr = l.Svc.IPRegion.Lookup(ip)
+	}
+	if ip != "" {
+		requestctx.SetClientIPRegion(l.Ctx, ip, admin.LastLoginIPAddr)
+	}
+}
+
+// invalidAdminPasswordResult 返回统一的账号或密码错误，避免向外暴露管理员账号是否存在。
+func invalidAdminPasswordResult(err error) *types.BizResult {
+	return types.NewBizResult(codes.InvalidPassword).
+		SetI18nMessage(i18n.MsgKeyAccountPwdInvalid).
+		WithError(err)
+}
+
 // Logout 清理当前管理员缓存登录态，完成显式登出。
 func (l *AdminLogic) Logout(ctxAdmin *helper.CtxAdmin) *types.BizResult {
 	cacheLogic := cachelogic.NewCacheLogic(l.Ctx, l.Svc)
-	if err := cacheLogic.MarkAdminLogoutToken(ctxAdmin.ID, l.AccessToken(), 7*24*time.Hour); err != nil {
-		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
-			"AdminLogic.Logout 账号[%s]记录登出令牌失败", ctxAdmin.Name).ToBizResult()
-	}
-	err := cacheLogic.DeleteAdminInfo(ctxAdmin.ID)
+	_, err := cacheLogic.DeleteAdminSessionForLogout(ctxAdmin.ID, l.AccessToken())
 	if err != nil {
 		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
-			"AdminLogic.Logout 账号[%s]清理缓存失败", ctxAdmin.Name).ToBizResult()
+			"AdminLogic.Logout 账号[%s]原子清理当前会话失败", ctxAdmin.Name).ToBizResult()
 	}
 
 	return types.NewBizResult(codes.Success).
@@ -137,12 +169,18 @@ func (l *AdminLogic) Logout(ctxAdmin *helper.CtxAdmin) *types.BizResult {
 // generateJWT 生成 JWT 令牌，sub/username/ip 会被后续鉴权中间件解析并回填到请求上下文。
 func (l *AdminLogic) generateJWT(userID int, username string, IP string) (string, error) {
 	cfg := l.Svc.CurrentConfig()
+	expiresIn := cfg.JwtExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 86400
+	}
+	now := time.Now()
 	claims := jwt.MapClaims{
 		"sub":      userID,
 		"username": username,
 		"ip":       IP,
-		"iat":      time.Now().Unix(),
-		"exp":      time.Now().Add(7 * 24 * time.Hour).Unix(), // 令牌有效期为7天, 到期后强制重新登录
+		"jti":      uuid.NewString(),
+		"iat":      now.Unix(),
+		"exp":      now.Add(time.Duration(expiresIn) * time.Second).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(cfg.JwtSecret))
@@ -166,6 +204,16 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 	if exists {
 		return AdminNameAlreadyExistsResult(req.Username, ErrAdminNameAlreadyExists)
 	}
+	avatar, err := filelogic.NewFileTransferLogicWithContext(l.Ctx, l.Svc).ValidateAdminAvatar(req.Avatar)
+	if err != nil {
+		return types.ParamErrorResult(err).
+			WithError(errors.Wrapf(err, "AdminLogic.Create 账号[%s]头像校验失败", req.Username))
+	}
+	password, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+			"AdminLogic.Create 账号[%s]生成密码哈希失败", req.Username).ToBizResult()
+	}
 	encryptedMFASecret := ""
 	if strings.TrimSpace(req.MfaSecureKey) != "" {
 		encryptedMFASecret, err = securitylogic.NewSecurityLogic(l.Ctx, l.Svc).EncryptAdminMFASecret(req.MfaSecureKey)
@@ -180,7 +228,7 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 		ID:                0,
 		Name:              req.Username,
 		RealName:          req.RealName,
-		Password:          "", // 密码稍后更新
+		Password:          string(password),
 		NeedResetPassword: 1,
 		Email:             req.Email,
 		Phone:             req.Phone,
@@ -188,7 +236,7 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 		// 首次登录阶段允许用户先改密、后续再自行决定是否完成 MFA 绑定，因此新建账号默认保持待启用状态。
 		MfaStatus:       0,
 		Status:          1,
-		Avatar:          req.Avatar,
+		Avatar:          avatar,
 		Description:     req.Description,
 		LastLoginTime:   time.Time{},
 		LastLoginIP:     "",
@@ -196,7 +244,7 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
-	// 创建用户和写入加密密码必须处于同一事务，统一交给闭包事务处理提交/回滚。
+	// 管理员和初始角色必须在同一事务提交，避免账号已创建但角色未绑定。
 	roleIDs := types.UniquePositiveInts(req.RoleIDs)
 	if len(roleIDs) > 0 {
 		if err := (&rbaclogic.AdminRoleLogic{BaseLogic: l.BaseLogic}).EnsureRolesWithinManageScope(roleIDs); err != nil {
@@ -208,16 +256,6 @@ func (l *AdminLogic) Create(req *types.AddAdminReq) *types.BizResult {
 	if err = l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&admin).Error; err != nil {
 			return errors.Wrap(err, "tx.Create 创建用户失败")
-		}
-
-		// 先基于已落库账号信息生成带盐密码，再回写到当前事务中的记录。
-		password, err := bcrypt.GenerateFromPassword([]byte(admin.PasswordWithSalt(req.Password)), bcrypt.DefaultCost)
-		if err != nil {
-			return errors.Wrap(err, "bcrypt.GenerateFromPassword 密码加密失败")
-		}
-
-		if err := tx.Model(&admin).Update("password", string(password)).Error; err != nil {
-			return errors.Wrap(err, "tx.Update 更新用户密码失败")
 		}
 		if len(roleIDs) > 0 {
 			if err := (&AdminManageLogic{AdminLogic: l}).replaceAdminRolesTx(tx, admin.ID, roleIDs); err != nil {
@@ -244,7 +282,11 @@ func (l *AdminLogic) RequireOperateMFATwoStep(scenario int, twoStepKey string, t
 		return types.Nil
 	}
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
-	if !securityLogic.NeedOperateMFATwoStep(scenario) {
+	needTwoStep, err := securityLogic.NeedOperateMFATwoStep(scenario)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if !needTwoStep {
 		return nil
 	}
 	return securityLogic.VerifyMFATwoStepTicket(ctxAdmin.ID, scenario, twoStepKey, twoStepValue)
@@ -296,31 +338,23 @@ func (l *AdminLogic) GetAdminProfileByID(id int) (*types.AdminProfile, error) {
 // GetLoginAfterInfo 返回前端登录后初始化所需的管理员资料与基础角色信息。
 func (l *AdminLogic) GetLoginAfterInfo(ctxAdmin *helper.CtxAdmin) *types.BizResult {
 	info, err := cachelogic.NewCacheLogic(l.Ctx, l.Svc).GetAdminInfo(ctxAdmin.ID)
-	if err != nil {
-		// 缓存 miss 时回源数据库补全信息，避免因缓存丢失导致前端登录后初始化接口报错。
-		profile, err := l.GetAdminProfileByID(ctxAdmin.ID)
-		if err != nil {
-			return &types.BizResult{
-				Code:       codes.ServerError,
-				MessageKey: i18n.MsgKeyAdminInfoFetchFail,
-				Error:      errors.Wrapf(err, "AdminLogic.GetCurrentAdminInfo 账号[%s]l.GetAdminByID 获取管理员信息失败", ctxAdmin.Name),
-			}
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return &types.BizResult{
+			Code:       codes.InternalError,
+			MessageKey: i18n.MsgKeyCacheInfoFail,
+			Error:      errors.Wrapf(err, "AdminLogic.GetLoginAfterInfo 账号[%s]读取 Redis 会话失败", ctxAdmin.Name),
 		}
-
-		info = profile.ToAdminInfo(l.AccessToken())
-
-		// 缓存用户信息
-		if err = cachelogic.NewCacheLogic(l.Ctx, l.Svc).SetAdminInfo(ctxAdmin.ID, info); err != nil {
-			return &types.BizResult{
-				Code:       codes.InternalError,
-				MessageKey: i18n.MsgKeyCacheInfoFail,
-				Error:      errors.Wrapf(err, "AdminLogic.Login 账号[%s]NewCacheLogic.SetAdminInfo 缓存用户信息失败", info.UserName),
-			}
+	}
+	if errors.Is(err, redis.Nil) || info == nil {
+		// 鉴权后的缓存 miss 代表会话已过期或被撤销，禁止使用当前请求旧 token 从数据库复活登录态。
+		return &types.BizResult{
+			Code:       codes.Unauthorized,
+			MessageKey: i18n.MsgKeyNeedLogin,
+			Error:      errors.Errorf("AdminLogic.GetLoginAfterInfo 账号[%s]Redis 会话不存在", ctxAdmin.Name),
 		}
 	}
 
-	// 登录后初始化继续保持“缓存优先、miss 自动回源并回填缓存”的统一语义，
-	// 避免每次进入后台都直接访问 MySQL。
+	// 登录后初始化只读取已经通过鉴权的当前会话，避免每次进入后台都直接访问 MySQL。
 	roleLogic := &rbaclogic.AdminRoleLogic{BaseLogic: l.BaseLogic}
 	roleIDs, err := roleLogic.EnabledRoleIDsByUserWithCache(ctxAdmin.ID)
 	if err != nil {
@@ -401,60 +435,59 @@ func (l *AdminLogic) GetUserPermissionCodes(userID int) *types.BizResult {
 	}
 }
 
-// RefreshAccessToken 刷新当前管理员访问令牌，并同步回写缓存中的 token 字段。
+// RefreshAccessToken 为当前有效会话主动续签访问令牌，并原子续写缓存 token 与 TTL。
 func (l *AdminLogic) RefreshAccessToken(ctxAdmin *helper.CtxAdmin) *types.BizResult {
 	cacheLogic := cachelogic.NewCacheLogic(l.Ctx, l.Svc)
+	expectedToken := strings.TrimSpace(l.AccessToken())
+	if expectedToken == "" {
+		return &types.BizResult{
+			Code:       codes.Unauthorized,
+			MessageKey: i18n.MsgKeyNeedLogin,
+			Error:      errors.New("AdminLogic.RefreshAccessToken 当前请求 token 为空"),
+		}
+	}
 	info, err := cacheLogic.GetAdminInfo(ctxAdmin.ID)
 	ip := l.ClientIP()
-	if err == nil && info != nil {
-		// 缓存中有用户信息，直接生成新Token返回
-		token, err := l.generateJWT(info.ID, info.UserName, ip)
-		if err != nil {
-			return &types.BizResult{
-				Code:       codes.InternalError,
-				MessageKey: i18n.MsgKeyTokenGenerateFail,
-				Error:      errors.Wrapf(err, "AdminLogic.RefreshAccessToken 账号[%s]l.generateJWT 生成新Token失败", info.UserName),
-			}
-		}
-		if err = cacheLogic.SetAdminInfoByField(ctxAdmin.ID, "token", token); err != nil {
-			return &types.BizResult{
-				Code:       codes.InternalError,
-				MessageKey: i18n.MsgKeyTokenCacheFail,
-				Error:      errors.Wrapf(err, "AdminLogic.RefreshAccessToken 账号[%s]cacheLogic.SetAdminInfoByField 更新缓存Token失败", info.UserName),
-			}
-		}
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return &types.BizResult{
-			Code:       codes.Success,
-			MessageKey: i18n.MsgKeySuccess,
-			Data:       map[string]interface{}{"token": token, "isRefresh": true},
+			Code:       codes.InternalError,
+			MessageKey: i18n.MsgKeyCacheInfoFail,
+			Error:      errors.Wrap(err, "AdminLogic.RefreshAccessToken 读取 Redis 会话失败"),
 		}
 	}
-	profile, err := l.GetAdminProfileByID(ctxAdmin.ID)
-	if err != nil {
+	if errors.Is(err, redis.Nil) || info == nil {
 		return &types.BizResult{
-			Code:       codes.ServerError,
-			MessageKey: i18n.MsgKeyAdminInfoFetchFail,
-			Error:      errors.Wrapf(err, "AdminLogic.RefreshAccessToken 账号[%s]GetAdminProfileByID 获取管理员资料失败", ctxAdmin.Name),
+			Code:       codes.Unauthorized,
+			MessageKey: i18n.MsgKeyNeedLogin,
+			Error:      errors.New("AdminLogic.RefreshAccessToken Redis 会话不存在"),
 		}
 	}
-	token, err := l.generateJWT(profile.ID, profile.UserName, ip)
+	token, err := l.generateJWT(info.ID, info.UserName, ip)
 	if err != nil {
 		return &types.BizResult{
 			Code:       codes.InternalError,
 			MessageKey: i18n.MsgKeyTokenGenerateFail,
-			Error:      errors.Wrapf(err, "AdminLogic.RefreshAccessToken 账号[%s]l.generateJWT 生成新Token失败", profile.UserName),
+			Error:      errors.Wrapf(err, "AdminLogic.RefreshAccessToken 账号[%s]l.generateJWT 生成新Token失败", info.UserName),
 		}
 	}
-	if err = cacheLogic.SetAdminInfo(profile.ID, profile.ToAdminInfo(token)); err != nil {
+	activeToken, err := cacheLogic.RotateAdminToken(info.ID, expectedToken, token)
+	if err != nil {
 		return &types.BizResult{
 			Code:       codes.InternalError,
-			MessageKey: i18n.MsgKeyCacheInfoFail,
-			Error:      errors.Wrapf(err, "AdminLogic.RefreshAccessToken 账号[%s]NewCacheLogic.SetAdminInfo 缓存用户信息失败", profile.UserName),
+			MessageKey: i18n.MsgKeyTokenCacheFail,
+			Error:      errors.Wrapf(err, "AdminLogic.RefreshAccessToken 账号[%s]cacheLogic.RotateAdminToken 轮换缓存 token 失败", info.UserName),
+		}
+	}
+	if activeToken == "" {
+		return &types.BizResult{
+			Code:       codes.Unauthorized,
+			MessageKey: i18n.MsgKeyNeedLogin,
+			Error:      errors.Errorf("AdminLogic.RefreshAccessToken 账号[%s]Redis 会话已撤销或已被并发轮换", info.UserName),
 		}
 	}
 	return &types.BizResult{
 		Code:       codes.Success,
 		MessageKey: i18n.MsgKeySuccess,
-		Data:       map[string]interface{}{"token": token, "isRefresh": true},
+		Data:       map[string]interface{}{"token": activeToken, "isRefresh": true},
 	}
 }

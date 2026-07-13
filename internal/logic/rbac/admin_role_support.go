@@ -646,39 +646,24 @@ func subtractSortedInts(left []int, right []int) []int {
 }
 
 // refreshRoleRelatedCache 清理角色相关缓存，确保下一次读取能重建最新数据。
-func (l *AdminRoleLogic) refreshRoleRelatedCache(roleIDs ...int) {
+func (l *AdminRoleLogic) refreshRoleRelatedCache(roleIDs ...int) error {
 	roleIDs = types.UniquePositiveInts(roleIDs)
 	adminIDs, err := l.adminIDsByRoleIDs(roleIDs)
 	if err != nil {
-		corelogic.LogWrappedError(l, err, "AdminRoleLogic.refreshRoleRelatedCache 查询受影响管理员失败 roleIDs=%v", roleIDs)
+		return errors.Wrapf(err, "查询受影响管理员失败 roleIDs=%v", roleIDs)
 	}
-	l.refreshRoleRelatedCacheByScope(roleIDs, adminIDs)
+	return l.refreshRoleRelatedCacheByScope(roleIDs, adminIDs)
 }
 
 // refreshRoleRelatedCacheByScope 按角色与管理员影响范围精确清理缓存。
 // 管理员角色/权限缓存必须按 adminID 精确删除，禁止前缀扫描。
-func (l *AdminRoleLogic) refreshRoleRelatedCacheByScope(roleIDs []int, adminIDs []int) {
-	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
-	if err != nil {
-		corelogic.LogWrappedError(l, err, "AdminRoleLogic.refreshRoleRelatedCacheByScope 初始化表缓存管理器失败")
-		manager = nil
-	}
+func (l *AdminRoleLogic) refreshRoleRelatedCacheByScope(roleIDs []int, adminIDs []int) error {
 	roleCacheKeys := []string{keys.RoleTree, keys.RoleStatus}
 	for _, roleID := range types.UniquePositiveInts(roleIDs) {
 		roleCacheKeys = append(roleCacheKeys, fmt.Sprintf(keys.RolePermission, roleID))
 	}
-	if manager != nil {
-		for _, cacheKey := range roleCacheKeys {
-			physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey)
-			if err := manager.DeleteByKey(l.Ctx, physicalKey); err != nil && !cachelogic.IsTableCacheTargetNotFound(err) {
-				corelogic.LogWrappedError(l, err, "AdminRoleLogic.refreshRoleRelatedCacheByScope 清理角色缓存key[%s]失败", cacheKey)
-			}
-		}
+	if err := cachelogic.DeleteRedisKeysExactBatches(l.BaseLogic, "AdminRoleLogic.refreshRoleRelatedCacheByScope 删除角色缓存", cachelogic.TableCachePhysicalKeys(l.BaseLogic, roleCacheKeys...)); err != nil {
+		return errors.Tag(err)
 	}
-	if l.Redis() != nil {
-		if err := l.RdsDelKeys(cachelogic.TableCachePhysicalKeys(l.BaseLogic, roleCacheKeys...)...); err != nil {
-			corelogic.LogWrappedError(l, err, "AdminRoleLogic.refreshRoleRelatedCacheByScope 兜底删除角色缓存失败 roleIDs=%v", roleIDs)
-		}
-	}
-	cachelogic.InvalidateAdminRoleAndPermissionCacheByAdminIDs(l.BaseLogic, adminIDs...)
+	return cachelogic.InvalidateAdminRoleAndPermissionCacheByAdminIDs(l.BaseLogic, adminIDs...)
 }

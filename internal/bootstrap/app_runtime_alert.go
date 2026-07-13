@@ -7,12 +7,20 @@ import (
 	"admin/internal/svc"
 )
 
-// notifyAppRuntimeAlert 通过任务系统统一上报 App 层运行异常。
+// notifyComponentRegisterFailure 上报组件注册阶段失败；独立告警器未完成装配时安全降级。
+func notifyComponentRegisterFailure(ctx context.Context, svcCtx *svc.ServiceContext, err error) {
+	if svcCtx == nil || err == nil {
+		return
+	}
+	svc.NotifyTaskRuntimeAlert(ctx, svcCtx.RuntimeAlerter, appalert.LifecycleFailure("register", "component_registry", err))
+}
+
+// notifyAppRuntimeAlert 通过独立告警入口上报 App 层运行异常。
 func (a *App) notifyAppRuntimeAlert(ctx context.Context, alert svc.TaskRuntimeAlert) {
 	if a == nil || a.ServiceContext == nil {
 		return
 	}
-	svc.NotifyTaskRuntimeAlert(ctx, a.ServiceContext.Task, alert)
+	svc.NotifyTaskRuntimeAlert(ctx, a.ServiceContext.RuntimeAlerter, alert)
 }
 
 // notifyLifecycleFailure 上报服务启动或平滑停止生命周期失败。

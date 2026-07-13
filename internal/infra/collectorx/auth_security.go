@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+
+	"admin/internal/config"
 )
 
 // 认证风控 Collector 业务类型。
 const (
-	BizTypeAuthSecurity = "auth.security" // 前台 API 认证风控事件
+	BizTypeAuthSecurity = config.CollectorBizTypeAuthSecurity // 前台 API 认证风控事件
 )
 
 // 认证风控事件指标标签兜底值。
@@ -197,14 +199,14 @@ func normalizeAuthSecurityCategory(reason string) string {
 	return authSecurityLabelOther
 }
 
-// normalizeAuthSecurityAppID 归一化站点标签，避免异常值扩大指标维度。
+// normalizeAuthSecurityAppID 归一化站点标签，仅接受字母、数字、点、下划线和短横线。
 func normalizeAuthSecurityAppID(appID string) string {
 	appID = strings.TrimSpace(appID)
 	if appID == "" {
 		return authSecurityLabelUnknown
 	}
 	for _, r := range appID {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
 			continue
 		}
 		return authSecurityLabelOther

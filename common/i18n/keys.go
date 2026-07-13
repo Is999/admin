@@ -287,8 +287,14 @@ const (
 	MsgKeyTaskRegistryWorkflowUserTagOutboxRetryDesc = "task.registry.workflow.user_tag_outbox_retry.desc"
 	// MsgKeyTaskRegistryWorkflowUserTagOutboxRetryHint 表示用户标签 outbox 重派工作流使用提示 key。
 	MsgKeyTaskRegistryWorkflowUserTagOutboxRetryHint = "task.registry.workflow.user_tag_outbox_retry.hint"
-	// MsgKeyTaskReportRetentionWarning 表示任务运行日报 completed 保留期不足提示 key。
+	// MsgKeyTaskReportRetentionWarning 表示任务运行日报终态数据保留期不足提示 key。
 	MsgKeyTaskReportRetentionWarning = "task.report.retention_warning"
+	// MsgKeyTaskReportArchiveTrimWarning 表示 Asynq 失败归档达到裁剪阈值提示 key。
+	MsgKeyTaskReportArchiveTrimWarning = "task.report.archive_trim_warning"
+	// MsgKeyTaskReportScanLimitWarning 表示日报主动扫描截断提示 key。
+	MsgKeyTaskReportScanLimitWarning = "task.report.scan_limit_warning"
+	// MsgKeyTaskReportQueueLimitWarning 是日报队列读取上限提示。
+	MsgKeyTaskReportQueueLimitWarning = "task.report.queue_limit_warning"
 	// MsgKeyHotReloadFailed 表示配置热加载失败状态说明 key。
 	MsgKeyHotReloadFailed = "hot_reload.failed"
 	// MsgKeyHotReloadFingerprintInitFailed 表示初始化配置指纹失败状态说明 key。
@@ -367,6 +373,12 @@ const (
 	MsgKeyAPIRuntimeProfileSyncWarning = "api_runtime.profile_sync_warning"
 	// MsgKeyAPIRuntimeStatusSyncWarning 表示状态已更新但 API 缓存同步失败说明 key。
 	MsgKeyAPIRuntimeStatusSyncWarning = "api_runtime.status_sync_warning"
+	// MsgKeyAPIRuntimeSessionSyncWarning 表示认证版本已更新但 API 会话清理失败说明 key。
+	MsgKeyAPIRuntimeSessionSyncWarning = "api_runtime.session_sync_warning"
+	// MsgKeyAdminCacheInvalidationPending 表示管理员变更已提交但安全缓存失效失败说明 key。
+	MsgKeyAdminCacheInvalidationPending = "admin.cache_invalidation_pending"
+	// MsgKeyCacheSyncPending 表示数据已提交但运行缓存同步失败说明 key。
+	MsgKeyCacheSyncPending = "cache.sync_pending"
 	// MsgKeyCollectorRunPartialFailed 表示 Collector 失败账本重试仍有失败事件说明 key。
 	MsgKeyCollectorRunPartialFailed = "collector.run_partial_failed"
 	// MsgKeyCollectorRunSuccess 表示 Collector 执行完成说明 key。

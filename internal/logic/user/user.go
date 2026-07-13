@@ -95,7 +95,14 @@ func (l *Logic) List(req *types.UserListReq) *types.BizResult {
 	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(types.ListResp[types.UserItem]{List: items, Total: total})
+		WithData(types.ListResp[types.UserItem]{
+			List:  items,
+			Total: total,
+			Meta: types.UserListMeta{
+				ExactTotal:            true,
+				StatusFilterSupported: true,
+			},
+		})
 }
 
 // listByUserIdentity 在物理分表阶段通过身份索引定位用户，避免扫描所有分表。
@@ -123,7 +130,7 @@ func (l *Logic) listByUserIdentity(db *gorm.DB, req *types.UserListReq) *types.B
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 获取用户身份索引表失败").ToBizResult()
 	}
-	dbq := db.Model(&model.UserIdentity{}).Table(userIdentityListTableName(tableName, identityType, req.Username))
+	dbq := db.Model(&model.UserIdentity{}).Table(tableName)
 	if req.ID > 0 {
 		dbq = dbq.Where("user_id = ?", req.ID)
 	}
@@ -135,28 +142,59 @@ func (l *Logic) listByUserIdentity(db *gorm.DB, req *types.UserListReq) *types.B
 	} else if req.Username != "" {
 		dbq = dbq.Where("identity_value LIKE ?", strings.ToLower(req.Username)+"%")
 	}
-	orderField := userIdentityOrderField(req.OrderBy, identityType)
 	orderDirection := corelogic.NormalizedOrderDirection(req.Order)
+	if req.CursorID > 0 {
+		if orderDirection == "asc" {
+			dbq = dbq.Where("user_id > ?", req.CursorID)
+		} else {
+			dbq = dbq.Where("user_id < ?", req.CursorID)
+		}
+	}
 	var identities []model.UserIdentity
-	if err := dbq.Order(orderField + " " + orderDirection).Limit(req.PageSize).Find(&identities).Error; err != nil {
+	if err := dbq.Order("user_id " + orderDirection).Limit(req.PageSize + 1).Find(&identities).Error; err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 查询前台用户身份索引失败").ToBizResult()
+	}
+	hasMore := len(identities) > req.PageSize
+	if hasMore {
+		identities = identities[:req.PageSize]
+	}
+	for index := range identities {
+		identities[index].IdentityType = identityType
+	}
+	users, err := model.FindUsersByIdentityRows(db, identities)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 批量读取前台用户失败").ToBizResult()
 	}
 	items := make([]types.UserItem, 0, len(identities))
 	for index := range identities {
-		identities[index].IdentityType = identityType
 		identity := identities[index]
-		row, err := model.FindUserByIdentityRow(db, &identity)
-		if err != nil {
-			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.List 读取前台用户 ID[%d]失败", identity.UserID).ToBizResult()
-		}
+		row := users[identity.UserID]
 		if req.Username != "" && !strings.HasPrefix(strings.ToLower(row.Username), strings.ToLower(req.Username)) {
 			continue
 		}
-		items = append(items, userModelToItem(*row))
+		items = append(items, userModelToItem(row))
+	}
+	nextCursorID := int64(0)
+	if hasMore && len(identities) > 0 {
+		nextCursorID = identities[len(identities)-1].UserID
+	}
+	// 分表阶段用“当前已浏览行数 + 下一页占位”驱动分页控件，不执行高成本实时 COUNT。
+	total := int64((req.Page-1)*req.PageSize + len(items))
+	if hasMore {
+		total++
 	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(types.ListResp[types.UserItem]{List: items, Total: int64(len(items)), Meta: types.UserListMeta{ExactTotal: false}})
+		WithData(types.ListResp[types.UserItem]{
+			List:  items,
+			Total: total,
+			Meta: types.UserListMeta{
+				ExactTotal:            false,
+				HasMore:               hasMore,
+				NextCursorID:          nextCursorID,
+				StatusFilterSupported: false,
+			},
+		})
 }
 
 // Get 查询前台用户详情。
@@ -242,7 +280,7 @@ func (l *Logic) Update(req *types.UpdateUserReq) *types.BizResult {
 	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioUserManage, req.TwoStepKey, req.TwoStepValue); err != nil {
 		return l.MFABizResult(err)
 	}
-	row, err := l.getUser(req.ID)
+	row, err := l.getUserForMutation(req.ID)
 	if err != nil {
 		return userFindResult("UserLogic.Update", req.ID, err)
 	}
@@ -259,7 +297,7 @@ func (l *Logic) Update(req *types.UpdateUserReq) *types.BizResult {
 		if err = model.UpdateUserProfileWithIdentities(db, req.ID, updates, l.Svc.CurrentConfig().AppKey); err != nil {
 			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.Update 更新前台用户 ID[%d]失败", req.ID).ToBizResult()
 		}
-		row, err = l.getUser(req.ID)
+		row, err = l.getUserForMutation(req.ID)
 		if err != nil {
 			return userFindResult("UserLogic.Update.reload", req.ID, err)
 		}
@@ -271,7 +309,7 @@ func (l *Logic) Update(req *types.UpdateUserReq) *types.BizResult {
 		Message: l.Message(i18n.MsgKeyAPIRuntimeProfileUnchanged),
 	}
 	if len(updates) > 0 {
-		syncResp, err = l.syncUserRuntime(req.ID, true, false, "admin_update_user_profile")
+		syncResp, err = l.syncUserRuntime(req.ID, true, false, 0, "admin_update_user_profile")
 		if err != nil {
 			syncResp = l.apiRuntimeSyncWarning(req.ID, syncResp, i18n.MsgKeyAPIRuntimeProfileSyncWarning, err)
 		}
@@ -286,7 +324,7 @@ func (l *Logic) UpdateStatus(req *types.UserStatusReq) *types.BizResult {
 	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioUserManage, req.TwoStepKey, req.TwoStepValue); err != nil {
 		return l.MFABizResult(err)
 	}
-	row, err := l.getUser(req.ID)
+	row, err := l.getUserForMutation(req.ID)
 	if err != nil {
 		return userFindResult("UserLogic.UpdateStatus", req.ID, err)
 	}
@@ -298,33 +336,25 @@ func (l *Logic) UpdateStatus(req *types.UserStatusReq) *types.BizResult {
 		Message: l.Message(i18n.MsgKeyAPIRuntimeStatusUnchanged),
 	}
 	if row.Status != status {
-		if _, err := l.runtimeClient(); err != nil {
-			return apiRuntimeRequiredResult("UserLogic.UpdateStatus API 运行态同步未配置", err)
-		}
-		if status == model.UserStatusDisabled {
-			syncResp, err = l.syncUserRuntime(req.ID, true, true, "admin_disable_user")
-			if err != nil {
-				return apiRuntimeSyncFailedResult("UserLogic.UpdateStatus 禁用前同步前台用户登录态失败", err)
-			}
-		}
 		db, err := l.userWriteDB()
 		if err != nil {
 			return l.userDBError("UserLogic.UpdateStatus 前台用户库未配置", err)
 		}
 		now := time.Now()
-		if err = model.UpdateUser(db, req.ID, map[string]any{
-			"status":     status,
-			"updated_at": now,
-		}); err != nil {
+		authVersion, err := model.UpdateUserStatusAndAuthVersion(db, req.ID, status, now)
+		if err != nil {
 			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.UpdateStatus 修改前台用户 ID[%d]状态失败", req.ID).ToBizResult()
 		}
 		row.Status = status
+		row.AuthVersion = authVersion
 		row.UpdatedAt = now
-		if status != model.UserStatusDisabled {
-			syncResp, err = l.syncUserRuntime(req.ID, true, false, "admin_update_user_status")
-			if err != nil {
-				syncResp = l.apiRuntimeSyncWarning(req.ID, syncResp, i18n.MsgKeyAPIRuntimeStatusSyncWarning, err)
-			}
+		reason := "admin_update_user_status"
+		if status == model.UserStatusDisabled {
+			reason = "admin_disable_user"
+		}
+		syncResp, err = l.syncUserRuntime(req.ID, true, true, authVersion, reason)
+		if err != nil {
+			syncResp = l.apiRuntimeSyncWarning(req.ID, syncResp, i18n.MsgKeyAPIRuntimeStatusSyncWarning, err)
 		}
 	}
 	return types.NewBizResult(codes.UpdateSuccess).
@@ -337,30 +367,29 @@ func (l *Logic) ResetPassword(req *types.ResetUserPasswordReq) *types.BizResult 
 	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioUserManage, req.TwoStepKey, req.TwoStepValue); err != nil {
 		return l.MFABizResult(err)
 	}
-	row, err := l.getUser(req.ID)
+	row, err := l.getUserForMutation(req.ID)
 	if err != nil {
 		return userFindResult("UserLogic.ResetPassword", req.ID, err)
-	}
-	if _, err := l.runtimeClient(); err != nil {
-		return apiRuntimeRequiredResult("UserLogic.ResetPassword API 运行态同步未配置", err)
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(req.Password)), bcrypt.DefaultCost)
 	if err != nil {
 		return types.ServerError(i18n.MsgKeyInternalError, err, "UserLogic.ResetPassword 生成前台用户 ID[%d]密码哈希失败", req.ID).ToBizResult()
-	}
-	syncResp, err := l.syncUserRuntime(req.ID, false, true, "admin_reset_user_password")
-	if err != nil {
-		return apiRuntimeSyncFailedResult("UserLogic.ResetPassword 更新密码前同步前台用户登录态失败", err)
 	}
 	db, err := l.userWriteDB()
 	if err != nil {
 		return l.userDBError("UserLogic.ResetPassword 前台用户库未配置", err)
 	}
 	now := time.Now()
-	if err = model.UpdateUserPasswordHash(db, req.ID, string(passwordHash), now); err != nil {
+	authVersion, err := model.UpdateUserPasswordAndAuthVersion(db, req.ID, string(passwordHash), now)
+	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.ResetPassword 更新前台用户 ID[%d]密码失败", req.ID).ToBizResult()
 	}
+	row.AuthVersion = authVersion
 	row.UpdatedAt = now
+	syncResp, err := l.syncUserRuntime(req.ID, false, true, authVersion, "admin_reset_user_password")
+	if err != nil {
+		syncResp = l.apiRuntimeSyncWarning(req.ID, syncResp, i18n.MsgKeyAPIRuntimeSessionSyncWarning, err)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess).
 		WithData(types.UserMutationResp{Item: ptrUserItem(userModelToItem(*row)), Sync: syncResp})
@@ -371,12 +400,25 @@ func (l *Logic) SyncRuntime(req *types.SyncUserRuntimeReq) *types.BizResult {
 	if err := l.RequireOperateMFATwoStep(securitylogic.MFAScenarioUserManage, req.TwoStepKey, req.TwoStepValue); err != nil {
 		return l.MFABizResult(err)
 	}
-	if _, err := l.getUser(req.ID); err != nil {
+	row, err := l.getUserForMutation(req.ID)
+	if err != nil {
 		return userFindResult("UserLogic.SyncRuntime", req.ID, err)
 	}
-	syncResp, err := l.syncUserRuntime(req.ID, req.Profile, req.Sessions, "admin_manual_user_runtime_sync")
+	authVersion := uint64(0)
+	if req.Sessions {
+		db, err := l.userWriteDB()
+		if err != nil {
+			return l.userDBError("UserLogic.SyncRuntime 前台用户库未配置", err)
+		}
+		authVersion, err = model.BumpUserAuthVersion(db, req.ID, time.Now())
+		if err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err, "UserLogic.SyncRuntime 递增前台用户 ID[%d]认证版本失败", req.ID).ToBizResult()
+		}
+		row.AuthVersion = authVersion
+	}
+	syncResp, err := l.syncUserRuntime(req.ID, req.Profile, req.Sessions, authVersion, "admin_manual_user_runtime_sync")
 	if err != nil {
-		return apiRuntimeSyncFailedResult("UserLogic.SyncRuntime 手动同步前台用户运行态失败", err)
+		syncResp = l.apiRuntimeSyncWarning(req.ID, syncResp, i18n.MsgKeyAPIRuntimeSessionSyncWarning, err)
 	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess).
@@ -423,6 +465,22 @@ func (l *Logic) getUser(id int64) (*model.User, error) {
 	return row, nil
 }
 
+// getUserForMutation 从主库读取待修改用户，避免副本延迟跳过敏感更新或返回旧资料。
+func (l *Logic) getUserForMutation(id int64) (*model.User, error) {
+	db, err := l.userWriteDB()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	row, err := model.FindUserByID(db, id)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if row == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return row, nil
+}
+
 // runtimeClient 返回 API 内网运行态客户端。
 func (l *Logic) runtimeClient() (*apiruntime.Client, error) {
 	if l == nil || l.Svc == nil {
@@ -432,14 +490,14 @@ func (l *Logic) runtimeClient() (*apiruntime.Client, error) {
 }
 
 // syncUserRuntime 调用 API 失效资料缓存或登录态。
-func (l *Logic) syncUserRuntime(userID int64, profile bool, sessions bool, reason string) (types.UserRuntimeSyncResp, error) {
+func (l *Logic) syncUserRuntime(userID int64, profile bool, sessions bool, authVersion uint64, reason string) (types.UserRuntimeSyncResp, error) {
 	client, err := l.runtimeClient()
 	if err != nil {
-		return types.UserRuntimeSyncResp{Enabled: false, Success: false, UserID: userID, Message: l.Message(i18n.MsgKeyAPIRuntimeNotConfigured)}, errors.Tag(err)
+		return types.UserRuntimeSyncResp{Enabled: false, Success: false, UserID: userID, AuthVersion: authVersion, Message: l.Message(i18n.MsgKeyAPIRuntimeNotConfigured)}, errors.Tag(err)
 	}
-	resp, err := client.SyncUserRuntime(l.Ctx, userID, profile, sessions, reason)
+	resp, err := client.SyncUserRuntime(l.Ctx, userID, profile, sessions, authVersion, reason)
 	if err != nil {
-		return types.UserRuntimeSyncResp{Enabled: true, Success: false, UserID: userID, Message: err.Error()}, errors.Tag(err)
+		return types.UserRuntimeSyncResp{Enabled: true, Success: false, UserID: userID, AuthVersion: authVersion}, errors.Tag(err)
 	}
 	return *resp, nil
 }
@@ -473,36 +531,13 @@ func userOrderField(orderBy string) string {
 	}
 }
 
-// userIdentityOrderField 把前端排序字段映射到身份索引表字段。
-func userIdentityOrderField(orderBy string, identityType string) string {
-	switch strings.TrimSpace(orderBy) {
-	case "username":
-		if identityType != model.UserIdentityTypeUsername {
-			return "user_id"
-		}
-		return "identity_value"
-	case "shardNo":
-		return "user_shard_no"
-	default:
-		return "user_id"
-	}
-}
-
-// userIdentityListTableName 返回分表列表身份表名；用户名左前缀搜索固定提示唯一索引，避免大表路径退化全扫。
-func userIdentityListTableName(tableName string, identityType string, username string) string {
-	if identityType == model.UserIdentityTypeUsername && strings.TrimSpace(username) != "" {
-		return tableName + " FORCE INDEX (uk_user_identity_value)"
-	}
-	return tableName
-}
-
 // validateUserIdentityListReq 校验分表阶段身份索引列表支持的过滤和排序边界。
 func validateUserIdentityListReq(req *types.UserListReq) error {
 	if req == nil {
 		return errors.New("用户列表请求为空")
 	}
-	if req.Page > 1 {
-		return errors.New("用户分表阶段列表不支持深分页，请使用 ID、用户名、邮箱或手机号缩小查询范围")
+	if req.Page > 1 && req.CursorID <= 0 {
+		return errors.New("用户分表阶段翻页必须携带上一页返回的游标")
 	}
 	if strings.TrimSpace(req.Email) != "" && strings.TrimSpace(req.Phone) != "" {
 		return errors.New("用户分表阶段列表不支持同时按邮箱和手机号查询")
@@ -511,10 +546,10 @@ func validateUserIdentityListReq(req *types.UserListReq) error {
 		return errors.New("用户分表阶段列表不支持按状态筛选，避免扫描所有用户分表")
 	}
 	switch strings.TrimSpace(req.OrderBy) {
-	case "", "id", "username", "shardNo":
+	case "", "id":
 		return nil
 	default:
-		return errors.New("用户分表阶段列表仅支持按 id、username、shardNo 排序")
+		return errors.New("用户分表阶段列表仅支持按 id 排序")
 	}
 }
 
@@ -592,20 +627,13 @@ func apiRuntimeRequiredResult(context string, err error) *types.BizResult {
 		WithError(errors.Wrap(err, context))
 }
 
-// apiRuntimeSyncFailedResult 返回运行态同步失败响应。
-func apiRuntimeSyncFailedResult(context string, err error) *types.BizResult {
-	return types.ServerError(i18n.MsgKeyInternalError, err, context).ToBizResult()
-}
-
 // apiRuntimeSyncWarning 把写库后同步失败转换为可重试的运行态提示，避免误报数据库写入失败。
 func (l *Logic) apiRuntimeSyncWarning(userID int64, resp types.UserRuntimeSyncResp, fallbackKey string, err error) types.UserRuntimeSyncResp {
+	corelogic.LogWrappedError(l.Logger, err, "UserLogic API 运行态同步失败 user_id=%d", userID)
 	resp.Success = false
 	resp.UserID = userID
 	if resp.Message == "" {
 		resp.Message = l.Message(fallbackKey)
-	}
-	if err != nil && !strings.Contains(resp.Message, err.Error()) {
-		resp.Message = resp.Message + "：" + err.Error()
 	}
 	return resp
 }

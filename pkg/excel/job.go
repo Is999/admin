@@ -100,6 +100,11 @@ func (s *RedisStore) Load(ctx context.Context, jobID string, target any) error {
 
 // Save 把指定任务状态保存到 Redis。
 func (s *RedisStore) Save(ctx context.Context, jobID string, value any) error {
+	return s.SaveWithTTL(ctx, jobID, value, s.ttl)
+}
+
+// SaveWithTTL 按调用方指定的保留时间保存任务状态。
+func (s *RedisStore) SaveWithTTL(ctx context.Context, jobID string, value any, ttl time.Duration) error {
 	if s == nil || s.client == nil {
 		return errors.Errorf("Redis 状态存储未初始化")
 	}
@@ -111,7 +116,10 @@ func (s *RedisStore) Save(ctx context.Context, jobID string, value any) error {
 	if err != nil {
 		return errors.Wrapf(err, "imex.RedisStore.Save 序列化任务[%s]失败", jobID)
 	}
-	if err := s.client.Set(ctx, fmt.Sprintf(s.keyPattern, jobID), body, s.ttl).Err(); err != nil {
+	if ttl <= 0 {
+		return errors.Errorf("任务状态保留时间必须大于0")
+	}
+	if err := s.client.Set(ctx, fmt.Sprintf(s.keyPattern, jobID), body, ttl).Err(); err != nil {
 		return errors.Wrapf(err, "imex.RedisStore.Save 保存任务[%s]失败", jobID)
 	}
 	return nil

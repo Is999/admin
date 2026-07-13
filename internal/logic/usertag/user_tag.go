@@ -216,9 +216,7 @@ func buildUserTagWorkflowReq(req *types.TriggerUserTagWorkflowReq, cfg config.Us
 		}
 	}
 	for _, uid := range req.UIDs {
-		if uid > 0 {
-			targets = append(targets, "uid="+strconv.FormatInt(uid, 10))
-		}
+		targets = append(targets, "uid="+uid)
 	}
 	if req.BatchSize > 0 {
 		targets = append(targets, "batch_size="+strconv.Itoa(req.BatchSize))
@@ -270,7 +268,7 @@ func defaultUserTagUniqueKey(req *types.TriggerUserTagWorkflowReq) string {
 	canonical := strings.Join([]string{
 		"mode=" + mode,
 		"tags=" + joinInts(req.TagTypes),
-		"uids=" + joinInt64s(req.UIDs),
+		"uids=" + strings.Join(req.UIDs, "_"),
 		"shard_total=" + strconv.Itoa(req.ShardTotal),
 		"batch_size=" + strconv.Itoa(req.BatchSize),
 		"worker_count=" + strconv.Itoa(req.WorkerCount),
@@ -278,13 +276,4 @@ func defaultUserTagUniqueKey(req *types.TriggerUserTagWorkflowReq) string {
 	}, "|")
 	sum := sha1.Sum([]byte(canonical))
 	return fmt.Sprintf(keys.UserTagWorkflowUniqueSegment, mode, sum[:8])
-}
-
-// joinInt64s 把 UID 列表拼成稳定字符串，用于生成幂等键等场景。
-func joinInt64s(items []int64) string {
-	parts := make([]string, 0, len(items))
-	for _, item := range items {
-		parts = append(parts, strconv.FormatInt(item, 10))
-	}
-	return strings.Join(parts, "_")
 }

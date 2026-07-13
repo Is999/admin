@@ -369,7 +369,15 @@ func (m *Manager) toTaskItemWithPeriodicNextRuns(ctx context.Context, info *asyn
 	if info == nil {
 		return types.TaskItem{}
 	}
-	runtimeRecord := m.readTaskRuntime(ctx, info.ID)
+	runtimeRecord := m.readTaskRuntime(ctx, info.Queue, info.ID)
+	return m.toTaskItemWithRuntime(info, periodicNextRuns, runtimeRecord)
+}
+
+// toTaskItemWithRuntime 使用已读取的运行快照组装任务详情，供日报批量读取避免逐条访问 Redis。
+func (m *Manager) toTaskItemWithRuntime(info *asynq.TaskInfo, periodicNextRuns []periodicNextRun, runtimeRecord taskRuntimeRecord) types.TaskItem {
+	if info == nil {
+		return types.TaskItem{}
+	}
 	startedAt := runtimeRecord.StartedAt
 	if startedAt == "" {
 		startedAt = taskStartedAtFromResult(info.Result)
@@ -387,12 +395,21 @@ func (m *Manager) toTaskItemWithPeriodicNextRuns(ctx context.Context, info *asyn
 	if executionTrace == nil {
 		executionTrace = taskExecutionStatsFromResult(info.Result)
 	}
+	// 触发任务优先使用已确认的实例 ID，再按载荷和任务 ID 恢复，确保入口终态失败也能计入工作流统计。
+	workflowID := strings.TrimSpace(info.Headers[headerWorkflowID])
+	if workflowID == "" && info.Type == TypeWorkflowTrigger {
+		workflowID = helper.FirstNonEmptyString(
+			taskItemJSONField(info.Result, taskSearchFieldWorkflowID),
+			taskItemJSONField(info.Payload, taskSearchFieldWorkflowID),
+			strings.TrimSpace(info.ID),
+		)
+	}
 	item := types.TaskItem{
 		ID:             info.ID,
 		Queue:          m.displayQueueName(info.Queue),
 		TaskType:       info.Type,
 		TaskName:       taskInfoDisplayName(info),
-		WorkflowID:     strings.TrimSpace(info.Headers[headerWorkflowID]),
+		WorkflowID:     workflowID,
 		State:          info.State.String(),
 		Group:          m.displayGroupName(info.Group),
 		MaxRetry:       info.MaxRetry,

@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"
 	redsyncv4 "github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
@@ -35,7 +34,6 @@ type Lock struct {
 	rs       *redsyncv4.Redsync // redsync 管理器，负责创建底层分布式互斥锁
 	mutex    *redsyncv4.Mutex   // 当前生命周期内持有的底层互斥锁实例
 	key      string             // Redis 锁 key，所有实例通过同一个 key 竞争锁
-	token    string             // 当前持锁实例的唯一 token，用于安全续期和释放锁
 	ttl      time.Duration      // 当前锁生命周期的过期时间，用于计算续期和释放操作的短超时
 	cancel   context.CancelFunc // 当前锁生命周期的取消函数，用于加锁失败、续期失败或释放时停止内部上下文
 	done     chan struct{}      // 通知续期 goroutine 停止的信号通道
@@ -49,10 +47,9 @@ type Lock struct {
 func NewLock(redisClient redis.UniversalClient, key string) *Lock {
 	// lock 保存一次分布式锁生命周期所需的固定配置和内部状态。
 	lock := &Lock{
-		key:   strings.TrimSpace(key),
-		token: utils.RandomLetters(16, utils.RandSource),
-		done:  make(chan struct{}),
-		lost:  make(chan error, 1),
+		key:  strings.TrimSpace(key),
+		done: make(chan struct{}),
+		lost: make(chan error, 1),
 	}
 	if redisClient != nil {
 		// pool 将 go-redis 客户端适配为 redsync 可使用的 Redis 连接池。
@@ -96,9 +93,6 @@ func (l *Lock) TryLock(ctx context.Context, ttl time.Duration) error {
 				return 200 * time.Millisecond
 			}
 			return delay
-		}),
-		redsyncv4.WithGenValueFunc(func() (string, error) {
-			return l.token, nil
 		}),
 	)
 

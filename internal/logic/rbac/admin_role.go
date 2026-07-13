@@ -186,7 +186,10 @@ func (l *AdminRoleLogic) Create(req *types.SaveRoleReq) *types.BizResult {
 				"AdminRoleLogic.Create 创建角色[%s]失败", req.Title).ToBizResult()
 		}
 
-		l.refreshRoleRelatedCache(role.ID)
+		if err := l.refreshRoleRelatedCache(role.ID); err != nil {
+			return corelogic.CacheSyncPendingResult(l.Logger, codes.AddSuccess, i18n.MsgKeyCacheSyncPending, err,
+				"AdminRoleLogic.Create RBAC缓存同步失败")
+		}
 		return types.NewBizResult(codes.AddSuccess).
 			SetI18nMessage(i18n.MsgKeyAddSuccess)
 	})
@@ -283,7 +286,10 @@ func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
 				"AdminRoleLogic.Update 更新角色 ID[%d]失败", req.ID).ToBizResult()
 		}
 
-		l.refreshRoleRelatedCache(roleIDSetToSlice(affectedRoleSet)...)
+		if err := l.refreshRoleRelatedCache(roleIDSetToSlice(affectedRoleSet)...); err != nil {
+			return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+				"AdminRoleLogic.Update RBAC缓存同步失败")
+		}
 		return types.NewBizResult(codes.UpdateSuccess).
 			SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 	})
@@ -362,7 +368,10 @@ func (l *AdminRoleLogic) Delete(req *types.IDPathReq) *types.BizResult {
 	if len(deletedRoleIDs) == 0 {
 		deletedRoleIDs = []int{req.ID}
 	}
-	l.refreshRoleRelatedCacheByScope(deletedRoleIDs, affectedAdminIDs)
+	if err := l.refreshRoleRelatedCacheByScope(deletedRoleIDs, affectedAdminIDs); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.DeleteSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"AdminRoleLogic.Delete RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.DeleteSuccess).
 		SetI18nMessage(i18n.MsgKeyDeleteSuccess)
 }
@@ -417,7 +426,10 @@ func (l *AdminRoleLogic) UpdateStatus(req *types.RoleStatusReq) *types.BizResult
 			"AdminRoleLogic.UpdateStatus 角色 ID[%d]不存在", req.ID).ToBizResult()
 	}
 
-	l.refreshRoleRelatedCache(roleIDs...)
+	if err := l.refreshRoleRelatedCache(roleIDs...); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"AdminRoleLogic.UpdateStatus RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyStatusChangeOK)
 }
@@ -506,7 +518,10 @@ func (l *AdminRoleLogic) SavePermissions(req *types.RolePermissionSaveReq) *type
 				"AdminRoleLogic.SavePermissions 保存角色 ID[%d]权限失败", req.ID).ToBizResult()
 		}
 
-		l.refreshRoleRelatedCache(roleIDSetToSlice(affectedRoleSet)...)
+		if err := l.refreshRoleRelatedCache(roleIDSetToSlice(affectedRoleSet)...); err != nil {
+			return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+				"AdminRoleLogic.SavePermissions RBAC缓存同步失败")
+		}
 		return types.NewBizResult(codes.UpdateSuccess).
 			SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 	})

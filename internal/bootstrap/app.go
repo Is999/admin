@@ -3,9 +3,11 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	i18n "admin/common/i18n"
 	"admin/internal/bootstrap/components"
@@ -28,6 +30,8 @@ import (
 )
 
 const (
+	// httpDrainTimeout 限制发布停机时等待在途 HTTP 请求的最长时间。
+	httpDrainTimeout = 5 * time.Second
 	// ModeAPI 启动 HTTP API（bit=1）。
 	ModeAPI = runmode.API
 	// ModeWorker 启动异步任务 Worker（bit=2）。
@@ -66,13 +70,16 @@ func New(ctx context.Context, c config.Config, mode int, options ...Option) (*Ap
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
+	// 运行配置保存最终生效模式，避免命令行覆盖后健康检查仍读取旧值。
+	c.RunMode = mode
 	// 初始化数据库、Redis、Kafka 等基础设施
 	svcCtx, shutdown, err := BuildServiceContext(ctx, c)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if err = applyStartupRuntimeConfig(ctx, svcCtx, &c); err != nil {
-		_ = bootstrapresources.CloseServiceContextResources(svcCtx, nil, false)
+	startupRuntimeConfig, err := applyStartupRuntimeConfig(ctx, svcCtx, &c)
+	if err != nil {
+		_ = bootstrapresources.CloseServiceContextResources(ctx, svcCtx, nil, false)
 		if shutdown != nil {
 			_ = shutdown(context.Background())
 		}
@@ -83,6 +90,7 @@ func New(ctx context.Context, c config.Config, mode int, options ...Option) (*Ap
 	state := components.NewState(c, mode, svcCtx, shutdown, resolvedOptions.RouteModules, resolvedOptions.TaskPlugins)
 	registry := components.NewRegistry(componentbuiltin.ResolveStartup(resolvedOptions.UseDefaultComponents, resolvedOptions.Components)...)
 	if err = registry.Register(ctx, state); err != nil {
+		notifyComponentRegisterFailure(ctx, svcCtx, err)
 		cleanupComponentState(context.Background(), state)
 		return nil, errors.Tag(err)
 	}
@@ -101,6 +109,8 @@ func New(ctx context.Context, c config.Config, mode int, options ...Option) (*Ap
 		taskRedis:      runtimeSnapshot.TaskRedis,
 		taskRedisOwned: runtimeSnapshot.TaskRedisOwned,
 	}
+	// 启动快照已应用，先初始化 watcher 水位，避免首次轮询重复加载同一版本。
+	app.runtimeConfig.MarkApplied(startupRuntimeConfig.VersionNo, startupRuntimeConfig.Checksum)
 	svcCtx.ConfigReload = app
 	app.UpdateConfig(c)
 	return app, nil
@@ -125,7 +135,7 @@ func (a *App) UpdateConfig(c config.Config) {
 	a.configValue.Store(c)
 	if a.ServiceContext != nil {
 		a.ServiceContext.UpdateConfig(c)
-		a.refreshHotReloadStatus(func(status svc.HotReloadStatus) svc.HotReloadStatus {
+		a.hotReloadRecorder().UpdateStatus(func(status svc.HotReloadStatus) svc.HotReloadStatus {
 			status.ConfigSummary = hotreload.Summary(c)
 			return status
 		})
@@ -141,7 +151,7 @@ func (a *App) BindConfigFile(configFile string) {
 		return
 	}
 	configFile = a.hotReload.SetConfigFile(configFile)
-	a.refreshHotReloadStatus(func(status svc.HotReloadStatus) svc.HotReloadStatus {
+	a.hotReloadRecorder().UpdateStatus(func(status svc.HotReloadStatus) svc.HotReloadStatus {
 		status.ConfigFile = configFile
 		return status
 	})
@@ -158,7 +168,7 @@ func (a *App) ReloadConfig(ctx context.Context, source string) error {
 	configFile := a.boundConfigFile()
 	if configFile == "" {
 		err := errors.Errorf("未绑定配置文件路径")
-		a.markHotReloadFailure(i18n.MsgKeyHotReloadManualFailed, "手动触发配置重载失败", err, "", hotreload.Source(source), "not_bound", "")
+		a.hotReloadRecorder().Failure(i18n.MsgKeyHotReloadManualFailed, "手动触发配置重载失败", err, "", hotreload.Source(source), "not_bound", "")
 		return err
 	}
 	_, err := a.reloadConfigFile(ctx, hotreload.Source(source), configFile)
@@ -174,8 +184,8 @@ func (a *App) Start() error {
 
 	// 统一启动组件注册的后台生命周期钩子，避免在入口层硬编码具体组件类型。
 	if err := a.runStartHooks(context.Background()); err != nil {
-		a.stopConfigHotReload()
-		a.stopRuntimeConfigWatcher()
+		_ = a.stopConfigHotReload(context.Background())
+		_ = a.stopRuntimeConfigWatcher(context.Background())
 		return errors.Tag(err)
 	}
 
@@ -187,7 +197,7 @@ func (a *App) Start() error {
 			logx.Field("host", fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)),
 			logx.Field("mode", runmode.Format(a.Mode)),
 		)
-		a.Server.Start()
+		startHTTPServer(a.Server, httpDrainTimeout)
 		return nil
 	}
 
@@ -198,6 +208,31 @@ func (a *App) Start() error {
 	)
 	waitForSignal()
 	return nil
+}
+
+// startHTTPServer 启动 HTTP 服务，并为框架的无期限请求排空增加上限。
+func startHTTPServer(server *rest.Server, drainTimeout time.Duration) {
+	drainDone := make(chan struct{})
+	defer close(drainDone)
+	server.StartWithOpts(func(httpServer *http.Server) {
+		limitHTTPDrain(httpServer, drainTimeout, drainDone)
+	})
+}
+
+// limitHTTPDrain 到期后关闭仍未结束的连接，确保后续资源关闭可以继续执行。
+func limitHTTPDrain(server *http.Server, timeout time.Duration, done <-chan struct{}) {
+	if server == nil || timeout <= 0 {
+		return
+	}
+	server.RegisterOnShutdown(func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			_ = server.Close()
+		case <-done:
+		}
+	})
 }
 
 // Stop 按相反顺序释放资源，确保 tracing exporter 等后台组件有机会优雅退出。
@@ -213,18 +248,18 @@ func (a *App) Stop(ctx context.Context) error {
 	if a.Server != nil {
 		a.Server.Stop()
 	}
-	// 再停止配置热加载协程，避免资源释放过程中仍有后台线程刷新配置快照。
-	a.stopConfigHotReload()
-	a.stopRuntimeConfigWatcher()
 	var firstErr error
 	recordErr := func(err error) {
 		if err != nil && firstErr == nil {
 			firstErr = errors.Tag(err)
 		}
 	}
+	// 再停止配置热加载协程，避免资源释放过程中仍有后台线程刷新配置快照。
+	recordErr(a.stopConfigHotReload(ctx))
+	recordErr(a.stopRuntimeConfigWatcher(ctx))
 	// 组件生命周期钩子按启动逆序停止，尽量保持依赖关系的释放顺序正确。
 	recordErr(a.runStopHooks(ctx))
-	recordErr(bootstrapresources.CloseServiceContextResources(a.ServiceContext, a.taskRedis, a.taskRedisOwned))
+	recordErr(bootstrapresources.CloseServiceContextResources(ctx, a.ServiceContext, a.taskRedis, a.taskRedisOwned))
 	// 最后执行基础设施总关闭钩子，保证 tracing/exporter 等底层资源有机会优雅退出。
 	if a.shutdown != nil {
 		recordErr(a.shutdown(ctx))

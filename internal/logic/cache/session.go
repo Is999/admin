@@ -7,6 +7,9 @@ import (
 	"admin/internal/svc"
 	"admin/internal/types"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +20,26 @@ import (
 // CacheLogic 负责登录态与轻量级业务缓存的读写封装。
 type CacheLogic struct {
 	*corelogic.BaseLogic // 复用上下文和 Redis 操作能力
+}
+
+const (
+	// adminRefreshTokenGraceSeconds 是刷新接口对上一枚 token 的幂等宽限窗口，普通业务接口不使用该窗口。
+	adminRefreshTokenGraceSeconds = int64(30)
+	// adminRefreshPreviousTokenDigestField 保存上一枚刷新 token 的 SHA-256 摘要，不在 Redis 中留存原 token。
+	adminRefreshPreviousTokenDigestField = "refreshPreviousTokenDigest"
+	// adminRefreshGraceUntilField 保存上一枚刷新 token 的宽限截止时间戳。
+	adminRefreshGraceUntilField = "refreshGraceUntil"
+)
+
+// adminInfoMutableFields 是个人中心允许原子同步到当前登录态的公开资料字段。
+var adminInfoMutableFields = map[string]struct{}{
+	"avatar":            {},
+	"description":       {},
+	"email":             {},
+	"mfaStatus":         {},
+	"needResetPassword": {},
+	"phone":             {},
+	"realName":          {},
 }
 
 // NewCacheLogic 为缓存相关逻辑绑定请求上下文，确保 Redis 操作日志能带上 trace_id。
@@ -31,21 +54,11 @@ func (l *CacheLogic) getAdminInfoKey(adminID int) string {
 	return keys.AdminInfoRedisKey(adminID)
 }
 
-// getAdminLogoutTokenKey 统一管理员登出令牌标记 key，避免中间件和业务层重复拼接。
-func (l *CacheLogic) getAdminLogoutTokenKey(adminID int) string {
-	return keys.AdminLogoutTokenRedisKey(adminID)
-}
-
-// ClearAdminLogoutToken 清理管理员显式登出标记，登录成功后允许新 token 正常回源会话。
-func (l *CacheLogic) ClearAdminLogoutToken(adminID int) error {
-	if adminID <= 0 {
-		return nil
-	}
-	return l.RdsDelKeys(l.getAdminLogoutTokenKey(adminID))
-}
-
 // SetAdminInfo 整体写入管理员缓存信息，并设置统一过期时间。
 func (l *CacheLogic) SetAdminInfo(adminID int, info *types.AdminInfo) error {
+	if adminID <= 0 || info == nil {
+		return errors.Errorf("管理员会话写入参数不完整")
+	}
 	ctx := l.Ctx
 	key := l.getAdminInfoKey(adminID)
 	expiresIn := l.Svc.CurrentConfig().JwtExpiresIn
@@ -53,24 +66,43 @@ func (l *CacheLogic) SetAdminInfo(adminID int, info *types.AdminInfo) error {
 		// 支持测试与轻量 ServiceContext 场景：若未显式注入 JwtExpiresIn，则按默认 24 小时处理，避免缓存立即过期。
 		expiresIn = 86400
 	}
-	pipe := l.Svc.Rds.Pipeline()
-	pipe.HSet(ctx, key, info.ToMap())
-	pipe.Expire(ctx, key, corelogic.JitterTTL(time.Duration(expiresIn)*time.Second))
-	_, err := pipe.Exec(ctx)
+	// 登录资料、token、宽限字段清理和 TTL 必须在同 key MULTI/EXEC 中提交，避免并发登出穿插 HSET/EXPIRE。
+	_, err := l.Svc.Rds.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.HSet(ctx, key, info.ToMap())
+		pipe.HDel(ctx, key, adminRefreshPreviousTokenDigestField, adminRefreshGraceUntilField)
+		pipe.Expire(ctx, key, time.Duration(expiresIn)*time.Second)
+		return nil
+	})
 	return errors.Tag(err)
 }
 
-// SetAdminInfoByField 按字段增量更新管理员缓存，只允许更新已存在的字段。
-func (l *CacheLogic) SetAdminInfoByField(adminID int, field string, value any) error {
-	ctx := l.Ctx
-	key := l.getAdminInfoKey(adminID)
-	// 判断缓存和字段都存在时才更新，避免误把不完整数据补写到缓存里。
-	result, err := setAdminInfoByFieldScript.Run(ctx, l.Svc.Rds, []string{key}, field, value).Result()
+// SetAdminInfoFields 原子更新当前登录态中已经存在的受控资料字段，不创建已撤销或过期的会话。
+func (l *CacheLogic) SetAdminInfoFields(adminID int, fields map[string]any) error {
+	if adminID <= 0 || len(fields) == 0 {
+		return errors.Errorf("管理员会话字段更新参数不完整")
+	}
+	fieldNames := make([]string, 0, len(fields))
+	for rawField := range fields {
+		field := strings.TrimSpace(rawField)
+		if field != rawField {
+			return errors.Errorf("管理员会话字段格式不合法: %s", rawField)
+		}
+		if _, ok := adminInfoMutableFields[field]; !ok {
+			return errors.Errorf("管理员会话字段不允许更新: %s", field)
+		}
+		fieldNames = append(fieldNames, field)
+	}
+	sort.Strings(fieldNames)
+	args := make([]any, 0, len(fieldNames)*2)
+	for _, field := range fieldNames {
+		args = append(args, field, fields[field])
+	}
+	result, err := setAdminInfoFieldsScript.Run(l.Ctx, l.Svc.Rds, []string{l.getAdminInfoKey(adminID)}, args...).Int64()
 	if err != nil {
 		return errors.Tag(err)
 	}
-	if result.(int64) == 0 {
-		return errors.Errorf("缓存键或字段不存在")
+	if result == 0 {
+		return errors.Errorf("管理员会话缓存或目标字段不存在")
 	}
 	return nil
 }
@@ -101,36 +133,84 @@ func (l *CacheLogic) GetAdminToken(adminID int) (string, error) {
 	return l.Svc.Rds.HGet(ctx, key, "token").Result()
 }
 
+// RotateAdminToken 原子轮换当前 token；同一旧 token 在短暂宽限期内重试时幂等返回已轮换 token。
+// 返回空字符串表示会话不存在、已登出、已重新登录或请求 token 已超出宽限期。
+func (l *CacheLogic) RotateAdminToken(adminID int, expectedToken string, newToken string) (string, error) {
+	expectedToken = strings.TrimSpace(expectedToken)
+	newToken = strings.TrimSpace(newToken)
+	if adminID <= 0 || expectedToken == "" || newToken == "" {
+		return "", errors.Errorf("管理员会话 token 轮换参数不完整")
+	}
+	expiresIn := l.Svc.CurrentConfig().JwtExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 86400
+	}
+	result, err := rotateAdminTokenScript.Run(
+		l.Ctx,
+		l.Svc.Rds,
+		[]string{l.getAdminInfoKey(adminID)},
+		expectedToken,
+		newToken,
+		adminTokenDigest(expectedToken),
+		adminRefreshTokenGraceSeconds,
+		expiresIn,
+	).Text()
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	return strings.TrimSpace(result), nil
+}
+
+// CanUseAdminSessionToken 判断 token 是否为当前 token，或仍处于会话刷新宽限期。
+// 该能力只允许鉴权中间件用于 auth.refresh 和 auth.logout，普通业务路由仍只接受当前 token。
+func (l *CacheLogic) CanUseAdminSessionToken(adminID int, token string) (bool, error) {
+	token = strings.TrimSpace(token)
+	if adminID <= 0 || token == "" {
+		return false, nil
+	}
+	result, err := canUseAdminSessionTokenScript.Run(
+		l.Ctx,
+		l.Svc.Rds,
+		[]string{l.getAdminInfoKey(adminID)},
+		token,
+		adminTokenDigest(token),
+	).Int64()
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	return result == 1, nil
+}
+
+// adminTokenDigest 返回 token 的不可逆摘要，供短暂刷新宽限匹配使用。
+func adminTokenDigest(token string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:])
+}
+
 // DeleteAdminInfo 删除指定管理员的缓存登录态。
 func (l *CacheLogic) DeleteAdminInfo(adminID int) error {
 	key := l.getAdminInfoKey(adminID)
 	return errors.Tag(l.Svc.Rds.Del(l.Ctx, key).Err())
 }
 
-// MarkAdminLogoutToken 记录管理员最近一次显式登出的 token，避免缓存 miss 时误把已登出的 token 回源恢复。
-func (l *CacheLogic) MarkAdminLogoutToken(adminID int, token string, ttl time.Duration) error {
-	if adminID <= 0 || strings.TrimSpace(token) == "" {
-		return nil
-	}
-	if ttl <= 0 {
-		ttl = corelogic.JitterTTL(7 * 24 * time.Hour)
-	}
-	return errors.Tag(l.Svc.Rds.Set(l.Ctx, l.getAdminLogoutTokenKey(adminID), token, ttl).Err())
-}
-
-// IsAdminLogoutToken 判断当前 token 是否已被显式登出标记。
-func (l *CacheLogic) IsAdminLogoutToken(adminID int, token string) (bool, error) {
-	if adminID <= 0 || strings.TrimSpace(token) == "" {
+// DeleteAdminSessionForLogout 删除当前请求持有的会话。
+// 刷新并发窗口内接受上一枚 token；重新登录会清空宽限字段，因此旧登录请求不能删除新会话。
+func (l *CacheLogic) DeleteAdminSessionForLogout(adminID int, token string) (bool, error) {
+	token = strings.TrimSpace(token)
+	if adminID <= 0 || token == "" {
 		return false, nil
 	}
-	value, err := l.Svc.Rds.Get(l.Ctx, l.getAdminLogoutTokenKey(adminID)).Result()
-	if err == redis.Nil {
-		return false, nil
-	}
+	deleted, err := deleteAdminSessionForLogoutScript.Run(
+		l.Ctx,
+		l.Svc.Rds,
+		[]string{l.getAdminInfoKey(adminID)},
+		token,
+		adminTokenDigest(token),
+	).Int64()
 	if err != nil {
 		return false, errors.Tag(err)
 	}
-	return value == token, nil
+	return deleted == 1, nil
 }
 
 // RebuildAdminInfo 从主库回源管理员资料并重建登录态缓存。
@@ -168,21 +248,6 @@ func (l *CacheLogic) RebuildAdminInfoByKey(key string) error {
 	}
 	_, err = l.RebuildAdminInfo(adminID, token)
 	return errors.Tag(err)
-}
-
-// TouchAdminInfo 为管理员缓存做滑动续期，避免活跃会话频繁回源数据库。
-func (l *CacheLogic) TouchAdminInfo(adminID int) error {
-	// 判断缓存过期时间是否小于 1 小时，如果是则续期 4 小时，减少频繁写 Redis。
-	ctx := l.Ctx
-	key := l.getAdminInfoKey(adminID)
-	ttl, err := l.Svc.Rds.TTL(ctx, key).Result()
-	if err != nil {
-		return errors.Tag(err)
-	}
-	if ttl < 1*time.Hour {
-		return errors.Tag(l.Svc.Rds.Expire(ctx, key, corelogic.JitterTTL(4*time.Hour)).Err())
-	}
-	return nil
 }
 
 // BuildAdminProfileCache 把管理员模型转换成公开资料缓存结构。

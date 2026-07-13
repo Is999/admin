@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"admin/internal/config"
 	"admin/internal/infra/collectorx"
 	"admin/internal/model"
 
@@ -16,7 +17,7 @@ import (
 
 const (
 	// AdminLogCollectorBizType 表示 admin_log 批量入库的 Collector 业务类型。
-	AdminLogCollectorBizType = "admin_log.audit"
+	AdminLogCollectorBizType = config.CollectorBizTypeAdminLogAudit
 	adminLogPartitionKey     = "admin_log" // 审计日志固定分区键，保证同任务入库顺序稳定
 )
 
@@ -44,6 +45,7 @@ func (w *CollectorWriter) EnqueueAdminLog(ctx context.Context, eventID string, r
 	if eventID == "" {
 		return errors.Errorf("审计日志缺少 event_id")
 	}
+	row.EventID = eventID
 	payload, err := json.Marshal(row)
 	if err != nil {
 		return errors.Wrap(err, "编码审计日志 Collector 事件失败")
@@ -80,17 +82,25 @@ func (p *AdminLogBatchProcessor) ProcessBatch(ctx context.Context, events []coll
 	rows := make([]model.AdminLog, 0, len(events))
 	results := make([]collectorx.ProcessResult, 0, len(events))
 	rowEventIDs := make([]string, 0, len(events))
+	seenEventIDs := make(map[string]struct{}, len(events))
 	for _, event := range events {
 		eventID := strings.TrimSpace(event.EventID)
+		if eventID == "" {
+			results = append(results, collectorx.ProcessResult{EventID: event.EventID, Success: false, Error: "admin_log 审计事件缺少 event_id"})
+			continue
+		}
+		if _, ok := seenEventIDs[eventID]; ok {
+			continue
+		}
+		seenEventIDs[eventID] = struct{}{}
 		var row model.AdminLog
 		if err := json.Unmarshal(event.Payload, &row); err != nil {
 			results = append(results, collectorx.ProcessResult{EventID: eventID, Success: false, Error: "解析 admin_log 审计事件失败"})
 			continue
 		}
-		if eventID == "" {
-			results = append(results, collectorx.ProcessResult{EventID: event.EventID, Success: false, Error: "admin_log 审计事件缺少 event_id"})
-			continue
-		}
+		// 主键只能由目标库生成，禁止重放载荷中的旧 ID 触发错误的主键幂等命中。
+		row.ID = 0
+		row.EventID = eventID
 		if row.CreatedAt.IsZero() {
 			row.CreatedAt = now
 		}

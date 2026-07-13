@@ -19,6 +19,7 @@ const (
 // UserListReq 表示业务用户列表查询请求。
 type UserListReq struct {
 	ID          int64  `json:"id,optional" form:"id,optional"`             // 用户 ID 精确筛选
+	CursorID    int64  `json:"cursorId,optional" form:"cursorId,optional"` // 分表阶段下一页用户 ID 游标，首页为 0
 	ShardNo     *int   `json:"shardNo,optional" form:"shardNo,optional"`   // ID 哈希分片筛选：0-1023
 	Username    string `json:"username,optional" form:"username,optional"` // 用户名筛选
 	Email       string `json:"email,optional" form:"email,optional"`       // 邮箱筛选
@@ -199,7 +200,10 @@ type UserItem struct {
 
 // UserListMeta 表示业务用户列表的附加分页口径。
 type UserListMeta struct {
-	ExactTotal bool `json:"exactTotal"` // 是否返回精确总数；分表阶段为 false，避免实时 COUNT
+	ExactTotal            bool  `json:"exactTotal"`            // 是否返回精确总数；分表阶段为 false，避免实时 COUNT
+	HasMore               bool  `json:"hasMore"`               // 分表阶段是否仍有下一页
+	NextCursorID          int64 `json:"nextCursorId,string"`   // 下一页用户 ID 游标，末页为 0
+	StatusFilterSupported bool  `json:"statusFilterSupported"` // 是否支持状态筛选；分表阶段为 false
 }
 
 // UserRuntimeSyncResp 表示 admin 调用 API 运行态同步后的回执。
@@ -209,6 +213,7 @@ type UserRuntimeSyncResp struct {
 	UserID                  int64  `json:"userId,string"`           // 用户 ID，JSON 以字符串返回，避免前端丢失精度
 	ProfileCacheInvalidated bool   `json:"profileCacheInvalidated"` // 是否已处理资料缓存
 	SessionsInvalidated     bool   `json:"sessionsInvalidated"`     // 是否已处理登录态
+	AuthVersion             uint64 `json:"authVersion,string"`      // 本次登录态失效使用的已提交认证版本，JSON 以字符串返回
 	Message                 string `json:"message"`                 // 同步结果说明
 }
 

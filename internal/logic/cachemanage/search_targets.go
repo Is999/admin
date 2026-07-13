@@ -26,7 +26,7 @@ type templateSearchTarget struct {
 // 这里把“可预热模板”和“仅可搜索模板”统一收口，后续新增模板 key 只需补一个枚举器。
 func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 	warmupTargets := l.warmupTemplateTargets()
-	targets := make([]templateSearchTarget, 0, len(warmupTargets)+6)
+	targets := make([]templateSearchTarget, 0, len(warmupTargets)+5)
 	for _, target := range warmupTargets {
 		targets = append(targets, templateSearchTarget{
 			providerName: "warmup_template",
@@ -54,22 +54,6 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 		},
 		templateSearchTarget{
 			providerName: "admin_enabled_ids",
-			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminPermissionIDsPattern),
-			tableCache:   true,
-			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildTableAdminKeys(keys.AdminPermissionIDs)
-			},
-		},
-		templateSearchTarget{
-			providerName: "admin_enabled_ids",
-			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminPermissionUUIDsPattern),
-			tableCache:   true,
-			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				return l.buildTableAdminKeys(keys.AdminPermissionUUIDs)
-			},
-		},
-		templateSearchTarget{
-			providerName: "admin_enabled_ids",
 			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminProfilePattern),
 			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
@@ -82,6 +66,14 @@ func (l *SystemCacheLogic) searchTemplateTargets() []templateSearchTarget {
 			tableCache:   true,
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
 				return l.buildTableAdminKeys(keys.AdminRolesDetail)
+			},
+		},
+		templateSearchTarget{
+			providerName: "runtime_config_release_ids",
+			templateKey:  cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RuntimeConfigReleasePattern),
+			tableCache:   true,
+			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
+				return l.buildRuntimeConfigReleaseKeys()
 			},
 		},
 	)
@@ -173,4 +165,27 @@ func (l *SystemCacheLogic) buildTableAdminKeys(keyFormat string) ([]string, erro
 		return nil, errors.Tag(err)
 	}
 	return cachelogic.TableCachePhysicalKeys(l.BaseLogic, keysList...), nil
+}
+
+// buildRuntimeConfigReleaseKeys 枚举最近的运行配置发布快照缓存实例 key。
+func (l *SystemCacheLogic) buildRuntimeConfigReleaseKeys() ([]string, error) {
+	readDB, err := cachelogic.TableCacheReadDB(l.BaseLogic, svc.DatabaseMain, "main")
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	var releaseIDs []uint64
+	if err := readDB.Model(&model.RuntimeConfigRelease{}).
+		Order("id DESC").
+		Limit(cacheTemplateEnumerationLimit).
+		Pluck("id", &releaseIDs).Error; err != nil {
+		return nil, errors.Tag(err)
+	}
+	keysList := make([]string, 0, len(releaseIDs))
+	for _, releaseID := range releaseIDs {
+		if releaseID == 0 {
+			continue
+		}
+		keysList = append(keysList, cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RuntimeConfigReleaseKey(releaseID)))
+	}
+	return keysList, nil
 }

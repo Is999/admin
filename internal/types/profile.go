@@ -8,27 +8,6 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
-// ProfileLoginReq 表示前端 `vue-vben-admin` 使用的登录请求。
-type ProfileLoginReq struct {
-	Username   string `json:"username,optional"`   // 登录用户名
-	Password   string `json:"password"`            // 登录密码，沿用前端加密/签名后的传参
-	SecureCode string `json:"secureCode,optional"` // 安全验证码，参与登录签名与加密
-	Captcha    string `json:"captcha,optional"`    // 图形验证码字段
-	Key        string `json:"key,optional"`        // 图形验证码 key 字段
-}
-
-// Validate 校验登录请求。
-func (r *ProfileLoginReq) Validate() error {
-	r.Username = strings.TrimSpace(r.Username)
-	if r.Username == "" {
-		return errors.Errorf("用户名不能为空")
-	}
-	if strings.TrimSpace(r.Password) == "" {
-		return errors.Errorf("密码不能为空")
-	}
-	return nil
-}
-
 // ProfileCheckSecureReq 表示校验当前登录账号密码的请求。
 type ProfileCheckSecureReq struct {
 	Secure string `json:"secure"` // 当前登录账号密码

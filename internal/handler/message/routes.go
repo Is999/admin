@@ -27,6 +27,14 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
+			Path:        "/api/admin-messages/receiver-options", // 查询消息可用收件人选项。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.AdminMessageReceiverOptions,
+			Description: shared.AdminMessageReceiverOptions.Describe,
+			Handler:     ListAdminMessageReceiverOptionsHandler,
+		},
+		{
+			Method:      http.MethodGet,
 			Path:        "/api/admin-messages/:id/receivers", // 查询管理员消息收件人明细。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.AdminMessageReceivers,

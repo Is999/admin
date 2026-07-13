@@ -5,6 +5,13 @@ const (
 	// ScopeRoot 表示 Redis 缓存和锁的 app_id 命名空间根前缀。
 	// Redis 类型：命名空间前缀，TTL 过期规则：不直接写入 Redis。
 	ScopeRoot = "app:"
+	// rateLimitRedisRoot 表示项目分布式限流状态的二级业务前缀。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由具体限流算法管理状态和 TTL。
+	// GCRA 逻辑 key 会由 redis_rate 在物理 key 前追加固定的 `rate:` 前缀。
+	rateLimitRedisRoot = "rate_limit"
+	// rateLimitFixedIntervalSegment 表示固定间隔限流状态的算法隔离段。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由固定间隔限流令牌的 interval 控制。
+	rateLimitFixedIntervalSegment = "fixed_interval"
 )
 
 // table-cache Redis key 二级前缀集中维护。
@@ -39,6 +46,12 @@ const (
 	// taskAsynqRedisRoot 表示 Asynq 框架固定 Redis 根前缀。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq 内部 key 生命周期控制。
 	taskAsynqRedisRoot = "asynq"
+	// taskAsynqStatePending 表示 Asynq pending 状态 list 段。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq pending 队列生命周期控制。
+	taskAsynqStatePending = "pending"
+	// taskAsynqStateActive 表示 Asynq active 状态 list 段。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq active 队列生命周期控制。
+	taskAsynqStateActive = "active"
 	// taskAsynqStateRetry 表示 Asynq retry 状态 zset 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq retry 队列生命周期控制。
 	taskAsynqStateRetry = "retry"
@@ -73,21 +86,6 @@ const (
 	// taskWorkflowNodesSegment 表示工作流节点集合 key 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由工作流节点集合 key 的调用方 TTL 控制。
 	taskWorkflowNodesSegment = "nodes"
-	// taskWorkflowScheduledSegment 表示工作流节点调度去重 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由节点调度去重 key 的调用方 TTL 控制。
-	taskWorkflowScheduledSegment = "scheduled"
-	// taskWorkflowFinalizedSegment 表示工作流节点终态收口 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由节点终态 key 的调用方 TTL 控制。
-	taskWorkflowFinalizedSegment = "finalized"
-	// taskWorkflowInstanceSegment 表示工作流分片实例 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由分片实例 key 的调用方 TTL 控制。
-	taskWorkflowInstanceSegment = "instance"
-	// taskWorkflowCompletedSegment 表示工作流完成标记 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由工作流完成标记 key 的调用方 TTL 控制。
-	taskWorkflowCompletedSegment = "completed"
-	// taskWorkflowFailedSegment 表示工作流失败标记 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由工作流失败标记 key 的调用方 TTL 控制。
-	taskWorkflowFailedSegment = "failed"
 	// taskWorkflowUniqueSegment 表示工作流幂等占位 key 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由工作流幂等 key TTL 控制。
 	taskWorkflowUniqueSegment = "unique"
@@ -203,20 +201,6 @@ const (
 	// Redis 类型：String（JSON 文本），TTL 过期规则：无固定 TTL，按权限变更精确失效。
 	PermissionTree = "permission_tree"
 
-	// RoutePermissionIDs 表示路由别名候选权限 ID 集合缓存键模板。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
-	// `%s` 位置填充路由别名。
-	RoutePermissionIDs = "route_permission_ids:%s"
-
-	// RoutePermissionIDsPattern 表示路由别名候选权限 ID 集合缓存键展示模板。
-	// Redis 类型：Set 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
-	RoutePermissionIDsPattern = "route_permission_ids:{routeAlias}"
-
-	// RoutePermissionAliasIndex 表示已写入路由权限候选缓存的路由别名索引。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
-	// 成员为 routeAlias，用于权限定义变更时精确删除 `route_permission_ids:{routeAlias}`，避免前缀 SCAN。
-	RoutePermissionAliasIndex = "route_permission_ids:index"
-
 	// SysConfigUUID 表示系统配置缓存键模板。
 	// Redis 类型：Hash，TTL 过期规则：无固定 TTL，按业务更新或删除精确失效。
 	// `%s` 位置填充系统配置 uuid。
@@ -270,11 +254,6 @@ const (
 	// Redis 类型：String（Unix 时间戳），TTL 过期规则：由登录 MFA 流程 TTL 控制，过期后需重新校验。
 	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
 	LoginCheckMFAFlag = "login_check_mfa_flag:%d"
-
-	// AdminLogoutToken 表示管理员登出令牌标记业务段模板。
-	// Redis 类型：String，TTL 过期规则：由调用方 TTL 或业务精确删除控制。
-	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
-	AdminLogoutToken = "admin:logout_token:%d"
 
 	// AdminMFATwoStepTicket 表示管理员二次校验票据业务段模板。
 	// Redis 类型：String，TTL 过期规则：由调用方 TTL 或业务精确删除控制。

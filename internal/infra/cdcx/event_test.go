@@ -2,6 +2,7 @@ package cdcx
 
 import "testing"
 
+// TestDecodeDebeziumEvent 验证 Debezium 载荷会完整映射为内部事件。
 func TestDecodeDebeziumEvent(t *testing.T) {
 	raw := []byte(`{"before":null,"after":{"id":1},"source":{"db":"admin","table":"admin_log","file":"mysql-bin.000001","pos":128,"row":1,"server_id":223344,"gtid":"g1","snapshot":false,"ts_ms":1782311237336},"op":"c"}`)
 	key := []byte(`{"schema":{"type":"struct"},"payload":{"id":1}}`)
@@ -32,6 +33,7 @@ func TestDecodeDebeziumEvent(t *testing.T) {
 	}
 }
 
+// TestDecodeDebeziumEventRejectsMissingOp 验证缺少操作类型的载荷会被拒绝。
 func TestDecodeDebeziumEventRejectsMissingOp(t *testing.T) {
 	_, err := DecodeDebeziumEvent("topic", 0, 1, nil, []byte(`{"after":{"id":1},"source":{"db":"admin","table":"admin_log"}}`))
 	if err == nil {
@@ -39,6 +41,7 @@ func TestDecodeDebeziumEventRejectsMissingOp(t *testing.T) {
 	}
 }
 
+// TestDecodeDebeziumEventSkipsTombstone 验证空值墓碑消息返回主动跳过错误。
 func TestDecodeDebeziumEventSkipsTombstone(t *testing.T) {
 	_, err := DecodeDebeziumEvent("topic", 0, 1, nil, nil)
 	if !IsSkip(err) {
@@ -46,6 +49,7 @@ func TestDecodeDebeziumEventSkipsTombstone(t *testing.T) {
 	}
 }
 
+// TestEventRowData 验证新增读取 after、删除读取 before 的行数据语义。
 func TestEventRowData(t *testing.T) {
 	createEvent := Event{Operation: OperationCreate, After: []byte(`{"id":1}`), Before: []byte(`{"id":0}`)}
 	if string(createEvent.RowData()) != `{"id":1}` {

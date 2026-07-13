@@ -13,12 +13,10 @@ cache:
     - .cache/go-build
 
 test:
-  image: golang:1.26
+  image: golang:1.26.5
   stage: test
   script:
-    - make fmt-check
-    - make test
-    - make secret-scan
+    - make ci
 
 prometheus-rules:
   image:
@@ -29,13 +27,13 @@ prometheus-rules:
     - promtool check rules docs/prometheus/*.yml
 
 build:
-  image: golang:1.26
+  image: golang:1.26.5
   stage: build
   script:
     - make build build-tools package VERSION="$CI_COMMIT_SHORT_SHA"
   artifacts:
     paths:
-      - bin/admin-cron
-      - bin/admin-cron-migrate
+      - bin/admin
+      - bin/admin-migrate
       - dist/*.tar.gz
     expire_in: 7 days

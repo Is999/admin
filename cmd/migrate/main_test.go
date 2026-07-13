@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
 	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/database"
+
+	"github.com/alicebob/miniredis/v2"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 // TestResolveMigrationActionDefault 验证空 action 默认只查看迁移状态。
@@ -81,7 +86,7 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			name:   "skip dry run",
 			action: actionDryRun,
 			results: []database.MigrationRunItem{
-				{Name: "sync_document_permissions", Status: database.MigrationStatusExecuted},
+				{Name: "bootstrap_admin_permission", Status: database.MigrationStatusExecuted},
 			},
 		},
 		{
@@ -92,26 +97,26 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			},
 		},
 		{
-			name:   "refresh executed document permission migration",
+			name:   "refresh executed permission baseline",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Name: "sync_document_permissions", Status: database.MigrationStatusExecuted},
+				{Name: "bootstrap_admin_permission", Status: database.MigrationStatusExecuted},
 			},
 			want: true,
 		},
 		{
-			name:   "refresh applied document permission migration by asset",
+			name:   "refresh applied permission baseline by asset",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Asset: "document_permission_seed.sql", Status: database.MigrationStatusApplied},
+				{Asset: "admin_permission.sql", Status: database.MigrationStatusApplied},
 			},
 			want: true,
 		},
 		{
-			name:   "skip pending document permission migration",
+			name:   "skip pending permission baseline",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Name: "sync_document_permissions", Status: database.MigrationStatusPending},
+				{Name: "bootstrap_admin_permission", Status: database.MigrationStatusPending},
 			},
 		},
 	}
@@ -140,5 +145,33 @@ func TestPublishMigrationRuntimeConfigRestoresPreviousAppID(t *testing.T) {
 	restore()
 	if got := runtimecfg.AppID(); got != "before" {
 		t.Fatalf("runtimecfg.AppID() after restore = %q, want before", got)
+	}
+}
+
+// TestRefreshPermissionCacheAfterMigrationPropagatesRefreshError 验证迁移后权限缓存刷新失败会返回给命令入口。
+func TestRefreshPermissionCacheAfterMigrationPropagatesRefreshError(t *testing.T) {
+	// redisServer 提供正常 Redis，使测试精确进入权限缓存刷新阶段。
+	redisServer := miniredis.RunT(t)
+	// db 使用不可达连接，在全量角色查询时返回可预期错误。
+	db, err := gorm.Open(mysql.New(mysql.Config{
+		DSN:                       "root@tcp(127.0.0.1:1)/test?timeout=50ms&charset=utf8mb4&parseTime=True&loc=Local",
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatalf("创建迁移缓存刷新测试数据库失败: %v", err)
+	}
+	// cfg 只包含迁移后缓存刷新所需的 Redis 配置。
+	cfg := config.Config{
+		AppID: "site-a",
+		Redis: config.RedisConfig{
+			Type:     "single",
+			Addrs:    []string{redisServer.Addr()},
+			PoolSize: 1,
+		},
+	}
+
+	err = refreshPermissionCacheAfterMigration(context.Background(), cfg, db)
+	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Fatalf("refreshPermissionCacheAfterMigration() error = %v, want refresh failure", err)
 	}
 }

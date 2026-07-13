@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Is999/go-utils/errors"
 
@@ -23,7 +24,7 @@ func TestMarkHotReloadFailureSuppressesRepeatedLogs(t *testing.T) {
 		ServiceContext: svcCtx,
 	}
 
-	app.markHotReloadFailure(i18n.MsgKeyHotReloadFailed, "配置热加载失败", errors.New("boom"), "v1", "watcher", "load", "/tmp/config.yaml")
+	app.hotReloadRecorder().Failure(i18n.MsgKeyHotReloadFailed, "配置热加载失败", errors.New("boom"), "v1", "watcher", "load", "/tmp/config.yaml")
 	first := svcCtx.CurrentHotReloadStatus()
 	if first.LastStatus != "failed" {
 		t.Fatalf("期望状态为 failed，实际为 %q", first.LastStatus)
@@ -35,7 +36,7 @@ func TestMarkHotReloadFailureSuppressesRepeatedLogs(t *testing.T) {
 		t.Fatalf("期望首次失败不被抑制，实际计数为 %d", first.SuppressedFailureCount)
 	}
 
-	app.markHotReloadFailure(i18n.MsgKeyHotReloadFailed, "配置热加载失败", errors.New("boom"), "v1", "watcher", "load", "/tmp/config.yaml")
+	app.hotReloadRecorder().Failure(i18n.MsgKeyHotReloadFailed, "配置热加载失败", errors.New("boom"), "v1", "watcher", "load", "/tmp/config.yaml")
 	second := svcCtx.CurrentHotReloadStatus()
 	if second.SuppressedFailureCount != 1 {
 		t.Fatalf("期望失败抑制计数为 1，实际为 %d", second.SuppressedFailureCount)
@@ -197,12 +198,67 @@ hot_reload:
 	if got := current.Redis.Addrs[0]; got != beforeCfg.Redis.Addrs[0] {
 		t.Fatalf("期望 Redis 运行配置保持原值 %q，实际为 %q", beforeCfg.Redis.Addrs[0], got)
 	}
-	if got := current.AppKey; got != "new-key" {
-		t.Fatalf("期望动态配置 app_key 已刷新，实际为 %q", got)
+	if got := current.AppKey; got != beforeCfg.AppKey {
+		t.Fatalf("期望数据密钥保持原值 %q，实际为 %q", beforeCfg.AppKey, got)
 	}
 	status := svcCtx.CurrentHotReloadStatus()
-	if !status.RestartRequired || !strings.Contains(status.RestartReason, "redis") {
-		t.Fatalf("期望标记 Redis 变更需重启，实际状态为 %+v", status)
+	if !status.RestartRequired || !strings.Contains(status.RestartReason, "redis") || !strings.Contains(status.RestartReason, "app_key") {
+		t.Fatalf("期望标记 Redis 与 app_key 变更需重启，实际状态为 %+v", status)
+	}
+}
+
+// TestReloadConfigFileDisablesWatcherAfterUnlock 确保手动关闭热加载时不会与等待重载锁的 watcher 互相死锁。
+func TestReloadConfigFileDisablesWatcherAfterUnlock(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configFile, []byte(minimalConfigYAML(`
+hot_reload:
+  enabled: false
+`)), 0o644); err != nil {
+		t.Fatalf("写入配置文件失败: %v", err)
+	}
+	beforeCfg, err := LoadConfig(configFile)
+	if err != nil {
+		t.Fatalf("加载初始配置失败: %v", err)
+	}
+	beforeCfg.HotReload.Enabled = true
+	svcCtx := svc.NewServiceContext(beforeCfg, svc.Dependencies{})
+	app := &App{ServiceContext: svcCtx}
+	app.UpdateConfig(beforeCfg)
+
+	watcherStarted := make(chan struct{})
+	watcherFinished := make(chan struct{})
+	if ok := app.hotReload.StartWatcher(func(ctx context.Context) {
+		close(watcherStarted)
+		<-ctx.Done()
+		app.hotReload.LockExec()
+		app.hotReload.UnlockExec()
+		close(watcherFinished)
+	}); !ok {
+		t.Fatal("启动测试 watcher 失败")
+	}
+	<-watcherStarted
+
+	reloadDone := make(chan error, 1)
+	go func() {
+		_, reloadErr := app.reloadConfigFile(context.Background(), "manual_api", configFile)
+		reloadDone <- reloadErr
+	}()
+	select {
+	case reloadErr := <-reloadDone:
+		if reloadErr != nil {
+			t.Fatalf("关闭热加载失败: %v", reloadErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("关闭热加载发生死锁")
+	}
+	select {
+	case <-watcherFinished:
+	case <-time.After(time.Second):
+		t.Fatal("关闭热加载后 watcher 未退出")
+	}
+	if app.isConfigHotReloadRunning() {
+		t.Fatal("关闭热加载后 watcher 仍显示运行中")
 	}
 }
 

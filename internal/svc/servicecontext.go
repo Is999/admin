@@ -2,6 +2,7 @@ package svc
 
 import (
 	"context"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -9,8 +10,13 @@ import (
 	"admin/internal/config"
 	"admin/internal/infra/cdcx"
 	"admin/internal/infra/collectorx"
+	"admin/internal/infra/ipregion"
 	"admin/internal/infra/kafkax"
+	"admin/internal/infra/redislimit"
+	"admin/internal/requestctx"
 
+	utils "github.com/Is999/go-utils"
+	tablecache "github.com/Is999/table-cache"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -24,15 +30,19 @@ type SiteDatabases struct {
 // Dependencies 表示 ServiceContext 运行所需的外部依赖集合。
 // 该结构只承载已经初始化完成的资源引用，初始化顺序、失败回滚和关闭策略仍由 bootstrap 生命周期管理。
 type Dependencies struct {
-	SiteDBs        SiteDatabases         // 主库与可选扩展库连接集合
-	Kafka          *kafkax.Producer      // Kafka 生产者，用户标签事件同步使用
-	Rds            redis.UniversalClient // Redis 客户端，频控、锁和任务队列等链路复用
-	Audit          *audit.Recorder       // 审计日志记录器，后台敏感操作统一落审计
-	SnowflakeLease SnowflakeLease        // 雪花 node_id Redis 租约
+	SiteDBs           SiteDatabases         // 主库与可选扩展库连接集合
+	Kafka             *kafkax.Producer      // Kafka 生产者，用户标签事件同步使用
+	Rds               redis.UniversalClient // Redis 客户端，频控、锁和任务队列等链路复用
+	RedisLimiter      *redislimit.Limiter   // 可选的进程级 Redis 分布式限流器，未传入时按 Rds 自动创建
+	Audit             *audit.Recorder       // 审计日志记录器，后台敏感操作统一落审计
+	IPRegion          *ipregion.Locator     // 本地 IP 归属地查询器
+	SnowflakeLease    SnowflakeLease        // 雪花 node_id Redis 租约
+	TableCacheMetrics tablecache.Metrics    // 表缓存运行指标记录器
 }
 
 // SnowflakeLease 约束雪花 node_id 租约的关闭能力。
 type SnowflakeLease interface {
+	Ready(context.Context) error
 	Close(context.Context) error
 }
 
@@ -40,23 +50,29 @@ type SnowflakeLease interface {
 // - SiteDBs: 主库与可选扩展库连接集合
 // - Rds: Redis（频控、计数、最后发言时间等）
 type ServiceContext struct {
-	configValue    atomic.Value          // 当前生效的配置快照，供运行期按原子方式读取
-	reloadValue    atomic.Value          // 配置热加载运行状态快照，供管理接口和日志复用
-	storageValue   atomic.Value          // 文件存储运行时缓存，保存 *StorageRuntime
-	uploadValue    atomic.Value          // 文件上传运行时缓存，保存 *FileTransferRuntime
-	SiteDBs        SiteDatabases         // 主库与可选扩展库连接集合
-	Kafka          *kafkax.Producer      // Kafka 生产者，未启用时为空
-	Rds            redis.UniversalClient // Redis 客户端（兼容单机/集群）
-	Audit          *audit.Recorder       // 审计日志记录器
-	SnowflakeLease SnowflakeLease        // 雪花 node_id Redis 租约
-	Task           TaskQueue             // 任务系统接口（支持调度、DAG、队列管理）
-	ConfigReload   ConfigReloadExecutor  // 配置热加载执行器，供管理接口手动触发重载
-	Collector      *collectorx.Manager   // 通用收集器（Kafka 正常链路与失败账本重试）
-	CDC            CDCConsumer           // CDC 消费器状态接口，未启用时为空
+	configValue       atomic.Value          // 当前生效的配置快照，供运行期按原子方式读取
+	reloadValue       atomic.Value          // 配置热加载运行状态快照，供管理接口和日志复用
+	storageValue      atomic.Value          // 文件存储运行时缓存，保存 *StorageRuntime
+	uploadValue       atomic.Value          // 文件上传运行时缓存，保存 *FileTransferRuntime
+	SiteDBs           SiteDatabases         // 主库与可选扩展库连接集合
+	Kafka             *kafkax.Producer      // Kafka 生产者，未启用时为空
+	Rds               redis.UniversalClient // Redis 客户端（兼容单机/集群）
+	RedisLimiter      *redislimit.Limiter   // Redis 分布式限流器，同 key 跨实例共享、不同 key 相互隔离
+	Audit             *audit.Recorder       // 审计日志记录器
+	IPRegion          *ipregion.Locator     // 本地 IP 归属地查询器
+	SnowflakeLease    SnowflakeLease        // 雪花 node_id Redis 租约
+	TableCacheMetrics tablecache.Metrics    // 表缓存运行指标记录器
+	TrustedProxies    *utils.TrustedProxies // 启动期解析完成的可信反向代理白名单
+	Task              TaskQueue             // 任务系统接口（支持调度、DAG、队列管理）
+	RuntimeAlerter    TaskRuntimeAlerter    // 独立运行告警入口，不依赖任务系统开关
+	ConfigReload      ConfigReloadExecutor  // 配置热加载执行器，供管理接口手动触发重载
+	Collector         *collectorx.Manager   // 通用收集器（Kafka 正常链路与失败账本重试）
+	CDC               CDCConsumer           // CDC 消费器状态接口，未启用时为空
 }
 
 // CDCConsumer 约束 CDC 消费器对业务层暴露的最小能力。
 type CDCConsumer interface {
+	Ready(ctx context.Context, requireWorker bool) error
 	Snapshot() cdcx.ConsumerStatus
 	RegisteredTables() []string
 }
@@ -100,14 +116,25 @@ type HotReloadStatus struct {
 	SuppressedFailureCount int64     // 限频压制的重复失败日志次数
 }
 
-// NewServiceContext 只接收已经初始化完成的依赖，避免把初始化细节继续堆到 ServiceContext 内部。
+// NewServiceContext 接收已初始化的外部依赖，并按 Redis 派生无独立生命周期的轻量限流组件。
 func NewServiceContext(c config.Config, deps Dependencies) *ServiceContext {
+	trustedProxies, _ := utils.NewTrustedProxies(c.TrustedProxies...)
+	if len(c.TrustedProxies) == 0 {
+		trustedProxies = nil
+	}
 	svcCtx := &ServiceContext{
-		SiteDBs:        deps.SiteDBs,
-		Kafka:          deps.Kafka,
-		Rds:            deps.Rds,
-		Audit:          deps.Audit,
-		SnowflakeLease: deps.SnowflakeLease,
+		SiteDBs:           deps.SiteDBs,
+		Kafka:             deps.Kafka,
+		Rds:               deps.Rds,
+		RedisLimiter:      deps.RedisLimiter,
+		Audit:             deps.Audit,
+		IPRegion:          deps.IPRegion,
+		SnowflakeLease:    deps.SnowflakeLease,
+		TableCacheMetrics: deps.TableCacheMetrics,
+		TrustedProxies:    trustedProxies,
+	}
+	if svcCtx.RedisLimiter == nil && deps.Rds != nil {
+		svcCtx.RedisLimiter = redislimit.New(deps.Rds)
 	}
 	svcCtx.UpdateConfig(c)
 	svcCtx.UpdateHotReloadStatus(HotReloadStatus{LastStatus: "idle"})
@@ -123,14 +150,19 @@ func (s *ServiceContext) ScopedWithContext(ctx context.Context) *ServiceContext 
 		return nil
 	}
 	scoped := &ServiceContext{
-		SiteDBs:        s.SiteDBs.WithContext(ctx),
-		Kafka:          s.Kafka,
-		Rds:            s.Rds,
-		Audit:          s.Audit,
-		SnowflakeLease: s.SnowflakeLease,
+		SiteDBs:           s.SiteDBs.WithContext(ctx),
+		Kafka:             s.Kafka,
+		Rds:               s.Rds,
+		RedisLimiter:      s.RedisLimiter,
+		Audit:             s.Audit,
+		IPRegion:          s.IPRegion,
+		SnowflakeLease:    s.SnowflakeLease,
+		TableCacheMetrics: s.TableCacheMetrics,
+		TrustedProxies:    s.TrustedProxies,
 	}
 	scoped.configValue.Store(s.CurrentConfig())
 	scoped.Task = s.Task
+	scoped.RuntimeAlerter = s.RuntimeAlerter
 	scoped.ConfigReload = s.ConfigReload
 	scoped.Collector = s.Collector
 	scoped.CDC = s.CDC
@@ -142,6 +174,14 @@ func (s *ServiceContext) ScopedWithContext(ctx context.Context) *ServiceContext 
 	}
 	scoped.UpdateHotReloadStatus(s.CurrentHotReloadStatus())
 	return scoped
+}
+
+// ClientIP 仅在远端命中显式可信代理时解析转发头；空配置保留只信任回环代理的安全默认值。
+func (s *ServiceContext) ClientIP(r *http.Request) string {
+	if s != nil && s.TrustedProxies != nil {
+		return requestctx.NormalizeClientIP(utils.ClientIPWithTrustedProxies(r, s.TrustedProxies))
+	}
+	return requestctx.NormalizeClientIP(utils.ClientIP(r))
 }
 
 // CurrentConfig 返回当前生效的配置快照，供运行期读取最新配置。

@@ -2,9 +2,7 @@ package admin
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
-	"html"
 	"math/big"
 	"strings"
 	"time"
@@ -42,6 +40,12 @@ func (l *AdminLogic) BuildLoginCaptcha() *types.BizResult {
 			SetI18nMessage(i18n.MsgKeyInternalError).
 			WithError(errors.Wrap(err, "AdminLogic.BuildLoginCaptcha 生成验证码失败"))
 	}
+	image, err := buildLoginCaptchaImageDataURL(code)
+	if err != nil {
+		return types.NewBizResult(codes.ServerError).
+			SetI18nMessage(i18n.MsgKeyInternalError).
+			WithError(errors.Wrap(err, "AdminLogic.BuildLoginCaptcha 渲染验证码失败"))
+	}
 	cacheKey := l.AppRedisKey(fmt.Sprintf(keys.LoginCaptcha, key))
 	if err = l.Redis().Set(l.Ctx, cacheKey, strings.ToLower(code), loginCaptchaTTLSeconds*time.Second).Err(); err != nil {
 		return types.NewBizResult(codes.ServerError).
@@ -52,7 +56,7 @@ func (l *AdminLogic) BuildLoginCaptcha() *types.BizResult {
 		SetI18nMessage(i18n.MsgKeySuccess).
 		WithData(&types.LoginCaptchaResp{
 			Key:           key,
-			Image:         buildLoginCaptchaSVGDataURL(code),
+			Image:         image,
 			ExpireSeconds: loginCaptchaTTLSeconds,
 		})
 }
@@ -102,42 +106,6 @@ func generateLoginCaptchaCode(length int) (string, error) {
 		builder.WriteRune(loginCaptchaAlphabet[index])
 	}
 	return builder.String(), nil
-}
-
-// buildLoginCaptchaSVGDataURL 生成包含简单干扰线的 SVG 验证码图片。
-func buildLoginCaptchaSVGDataURL(code string) string {
-	const (
-		width  = 132
-		height = 44
-	)
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d">`, width, height, width, height))
-	builder.WriteString(`<rect width="100%" height="100%" rx="8" fill="#f8fafc"/>`)
-	for i := 0; i < 6; i++ {
-		x1, _ := randomInt(width)
-		y1, _ := randomInt(height)
-		x2, _ := randomInt(width)
-		y2, _ := randomInt(height)
-		builder.WriteString(fmt.Sprintf(`<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#cbd5e1" stroke-width="1"/>`, x1, y1, x2, y2))
-	}
-	for i := 0; i < len(code); i++ {
-		rotate, _ := randomInt(31)
-		offsetY, _ := randomInt(7)
-		colorIdx, _ := randomInt(4)
-		colors := []string{"#1d4ed8", "#0f172a", "#7c3aed", "#047857"}
-		builder.WriteString(fmt.Sprintf(
-			`<text x="%d" y="%d" font-size="26" font-family="Verdana,Arial,sans-serif" font-weight="700" fill="%s" transform="rotate(%d %d %d)">%s</text>`,
-			18+i*26,
-			31+offsetY,
-			colors[colorIdx],
-			rotate-15,
-			18+i*26,
-			31+offsetY,
-			html.EscapeString(string(code[i])),
-		))
-	}
-	builder.WriteString(`</svg>`)
-	return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(builder.String()))
 }
 
 // randomInt 生成 [0, max) 的安全随机整数。

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,17 +31,23 @@ type larkAlertPayload struct {
 	} `json:"content"`
 	// Card 表示 Lark 卡片消息内容。
 	Card struct {
+		// Header 表示卡片标题区域。
 		Header struct {
 			Template string `json:"template"` // Template 表示卡片颜色模板。
-			Title    struct {
+			// Title 表示卡片标题内容。
+			Title struct {
 				Content string `json:"content"` // Content 表示卡片标题。
 			} `json:"title"`
 		} `json:"header"`
+		// Elements 表示卡片正文元素列表。
 		Elements []struct {
+			// Text 表示可选的正文文本。
 			Text *struct {
 				Content string `json:"content"` // Content 表示卡片文本。
 			} `json:"text"`
+			// Fields 表示正文中的字段列表。
 			Fields []struct {
+				// Text 表示字段文本容器。
 				Text struct {
 					Content string `json:"content"` // Content 表示字段文本。
 				} `json:"text"`
@@ -49,6 +56,7 @@ type larkAlertPayload struct {
 	} `json:"card"`
 }
 
+// larkAlertCardText 按展示顺序拼接告警卡片中的可见文本。
 func larkAlertCardText(payload larkAlertPayload) string {
 	parts := []string{payload.Card.Header.Title.Content}
 	for _, element := range payload.Card.Elements {
@@ -60,6 +68,81 @@ func larkAlertCardText(payload larkAlertPayload) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// TestLarkRuntimeAlerterWorksWithoutTaskManager 验证任务系统关闭时非任务组件告警仍可发送并限频。
+func TestLarkRuntimeAlerterWorksWithoutTaskManager(t *testing.T) {
+	payloadCh := make(chan larkAlertPayload, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload larkAlertPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		payloadCh <- payload
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+
+	alerter, err := NewLarkRuntimeAlerter(config.Config{
+		AppID: "site-1",
+		Alert: config.AlertConfig{Lark: config.LarkAlertConfig{
+			Enabled: true, WebhookURL: server.URL, TimeoutSeconds: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("创建独立 Lark 运行告警器失败: %v", err)
+	}
+	alert := svc.TaskRuntimeAlert{
+		Kind: "collector_worker_failed", Component: "collector", Operation: "consume", Reason: "kafka timeout",
+	}
+	alerter.NotifyRuntimeAlert(context.Background(), alert)
+	alert.Reason = "kafka timeout again"
+	alerter.NotifyRuntimeAlert(context.Background(), alert)
+
+	select {
+	case payload := <-payloadCh:
+		if text := larkAlertCardText(payload); !strings.Contains(text, "collector") || !strings.Contains(text, "kafka timeout") {
+			t.Fatalf("独立运行告警内容不完整: %s", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("任务系统关闭时未收到独立运行告警")
+	}
+	select {
+	case payload := <-payloadCh:
+		t.Fatalf("同一指纹告警未限频: %+v", payload)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestLarkRuntimeAlerterRetriesAfterSendFailure 验证发送失败不会误触发限频。
+func TestLarkRuntimeAlerterRetriesAfterSendFailure(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			http.Error(w, "temporary failure", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+
+	alerter, err := NewLarkRuntimeAlerter(config.Config{
+		Alert: config.AlertConfig{Lark: config.LarkAlertConfig{
+			Enabled: true, WebhookURL: server.URL, TimeoutSeconds: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("创建独立 Lark 运行告警器失败: %v", err)
+	}
+	alert := svc.TaskRuntimeAlert{
+		Kind: "collector_worker_failed", Component: "collector", Operation: "consume", Reason: "kafka timeout",
+	}
+	alerter.NotifyRuntimeAlert(context.Background(), alert)
+	alerter.NotifyRuntimeAlert(context.Background(), alert)
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("Lark 请求次数 = %d，期望发送失败后立即重试", got)
+	}
 }
 
 // TestTaskFailureLarkAlertSendsOnArchivedTask 验证任务进入 archived 终态失败后会真正调用 Lark webhook。

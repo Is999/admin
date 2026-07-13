@@ -2,14 +2,13 @@ package collectorx
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"admin/internal/config"
 	"admin/internal/infra/loggerx"
@@ -20,26 +19,47 @@ import (
 	"github.com/segmentio/kafka-go"
 	"github.com/zeromicro/go-zero/core/logx"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
-// Collector 默认运行参数限制单轮处理规模、租约和慢批次日志阈值。
+// Collector 默认参数统一控制批次、重试和超时行为。
 const (
-	defaultFailureRetryBatchSize        = 500                    // 失败账本单轮领取的默认事件数量
-	defaultFailureRetryIntervalSeconds  = 1                      // 失败账本空轮询后的默认等待秒数
-	defaultFailureRunningLeaseSeconds   = 600                    // 失败账本运行中事件的默认租约秒数
-	defaultFailureMaxRetryTimes         = 8                      // 失败事件默认最大重试次数
-	defaultCollectorBatchSize           = 500                    // Collector 默认本地批量条数
-	defaultCollectorBatchWait           = 20 * time.Millisecond  // Collector 默认本地聚合等待时长
-	defaultKafkaWriteTimeout            = 10 * time.Second       // Kafka 默认写入超时时间
-	defaultIdempotencyTTL               = time.Hour              // Collector Redis 幂等终态保留时间
-	defaultIdempotencyProcessingTTL     = 10 * time.Minute       // Collector Redis 处理中占用租约时间
-	defaultIdempotencyPipelineBatchSize = 200                    // Collector Redis 幂等 Pipeline 默认命令数
-	maxCollectorTaskBatchWait           = time.Minute            // 单个 Collector 任务最大聚合等待时间
-	maxCollectorCarrierBatchSize        = 5000                   // Collector 单批载体处理数量上限
-	maxIdempotencyPipelineBatchSize     = 1000                   // Collector Redis 幂等 Pipeline 命令数上限
-	maxInvalidKafkaPayloadBytes         = 4000                   // 坏消息失败账本保留的最大原始内容字节数
-	slowCollectorBatchThreshold         = 200 * time.Millisecond // Collector 批量处理慢日志阈值
+	defaultFailureRetryBatchSize        = 500                   // 失败账本单轮领取的默认事件数量
+	defaultFailureRetryIntervalSeconds  = 1                     // 失败账本空轮询后的默认等待秒数
+	defaultFailureRunningLeaseSeconds   = 600                   // 失败账本运行中事件的默认租约秒数
+	defaultFailureMaxRetryTimes         = 8                     // 失败事件默认最大重试次数
+	defaultCollectorBatchSize           = 500                   // Collector 默认本地批量条数
+	defaultCollectorBatchWait           = 20 * time.Millisecond // Collector 默认本地聚合等待时长
+	defaultProcessorTimeout             = 5 * time.Minute       // Processor 默认单批执行超时
+	defaultKafkaWriteTimeout            = 10 * time.Second      // Kafka 默认写入超时时间
+	defaultIdempotencyPipelineBatchSize = 200                   // Collector Redis 幂等 Pipeline 默认命令数
+)
+
+// Collector Redis 默认租约与终态 TTL 复用配置层唯一默认值。
+const (
+	defaultIdempotencyTTL           = time.Duration(config.DefaultCollectorIdempotencyTTLSeconds) * time.Second           // Collector Redis 幂等终态保留时间
+	defaultIdempotencyProcessingTTL = time.Duration(config.DefaultCollectorIdempotencyProcessingTTLSeconds) * time.Second // Collector Redis 处理中占用租约时间
+)
+
+// Collector 运行上限防止错误配置放大批量、等待和 Redis 压力。
+const (
+	maxCollectorTaskBatchWait       = time.Minute            // 单个 Collector 任务最大聚合等待时间
+	maxCollectorProcessorTimeout    = time.Hour              // 单个 Processor 执行超时硬上限
+	maxCollectorCarrierBatchSize    = 5000                   // Collector 单批载体处理数量上限
+	maxIdempotencyPipelineBatchSize = 1000                   // Collector Redis 幂等 Pipeline 命令数上限
+	slowCollectorBatchThreshold     = 200 * time.Millisecond // Collector 批量处理慢日志阈值
+)
+
+// Collector 事件上限与失败账本字段及 Kafka 信封契约保持一致。
+const (
+	maxCollectorEventIDBytes      = 64        // 事件 ID 字节上限
+	maxCollectorBizTypeBytes      = 100       // 业务类型字节上限
+	maxCollectorPartitionKeyBytes = 128       // 分区键字节上限
+	maxCollectorPayloadBytes      = 60 * 1024 // 事件 JSON 负载上限，为 MySQL TEXT 保留安全余量
+	maxCollectorKafkaMessageBytes = 64 * 1024 // Kafka 事件信封上限，兼作常规 fetch 目标
+	maxCollectorLastErrorBytes    = 1000      // 失败原因字节上限
+	maxInvalidKafkaTopicBytes     = 249       // Kafka Topic 诊断快照上限
+	maxInvalidKafkaKeyBytes       = 1024      // 坏消息 Kafka key 诊断快照上限
+	maxInvalidKafkaRawBytes       = 4096      // 坏消息原始内容诊断快照上限
 )
 
 // kafkaMessageWriter 约束 Kafka 写入器，便于单测替换真实 broker。
@@ -60,11 +80,25 @@ type Manager struct {
 	processors map[string]Processor // bizType 到批量处理器的映射
 	alertHook  AlertHook            // 后台运行异常告警钩子
 
-	ctx    context.Context    // 后台 worker 生命周期上下文
-	cancel context.CancelFunc // 后台 worker 停止函数
-	wg     sync.WaitGroup     // 等待后台 worker 退出
+	ctx             context.Context    // 后台 worker 生命周期上下文
+	cancel          context.CancelFunc // 后台 worker 停止函数
+	wg              sync.WaitGroup     // 等待后台 worker 退出
+	running         atomic.Bool        // Collector 后台 worker 是否已启动
+	activeWorkers   atomic.Int32       // 当前实际运行的消费与失败重试 worker 数量
+	expectedWorkers atomic.Int32       // 当前配置要求运行的 worker 数量
 
 	kafkaReaders []*kafka.Reader // Kafka 消费器列表，每个任务 Topic 一个 Reader
+}
+
+// eventKey 唯一标识 Collector 业务类型内的一条事件。
+type eventKey struct {
+	bizType string // 业务类型
+	eventID string // 事件 ID
+}
+
+// eventKeyOf 返回事件的业务复合键。
+func eventKeyOf(event Event) eventKey {
+	return eventKey{bizType: event.BizType, eventID: event.EventID}
 }
 
 // kafkaBatch 表示一批 Kafka 消息及其解析后的有效事件和坏消息失败记录。
@@ -98,7 +132,7 @@ type collectorBatchPolicy struct {
 
 // collectorKafkaRoute 表示单个业务任务的 Kafka 投递和消费路由。
 type collectorKafkaRoute struct {
-	topic   string // Kafka Topic
+	topic   string // Kafka 主题
 	groupID string // Kafka 消费组
 }
 
@@ -109,6 +143,17 @@ type failureEventSeed struct {
 	attempt   int                             // 已失败次数
 	nextRunAt time.Time                       // 下次允许重试时间
 	lastError string                          // 失败原因摘要
+}
+
+// invalidKafkaSnapshot 保存坏消息的有界诊断信息，内容必须能安全写入失败账本 TEXT 字段。
+type invalidKafkaSnapshot struct {
+	Topic              string `json:"topic"`              // Topic 诊断快照
+	Partition          int    `json:"partition"`          // Kafka 分区号
+	Offset             int64  `json:"offset"`             // Kafka 消费位点
+	Key                string `json:"key"`                // 消息 key 有界快照
+	Raw                string `json:"raw"`                // 原始消息有界快照
+	OriginalKeyBytes   int    `json:"originalKeyBytes"`   // 原始 key 字节数
+	OriginalValueBytes int    `json:"originalValueBytes"` // 原始消息体字节数
 }
 
 // collectorDeadSummary 表示一次回写中进入死信的事件摘要。
@@ -211,33 +256,45 @@ func (m *Manager) Start() {
 	if m == nil || !m.cfg.Enabled {
 		return
 	}
-	if m.cancel != nil {
+	if !m.running.CompareAndSwap(false, true) {
 		return
 	}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
+	routes := collectorConfiguredReadRoutes(m.cfg)
+	m.expectedWorkers.Store(int32(1 + len(routes)))
 
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
+		m.activeWorkers.Add(1)
+		defer m.activeWorkers.Add(-1)
 		m.runFailureRetryWorker()
 	}()
 
 	if len(m.cfg.Kafka.Brokers) > 0 {
-		for _, route := range collectorConfiguredReadRoutes(m.cfg) {
-			reader := kafka.NewReader(kafka.ReaderConfig{
-				Brokers: m.cfg.Kafka.Brokers,
-				GroupID: route.groupID,
-				Topic:   route.topic,
-			})
+		for _, route := range routes {
+			reader := kafka.NewReader(m.kafkaReaderConfig(route))
 			m.kafkaReaders = append(m.kafkaReaders, reader)
 			topic := route.topic
 			groupID := route.groupID
 			m.wg.Add(1)
 			go func() {
 				defer m.wg.Done()
+				m.activeWorkers.Add(1)
+				defer m.activeWorkers.Add(-1)
 				m.runKafkaWorker(reader, topic, groupID)
 			}()
 		}
+	}
+}
+
+// kafkaReaderConfig 返回有界的常规 fetch 目标；超限单消息仍由消费后校验转入死信。
+func (m *Manager) kafkaReaderConfig(route collectorKafkaRoute) kafka.ReaderConfig {
+	return kafka.ReaderConfig{
+		Brokers:  m.cfg.Kafka.Brokers,
+		GroupID:  route.groupID,
+		Topic:    route.topic,
+		MaxBytes: maxCollectorKafkaMessageBytes,
 	}
 }
 
@@ -249,11 +306,23 @@ func (m *Manager) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	m.running.Store(false)
 	if m.cancel != nil {
 		m.cancel()
 	}
+	var firstErr error
+	recordErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = errors.Tag(err)
+		}
+	}
+	readerClosers := make([]func() error, 0, len(m.kafkaReaders))
 	for _, reader := range m.kafkaReaders {
-		_ = reader.Close()
+		readerClosers = append(readerClosers, reader.Close)
+	}
+	recordErr(closeAllWithContext(ctx, readerClosers))
+	if ctx.Err() != nil {
+		return errors.Tag(firstErr)
 	}
 	done := make(chan struct{})
 	go func() {
@@ -263,12 +332,110 @@ func (m *Manager) Stop(ctx context.Context) error {
 	select {
 	case <-done:
 	case <-ctx.Done():
+		recordErr(errors.Wrap(ctx.Err(), "等待 Collector 后台协程退出超时"))
+		return errors.Tag(firstErr)
+	}
+	writerClosers := make([]func() error, 0, len(m.writers))
+	for _, topic := range sortedWriterTopics(m.writers) {
+		writerClosers = append(writerClosers, m.writers[topic].Close)
+	}
+	recordErr(closeAllWithContext(ctx, writerClosers))
+	return errors.Tag(firstErr)
+}
+
+// closeAllWithContext 并发关闭彼此独立的 Kafka 资源，并受应用停止期限约束。
+func closeAllWithContext(ctx context.Context, closeFns []func() error) error {
+	if len(closeFns) == 0 {
+		return nil
+	}
+	errs := make(chan error, len(closeFns))
+	var wg sync.WaitGroup
+	wg.Add(len(closeFns))
+	for _, closeFn := range closeFns {
+		go func() {
+			defer wg.Done()
+			errs <- closeFn()
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				return errors.Tag(err)
+			}
+		}
+		return nil
+	case <-ctx.Done():
 		return errors.Tag(ctx.Err())
 	}
-	for _, writer := range m.writers {
-		_ = writer.Close()
+}
+
+// Ready 检查 Kafka 连通性以及 Worker 模式下的后台协程状态。
+func (m *Manager) Ready(ctx context.Context, requireWorker bool) error {
+	if m == nil || !m.cfg.Enabled {
+		return errors.New("Collector未初始化或未启用")
+	}
+	if len(m.writers) == 0 {
+		return errors.New("Collector Kafka写入器未初始化")
+	}
+	if err := pingKafkaBrokers(ctx, m.cfg.Kafka.Brokers, collectorConfiguredTopics(m.cfg)); err != nil {
+		return errors.Tag(err)
+	}
+	if !requireWorker {
+		return nil
+	}
+	if !m.running.Load() {
+		return errors.New("Collector后台Worker未运行")
+	}
+	expected := m.expectedWorkers.Load()
+	if active := m.activeWorkers.Load(); active < expected {
+		return errors.Errorf("Collector后台Worker不完整 active=%d expected=%d", active, expected)
 	}
 	return nil
+}
+
+// pingKafkaBrokers 通过 Kafka 元数据协议检查所有 Collector Topic。
+func pingKafkaBrokers(ctx context.Context, brokers []string, topics []string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var lastErr error
+	dialer := &kafka.Dialer{Timeout: time.Second}
+	for _, broker := range brokers {
+		broker = strings.TrimSpace(broker)
+		if broker == "" {
+			continue
+		}
+		brokerReady := true
+		for _, topic := range topics {
+			partitions, err := dialer.LookupPartitions(ctx, "tcp", broker, topic)
+			if err == nil && len(partitions) > 0 {
+				continue
+			}
+			if err == nil {
+				err = errors.Errorf("Collector Kafka Topic不存在或无分区 topic=%s", topic)
+			}
+			lastErr = err
+			brokerReady = false
+			break
+		}
+		if brokerReady && len(topics) > 0 {
+			return nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if lastErr == nil {
+		return errors.New("Collector Kafka broker未配置")
+	}
+	return errors.Wrap(lastErr, "Collector Kafka broker或Topic不可用")
 }
 
 // RunNow 手动执行一轮失败账本重试，便于管理端立即处理已修复事件。
@@ -296,6 +463,9 @@ func (m *Manager) Enqueue(ctx context.Context, event Event) (string, error) {
 	body, err := json.Marshal(event)
 	if err != nil {
 		return "", errors.Tag(err)
+	}
+	if len(body) > maxCollectorKafkaMessageBytes {
+		return "", errors.Errorf("collector Kafka 消息不能超过 %d 字节", maxCollectorKafkaMessageBytes)
 	}
 	if !m.kafkaAvailable(route) {
 		err = errors.Errorf("collector kafka topic 未配置 bizType=%s", event.BizType)
@@ -379,9 +549,9 @@ func (m *Manager) processorFor(bizType string) (Processor, bool) {
 }
 
 // processBatch 按 bizType 分组调用 Processor，并返回成功和失败事件集合。
-func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]struct{}, map[string]string) {
-	success := make(map[string]struct{}, len(events))
-	failed := make(map[string]string)
+func (m *Manager) processBatch(ctx context.Context, events []Event) (map[eventKey]struct{}, map[eventKey]string) {
+	success := make(map[eventKey]struct{}, len(events))
+	failed := make(map[eventKey]string)
 	for _, task := range groupEventsByBizType(events) {
 		bizType := task.bizType
 		group := task.events
@@ -391,7 +561,7 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 		p, ok := m.processorFor(bizType)
 		if !ok {
 			for _, event := range group {
-				failed[event.EventID] = "collector 未注册 processor bizType=" + bizType
+				failed[eventKeyOf(event)] = "collector 未注册 processor bizType=" + bizType
 			}
 			groupFailCount = len(group)
 			m.reportRuntimeAlert(ctx, RuntimeAlert{
@@ -413,7 +583,7 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 		results, err := m.processBizBatch(ctx, bizType, p, group)
 		if err != nil {
 			for _, event := range group {
-				failed[event.EventID] = err.Error()
+				failed[eventKeyOf(event)] = err.Error()
 			}
 			groupFailCount = len(group)
 			m.reportRuntimeAlert(ctx, RuntimeAlert{
@@ -434,7 +604,7 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 		}
 		if len(results) == 0 {
 			for _, event := range group {
-				success[event.EventID] = struct{}{}
+				success[eventKeyOf(event)] = struct{}{}
 			}
 			groupSuccessCount = len(group)
 			m.recordProcessorBatchMetrics(bizType, len(group), groupSuccessCount, groupFailCount, time.Since(beginAt))
@@ -453,9 +623,10 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 				continue
 			}
 			delete(pending, eventID)
+			key := eventKey{bizType: bizType, eventID: eventID}
 			if result.Success {
-				success[eventID] = struct{}{}
-				delete(failed, eventID)
+				success[key] = struct{}{}
+				delete(failed, key)
 				groupSuccessCount++
 				continue
 			}
@@ -463,11 +634,11 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 			if msg == "" {
 				msg = "collector processor 返回失败"
 			}
-			failed[eventID] = msg
+			failed[key] = msg
 			groupFailCount++
 		}
 		for eventID := range pending {
-			failed[eventID] = "collector processor 未返回事件处理结果"
+			failed[eventKey{bizType: bizType, eventID: eventID}] = "collector processor 未返回事件处理结果"
 			groupFailCount++
 		}
 		if groupFailCount > 0 {
@@ -490,14 +661,26 @@ func (m *Manager) processBatch(ctx context.Context, events []Event) (map[string]
 	return success, failed
 }
 
-// processBizBatch 执行单个 bizType 的业务 Processor，并把业务 panic 转成错误，避免 worker 异常退出。
+// processBizBatch 在超时上下文中同步执行 Processor，避免取消后留下继续产生副作用的孤儿协程。
 func (m *Manager) processBizBatch(ctx context.Context, bizType string, p Processor, group []Event) (results []ProcessResult, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	processorCtx, cancel := context.WithTimeout(ctx, m.processorTimeout(bizType))
+	defer cancel()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = errors.Errorf("collector processor panic bizType=%s panic=%v", bizType, recovered)
 		}
 	}()
-	return p.ProcessBatch(ctx, group)
+	results, err = p.ProcessBatch(processorCtx, group)
+	if err != nil {
+		return results, errors.Tag(err)
+	}
+	if processorErr := processorCtx.Err(); processorErr != nil {
+		return nil, errors.Wrap(processorErr, "collector processor 执行超时或取消 bizType="+bizType)
+	}
+	return results, nil
 }
 
 // groupEventsByBizType 按业务类型稳定聚合事件，保证不同 Processor 的批次隔离且调度顺序可预测。
@@ -519,122 +702,90 @@ func groupEventsByBizType(events []Event) []eventTaskGroup {
 	return groups
 }
 
-// idempotencyStore 返回 Collector Redis 幂等存储。
-func (m *Manager) idempotencyStore() *idempotencyStore {
-	if m == nil {
-		return nil
-	}
-	return m.idempotency
-}
-
-// beginIdempotentEvents 按 BizType+EventID 过滤已处理、处理中或失败账本接管的重复事件。
-func (m *Manager) beginIdempotentEvents(ctx context.Context, events []Event, now time.Time) ([]Event, []idempotencyClaim, int, error) {
+// beginIdempotentEvents 按任务开关占用 BizType+EventID，保留原始事件顺序并跳过已进入终态的重复事件。
+func (m *Manager) beginIdempotentEvents(ctx context.Context, events []Event) ([]Event, []idempotencyClaim, int, error) {
 	if len(events) == 0 {
 		return events, nil, 0, nil
 	}
-	if !m.idempotencyEnabledForEvents(events) {
+	enabledEvents := make([]Event, 0, len(events))
+	for _, event := range events {
+		if m.idempotencyEnabledForBizType(event.BizType) {
+			enabledEvents = append(enabledEvents, event)
+		}
+	}
+	if len(enabledEvents) == 0 {
 		return events, nil, 0, nil
 	}
-	store := m.idempotencyStore()
+	store := m.idempotency
 	if store == nil {
 		return nil, nil, 0, errors.Errorf("collector Redis 幂等存储未初始化")
 	}
-	return store.beginBatch(ctx, events, now)
+	_, claims, duplicate, err := store.beginBatch(ctx, enabledEvents)
+	if err != nil {
+		return nil, nil, 0, errors.Tag(err)
+	}
+	claimed := make(map[eventKey]struct{}, len(claims))
+	for _, claim := range claims {
+		claimed[eventKey{bizType: claim.BizType, eventID: claim.EventID}] = struct{}{}
+	}
+	processEvents := make([]Event, 0, len(events)-duplicate)
+	appended := make(map[eventKey]struct{}, len(claims))
+	for _, event := range events {
+		if !m.idempotencyEnabledForBizType(event.BizType) {
+			processEvents = append(processEvents, event)
+			continue
+		}
+		key := eventKey{bizType: strings.TrimSpace(event.BizType), eventID: strings.TrimSpace(event.EventID)}
+		if _, ok := claimed[key]; !ok {
+			continue
+		}
+		if _, ok := appended[key]; ok {
+			continue
+		}
+		appended[key] = struct{}{}
+		processEvents = append(processEvents, event)
+	}
+	return processEvents, claims, duplicate, nil
 }
 
-// markIdempotentDone 标记已成功处理的事件，避免 Kafka 重投重复调用 Processor。
-func (m *Manager) markIdempotentDone(ctx context.Context, events []idempotencyStateEvent, now time.Time) error {
-	if len(events) == 0 {
-		return nil
-	}
-	if store := m.idempotencyStore(); store != nil {
-		return errors.Tag(store.done(ctx, events, now))
-	}
-	return errors.Errorf("collector Redis 幂等存储未初始化")
-}
-
-// markIdempotentFailed 标记已进入失败账本的事件，避免正常 Kafka 重投重复调用 Processor。
-func (m *Manager) markIdempotentFailed(ctx context.Context, events []idempotencyStateEvent, now time.Time) error {
-	if len(events) == 0 {
-		return nil
-	}
-	if store := m.idempotencyStore(); store != nil {
-		return errors.Tag(store.failed(ctx, events, now))
-	}
-	return errors.Errorf("collector Redis 幂等存储未初始化")
-}
-
-// releaseIdempotent 释放处理中事件，通常用于失败账本写入失败后等待 Kafka 重投。
-func (m *Manager) releaseIdempotent(ctx context.Context, claims []idempotencyClaim) error {
+// renewIdempotentClaims 仅续期当前 Kafka 批次仍持有的 processing token。
+func (m *Manager) renewIdempotentClaims(ctx context.Context, claims []idempotencyClaim) error {
 	if len(claims) == 0 {
 		return nil
 	}
-	if store := m.idempotencyStore(); store != nil {
-		return errors.Tag(store.release(ctx, claims))
+	store := m.idempotency
+	if store == nil {
+		return errors.Errorf("collector Redis 幂等存储未初始化")
 	}
-	return errors.Errorf("collector Redis 幂等存储未初始化")
+	err := store.renew(ctx, claims)
+	result := "success"
+	if err != nil {
+		result = "failed"
+	}
+	recordLeaseRenew("redis_idempotency", result)
+	return errors.Tag(err)
 }
 
-// idempotencyStateEventsFromEvents 提取已启用 Collector 幂等去重的事件终态写入键。
-func (m *Manager) idempotencyStateEventsFromEvents(events []Event) []idempotencyStateEvent {
-	items := make([]idempotencyStateEvent, 0, len(events))
-	for _, event := range events {
-		if !m.idempotencyEnabledForBizType(event.BizType) {
-			continue
+// idempotencyClaimsFromSet 按 Processor 结果筛选当前批次的领取 token。
+func idempotencyClaimsFromSet(claims []idempotencyClaim, values map[eventKey]struct{}) []idempotencyClaim {
+	items := make([]idempotencyClaim, 0, len(values))
+	for _, claim := range claims {
+		if _, ok := values[eventKey{bizType: claim.BizType, eventID: claim.EventID}]; ok {
+			items = append(items, claim)
 		}
-		items = append(items, idempotencyStateEvent{BizType: event.BizType, EventID: event.EventID})
 	}
 	return items
 }
 
-// idempotencyStateEventsFromSet 按成功结果提取已启用幂等去重的事件终态写入键。
-func (m *Manager) idempotencyStateEventsFromSet(events []Event, values map[string]struct{}) []idempotencyStateEvent {
-	items := make([]idempotencyStateEvent, 0, len(values))
-	for _, event := range events {
-		if _, ok := values[event.EventID]; !ok {
-			continue
+// idempotencyClaimsFromFailures 按 Processor 失败结果筛选当前批次的领取 token。
+func idempotencyClaimsFromFailures(claims []idempotencyClaim, values map[eventKey]string) []idempotencyClaim {
+	items := make([]idempotencyClaim, 0, len(values))
+	for _, claim := range claims {
+		if _, ok := values[eventKey{bizType: claim.BizType, eventID: claim.EventID}]; ok {
+			items = append(items, claim)
 		}
-		if !m.idempotencyEnabledForBizType(event.BizType) {
-			continue
-		}
-		items = append(items, idempotencyStateEvent{BizType: event.BizType, EventID: event.EventID})
 	}
 	return items
-}
-
-// idempotencyStateEventsFromFailed 按失败结果提取已启用幂等去重的事件终态写入键。
-func (m *Manager) idempotencyStateEventsFromFailed(events []Event, values map[string]string) []idempotencyStateEvent {
-	items := make([]idempotencyStateEvent, 0, len(values))
-	for _, event := range events {
-		if _, ok := values[event.EventID]; !ok {
-			continue
-		}
-		if !m.idempotencyEnabledForBizType(event.BizType) {
-			continue
-		}
-		items = append(items, idempotencyStateEvent{BizType: event.BizType, EventID: event.EventID})
-	}
-	return items
-}
-
-// idempotencyStateEventsFromFailureRows 提取已启用幂等去重的失败账本事件终态写入键。
-func (m *Manager) idempotencyStateEventsFromFailureRows(rows []model.CollectorFailedEvent) []idempotencyStateEvent {
-	items := make([]idempotencyStateEvent, 0, len(rows))
-	for _, row := range rows {
-		if !m.idempotencyEnabledForBizType(row.BizType) {
-			continue
-		}
-		items = append(items, idempotencyStateEvent{BizType: row.BizType, EventID: row.EventID})
-	}
-	return items
-}
-
-// idempotencyEnabledForEvents 判断当前同任务批次是否需要 Redis 单任务 EventID 去重。
-func (m *Manager) idempotencyEnabledForEvents(events []Event) bool {
-	if len(events) == 0 {
-		return false
-	}
-	return m.idempotencyEnabledForBizType(events[0].BizType)
 }
 
 // idempotencyEnabledForBizType 返回指定 bizType 的 Redis 单任务 EventID 去重开关。
@@ -681,7 +832,7 @@ func normalizeEvent(event *Event) {
 	}
 }
 
-// normalizeAndValidateEvent 规范化并校验事件，确保无 bizType 的非法事件不会进入正常消费。
+// normalizeAndValidateEvent 按失败账本存储契约校验事件，避免无法落库的数据进入正常链路。
 func normalizeAndValidateEvent(event *Event) error {
 	normalizeEvent(event)
 	if event == nil {
@@ -693,844 +844,37 @@ func normalizeAndValidateEvent(event *Event) error {
 	if event.EventID == "" {
 		return errors.Errorf("collector event eventId 为空")
 	}
+	if !utf8.ValidString(event.EventID) {
+		return errors.Errorf("collector event eventId 不是有效 UTF-8")
+	}
+	if len(event.EventID) > maxCollectorEventIDBytes {
+		return errors.Errorf("collector event eventId 不能超过 %d 字节", maxCollectorEventIDBytes)
+	}
+	if !utf8.ValidString(event.BizType) {
+		return errors.Errorf("collector event bizType 不是有效 UTF-8")
+	}
+	if len(event.BizType) > maxCollectorBizTypeBytes {
+		return errors.Errorf("collector event bizType 不能超过 %d 字节", maxCollectorBizTypeBytes)
+	}
+	if !utf8.ValidString(event.PartitionKey) {
+		return errors.Errorf("collector event partitionKey 不是有效 UTF-8")
+	}
+	if len(event.PartitionKey) > maxCollectorPartitionKeyBytes {
+		return errors.Errorf("collector event partitionKey 不能超过 %d 字节", maxCollectorPartitionKeyBytes)
+	}
+	if len(event.Payload) > maxCollectorPayloadBytes {
+		return errors.Errorf("collector event payload 不能超过 %d 字节", maxCollectorPayloadBytes)
+	}
+	if !utf8.Valid(event.Payload) {
+		return errors.Errorf("collector event payload 不是有效 UTF-8")
+	}
+	if !json.Valid(event.Payload) {
+		return errors.Errorf("collector event payload 不是有效 JSON")
+	}
 	return nil
 }
 
 // runKafkaWorker 从指定 Kafka Topic 拉取事件，并按 partition 分发到独立顺序 lane。
-func (m *Manager) runKafkaWorker(reader *kafka.Reader, topic string, groupID string) {
-	if reader == nil {
-		return
-	}
-	lanes := make(map[int]chan kafkaWorkItem)
-	var lanesWG sync.WaitGroup
-	var commitMu sync.Mutex
-	commit := func(ctx context.Context, messages ...kafka.Message) error {
-		commitMu.Lock()
-		defer commitMu.Unlock()
-		return errors.Tag(reader.CommitMessages(ctx, messages...))
-	}
-	defer func() {
-		for _, lane := range lanes {
-			close(lane)
-		}
-		lanesWG.Wait()
-	}()
-	laneFor := func(partition int) chan kafkaWorkItem {
-		if lane := lanes[partition]; lane != nil {
-			return lane
-		}
-		lane := make(chan kafkaWorkItem, m.kafkaFetchBatchSize())
-		lanes[partition] = lane
-		lanesWG.Add(1)
-		go func() {
-			defer lanesWG.Done()
-			m.runKafkaPartitionLane(partition, lane, commit)
-		}()
-		return lane
-	}
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		default:
-		}
-		readCtx, cancel := context.WithTimeout(m.ctx, m.kafkaReadTimeout())
-		msg, err := reader.FetchMessage(readCtx)
-		cancel()
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				continue
-			}
-			if errors.Is(err, context.Canceled) && m.ctx.Err() != nil {
-				return
-			}
-			loggerx.Errorw(m.ctx, "采集器 Kafka 拉取失败", err)
-			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
-				Kind:      RuntimeAlertKindWorkerFailed,
-				Title:     "【P1 Collector Kafka 拉取失败】",
-				Status:    "Kafka worker 暂停本轮拉取，500ms 后继续重试",
-				Component: "collector",
-				Operation: "kafka_fetch_message",
-				Channel:   collectorRuntimeChannelKafka,
-				UniqueKey: topic,
-				Reason:    err.Error(),
-				Advice:    "请检查 Kafka broker、topic、consumer group 和网络连接；持续失败会导致 Collector 消费延迟增加。group_id=" + groupID,
-			})
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		item := m.kafkaWorkItem(msg)
-		select {
-		case laneFor(msg.Partition) <- item:
-		case <-m.ctx.Done():
-			return
-		}
-	}
-}
-
-// kafkaWorkItem 解析 Kafka 消息，坏消息转为失败账本死信记录。
-func (m *Manager) kafkaWorkItem(msg kafka.Message) kafkaWorkItem {
-	var event Event
-	if err := json.Unmarshal(msg.Value, &event); err != nil {
-		seed := m.invalidKafkaFailure(msg, err)
-		return kafkaWorkItem{message: msg, failure: &seed}
-	}
-	if err := normalizeAndValidateEvent(&event); err != nil {
-		seed := m.invalidKafkaFailure(msg, err)
-		return kafkaWorkItem{message: msg, failure: &seed}
-	}
-	return kafkaWorkItem{message: msg, event: event}
-}
-
-// runKafkaPartitionLane 在单个 Kafka partition 内按 offset 顺序聚合同任务批次。
-func (m *Manager) runKafkaPartitionLane(partition int, input <-chan kafkaWorkItem, commit kafkaCommitFunc) {
-	var pending []kafkaWorkItem
-	policy := collectorBatchPolicy{}
-	deadline := time.Time{}
-	var timer *time.Timer
-	defer func() {
-		if timer != nil {
-			timer.Stop()
-		}
-	}()
-	flush := func() bool {
-		if len(pending) == 0 {
-			return true
-		}
-		items := pending
-		pending = nil
-		policy = collectorBatchPolicy{}
-		deadline = time.Time{}
-		return m.flushKafkaWorkItems(partition, items, commit)
-	}
-	resetTimer := func(wait time.Duration) <-chan time.Time {
-		if timer == nil {
-			timer = time.NewTimer(wait)
-			return timer.C
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(wait)
-		return timer.C
-	}
-	appendFirst := func(item kafkaWorkItem) {
-		pending = append(pending, item)
-		policy = m.collectorTaskPolicyForItem(item)
-		deadline = time.Now().Add(policy.batchWait)
-	}
-	for {
-		if len(pending) == 0 {
-			select {
-			case <-m.ctx.Done():
-				return
-			case item, ok := <-input:
-				if !ok {
-					return
-				}
-				appendFirst(item)
-			}
-			continue
-		}
-		if len(pending) >= policy.batchSize {
-			if !flush() {
-				return
-			}
-			continue
-		}
-		wait := time.Until(deadline)
-		if wait <= 0 {
-			if !flush() {
-				return
-			}
-			continue
-		}
-		select {
-		case <-m.ctx.Done():
-			return
-		case item, ok := <-input:
-			if !ok {
-				flush()
-				return
-			}
-			if kafkaWorkItemSameTask(pending[0], item) {
-				pending = append(pending, item)
-				continue
-			}
-			if !flush() {
-				return
-			}
-			appendFirst(item)
-		case <-resetTimer(wait):
-			if !flush() {
-				return
-			}
-		}
-	}
-}
-
-// collectorTaskPolicyForItem 返回当前消息所属任务的聚合策略。
-func (m *Manager) collectorTaskPolicyForItem(item kafkaWorkItem) collectorBatchPolicy {
-	if item.failure != nil {
-		return m.collectorTaskPolicy("collector.invalid")
-	}
-	return m.collectorTaskPolicy(item.event.BizType)
-}
-
-// collectorTaskPolicy 返回指定 bizType 的聚合策略，未配置时回退到默认任务策略。
-func (m *Manager) collectorTaskPolicy(bizType string) collectorBatchPolicy {
-	var task config.CollectorTaskConfig
-	if m != nil {
-		if candidate, ok := m.cfg.Tasks[strings.TrimSpace(bizType)]; ok {
-			task = candidate
-		}
-	}
-	defaultTask := config.CollectorTaskConfig{}
-	if m != nil {
-		defaultTask = m.cfg.DefaultTask
-	}
-	batchSize := task.BatchSize
-	if batchSize <= 0 {
-		batchSize = defaultTask.BatchSize
-	}
-	if batchSize <= 0 {
-		batchSize = m.kafkaFetchBatchSize()
-	}
-	batchWait := task.BatchWaitMilliseconds
-	if batchWait <= 0 {
-		batchWait = defaultTask.BatchWaitMilliseconds
-	}
-	if batchWait <= 0 {
-		return collectorBatchPolicy{
-			batchSize: boundedPositiveInt(batchSize, defaultCollectorBatchSize, maxCollectorCarrierBatchSize),
-			batchWait: defaultCollectorBatchWait,
-		}
-	}
-	return collectorBatchPolicy{
-		batchSize: boundedPositiveInt(batchSize, defaultCollectorBatchSize, maxCollectorCarrierBatchSize),
-		batchWait: time.Duration(boundedPositiveInt(batchWait, int(defaultCollectorBatchWait/time.Millisecond), int(maxCollectorTaskBatchWait/time.Millisecond))) * time.Millisecond,
-	}
-}
-
-// kafkaWorkItemSameTask 判断两条消息能否在同一 partition lane 内合并为同任务批次。
-func kafkaWorkItemSameTask(first kafkaWorkItem, next kafkaWorkItem) bool {
-	if first.failure != nil || next.failure != nil {
-		return first.failure != nil && next.failure != nil
-	}
-	return first.event.BizType == next.event.BizType
-}
-
-// flushKafkaWorkItems 处理一个同 partition、同任务的批次，成功后再提交对应 offset。
-func (m *Manager) flushKafkaWorkItems(partition int, items []kafkaWorkItem, commit kafkaCommitFunc) bool {
-	batch := kafkaBatchFromWorkItems(items)
-	for {
-		if err := m.handleKafkaBatch(m.ctx, batch); err != nil {
-			if m.ctx.Err() != nil {
-				return false
-			}
-			loggerx.Errorw(m.ctx, "采集器 Kafka 批量处理失败", err,
-				logx.Field("partition", partition),
-				logx.Field("batch_size", len(batch.messages)),
-			)
-			m.reportRuntimeAlert(m.ctx, RuntimeAlert{
-				Kind:      RuntimeAlertKindWorkerFailed,
-				Title:     "【P1 Collector Kafka 批量处理失败】",
-				Status:    "Kafka offset 暂不提交，500ms 后继续重试本批消息",
-				Component: "collector",
-				Operation: "kafka_handle_batch",
-				Channel:   collectorRuntimeChannelKafka,
-				UniqueKey: kafkaBatchTopic(batch),
-				Reason:    err.Error(),
-				Count:     len(batch.messages),
-				Advice:    "请检查 Processor、失败账本写入和数据库连接池；修复前 Kafka 消费位点会停留在当前批次。",
-			})
-			if !sleepWithContext(m.ctx, 500*time.Millisecond) {
-				return false
-			}
-			continue
-		}
-		break
-	}
-	if err := commit(m.ctx, batch.messages...); err != nil {
-		return m.retryCommitKafkaBatch(partition, batch, commit, err)
-	}
-	return true
-}
-
-// retryCommitKafkaBatch 重试提交 offset，确认成功前不推进同 partition 后续批次。
-func (m *Manager) retryCommitKafkaBatch(partition int, batch kafkaBatch, commit kafkaCommitFunc, firstErr error) bool {
-	err := firstErr
-	for {
-		if m.ctx.Err() != nil {
-			return false
-		}
-		loggerx.Errorw(m.ctx, "采集器 Kafka offset 提交失败", err,
-			logx.Field("partition", partition),
-			logx.Field("batch_size", len(batch.messages)),
-		)
-		m.reportRuntimeAlert(m.ctx, RuntimeAlert{
-			Kind:      RuntimeAlertKindWorkerFailed,
-			Title:     "【P1 Collector Kafka Offset 提交失败】",
-			Status:    "事件已完成或失败账本已写入，Kafka offset 确认前不推进后续批次",
-			Component: "collector",
-			Operation: "kafka_commit_messages",
-			Channel:   collectorRuntimeChannelKafka,
-			UniqueKey: kafkaBatchTopic(batch),
-			Reason:    err.Error(),
-			Count:     len(batch.messages),
-			Advice:    "请检查 Kafka consumer group 状态和 broker 连接；Collector 会按 BizType+EventID 跳过运行期重复事件，确认 offset 前不会推进同 partition 后续批次。",
-		})
-		if !sleepWithContext(m.ctx, 500*time.Millisecond) {
-			return false
-		}
-		if err = commit(m.ctx, batch.messages...); err == nil {
-			return true
-		}
-	}
-}
-
-// kafkaBatchFromWorkItems 把 partition lane 内的消息转换成 Processor 批次。
-func kafkaBatchFromWorkItems(items []kafkaWorkItem) kafkaBatch {
-	batch := kafkaBatch{
-		messages: make([]kafka.Message, 0, len(items)),
-		events:   make([]Event, 0, len(items)),
-		invalid:  make([]failureEventSeed, 0),
-	}
-	for _, item := range items {
-		batch.messages = append(batch.messages, item.message)
-		if item.failure != nil {
-			batch.invalid = append(batch.invalid, *item.failure)
-			continue
-		}
-		batch.events = append(batch.events, item.event)
-	}
-	return batch
-}
-
-// kafkaBatchTopic 返回当前批次所属 Topic，用于告警定位。
-func kafkaBatchTopic(batch kafkaBatch) string {
-	if len(batch.messages) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(batch.messages[0].Topic)
-}
-
-// sleepWithContext 在重试等待期间响应 worker 停止信号。
-func sleepWithContext(ctx context.Context, duration time.Duration) bool {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
-// handleKafkaBatch 执行 Kafka 批次，只有成功或失败账本写入成功后调用方才允许提交 offset。
-func (m *Manager) handleKafkaBatch(ctx context.Context, batch kafkaBatch) error {
-	if len(batch.messages) == 0 {
-		return nil
-	}
-	recordKafkaConsume("received", len(batch.messages))
-	m.recordRuntimeKafkaConsume(kafkaBatchBizType(batch), len(batch.messages), 0)
-	if len(batch.invalid) > 0 {
-		if err := m.saveFailureEvents(ctx, batch.invalid); err != nil {
-			return errors.Tag(err)
-		}
-		recordKafkaConsume("invalid", len(batch.invalid))
-		m.recordRuntimeKafkaConsume(kafkaBatchBizType(batch), 0, len(batch.invalid))
-		first := batch.invalid[0]
-		m.reportRuntimeAlert(ctx, RuntimeAlert{
-			Kind:      RuntimeAlertKindInvalidEvent,
-			Title:     "【P1 Collector Kafka 消息无效】",
-			Status:    "坏消息已写入失败账本死信，后续会提交 Kafka offset",
-			Component: "collector",
-			Operation: "kafka_invalid_message",
-			BizType:   first.event.BizType,
-			Channel:   collectorRuntimeChannelKafka,
-			UniqueKey: first.event.EventID,
-			Reason:    first.lastError,
-			Count:     len(batch.invalid),
-			Advice:    "请检查 Kafka 生产方消息格式是否为 Collector Event JSON；坏消息不会进入正常 Processor。",
-		})
-	}
-	if len(batch.events) == 0 {
-		return nil
-	}
-	processEvents, claims, duplicateCount, err := m.beginIdempotentEvents(ctx, batch.events, time.Now())
-	if err != nil {
-		return errors.Tag(err)
-	}
-	if duplicateCount > 0 {
-		recordKafkaConsume("duplicate", duplicateCount)
-		m.recordRuntimeDuplicate(kafkaBatchBizType(batch), duplicateCount)
-	}
-	if len(processEvents) == 0 {
-		return nil
-	}
-	beginAt := time.Now()
-	success, failed := m.processBatch(ctx, processEvents)
-	if len(failed) == 0 {
-		if err := m.markIdempotentDone(ctx, m.idempotencyStateEventsFromEvents(processEvents), time.Now()); err != nil {
-			return errors.Tag(err)
-		}
-		m.logSlowBatch(ctx, "kafka_processor_batch", len(processEvents), beginAt)
-		recordKafkaConsume("processed", len(processEvents))
-		return nil
-	}
-	rows := m.failureSeedsFromResults(processEvents, failed, time.Now())
-	if err := m.saveFailureEvents(ctx, rows); err != nil {
-		if releaseErr := m.releaseIdempotent(ctx, claims); releaseErr != nil {
-			return errors.Wrap(releaseErr, "collector 失败账本写入失败后释放幂等占用失败")
-		}
-		return errors.Tag(err)
-	}
-	if err := m.markIdempotentDone(ctx, m.idempotencyStateEventsFromSet(processEvents, success), time.Now()); err != nil {
-		return errors.Tag(err)
-	}
-	if err := m.markIdempotentFailed(ctx, m.idempotencyStateEventsFromFailed(processEvents, failed), time.Now()); err != nil {
-		return errors.Tag(err)
-	}
-	m.logSlowBatch(ctx, "kafka_processor_batch_failed", len(processEvents), beginAt)
-	recordKafkaConsume("processed", len(success))
-	recordKafkaConsume("failed", len(failed))
-	return nil
-}
-
-// failureSeedsFromResults 将 Processor 失败结果转成失败账本写入快照。
-func (m *Manager) failureSeedsFromResults(events []Event, failed map[string]string, now time.Time) []failureEventSeed {
-	rows := make([]failureEventSeed, 0, len(failed))
-	for _, event := range events {
-		msg, ok := failed[event.EventID]
-		if !ok {
-			continue
-		}
-		rows = append(rows, failureEventSeed{
-			event:     event,
-			state:     model.CollectorFailedEventStateRetry,
-			attempt:   1,
-			nextRunAt: now.Add(nextRetryDelay(1)),
-			lastError: msg,
-		})
-	}
-	return rows
-}
-
-// invalidKafkaFailure 把无法进入 Processor 的 Kafka 消息转换成死信账本记录。
-func (m *Manager) invalidKafkaFailure(msg kafka.Message, cause error) failureEventSeed {
-	now := time.Now()
-	reason := ""
-	if cause != nil {
-		reason = cause.Error()
-	}
-	payload := map[string]any{
-		"topic":     msg.Topic,
-		"partition": msg.Partition,
-		"offset":    msg.Offset,
-		"key":       string(msg.Key),
-		"raw":       truncateErr(string(msg.Value), maxInvalidKafkaPayloadBytes),
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		body = []byte(`{"raw":""}`)
-	}
-	return failureEventSeed{
-		event: Event{
-			EventID:      invalidKafkaEventID(msg),
-			BizType:      "collector.invalid",
-			PartitionKey: fmt.Sprintf("%s:%d", msg.Topic, msg.Partition),
-			Payload:      json.RawMessage(body),
-		},
-		state:     model.CollectorFailedEventStateDead,
-		attempt:   m.failureMaxRetryTimes(),
-		nextRunAt: now,
-		lastError: reason,
-	}
-}
-
-// invalidKafkaEventID 基于 Kafka 位点生成坏消息幂等键。
-func invalidKafkaEventID(msg kafka.Message) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset)))
-	return "collector:invalid:" + hex.EncodeToString(sum[:8])
-}
-
-// saveFailureEvents 批量写入失败账本，成功后调用方才允许提交 Kafka offset。
-func (m *Manager) saveFailureEvents(ctx context.Context, seeds []failureEventSeed) error {
-	if len(seeds) == 0 {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	now := time.Now()
-	rows := make([]model.CollectorFailedEvent, 0, len(seeds))
-	for _, seed := range seeds {
-		finishedAt := (*time.Time)(nil)
-		if seed.state == model.CollectorFailedEventStateDead || seed.state == model.CollectorFailedEventStateDone {
-			t := now
-			finishedAt = &t
-		}
-		nextRunAt := seed.nextRunAt
-		if nextRunAt.IsZero() {
-			nextRunAt = now
-		}
-		rows = append(rows, model.CollectorFailedEvent{
-			EventID:      seed.event.EventID,
-			BizType:      seed.event.BizType,
-			PartitionKey: seed.event.PartitionKey,
-			Payload:      string(seed.event.Payload),
-			State:        seed.state,
-			Attempt:      seed.attempt,
-			NextRunAt:    nextRunAt,
-			StartedAt:    nil,
-			FinishedAt:   finishedAt,
-			LastError:    truncateErr(seed.lastError, 1000),
-			CreatedAt:    now,
-			UpdatedAt:    now,
-		})
-	}
-	beginAt := time.Now()
-	result := m.failures.WithContext(ctx).
-		Clauses(clause.OnConflict{DoNothing: true}).
-		CreateInBatches(&rows, m.failureWriteBatchSize())
-	if result.Error != nil {
-		return errors.Tag(result.Error)
-	}
-	if result.RowsAffected > 0 {
-		recordFailurePersistBatch(failureSeedsStateLabel(seeds), int(result.RowsAffected), time.Since(beginAt))
-	}
-	m.logSlowBatch(ctx, "failure_insert", len(rows), beginAt)
-	return nil
-}
-
-// runFailureRetryWorker 定时从失败账本批量领取事件并投送给 Processor。
-func (m *Manager) runFailureRetryWorker() {
-	intervalSeconds := m.cfg.FailureRetry.RunnerIntervalSeconds
-	if intervalSeconds <= 0 {
-		intervalSeconds = defaultFailureRetryIntervalSeconds
-	}
-	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-ticker.C:
-			if _, err := m.runFailureRetryOnce(m.ctx, 0); err != nil {
-				if strings.Contains(err.Error(), "collector 批量消费存在失败") {
-					continue
-				}
-				loggerx.Errorw(m.ctx, "采集器 失败账本重试失败", err)
-				m.reportRuntimeAlert(m.ctx, RuntimeAlert{
-					Kind:      RuntimeAlertKindWorkerFailed,
-					Title:     "【P1 Collector 失败账本重试失败】",
-					Status:    "失败账本本轮重试失败，下一轮会继续重试",
-					Component: "collector",
-					Operation: "failure_retry_run_once",
-					Channel:   collectorRuntimeChannelKafka,
-					Reason:    err.Error(),
-					Advice:    "请检查 collector_failed_event 查询、状态回写、Processor 业务依赖和数据库连接池；若失败持续出现，请查看 Collector 管理页积压与死信。",
-				})
-			}
-		}
-	}
-}
-
-// runFailureRetryOnce 执行一轮失败账本批量重试。
-func (m *Manager) runFailureRetryOnce(ctx context.Context, limit int) (int, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	beginAt := time.Now()
-	limit = boundedPositiveInt(limit, m.failureRetryBatchSize(), maxCollectorCarrierBatchSize)
-	now := time.Now()
-	if err := m.recoverExpiredRunning(ctx, limit, now); err != nil {
-		return 0, errors.Tag(err)
-	}
-	rows, err := m.claimDue(ctx, limit, now)
-	if err != nil {
-		return 0, errors.Tag(err)
-	}
-	if len(rows) == 0 {
-		return 0, nil
-	}
-	events := make([]Event, 0, len(rows))
-	rowByEventID := make(map[string]model.CollectorFailedEvent, len(rows))
-	failRows := make([]model.CollectorFailedEvent, 0, len(rows))
-	for _, row := range rows {
-		event := Event{
-			EventID:      row.EventID,
-			BizType:      row.BizType,
-			PartitionKey: row.PartitionKey,
-			Payload:      json.RawMessage(row.Payload),
-		}
-		if err := normalizeAndValidateEvent(&event); err != nil {
-			row.LastError = err.Error()
-			failRows = append(failRows, row)
-			continue
-		}
-		events = append(events, event)
-		rowByEventID[event.EventID] = row
-	}
-	success, failed := m.processBatch(ctx, events)
-	successIDs := make([]int64, 0, len(success))
-	successRows := make([]model.CollectorFailedEvent, 0, len(success))
-	for eventID := range success {
-		row, ok := rowByEventID[eventID]
-		if !ok {
-			continue
-		}
-		successIDs = append(successIDs, row.ID)
-		successRows = append(successRows, row)
-	}
-	for eventID, msg := range failed {
-		row, ok := rowByEventID[eventID]
-		if !ok {
-			continue
-		}
-		row.LastError = msg
-		failRows = append(failRows, row)
-	}
-	if len(successIDs) > 0 {
-		if err := m.markDone(ctx, successIDs, time.Now()); err != nil {
-			return len(successIDs), errors.Tag(err)
-		}
-		if err := m.markIdempotentDone(ctx, m.idempotencyStateEventsFromFailureRows(successRows), time.Now()); err != nil {
-			return len(successIDs), errors.Tag(err)
-		}
-	}
-	if len(failRows) > 0 {
-		if err := m.markFailed(ctx, failRows, errors.Errorf("collector 批量消费存在失败"), time.Now()); err != nil {
-			return len(successIDs), errors.Tag(err)
-		}
-		if err := m.markIdempotentFailed(ctx, m.idempotencyStateEventsFromFailureRows(failRows), time.Now()); err != nil {
-			return len(successIDs), errors.Tag(err)
-		}
-	}
-	if len(failRows) > 0 {
-		m.logSlowBatch(ctx, "failure_retry_failed", len(rows), beginAt)
-		return len(successIDs), errors.Errorf("collector 批量消费存在失败 success=%d failed=%d", len(successIDs), len(failRows))
-	}
-	m.logSlowBatch(ctx, "failure_retry_batch", len(rows), beginAt)
-	return len(successIDs), nil
-}
-
-// claimDue 使用 SKIP LOCKED 批量领取到期失败事件，保证多实例并发安全。
-func (m *Manager) claimDue(ctx context.Context, limit int, now time.Time) ([]model.CollectorFailedEvent, error) {
-	var rows []model.CollectorFailedEvent
-	err := m.failures.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		q := tx.Model(&model.CollectorFailedEvent{}).
-			Where("state IN ? AND next_run_at <= ?", []model.CollectorFailedEventState{
-				model.CollectorFailedEventStatePending,
-				model.CollectorFailedEventStateRetry,
-			}, now).
-			Order("id ASC").
-			Limit(limit).
-			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
-		if err := q.Find(&rows).Error; err != nil {
-			return errors.Tag(err)
-		}
-		if len(rows) == 0 {
-			return nil
-		}
-		ids := make([]int64, 0, len(rows))
-		for _, row := range rows {
-			ids = append(ids, row.ID)
-		}
-		startedAt := time.Now()
-		updates := map[string]any{
-			"state":      model.CollectorFailedEventStateRunning,
-			"started_at": startedAt,
-			"updated_at": startedAt,
-		}
-		if err := tx.Model(&model.CollectorFailedEvent{}).Where("id IN ?", ids).Updates(updates).Error; err != nil {
-			return errors.Tag(err)
-		}
-		for i := range rows {
-			rows[i].State = model.CollectorFailedEventStateRunning
-			rows[i].StartedAt = &startedAt
-		}
-		return nil
-	})
-	return rows, errors.Tag(err)
-}
-
-// recoverExpiredRunning 回收租约超时的重试中事件，避免 worker 异常退出造成永久卡死。
-func (m *Manager) recoverExpiredRunning(ctx context.Context, limit int, now time.Time) error {
-	leaseSeconds := m.cfg.FailureRetry.RunningLeaseSeconds
-	if leaseSeconds <= 0 {
-		leaseSeconds = defaultFailureRunningLeaseSeconds
-	}
-	if limit <= 0 {
-		limit = m.failureRetryBatchSize()
-	}
-	cutoff := now.Add(-time.Duration(leaseSeconds) * time.Second)
-	recoverErr := errors.Errorf("collector running 失败事件租约超时，已回收等待重试")
-	rows := make([]model.CollectorFailedEvent, 0, limit)
-	summary := collectorDeadSummary{}
-	err := m.failures.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		q := tx.Model(&model.CollectorFailedEvent{}).
-			Where("state = ? AND started_at IS NOT NULL AND started_at <= ?", model.CollectorFailedEventStateRunning, cutoff).
-			Order("id ASC").
-			Limit(limit).
-			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
-		if err := q.Find(&rows).Error; err != nil {
-			return errors.Tag(err)
-		}
-		if len(rows) == 0 {
-			return nil
-		}
-		var err error
-		summary, err = m.markFailedInTx(tx, rows, recoverErr, now)
-		return errors.Tag(err)
-	})
-	if err != nil {
-		return errors.Tag(err)
-	}
-	m.reportDeadEvents(ctx, summary, recoverErr)
-	return nil
-}
-
-// markDone 批量标记重试成功事件，使用 running 状态校验避免误更新。
-func (m *Manager) markDone(ctx context.Context, ids []int64, now time.Time) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	updates := map[string]any{
-		"state":       model.CollectorFailedEventStateDone,
-		"finished_at": now,
-		"updated_at":  now,
-		"last_error":  "",
-	}
-	result := m.failures.WithContext(ctx).
-		Model(&model.CollectorFailedEvent{}).
-		Where("id IN ? AND state = ?", ids, model.CollectorFailedEventStateRunning).
-		Updates(updates)
-	if result.Error != nil {
-		return errors.Tag(result.Error)
-	}
-	if result.RowsAffected != int64(len(ids)) {
-		return errors.Errorf("collectorx.markDone 状态回写行数不一致 expect=%d actual=%d", len(ids), result.RowsAffected)
-	}
-	return nil
-}
-
-// markFailed 按指数退避策略回写失败事件，超过最大次数后进入死信。
-func (m *Manager) markFailed(ctx context.Context, rows []model.CollectorFailedEvent, execErr error, now time.Time) error {
-	summary := collectorDeadSummary{}
-	err := m.failures.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var err error
-		summary, err = m.markFailedInTx(tx, rows, execErr, now)
-		return errors.Tag(err)
-	})
-	if err != nil {
-		return errors.Tag(err)
-	}
-	m.reportDeadEvents(ctx, summary, execErr)
-	return nil
-}
-
-// markFailedInTx 在同一事务内把 running 事件回写为 retry/dead。
-func (m *Manager) markFailedInTx(tx *gorm.DB, rows []model.CollectorFailedEvent, execErr error, now time.Time) (collectorDeadSummary, error) {
-	summary := collectorDeadSummary{}
-	if tx == nil {
-		return summary, errors.Errorf("collectorx.markFailedInTx tx 为空")
-	}
-	maxRetry := m.failureMaxRetryTimes()
-	for _, row := range rows {
-		newAttempt := row.Attempt + 1
-		nextState := model.CollectorFailedEventStateRetry
-		nextRunAt := now
-		finishedAt := (*time.Time)(nil)
-		if newAttempt >= maxRetry {
-			nextState = model.CollectorFailedEventStateDead
-			finishedAt = &now
-			summary.count++
-			if summary.bizType == "" {
-				summary.bizType = strings.TrimSpace(row.BizType)
-			}
-			if summary.eventID == "" {
-				summary.eventID = strings.TrimSpace(row.EventID)
-			}
-		} else {
-			nextRunAt = now.Add(nextRetryDelay(newAttempt))
-		}
-		lastError := row.LastError
-		if strings.TrimSpace(lastError) == "" && execErr != nil {
-			lastError = execErr.Error()
-		}
-		updates := map[string]any{
-			"state":       nextState,
-			"attempt":     newAttempt,
-			"next_run_at": nextRunAt,
-			"started_at":  nil,
-			"updated_at":  now,
-			"last_error":  truncateErr(lastError, 1000),
-		}
-		if finishedAt != nil {
-			updates["finished_at"] = *finishedAt
-		} else {
-			updates["finished_at"] = nil
-		}
-		result := tx.Model(&model.CollectorFailedEvent{}).
-			Where("id = ? AND state = ?", row.ID, model.CollectorFailedEventStateRunning).
-			Updates(updates)
-		if result.Error != nil {
-			return summary, errors.Tag(result.Error)
-		}
-		if result.RowsAffected == 0 {
-			return summary, errors.Errorf("collectorx.markFailed 任务状态已变化 id=%d", row.ID)
-		}
-	}
-	return summary, nil
-}
-
-// reportDeadEvents 上报失败账本事件进入死信的低基数告警和指标。
-func (m *Manager) reportDeadEvents(ctx context.Context, summary collectorDeadSummary, execErr error) {
-	if summary.count <= 0 {
-		return
-	}
-	reason := ""
-	if execErr != nil {
-		reason = execErr.Error()
-	}
-	m.reportRuntimeAlert(ctx, RuntimeAlert{
-		Kind:      RuntimeAlertKindDeadEvent,
-		Title:     "【P1 Collector 事件进入死信】",
-		Status:    "事件已达到最大重试次数并进入死信，不会继续自动处理",
-		Component: "collector",
-		Operation: "mark_dead",
-		BizType:   summary.bizType,
-		Channel:   collectorRuntimeChannelKafka,
-		UniqueKey: summary.bizType,
-		Reason:    reason,
-		Count:     summary.count,
-		Advice:    "请在 Collector 管理页按死信状态和 bizType 检索，确认业务影响范围后修复数据或处理器，再人工重试；必要时可用首个事件ID " + summary.eventID + " 定位。",
-	})
-	recordFailureDead(summary.bizType, summary.count)
-	m.recordRuntimeDead(summary.bizType, summary.count)
-}
-
-// nextRetryDelay 返回指定失败次数对应的下次重试延迟。
-func nextRetryDelay(attempt int) time.Duration {
-	switch attempt {
-	case 1:
-		return 1 * time.Second
-	case 2:
-		return 5 * time.Second
-	case 3:
-		return 30 * time.Second
-	case 4:
-		return 2 * time.Minute
-	default:
-		return 10 * time.Minute
-	}
-}
-
 // kafkaFetchBatchSize 返回 partition lane 本地缓冲大小，未配置时使用安全默认值。
 func (m *Manager) kafkaFetchBatchSize() int {
 	if m == nil {
@@ -1587,6 +931,35 @@ func (m *Manager) failureMaxRetryTimes() int {
 		return defaultFailureMaxRetryTimes
 	}
 	return m.cfg.FailureRetry.MaxRetryTimes
+}
+
+// failureRunningLease 返回失败账本领取租约。
+func (m *Manager) failureRunningLease() time.Duration {
+	if m == nil || m.cfg.FailureRetry.RunningLeaseSeconds <= 0 {
+		return time.Duration(defaultFailureRunningLeaseSeconds) * time.Second
+	}
+	return time.Duration(m.cfg.FailureRetry.RunningLeaseSeconds) * time.Second
+}
+
+// processorTimeout 返回指定业务 Processor 的单批执行超时。
+func (m *Manager) processorTimeout(bizType string) time.Duration {
+	seconds := 0
+	if m != nil {
+		if task, ok := m.cfg.Tasks[strings.TrimSpace(bizType)]; ok {
+			seconds = task.ProcessorTimeoutSeconds
+		}
+		if seconds <= 0 {
+			seconds = m.cfg.DefaultTask.ProcessorTimeoutSeconds
+		}
+	}
+	if seconds <= 0 {
+		return defaultProcessorTimeout
+	}
+	timeout := time.Duration(seconds) * time.Second
+	if timeout > maxCollectorProcessorTimeout {
+		return maxCollectorProcessorTimeout
+	}
+	return timeout
 }
 
 // collectorIdempotencyTTL 返回成功或失败终态去重缓存 TTL。
@@ -1704,6 +1077,16 @@ func sortedKeysFromStringMap(values map[string]string) []string {
 	return keys
 }
 
+// sortedWriterTopics 返回 Kafka writer 的稳定 Topic 顺序。
+func sortedWriterTopics(writers map[string]kafkaMessageWriter) []string {
+	topics := make([]string, 0, len(writers))
+	for topic := range writers {
+		topics = append(topics, topic)
+	}
+	sort.Strings(topics)
+	return topics
+}
+
 // firstNonEmpty 返回第一个非空白字符串。
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
@@ -1763,13 +1146,25 @@ func failedEventStateMetricLabel(state model.CollectorFailedEventState) string {
 	}
 }
 
-// truncateErr 截断错误摘要，避免异常文本过长撑大行记录。
+// truncateErr 清理并按 UTF-8 字节边界截断错误摘要，保证可写入 utf8mb4 字段。
 func truncateErr(msg string, limit int) string {
-	msg = strings.TrimSpace(msg)
-	if limit <= 0 || len(msg) <= limit {
-		return msg
+	return strings.TrimSpace(truncateTextBytes(strings.TrimSpace(msg), limit))
+}
+
+// truncateTextBytes 把任意字节串转成有效 UTF-8，并返回不超过上限的完整字符前缀。
+func truncateTextBytes(text string, limit int) string {
+	if limit <= 0 {
+		return ""
 	}
-	return msg[:limit]
+	text = strings.ToValidUTF8(text, "�")
+	if len(text) <= limit {
+		return text
+	}
+	end := limit
+	for end > 0 && !utf8.ValidString(text[:end]) {
+		end--
+	}
+	return text[:end]
 }
 
 // collectorAlertReason 生成 Collector 告警摘要，保留样例 ID 但不让它参与告警指纹。

@@ -6,6 +6,8 @@ import (
 )
 
 const (
+	// NameRuntimeAlert 表示独立运行告警启动组件名称。
+	NameRuntimeAlert = "runtime_alert"
 	// NameCollector 表示通用收集器启动组件名称。
 	NameCollector = "collector"
 	// NameCDCConsumer 表示 Debezium CDC 消费启动组件名称。
@@ -25,6 +27,15 @@ type Spec struct {
 // DefaultSpecs 返回项目内置启动组件规格，顺序即启动装配顺序。
 func DefaultSpecs() []Spec {
 	return []Spec{
+		{
+			Spec: register.Spec{
+				Name:        NameRuntimeAlert,
+				File:        "internal/bootstrap/components/builtin/alert.go",
+				Method:      "newRuntimeAlert",
+				Description: "注册独立运行告警组件",
+			},
+			Build: newRuntimeAlert,
+		},
 		{
 			Spec: register.Spec{
 				Name:        NameCollector,

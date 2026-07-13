@@ -16,6 +16,7 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -31,22 +32,34 @@ const (
 	reportTimeBucket = time.Hour
 	// reportTraceDetailLimit 控制单个错误任务展示的统计明细数量。
 	reportTraceDetailLimit = 3
+	// reportGlobalScanLimit 限制单份日报跨队列、跨状态读取的任务详情总数，超限时显式标记日报不完整。
+	reportGlobalScanLimit = 10_000
+	// reportGlobalScanByteLimit 限制单份日报加载 Redis 任务详情和运行快照的估算总字节数。
+	reportGlobalScanByteLimit int64 = 64 << 20
+	// reportPageByteLimit 限制单个 Asynq 原生详情页的估算加载字节数。
+	reportPageByteLimit int64 = 8 << 20
+	// reportQueueLimit 限制单份日报读取队列元数据和终态集合的队列数量。
+	reportQueueLimit = 32
+	// asynqArchivedTrimThreshold 是 Asynq v0.26.0 开始裁剪 archived 记录时的实际可见数量。
+	// 上游 Lua 按闭区间删除最旧记录，会比声明上限多裁一条，因此稳定可见上限是 9,999 条。
+	asynqArchivedTrimThreshold = 9_999
 )
 
 // QueueManager 描述任务运行日报读取任务系统数据所需的最小能力。
 type QueueManager interface {
-	ListQueues(ctx context.Context) (*types.TaskQueueListResp, error)                                // ListQueues 返回队列概览。
-	ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*types.TaskListResp, error)         // ListTasks 分页读取任务列表。
-	GetWorkflowStatus(ctx context.Context, workflowID string) (*types.TaskWorkflowStatusResp, error) // GetWorkflowStatus 读取工作流状态。
-	CompletedRetention() time.Duration                                                               // CompletedRetention 返回 completed 保留期。
+	ListReportQueues(ctx context.Context, limit int) (*types.TaskQueueListResp, bool, error)                                                                       // ListReportQueues 返回有界队列概览和是否截断。
+	ListReportTasks(ctx context.Context, req *types.ListTaskItemsReq, offset, limit int, byteBudget int64) (*types.TaskListResp, types.TaskReportScanUsage, error) // ListReportTasks 批量读取日报终态任务，并返回受控资源消耗。
+	GetWorkflowStatusSummaries(ctx context.Context, workflowIDs []string) (map[string]*types.TaskWorkflowStatusResp, error)                                        // GetWorkflowStatusSummaries 批量读取工作流轻量状态。
+	CompletedRetention() time.Duration                                                                                                                             // CompletedRetention 返回 completed 保留期。
+	ArchivedRetention() time.Duration                                                                                                                              // ArchivedRetention 返回 archived 保留期。
 }
 
 // ReportRequest 描述一次任务运行日报统计请求。
 type ReportRequest struct {
-	WindowStart time.Time // 统计窗口开始时间，默认取执行时间往前 24 小时
-	WindowEnd   time.Time // 统计窗口结束时间，默认取任务执行时间
-	GeneratedAt time.Time // 报告生成时间；为空时使用当前时间
-	PageSize    int       // 单页读取任务详情数量；<=0 时使用默认批量
+	WindowStart       time.Time // 统计窗口开始时间，默认取生成基准时间往前 24 小时
+	WindowEnd         time.Time // 统计窗口结束时间，默认取生成基准时间
+	GeneratedAt       time.Time // 报告生成时间；为空时使用当前时间
+	ExcludeWorkflowID string    // 排除当前日报工作流，避免报告把自身计入本窗口
 }
 
 // Report 汇总一个统计窗口内周期任务和工作流执行情况。
@@ -61,7 +74,7 @@ type Report struct {
 	PeriodicTriggerOK     int                 // 周期触发入口成功数
 	PeriodicTriggerFailed int                 // 周期触发入口失败数
 	NodeTaskTotal         int                 // 周期工作流节点任务总数
-	WorkflowTotal         int                 // 周期来源工作流实例数
+	WorkflowTotal         int                 // 当前窗口任务涉及的去重工作流实例数
 	WorkflowSuccess       int                 // 成功工作流实例数
 	WorkflowFailed        int                 // 失败工作流实例数
 	WorkflowRunning       int                 // 仍在运行的工作流实例数
@@ -80,8 +93,7 @@ type Report struct {
 	FailureTasks          []TaskSummary       // 失败任务明细
 	SlowTasks             []TaskSummary       // 慢任务明细
 	TraceErrorTasks       []TaskSummary       // 处理量错误任务明细
-	Truncated             bool                // 是否因外部保护截断了统计明细
-	RetentionWarning      string              // 保留时间不足提示
+	IntegrityWarnings     []string            // 保留期、裁剪或扫描上限导致的数据完整性提示
 }
 
 // QueueSummary 描述队列在日报窗口内和当前时刻的摘要。
@@ -182,6 +194,15 @@ type reportWindow struct {
 	hasRange bool      // 是否启用窗口过滤
 }
 
+// stateItemsResult 保存一次队列状态扫描结果和完整性边界。
+type stateItemsResult struct {
+	items                  []types.TaskItem // 当前扫描到的周期来源任务
+	archiveAtTrimThreshold bool             // archived 是否达到 Asynq 裁剪阈值
+	truncated              bool             // 是否因日报全局扫描预算主动截断
+	scanned                int              // 已读取的原始任务详情数，用于扣减全局预算
+	bytes                  int64            // 已允许加载的任务详情和运行快照估算字节数
+}
+
 // periodicAgg 暂存单个周期配置的执行统计。
 type periodicAgg struct {
 	item       PeriodicSummary // 对外输出的周期任务摘要
@@ -215,11 +236,13 @@ func NewService(manager QueueManager) *Service {
 	return &Service{manager: manager}
 }
 
-// Window 返回当前执行时间往前 24 小时的统计窗口。
+// Window 返回指定基准时间往前 24 小时的统计窗口。
 func Window(now time.Time) (time.Time, time.Time) {
 	if now.IsZero() {
 		now = time.Now()
 	}
+	// Asynq 终态 zset 和任务消息只保留秒级时间，窗口必须使用相同精度才能保证相邻日报不漏不重。
+	now = now.Truncate(time.Second)
 	return now.Add(-24 * time.Hour), now
 }
 
@@ -231,28 +254,71 @@ func (s *Service) Build(ctx context.Context, req ReportRequest) (Report, error) 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if req.WindowStart.IsZero() != req.WindowEnd.IsZero() {
+		return Report{}, errors.Errorf("任务运行日报统计窗口必须同时提供开始和结束时间")
+	}
 	req = normalizeRequest(req)
+	if req.WindowStart.Nanosecond() != 0 || req.WindowEnd.Nanosecond() != 0 {
+		return Report{}, errors.Errorf("任务运行日报统计窗口必须按整秒对齐 start=%s end=%s", req.WindowStart.Format(time.RFC3339Nano), req.WindowEnd.Format(time.RFC3339Nano))
+	}
+	if !req.WindowEnd.After(req.WindowStart) {
+		return Report{}, errors.Errorf("任务运行日报统计窗口非法 start=%s end=%s", req.WindowStart.Format(time.RFC3339), req.WindowEnd.Format(time.RFC3339))
+	}
 	window := reportWindow{start: req.WindowStart, end: req.WindowEnd, hasRange: true}
-	queueSummaries, err := s.queueSummaries(ctx)
+	queueSummaries, queueLimited, err := s.queueSummaries(ctx)
 	if err != nil {
 		return Report{}, errors.Tag(err)
 	}
 	items := make([]types.TaskItem, 0)
-	for _, summary := range queueSummaries {
-		for _, state := range []string{"archived", "completed"} {
-			stateItems, err := s.stateItems(ctx, summary.Name, state, window, req.PageSize)
+	archiveTrimQueues := make(map[string]struct{})
+	truncatedStates := make(map[string]struct{})
+	remainingScanBudget := reportGlobalScanLimit
+	remainingByteBudget := reportGlobalScanByteLimit
+	// 先扫描 archived，确保全局预算紧张时优先保留失败证据，再扫描 completed。
+	for _, state := range []string{"archived", "completed"} {
+		for _, summary := range queueSummaries {
+			stateKey := summary.Name + "/" + state
+			if state == asynq.TaskStateArchived.String() && summary.Archived >= asynqArchivedTrimThreshold {
+				archiveTrimQueues[summary.Name] = struct{}{}
+			}
+			if remainingScanBudget <= 0 || remainingByteBudget <= 0 {
+				truncatedStates[stateKey] = struct{}{}
+				continue
+			}
+			stateResult, err := s.stateItems(ctx, summary.Name, state, window, remainingScanBudget, remainingByteBudget)
 			if err != nil {
 				return Report{}, errors.Tag(err)
 			}
-			items = append(items, stateItems...)
+			remainingScanBudget -= stateResult.scanned
+			remainingByteBudget -= stateResult.bytes
+			items = append(items, stateResult.items...)
+			if stateResult.archiveAtTrimThreshold {
+				archiveTrimQueues[summary.Name] = struct{}{}
+			}
+			if stateResult.truncated {
+				truncatedStates[stateKey] = struct{}{}
+			}
 		}
 	}
-	statuses := s.workflowStatuses(ctx, items)
-	warning := s.retentionWarning(ctx, req.WindowStart, req.WindowEnd)
-	return buildReport(req, queueSummaries, items, statuses, false, warning), nil
+	items = dedupeReportItems(items)
+	if excludedID := strings.TrimSpace(req.ExcludeWorkflowID); excludedID != "" {
+		filtered := items[:0]
+		for _, item := range items {
+			if itemWorkflowID(item) != excludedID {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+	statuses, err := s.workflowStatuses(ctx, items)
+	if err != nil {
+		return Report{}, errors.Tag(err)
+	}
+	warnings := s.integrityWarnings(ctx, req.WindowStart, req.GeneratedAt, archiveTrimQueues, truncatedStates, queueLimited)
+	return buildReport(req, queueSummaries, items, statuses, warnings), nil
 }
 
-// normalizeRequest 补齐日报窗口、生成时间和分页批量默认值。
+// normalizeRequest 补齐日报窗口和生成时间。
 func normalizeRequest(req ReportRequest) ReportRequest {
 	now := req.GeneratedAt
 	if now.IsZero() {
@@ -264,17 +330,17 @@ func normalizeRequest(req ReportRequest) ReportRequest {
 	if req.GeneratedAt.IsZero() {
 		req.GeneratedAt = now
 	}
-	if req.PageSize <= 0 {
-		req.PageSize = reportPageSize
-	}
 	return req
 }
 
 // queueSummaries 读取队列当前积压概览，空队列时补默认展示队列。
-func (s *Service) queueSummaries(ctx context.Context) ([]QueueSummary, error) {
-	resp, err := s.manager.ListQueues(ctx)
+func (s *Service) queueSummaries(ctx context.Context) ([]QueueSummary, bool, error) {
+	resp, limited, err := s.manager.ListReportQueues(ctx, reportQueueLimit)
 	if err != nil {
-		return nil, errors.Tag(err)
+		return nil, false, errors.Tag(err)
+	}
+	if resp == nil {
+		return nil, false, errors.Errorf("任务运行日报队列概览为空")
 	}
 	result := make([]QueueSummary, 0, len(resp.Queues))
 	for _, item := range resp.Queues {
@@ -300,61 +366,141 @@ func (s *Service) queueSummaries(ctx context.Context) ([]QueueSummary, error) {
 			QueueSummary{Name: taskwire.QueueMaintenance},
 		)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
-	return result, nil
+	return result, limited, nil
 }
 
 // stateItems 分页读取指定状态下周期来源任务，直到覆盖整个统计窗口。
-func (s *Service) stateItems(ctx context.Context, queueName string, state string, window reportWindow, pageSize int) ([]types.TaskItem, error) {
-	if pageSize <= 0 {
-		pageSize = reportPageSize
+func (s *Service) stateItems(ctx context.Context, queueName string, state string, window reportWindow, scanBudget int, byteBudget int64) (stateItemsResult, error) {
+	if scanBudget <= 0 || byteBudget <= 0 {
+		return stateItemsResult{truncated: true}, nil
 	}
-	result := make([]types.TaskItem, 0)
-	for page := 1; ; page++ {
+	// 任务列表接口的结束时间为闭区间；减一纳秒后按秒格式化，使日报查询保持右开边界。
+	queryEnd := window.end
+	if !queryEnd.IsZero() {
+		queryEnd = queryEnd.Add(-time.Nanosecond)
+	}
+	result := stateItemsResult{items: make([]types.TaskItem, 0)}
+	seenTaskIDs := make(map[string]struct{})
+	expectedTotal := int64(-1)
+	for offset := 0; ; {
 		if err := ctx.Err(); err != nil {
-			return nil, errors.Tag(err)
+			return stateItemsResult{}, errors.Tag(err)
 		}
-		resp, err := s.manager.ListTasks(ctx, &types.ListTaskItemsReq{
-			Queue:     queueName,
-			State:     state,
-			Page:      page,
-			PageSize:  pageSize,
-			StartTime: formatWindowTime(window.start),
-			EndTime:   formatWindowTime(window.end),
-		})
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		if resp == nil {
+		if scanBudget-result.scanned < reportPageSize {
+			result.truncated = true
 			break
 		}
+		remainingBytes := byteBudget - result.bytes
+		if remainingBytes <= 0 {
+			result.truncated = true
+			break
+		}
+		pageByteBudget := min(remainingBytes, reportPageByteLimit)
+		resp, usage, err := s.manager.ListReportTasks(ctx, &types.ListTaskItemsReq{
+			Queue:     queueName,
+			State:     state,
+			StartTime: formatWindowTime(window.start),
+			EndTime:   formatWindowTime(queryEnd),
+		}, offset, reportPageSize, pageByteBudget)
+		if err != nil {
+			return stateItemsResult{}, errors.Tag(err)
+		}
+		if usage.Tasks < 0 || usage.Tasks > reportPageSize || result.scanned+usage.Tasks > scanBudget {
+			return stateItemsResult{}, errors.Errorf("日报任务状态扫描条数预算返回非法 queue=%s state=%s scanned=%d remaining=%d", queueName, state, usage.Tasks, scanBudget-result.scanned)
+		}
+		if usage.Bytes < 0 || usage.Bytes > pageByteBudget || result.bytes+usage.Bytes > byteBudget {
+			return stateItemsResult{}, errors.Errorf("日报任务状态扫描字节预算返回非法 queue=%s state=%s bytes=%d remaining=%d", queueName, state, usage.Bytes, byteBudget-result.bytes)
+		}
+		result.scanned += usage.Tasks
+		result.bytes += usage.Bytes
+		if resp == nil {
+			return stateItemsResult{}, errors.Errorf("日报任务状态扫描响应为空 queue=%s state=%s", queueName, state)
+		}
+		if resp.Total < 0 || len(resp.Tasks) > reportPageSize || int64(offset+len(resp.Tasks)) > resp.Total {
+			return stateItemsResult{}, errors.Errorf("日报任务状态扫描分页响应非法 queue=%s state=%s offset=%d limit=%d tasks=%d total=%d", queueName, state, offset, reportPageSize, len(resp.Tasks), resp.Total)
+		}
+		if state == asynq.TaskStateArchived.String() && resp.Total >= asynqArchivedTrimThreshold {
+			result.archiveAtTrimThreshold = true
+		}
+		if usage.ByteLimited {
+			result.truncated = true
+			break
+		}
+		if len(resp.Tasks) == 0 && int64(offset) < resp.Total {
+			return stateItemsResult{}, errors.Errorf("日报任务状态扫描提前结束 queue=%s state=%s offset=%d total=%d", queueName, state, offset, resp.Total)
+		}
+		if expectedTotal < 0 {
+			expectedTotal = resp.Total
+		} else if resp.Total != expectedTotal {
+			return stateItemsResult{}, errors.Errorf("日报任务状态扫描期间总数变化 queue=%s state=%s before=%d after=%d", queueName, state, expectedTotal, resp.Total)
+		}
+		if resp.Total > int64(scanBudget) {
+			result.truncated = true
+		}
 		for _, item := range resp.Tasks {
+			identity := reportTaskIdentity(item)
+			if identity == "" {
+				return stateItemsResult{}, errors.Errorf("日报任务状态扫描返回空任务标识 queue=%s state=%s", queueName, state)
+			}
+			if _, exists := seenTaskIDs[identity]; exists {
+				return stateItemsResult{}, errors.Errorf("日报任务状态扫描返回重复任务 queue=%s state=%s task_id=%s", queueName, state, item.ID)
+			}
+			seenTaskIDs[identity] = struct{}{}
 			if !taskItemHasPeriodicSource(item) || !reportContains(window, item) {
 				continue
 			}
-			result = append(result, item)
+			result.items = append(result.items, item)
 		}
-		if reportPageDone(resp, page, pageSize) {
+		offset += len(resp.Tasks)
+		if len(resp.Tasks) == 0 || int64(offset) >= resp.Total {
 			break
 		}
-		if err := pauseReportPage(ctx, page); err != nil {
-			return nil, errors.Tag(err)
+		if result.scanned >= scanBudget {
+			result.truncated = true
+			break
 		}
+		if err := pauseReportPage(ctx, offset/reportPageSize); err != nil {
+			return stateItemsResult{}, errors.Tag(err)
+		}
+	}
+	if !result.truncated && expectedTotal >= 0 && int64(len(seenTaskIDs)) != expectedTotal {
+		return stateItemsResult{}, errors.Errorf("日报任务状态扫描数量不一致 queue=%s state=%s unique=%d total=%d", queueName, state, len(seenTaskIDs), expectedTotal)
 	}
 	return result, nil
 }
 
-// reportPageDone 判断当前页是否已经覆盖状态集合的全部结果。
-func reportPageDone(resp *types.TaskListResp, page int, pageSize int) bool {
-	if resp == nil {
-		return true
+// reportTaskIdentity 返回任务跨状态去重使用的稳定标识。
+func reportTaskIdentity(item types.TaskItem) string {
+	id := strings.TrimSpace(item.ID)
+	if id == "" {
+		return ""
 	}
-	if resp.Total <= 0 {
-		return len(resp.Tasks) == 0 || len(resp.Tasks) < pageSize
+	return strings.TrimSpace(item.Queue) + "\x00" + id
+}
+
+// dedupeReportItems 防止任务在日报扫描期间迁移状态后被 completed/archived 重复计数。
+func dedupeReportItems(items []types.TaskItem) []types.TaskItem {
+	result := make([]types.TaskItem, 0, len(items))
+	indexes := make(map[string]int, len(items))
+	for _, item := range items {
+		identity := reportTaskIdentity(item)
+		if identity == "" {
+			result = append(result, item)
+			continue
+		}
+		index, ok := indexes[identity]
+		if !ok {
+			indexes[identity] = len(result)
+			result = append(result, item)
+			continue
+		}
+		currentTime, currentOK := taskItemPrimaryTime(result[index])
+		candidateTime, candidateOK := taskItemPrimaryTime(item)
+		if !currentOK || (candidateOK && !candidateTime.Before(currentTime)) {
+			result[index] = item
+		}
 	}
-	return int64(page*pageSize) >= resp.Total
+	return result
 }
 
 // pauseReportPage 在长窗口扫描中按页轻量让出，避免维护任务连续占用 Redis。
@@ -390,8 +536,8 @@ func reportContains(window reportWindow, item types.TaskItem) bool {
 	return true
 }
 
-// workflowStatuses 批量读取任务关联工作流状态，读取失败时保留任务里的名称兜底。
-func (s *Service) workflowStatuses(ctx context.Context, items []types.TaskItem) map[string]workflowStatus {
+// workflowStatuses 读取任务关联工作流状态；仅快照不存在时标记未知，读取故障交给任务重试。
+func (s *Service) workflowStatuses(ctx context.Context, items []types.TaskItem) (map[string]workflowStatus, error) {
 	ids := make(map[string]string)
 	for _, item := range items {
 		workflowID := itemWorkflowID(item)
@@ -401,27 +547,80 @@ func (s *Service) workflowStatuses(ctx context.Context, items []types.TaskItem) 
 		ids[workflowID] = itemWorkflowName(item)
 	}
 	statuses := make(map[string]workflowStatus, len(ids))
-	for workflowID, fallbackName := range ids {
-		meta, err := s.manager.GetWorkflowStatus(ctx, workflowID)
-		if err != nil || meta == nil {
-			statuses[workflowID] = workflowStatus{Name: fallbackName}
+	if len(ids) == 0 {
+		return statuses, nil
+	}
+	workflowIDs := make([]string, 0, len(ids))
+	for workflowID := range ids {
+		workflowIDs = append(workflowIDs, workflowID)
+	}
+	sort.Strings(workflowIDs)
+	summaries, err := s.manager.GetWorkflowStatusSummaries(ctx, workflowIDs)
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return nil, errors.Wrap(err, "批量读取日报工作流状态失败")
+	}
+	for _, workflowID := range workflowIDs {
+		fallbackName := ids[workflowID]
+		meta := summaries[workflowID]
+		if meta == nil {
+			statuses[workflowID] = workflowStatus{Name: fallbackName, Status: "unknown"}
 			continue
+		}
+		status := strings.TrimSpace(meta.Status)
+		switch status {
+		case "success", "failed", "running", "pending":
+		default:
+			status = "unknown"
 		}
 		statuses[workflowID] = workflowStatus{
 			Name:   helper.FirstNonEmptyString(strings.TrimSpace(meta.WorkflowName), fallbackName),
-			Status: strings.TrimSpace(meta.Status),
+			Status: status,
 		}
 	}
-	return statuses
+	return statuses, nil
 }
 
-// retentionWarning 在 completed 保留期不足覆盖日报窗口时给出运维提示。
-func (s *Service) retentionWarning(ctx context.Context, start, end time.Time) string {
-	if start.IsZero() || end.IsZero() || !end.After(start) {
+// integrityWarnings 汇总终态保留、Asynq 裁剪和主动资源上限导致的完整性风险。
+func (s *Service) integrityWarnings(ctx context.Context, start, generatedAt time.Time, archiveQueues, truncatedStates map[string]struct{}, queueLimited bool) []string {
+	warnings := make([]string, 0, 4)
+	if warning := s.retentionWarning(ctx, start, generatedAt); warning != "" {
+		warnings = append(warnings, warning)
+	}
+	locale := reportLocale(ctx)
+	if names := sortedStringSet(archiveQueues); len(names) > 0 {
+		warnings = append(warnings, i18n.MessageByKey(i18n.MsgKeyTaskReportArchiveTrimWarning, locale, strings.Join(names, ", ")))
+	}
+	if names := sortedStringSet(truncatedStates); len(names) > 0 {
+		warnings = append(warnings, i18n.MessageByKey(i18n.MsgKeyTaskReportScanLimitWarning, locale, strings.Join(names, ", "), reportGlobalScanLimit, reportGlobalScanByteLimit/(1<<20)))
+	}
+	if queueLimited {
+		warnings = append(warnings, i18n.MessageByKey(i18n.MsgKeyTaskReportQueueLimitWarning, locale, reportQueueLimit))
+	}
+	return warnings
+}
+
+// sortedStringSet 把集合转换为稳定排序列表，保证日报和测试输出可复现。
+func sortedStringSet(items map[string]struct{}) []string {
+	result := make([]string, 0, len(items))
+	for item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			result = append(result, item)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+// retentionWarning 在窗口最早数据已达到任一终态任务保留期时给出运维提示。
+func (s *Service) retentionWarning(ctx context.Context, start, generatedAt time.Time) string {
+	if start.IsZero() || generatedAt.IsZero() || generatedAt.Before(start) {
 		return ""
 	}
-	window := end.Sub(start)
-	if s.manager.CompletedRetention() > window {
+	retention := s.manager.CompletedRetention()
+	if archivedRetention := s.manager.ArchivedRetention(); archivedRetention > 0 && (retention <= 0 || archivedRetention < retention) {
+		retention = archivedRetention
+	}
+	if retention > generatedAt.Sub(start) {
 		return ""
 	}
 	return i18n.MessageByKey(i18n.MsgKeyTaskReportRetentionWarning, reportLocale(ctx))
@@ -436,14 +635,13 @@ func reportLocale(ctx context.Context) string {
 }
 
 // buildReport 将任务明细聚合为队列、周期配置、工作流和异常明细四类摘要。
-func buildReport(req ReportRequest, queues []QueueSummary, items []types.TaskItem, statuses map[string]workflowStatus, truncated bool, warning string) Report {
+func buildReport(req ReportRequest, queues []QueueSummary, items []types.TaskItem, statuses map[string]workflowStatus, warnings []string) Report {
 	report := Report{
-		WindowStart:      req.WindowStart,
-		WindowEnd:        req.WindowEnd,
-		GeneratedAt:      req.GeneratedAt,
-		QueueSummaries:   append([]QueueSummary(nil), queues...),
-		Truncated:        truncated,
-		RetentionWarning: strings.TrimSpace(warning),
+		WindowStart:       req.WindowStart,
+		WindowEnd:         req.WindowEnd,
+		GeneratedAt:       req.GeneratedAt,
+		QueueSummaries:    append([]QueueSummary(nil), queues...),
+		IntegrityWarnings: append([]string(nil), warnings...),
 	}
 	queueIndex := make(map[string]int, len(report.QueueSummaries))
 	for idx := range report.QueueSummaries {
@@ -615,12 +813,12 @@ func addWorkflow(aggs map[string]*workflowAgg, ids map[string]string, task TaskS
 	agg.item.Queue = helper.FirstNonEmptyString(agg.item.Queue, task.Queue)
 	if item.TaskType != taskwire.TypeWorkflowTrigger {
 		agg.item.NodeTasks++
-	}
-	if task.DurationMS > 0 {
-		agg.durationMS += task.DurationMS
-		agg.durationN++
-		if task.DurationMS > agg.item.MaxMS {
-			agg.item.MaxMS = task.DurationMS
+		if task.DurationMS > 0 {
+			agg.durationMS += task.DurationMS
+			agg.durationN++
+			if task.DurationMS > agg.item.MaxMS {
+				agg.item.MaxMS = task.DurationMS
+			}
 		}
 	}
 	if taskTimeAfter(taskTime(task), agg.item.LastAt) {
@@ -628,16 +826,20 @@ func addWorkflow(aggs map[string]*workflowAgg, ids map[string]string, task TaskS
 	}
 }
 
-// workflowStatusValue 优先使用工作流快照状态，缺失时按任务终态推断。
+// workflowStatusValue 优先保留工作流终态，其次使用任务归档失败证据覆盖陈旧非终态。
 func workflowStatusValue(workflowID string, taskState string, statuses map[string]workflowStatus) string {
-	if status, ok := statuses[workflowID]; ok {
-		switch strings.TrimSpace(status.Status) {
-		case "success", "failed", "running", "pending":
-			return strings.TrimSpace(status.Status)
-		}
+	status := strings.TrimSpace(statuses[workflowID].Status)
+	if status == "success" || status == "failed" {
+		return status
 	}
 	if taskState == asynq.TaskStateArchived.String() {
 		return "failed"
+	}
+	if status == "running" || status == "pending" {
+		return status
+	}
+	if status == "unknown" {
+		return "unknown"
 	}
 	if taskState == asynq.TaskStateCompleted.String() {
 		return "success"

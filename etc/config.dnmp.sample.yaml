@@ -21,6 +21,8 @@ run_mode: 7
 app_id: "1"
 # 应用密钥仅供本地示例使用，部署前必须替换。
 app_key: "dnmp-local-admin-app-key-please-change"
+# 可信反向代理 IP/CIDR；空列表仅信任本机回环代理。
+trusted_proxies: []
 
 # 基于 github.com/bwmarrin/snowflake 的分布式雪花 ID；多实例通过 Redis 租约自动分配 node_id。
 snowflake:
@@ -31,8 +33,8 @@ snowflake:
     # node_id 租约作用域；同一套 admin/api 部署必须一致。
     scope: "main"
     # node_id 租约 TTL，单位秒。
-    lease_seconds: 120
-    # node_id 租约续期间隔，单位秒，必须小于 lease_seconds。
+    lease_seconds: 120 # 允许 10-86400 秒。
+    # node_id 租约续期间隔，单位秒，必须小于 lease_seconds 的一半。
     renew_interval_seconds: 30
     # 按业务 namespace 限制可竞争 node_id 池大小；未配置时使用完整 0-1023。
     namespaces:
@@ -79,9 +81,9 @@ jwt_expires_in: 86400
 security:
   # 当前 app_id 的秘钥路由和版本材料配置。
   secret_key:
-    # 签名验签状态：1启用，0停用。
+    # 签名验签状态：1启用，0停用；与加密解密开关独立。
     sign_status: 1
-    # 加密解密状态：1启用，0停用。
+    # 加密解密状态：1启用，0停用；与签名验签开关独立。
     crypto_status: 1
     # 密钥版本，对应 X-Key-Version。
     key_version: "v1"
@@ -122,7 +124,16 @@ api_service:
   # API 内网调用超时秒数。
   timeout_seconds: 5
 
-# 文件存储配置：local 或 s3。
+# 本地 IP 归属地解析；IPv4/IPv6 XDB 会完整读入内存且合计上限 128 MiB，替换后需滚动重启实例。
+ip_region:
+  # 是否启用；启用后至少配置一个 XDB 文件，路径或文件无效会启动失败。
+  enabled: false
+  # IPv4 XDB 文件路径。
+  ipv4_xdb_path: "/data/admin/ip2region/ip2region_v4.xdb"
+  # IPv6 XDB 文件路径；不需要 IPv6 时留空。
+  ipv6_xdb_path: ""
+
+# 文件存储为启动期配置；任一字段变更后需重启，热加载不会切换当前实例。
 file_storage:
   # 存储类型：local | s3。
   type: "local"
@@ -158,8 +169,14 @@ file_storage:
     presign_expire_seconds: 900
   # 病毒扫描配置。
   virus_scanner:
-    # 扫描器名称；noop 表示不扫描。
+    # 扫描器名称；noop 表示不扫描，clamav 表示启用 ClamAV。
     name: "noop"
+    # clamdscan 命令路径；仅 clamav 生效，空值从 PATH 查找。
+    command: "clamdscan"
+    # clamd 配置文件路径；空值使用 clamdscan 默认配置。
+    config_file: ""
+    # 单文件扫描超时秒数；<=0 时默认 120 秒。
+    timeout_seconds: 120
   # 断点续传会话配置。
   upload_session:
     # 断点续传本地临时根目录；为空时回退到系统临时目录。
@@ -249,7 +266,7 @@ kafka:
     user_tag: "1_user_tag_event"
 
 # 通用收集器；正常链路只走 Kafka，DB 只保存失败账本。
-# 批次按压测调整，running 租约需大于单批失败重试耗时。
+# 批次按压测调整；Processor 受超时和自动续租保护。
 collector:
   # 是否启用通用收集器。
   enabled: true
@@ -272,6 +289,8 @@ collector:
     batch_size: 500
     # 同 bizType 未满批时最大等待时间，单位毫秒。
     batch_wait_milliseconds: 2000
+    # Processor 单批执行超时，单位秒。
+    processor_timeout_seconds: 300
   # Redis 单任务 EventID 幂等去重配置。
   idempotency:
     # 默认是否启用 Redis 去重；具体任务可通过 tasks.<bizType>.idempotency_enabled 覆盖，同 bizType 内按 EventID 去重。
@@ -371,8 +390,6 @@ task:
   default_timeout_seconds: 120
   # 默认任务唯一键 TTL，单位秒。
   default_unique_ttl_seconds: 60
-  # 已完成任务保留时长，单位秒。
-  completed_retention_seconds: 86400
   # 归档失败任务保留时长，单位秒。
   archived_retention_seconds: 604800
   # Worker 优雅退出等待时间，单位秒。

@@ -29,7 +29,7 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodPost,
-			Path:        "/api/auth/refresh", // 刷新访问令牌。
+			Path:        "/api/auth/refresh", // 在当前 JWT 和 Redis 会话仍有效时主动续签访问令牌。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.AuthRefresh,
 			Description: shared.AuthRefresh.Describe,
@@ -58,14 +58,6 @@ func RouteSpecs() []shared.RouteSpec {
 			Meta:        shared.AuthProfile,
 			Description: shared.AuthProfile.Describe,
 			Handler:     adminhandler.AuthProfileHandler,
-		},
-		{
-			Method:      http.MethodPost,
-			Path:        "/api/auth/verify-account", // 验证账号并生成MFA绑定信息。
-			Access:      shared.RouteAccessPublic,
-			Meta:        shared.AuthVerifyAccount,
-			Description: shared.AuthVerifyAccount.Describe,
-			Handler:     profilehandler.AuthVerifyAccountHandler,
 		},
 		{
 			Method:      http.MethodGet,

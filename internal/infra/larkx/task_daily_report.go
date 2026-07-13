@@ -16,6 +16,7 @@ const (
 
 // TaskDailyReport 描述任务系统日报通知内容。
 type TaskDailyReport struct {
+	ReportID              string                      // 站点与窗口稳定的日报投递标识
 	ServiceName           string                      // 服务名
 	Environment           string                      // 运行环境
 	AppID                 string                      // 站点/应用 ID
@@ -48,8 +49,7 @@ type TaskDailyReport struct {
 	FailureTasks          []TaskDailyReportTask       // 失败任务明细
 	SlowTasks             []TaskDailyReportTask       // 慢任务明细
 	TraceErrorTasks       []TaskDailyReportTask       // 处理量错误任务明细
-	Truncated             bool                        // 是否截断统计
-	RetentionWarning      string                      // 保留时间不足提示
+	IntegrityWarnings     []string                    // 数据保留、裁剪或扫描边界完整性提示
 }
 
 // TaskDailyReportQueue 描述队列维度日报摘要。
@@ -139,7 +139,7 @@ func (n *Notifier) formatTaskDailyReportCard(report TaskDailyReport) messageCard
 		generatedAt = n.now()
 	}
 	elements := []messageCardElement{
-		cardMarkdown("**状态**：%s\n**窗口**：%s\n**口径**：periodic 来源的 completed/archived 任务；工作流按实例状态汇总",
+		cardMarkdown("**状态**：%s\n**窗口**：%s\n**口径**：periodic 来源的 completed/archived 任务；工作流为窗口任务涉及的去重实例，状态取生成时快照",
 			taskDailyReportStatus(report),
 			formatCardWindow(report.WindowStart, report.WindowEnd),
 		),
@@ -147,6 +147,7 @@ func (n *Notifier) formatTaskDailyReportCard(report TaskDailyReport) messageCard
 			{"服务", report.ServiceName},
 			{"环境 / 站点", joinNonEmpty(" / ", report.Environment, report.AppID)},
 			{"生成时间", formatCardTime(generatedAt)},
+			{"日报 ID", report.ReportID},
 			{"队列积压", taskDailyReportBacklogText(report.Queues)},
 		}),
 		cardDivider(),
@@ -193,7 +194,7 @@ func taskDailyReportCardTitle(report TaskDailyReport) string {
 	if report.FailedTaskExecutions > 0 || report.WorkflowFailed > 0 {
 		return "P3 任务运行日报 | 存在失败"
 	}
-	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 || report.TraceErrorCount > 0 || report.Truncated || strings.TrimSpace(report.RetentionWarning) != "" {
+	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 || report.TraceErrorCount > 0 || taskDailyReportHasIntegrityWarnings(report) {
 		return "P3 任务运行日报 | 需关注"
 	}
 	return "P3 任务运行日报 | 正常"
@@ -204,7 +205,7 @@ func taskDailyReportCardTemplate(report TaskDailyReport) string {
 	if report.FailedTaskExecutions > 0 || report.WorkflowFailed > 0 {
 		return "red"
 	}
-	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 || report.TraceErrorCount > 0 || report.Truncated || strings.TrimSpace(report.RetentionWarning) != "" {
+	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 || report.TraceErrorCount > 0 || taskDailyReportHasIntegrityWarnings(report) {
 		return "orange"
 	}
 	return "green"
@@ -214,7 +215,7 @@ func taskDailyReportCardTemplate(report TaskDailyReport) string {
 func taskDailyReportSummaryLines(report TaskDailyReport) []string {
 	lines := []string{
 		"- 周期触发：" + countText(report.PeriodicTriggerTotal, report.PeriodicTriggerOK, report.PeriodicTriggerFailed),
-		"- 工作流：" + workflowCountText(report),
+		"- 涉及工作流：" + workflowCountText(report),
 		"- 任务执行：" + countText(report.TotalTaskExecutions, report.SuccessTaskExecutions, report.FailedTaskExecutions),
 		"- 节点任务：" + strconv.Itoa(report.NodeTaskTotal) + " 次",
 	}
@@ -236,14 +237,13 @@ func taskDailyReportFocusLines(report TaskDailyReport) []string {
 	if report.WorkflowRunning > 0 || report.WorkflowUnknown > 0 {
 		lines = append(lines, "- 工作流状态：运行中 "+strconv.Itoa(report.WorkflowRunning)+"，未知 "+strconv.Itoa(report.WorkflowUnknown))
 	}
-	if warning := strings.TrimSpace(report.RetentionWarning); warning != "" {
-		lines = append(lines, "- 数据完整性："+warning)
+	for _, warning := range report.IntegrityWarnings {
+		if warning = strings.TrimSpace(warning); warning != "" {
+			lines = append(lines, "- 数据完整性："+warning)
+		}
 	}
 	if report.TraceErrorCount > 0 {
 		lines = append(lines, "- 处理异常：隔离错误 "+formatInt64(report.TraceErrorCount)+"，详见处理异常 Top")
-	}
-	if report.Truncated {
-		lines = append(lines, "- 统计已截断：请缩小窗口或提高 completed 保留时间后复核")
 	}
 	return lines
 }
@@ -511,8 +511,14 @@ func taskDailyReportStatus(report TaskDailyReport) string {
 	if report.WorkflowRunning > 0 {
 		return "存在跨窗口仍在运行的工作流，请观察是否超时"
 	}
+	if report.WorkflowUnknown > 0 {
+		return "存在无法确认状态的工作流，当前不能判定窗口运行正常，请核对元数据和任务明细"
+	}
 	if report.TraceErrorCount > 0 {
 		return "存在处理量隔离错误，请查看处理异常 Top"
+	}
+	if taskDailyReportHasIntegrityWarnings(report) {
+		return "统计完整性存在风险，当前可见数据不能证明窗口运行正常，请先核对完整性提示"
 	}
 	return "周期任务与工作流运行正常"
 }
@@ -522,15 +528,17 @@ func taskDailyReportBacklogText(items []TaskDailyReportQueue) string {
 	if len(items) == 0 {
 		return "无队列数据"
 	}
-	var pending, active, retry, archived int
+	var pending, active, scheduled, retry, archived int
 	for _, item := range items {
 		pending += item.Pending
 		active += item.Active
+		scheduled += item.Scheduled
 		retry += item.Retry
 		archived += item.Archived
 	}
 	return "pending " + strconv.Itoa(pending) +
 		" / active " + strconv.Itoa(active) +
+		" / scheduled " + strconv.Itoa(scheduled) +
 		" / retry " + strconv.Itoa(retry) +
 		" / archived " + strconv.Itoa(archived)
 }
@@ -552,11 +560,10 @@ func workflowCountText(report TaskDailyReport) string {
 // taskDailyReportAdvice 根据日报异常状态生成处理建议。
 func taskDailyReportAdvice(report TaskDailyReport) []string {
 	advice := make([]string, 0, 4)
-	if warning := strings.TrimSpace(report.RetentionWarning); warning != "" {
-		advice = append(advice, "数据完整性："+warning)
-	}
-	if report.Truncated {
-		advice = append(advice, "统计结果已达到聚合上限，请缩小窗口或提高任务 completed 保留时间后复核。")
+	for _, warning := range report.IntegrityWarnings {
+		if warning = strings.TrimSpace(warning); warning != "" {
+			advice = append(advice, "数据完整性："+warning)
+		}
 	}
 	if report.TraceErrorCount > 0 {
 		advice = append(advice, "处理量存在隔离错误，请按处理异常 Top 的任务名、工作流和时间进入任务中心检索详情。")
@@ -565,6 +572,8 @@ func taskDailyReportAdvice(report TaskDailyReport) []string {
 		advice = append(advice, "按失败明细中的任务ID或工作流ID进入任务中心检索执行日志，确认依赖、数据影响范围和是否需要人工重试。")
 	} else if report.TraceErrorCount > 0 {
 		advice = append(advice, "当前窗口无终态失败；先确认处理异常 Top 是否需要数据补偿或重跑。")
+	} else if taskDailyReportHasIntegrityWarnings(report) {
+		advice = append(advice, "当前可见数据未发现终态失败，但存在数据完整性风险，不能据此判定窗口无失败；请先按完整性提示核对。")
 	} else {
 		advice = append(advice, "当前窗口无终态失败；继续观察慢任务 Top 和队列积压变化即可。")
 	}
@@ -572,6 +581,16 @@ func taskDailyReportAdvice(report TaskDailyReport) []string {
 		advice = append(advice, "存在未知工作流状态，通常表示工作流元数据已过期；可结合节点任务明细和队列保留时间确认是否需要补查。")
 	}
 	return advice
+}
+
+// taskDailyReportHasIntegrityWarnings 判断日报是否含有非空数据完整性提示。
+func taskDailyReportHasIntegrityWarnings(report TaskDailyReport) bool {
+	for _, warning := range report.IntegrityWarnings {
+		if strings.TrimSpace(warning) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // durationMSText 将毫秒数格式化为 Go duration 文本。

@@ -14,19 +14,23 @@ func (l *SecurityLogic) BuildProfileInfo(admin *model.Admin, token string) (*typ
 	if admin == nil {
 		return nil, errors.Errorf("管理员信息不能为空")
 	}
-	forceMFAEnabled := l.ForceLoginMFAEnabled()
+	forceMFAEnabled, err := l.ForceLoginMFAEnabled()
+	if err != nil {
+		return nil, errors.Wrap(err, "读取后台强制MFA配置失败")
+	}
 	existMFA := l.HasUsableAdminMFASecret(admin)
+	// needLoginMFA 直接复用本次已读取的强制开关，避免构造个人资料时重复读取 Redis。
+	needLoginMFA := admin.NeedResetPassword != 1 && (admin.MfaStatus == 1 || forceMFAEnabled)
+	needBindMFA := needLoginMFA && (admin.MfaStatus != 1 || !existMFA)
 	buildURL := ""
-	needBindMFA := l.NeedBindMFAOnLogin(admin)
 	if admin.MfaStatus != 1 || needBindMFA {
-		var err error
 		buildURL, err = l.BuildFreshAdminMFAURL(admin)
 		if err != nil {
 			return nil, errors.Wrapf(err, "SecurityLogic.BuildProfileInfo 生成管理员ID[%d]MFA绑定地址失败", admin.ID)
 		}
 	}
 	mfaCheck := 0
-	if l.NeedLoginMFA(admin) && !l.HasPassedLoginMFA(admin) {
+	if needLoginMFA && !l.HasPassedLoginMFA(admin) {
 		mfaCheck = 1
 	}
 	return &types.ProfileInfo{

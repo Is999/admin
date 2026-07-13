@@ -23,7 +23,7 @@ func TestTraceMiddlewareGeneratesTraceID(t *testing.T) {
 	defer func() { _ = shutdown(context.Background()) }()
 
 	var meta *requestctx.Meta
-	handler := NewTraceMiddleware().Handle(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewTraceMiddleware(nil).Handle(func(w http.ResponseWriter, r *http.Request) {
 		meta = requestctx.FromContext(r.Context())
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -64,7 +64,7 @@ func TestTraceMiddlewareUsesTraceparent(t *testing.T) {
 	defer func() { _ = shutdown(context.Background()) }()
 
 	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-	handler := NewTraceMiddleware().Handle(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewTraceMiddleware(nil).Handle(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -91,7 +91,7 @@ func TestTraceMiddlewareUsesXTraceID(t *testing.T) {
 
 	const headerTraceID = "4bf92f35-77b3-4da6-a3ce-929d0e0e4736"
 	const normalizedTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-	handler := NewTraceMiddleware().Handle(func(w http.ResponseWriter, r *http.Request) {
+	handler := NewTraceMiddleware(nil).Handle(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 

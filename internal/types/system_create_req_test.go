@@ -219,6 +219,20 @@ func TestCreateSecretKeyReqValidateDoesNotRequirePathID(t *testing.T) {
 	}
 }
 
+// TestSaveSecretKeyReqValidateAllowsCryptoOnly 确保管理接口允许独立启用加密解密。
+func TestSaveSecretKeyReqValidateAllowsCryptoOnly(t *testing.T) {
+	req := &SaveSecretKeyReq{
+		UUID:          "finance-app",
+		Title:         "财务系统",
+		KeyVersion:    "v1",
+		CryptoStatus:  1,
+		VersionStatus: 0,
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("expected crypto-only secret key to pass validation, got %v", err)
+	}
+}
+
 // TestCreateSecretKeyReqValidateKeepsNormalizedFields 确保新增秘钥校验会把字段清洗和默认稳定版本回写到原请求。
 func TestCreateSecretKeyReqValidateKeepsNormalizedFields(t *testing.T) {
 	req := &CreateSecretKeyReq{

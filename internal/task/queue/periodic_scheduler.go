@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	i18n "admin/common/i18n"
@@ -41,6 +42,55 @@ type periodicTaskScheduler struct {
 	mu       sync.Mutex              // mu 保护 entries 并发读写
 	entries  map[string]cron.EntryID // entries 记录配置摘要到 cron entry 的映射
 	shutdown bool                    // shutdown 标识调度器是否已进入停止流程
+}
+
+// periodicTaskJob 读取 cron 记录的本轮计划时刻并投递周期任务。
+type periodicTaskJob struct {
+	scheduler        *periodicTaskScheduler    // scheduler 执行 leader 校验、背压检查和入队
+	config           *asynq.PeriodicTaskConfig // config 是本调度项的任务和入队选项
+	uniqueBySchedule bool                      // uniqueBySchedule 表示入口去重是否包含本轮计划时刻
+	entryID          atomic.Int64              // entryID 关联 cron 内部调度记录
+}
+
+// newPeriodicTaskJob 创建周期调度任务。
+func newPeriodicTaskJob(scheduler *periodicTaskScheduler, config *asynq.PeriodicTaskConfig) *periodicTaskJob {
+	return &periodicTaskJob{
+		scheduler:        scheduler,
+		config:           config,
+		uniqueBySchedule: periodicTaskUsesScheduledUnique(scheduler, config),
+	}
+}
+
+// periodicTaskUsesScheduledUnique 判断周期入口是否需要按计划时刻隔离 Asynq 去重摘要。
+func periodicTaskUsesScheduledUnique(scheduler *periodicTaskScheduler, config *asynq.PeriodicTaskConfig) bool {
+	if scheduler == nil || scheduler.manager == nil || config == nil || config.Task == nil || config.Task.Type() != TypeWorkflowTrigger {
+		return false
+	}
+	var payload WorkflowTriggerPayload
+	if json.Unmarshal(config.Task.Payload(), &payload) != nil {
+		return false
+	}
+	definition, err := scheduler.manager.workflowDefinition(payload.WorkflowName)
+	return err == nil && definition.PeriodicUniqueBySchedule
+}
+
+// Run 按 cron 本轮登记的计划时刻投递任务。
+func (j *periodicTaskJob) Run() {
+	if j == nil || j.scheduler == nil || j.scheduler.cron == nil || j.config == nil {
+		return
+	}
+	now := time.Now()
+	entry := j.scheduler.cron.Entry(cron.EntryID(j.entryID.Load()))
+	scheduledAt := periodicScheduledAt(entry.Prev, now)
+	j.scheduler.enqueuePeriodicTask(j.config, scheduledAt, j.uniqueBySchedule)
+}
+
+// periodicScheduledAt 优先使用 cron 已登记时刻，记录缺失时回退当前秒。
+func periodicScheduledAt(previous, now time.Time) time.Time {
+	if previous.IsZero() || previous.After(now) {
+		return now.Truncate(time.Second)
+	}
+	return previous
 }
 
 // newPeriodicTaskScheduler 创建支持秒级 cron 的周期任务调度器。
@@ -169,11 +219,7 @@ func (s *periodicTaskScheduler) syncConfigs() error {
 		if _, ok := s.entries[hash]; ok {
 			continue
 		}
-		entryID, err := s.cron.AddFunc(item.Cronspec, func(cfg *asynq.PeriodicTaskConfig) func() {
-			return func() {
-				s.enqueuePeriodicTask(cfg)
-			}
-		}(item))
+		schedule, err := periodicCronParser.Parse(item.Cronspec)
 		if err != nil {
 			loggerx.Errorw(context.Background(), "周期任务 调度配置无效", err,
 				logx.Field("cron", item.Cronspec),
@@ -188,6 +234,9 @@ func (s *periodicTaskScheduler) syncConfigs() error {
 			)
 			continue
 		}
+		job := newPeriodicTaskJob(s, item)
+		entryID := s.cron.Schedule(schedule, job)
+		job.entryID.Store(int64(entryID))
 		s.entries[hash] = entryID
 	}
 	s.manager.markSchedulerSyncSuccess(len(next))
@@ -195,7 +244,7 @@ func (s *periodicTaskScheduler) syncConfigs() error {
 }
 
 // enqueuePeriodicTask 把单次周期触发任务投递给 Asynq。
-func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfig) {
+func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfig, scheduledAt time.Time, uniqueBySchedule bool) {
 	if s == nil || s.manager == nil || s.manager.client == nil || cfg == nil || cfg.Task == nil {
 		return
 	}
@@ -255,7 +304,24 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 	}
 	enqueueCtx, enqueueCancel := context.WithTimeout(context.Background(), periodicEnqueueGuardTimeout)
 	defer enqueueCancel()
-	if _, err := s.manager.client.EnqueueContext(enqueueCtx, cfg.Task, cfg.Opts...); err != nil {
+	task, err := periodicTaskWithScheduledAt(cfg.Task, scheduledAt, uniqueBySchedule)
+	if err != nil {
+		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), "", err.Error())
+		loggerx.Errorw(context.Background(), "周期任务 构造入口失败", err,
+			logx.Field("cron", cfg.Cronspec),
+			logx.Field("task_type", cfg.Task.Type()),
+			logx.Field("task_name", taskName),
+		)
+		s.notifyPeriodicRuntimeAlert(context.Background(), cfg,
+			taskRuntimeAlertKindPeriodicEnqueueFailed,
+			"【P1 周期任务入队失败】",
+			"本轮周期任务未成功构造，调度器继续运行",
+			"build_periodic_task",
+			err,
+		)
+		return
+	}
+	if _, err := s.manager.client.EnqueueContext(enqueueCtx, task, cfg.Opts...); err != nil {
 		s.manager.markSchedulerEnqueueFailure(taskName, cfg.Task.Type(), "", err.Error())
 		loggerx.Errorw(context.Background(), "周期任务 入队失败", err,
 			logx.Field("cron", cfg.Cronspec),
@@ -274,6 +340,40 @@ func (s *periodicTaskScheduler) enqueuePeriodicTask(cfg *asynq.PeriodicTaskConfi
 		return
 	}
 	s.manager.markSchedulerEnqueueSuccess(taskName, cfg.Task.Type())
+}
+
+// periodicTaskWithScheduledAt 复制周期任务并写入本轮触发时刻，避免修改调度器复用的静态任务。
+// 需要按计划时刻隔离去重时同步写入 payload，因为 Asynq Unique 不参与 header 摘要。
+func periodicTaskWithScheduledAt(task *asynq.Task, scheduledAt time.Time, uniqueBySchedule bool) (*asynq.Task, error) {
+	if task == nil {
+		return nil, errors.Errorf("周期任务不能为空")
+	}
+	headers := make(map[string]string, len(task.Headers())+1)
+	for key, value := range task.Headers() {
+		headers[key] = value
+	}
+	scheduledText := ""
+	if !scheduledAt.IsZero() {
+		scheduledText = scheduledAt.Format(time.RFC3339)
+		headers[HeaderScheduledAt] = scheduledText
+	}
+	payloadBytes := task.Payload()
+	if uniqueBySchedule {
+		if task.Type() != TypeWorkflowTrigger || scheduledText == "" {
+			return nil, errors.Errorf("按计划时刻隔离去重的周期任务缺少工作流入口或计划时间")
+		}
+		var payload WorkflowTriggerPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return nil, errors.Wrap(err, "解析按计划时刻隔离的周期任务载荷失败")
+		}
+		payload.ScheduledAt = scheduledText
+		var err error
+		payloadBytes, err = json.Marshal(payload)
+		if err != nil {
+			return nil, errors.Wrap(err, "序列化按计划时刻隔离的周期任务载荷失败")
+		}
+	}
+	return asynq.NewTaskWithHeaders(task.Type(), payloadBytes, headers), nil
 }
 
 // notifyPeriodicRuntimeAlert 从周期任务配置中提取字段并触发统一运行异常告警。

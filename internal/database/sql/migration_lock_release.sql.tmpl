@@ -1,0 +1,6 @@
+-- 代码资产：释放迁移命令持有的 MySQL 命名锁。
+-- SQL 方言：MySQL 8.0+。
+-- 调用方：database.migrationLock.release，执行前剥离本说明。
+-- 参数来源：锁名称来自已经获取成功的 migrationLock。
+-- 安全边界：仅在持锁的独占连接上执行，避免释放其他发布任务的锁。
+SELECT RELEASE_LOCK(?)

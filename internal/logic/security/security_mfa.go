@@ -238,7 +238,10 @@ func (l *SecurityLogic) issueMFATwoStepTicket(adminID int, scenario int, verifyR
 		return nil, errors.Errorf("Redis未初始化")
 	}
 	key := uuid.NewString()
-	value := utils.RandomLetters(32, utils.RandSource)
+	value, err := utils.SecureRandomLetters(32)
+	if err != nil {
+		return nil, errors.Wrap(err, "生成MFA二次校验票据失败")
+	}
 	ttl := l.mfaFrequencyTTL()
 	cacheKey := l.mfaTwoStepTicketKey(adminID, key)
 	cacheValue := encodeMFATwoStepTicketPayload(&mfaTwoStepTicketPayload{
@@ -393,37 +396,44 @@ func (l *SecurityLogic) IsMFAScenarioDisabled(scenario int) bool {
 }
 
 // NeedMFATwoStep 判断指定管理员在当前场景下是否需要二次校验票据。
-func (l *SecurityLogic) NeedMFATwoStep(admin *model.Admin, scenario int) bool {
+func (l *SecurityLogic) NeedMFATwoStep(admin *model.Admin, scenario int) (bool, error) {
 	if admin == nil {
-		return false
+		return false, nil
 	}
 	// 首次登录或管理员重置后的临时密码阶段，用户必须先完成改密，MFA 允许稍后再设置。
 	if scenario == MFAScenarioChangePassword && admin.NeedResetPassword == 1 {
-		return false
+		return false, nil
 	}
-	forceMFA := SecurityConfigBool(l.Ctx, l.Svc, ConfigAdminMFACheckEnable, false)
+	forceMFA, err := l.ForceLoginMFAEnabled()
+	if err != nil {
+		return false, errors.Tag(err)
+	}
 	if !forceMFA && admin.MfaStatus != 1 {
-		return false
+		return false, nil
 	}
 	if l.IsMFAScenarioDisabled(scenario) {
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // NeedOperateMFATwoStep 判断后台管理类敏感操作是否需要 MFA 二次校验票据。
 // 这类“代操作”场景统一只受系统强制开关和禁用场景配置控制，不再额外要求操作者自己已启用 MFA。
-func (l *SecurityLogic) NeedOperateMFATwoStep(scenario int) bool {
+func (l *SecurityLogic) NeedOperateMFATwoStep(scenario int) (bool, error) {
 	if scenario <= MFAScenarioLogin {
-		return false
+		return false, nil
 	}
-	if !l.ForceLoginMFAEnabled() {
-		return false
+	forceMFA, err := l.ForceLoginMFAEnabled()
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	if !forceMFA {
+		return false, nil
 	}
 	if l.IsMFAScenarioDisabled(scenario) {
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // buildAdminMFAURLBySecret 使用给定秘钥拼装管理员 MFA 绑定地址。

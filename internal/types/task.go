@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	tasklimits "admin/internal/task/limits"
 	"admin/internal/task/stats"
 
 	"github.com/Is999/go-utils/errors"
@@ -65,8 +66,14 @@ func (r *TriggerTaskWorkflowReq) Validate() error {
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")
 	}
+	if r.TimeoutSeconds != nil && *r.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
+		return errors.Errorf("timeoutSeconds 不能超过 %d", tasklimits.MaxTimeoutSeconds)
+	}
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")
+	}
+	if r.Retry != nil && *r.Retry > tasklimits.MaxRetry {
+		return errors.Errorf("retry 不能超过 %d", tasklimits.MaxRetry)
 	}
 	return nil
 }
@@ -286,8 +293,14 @@ func (r *EnqueueTaskReq) Validate() error {
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")
 	}
+	if r.TimeoutSeconds != nil && *r.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
+		return errors.Errorf("timeoutSeconds 不能超过 %d", tasklimits.MaxTimeoutSeconds)
+	}
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")
+	}
+	if r.Retry != nil && *r.Retry > tasklimits.MaxRetry {
+		return errors.Errorf("retry 不能超过 %d", tasklimits.MaxRetry)
 	}
 	return nil
 }
@@ -371,6 +384,13 @@ type TaskListResp struct {
 	PageSize   int        `json:"pageSize"`             // 当前页大小
 	Total      int64      `json:"total"`                // 该状态任务总数
 	Tasks      []TaskItem `json:"tasks"`                // 任务列表
+}
+
+// TaskReportScanUsage 记录日报读取一个 Asynq 原生页的受控资源消耗。
+type TaskReportScanUsage struct {
+	Tasks       int   // 已检查的原生页任务槽位数
+	Bytes       int64 // 已允许读取的 msg、result 和运行快照估算字节数
+	ByteLimited bool  // 是否因页级或全局字节预算停止读取
 }
 
 // TaskListOverviewResp 表示任务总览查询响应。
@@ -588,6 +608,7 @@ type TaskSchedulerItem struct {
 	RenewIntervalSeconds     int    `json:"renewIntervalSeconds"`              // leader 锁续租间隔（秒）
 	SyncIntervalSeconds      int    `json:"syncIntervalSeconds"`               // 周期任务配置同步间隔（秒）
 	HeartbeatIntervalSeconds int    `json:"heartbeatIntervalSeconds"`          // 调度器心跳间隔（秒）
+	MaxQueueBacklog          int    `json:"maxQueueBacklog"`                   // 周期任务投递前允许的队列积压上限，0 表示关闭背压
 	PeriodicTaskCount        int    `json:"periodicTaskCount"`                 // 当前有效周期任务数量
 	LastStatus               string `json:"lastStatus,omitempty"`              // 最近一次调度器总体状态
 	LastMessage              string `json:"lastMessage,omitempty"`             // 最近一次调度器总体状态说明

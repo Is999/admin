@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"admin/internal/config"
 	"admin/pkg/storage"
 	"admin/pkg/transfer"
 )
@@ -52,5 +53,61 @@ func TestValidateRequiredUploadSHA256(t *testing.T) {
 	}
 	if err := validateRequiredUploadSHA256("bad-hash"); err == nil {
 		t.Fatal("非法 SHA-256 摘要应失败")
+	}
+}
+
+// TestBuildUploadAccessURLUsesObjectKey 验证公开头像地址不依赖会过期的上传会话。
+func TestBuildUploadAccessURLUsesObjectKey(t *testing.T) {
+	session := &transfer.UploadSession{
+		BizType:   FileTransferBizAdminAvatar,
+		ObjectKey: "admin-avatar/202607/16/avatar.png",
+		Status:    "completed",
+	}
+	if got := buildUploadAccessURL(session); got != "/api/file-transfer/access?objectKey=admin-avatar%2F202607%2F16%2Favatar.png" {
+		t.Fatalf("公开头像地址不符合预期: %s", got)
+	}
+	session.Status = "uploading"
+	if got := buildUploadAccessURL(session); got != "" {
+		t.Fatalf("未完成上传不应生成公开地址: %s", got)
+	}
+}
+
+// TestResolveFileObjectKeyParsesPublicAccessURL 验证保存头像时可从公开访问 URL 还原对象 key。
+func TestResolveFileObjectKeyParsesPublicAccessURL(t *testing.T) {
+	store := storage.NewLocalStorage(config.FileStorageConfig{Local: config.FileStorageLocalConfig{RootDir: t.TempDir()}})
+	objectKey, err := resolveFileObjectKey(store, "/api/file-transfer/access?objectKey=admin-avatar%2F202607%2F16%2Favatar.png")
+	if err != nil {
+		t.Fatalf("解析公开头像地址失败: %v", err)
+	}
+	if objectKey != "admin-avatar/202607/16/avatar.png" {
+		t.Fatalf("对象 key = %q, want admin-avatar/202607/16/avatar.png", objectKey)
+	}
+	if _, err := resolveFileObjectKey(store, "/api/file-transfer/access"); err == nil {
+		t.Fatal("缺少对象 key 的公开地址应被拒绝")
+	}
+}
+
+// TestManagedUploadObjectKey 验证上传对象只接受指定业务的固定目录结构。
+func TestManagedUploadObjectKey(t *testing.T) {
+	validKeys := map[string]string{
+		"admin-avatar/202607/16/avatar.png":              "admin-avatar",
+		"tenant/files/admin-avatar/202607/16/avatar.png": "tenant/files/admin-avatar",
+	}
+	for objectKey, expectedPrefix := range validKeys {
+		if !isManagedUploadObjectKey(objectKey, expectedPrefix) {
+			t.Fatalf("合法头像对象 key 被拒绝: %s", objectKey)
+		}
+	}
+	invalidKeys := []string{
+		"sys-config-excel-import/202607/16/import.xlsx",
+		"admin-avatar/not-date/16/avatar.png",
+		"admin-avatar/202607/avatar.png",
+		"tenant/admin-avatar/202607/16/private/secret.txt",
+		"other-app/admin-avatar/202607/16/avatar.png",
+	}
+	for _, objectKey := range invalidKeys {
+		if isManagedUploadObjectKey(objectKey, "admin-avatar") {
+			t.Fatalf("非头像对象 key 被错误放行: %s", objectKey)
+		}
 	}
 }

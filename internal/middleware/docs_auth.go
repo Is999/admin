@@ -14,7 +14,6 @@ import (
 	"admin/internal/routealias"
 	"admin/internal/svc"
 
-	"github.com/Is999/go-utils"
 	"github.com/zeromicro/go-zero/rest"
 )
 
@@ -23,7 +22,8 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			ctx, _ := requestctx.New(r.Context())
-			requestctx.SetRequest(ctx, r.Method, r.URL.Path, utils.ClientIP(r))
+			clientIP := requestClientIP(svcCtx, r)
+			requestctx.SetRequest(ctx, r.Method, r.URL.Path, clientIP)
 			docsAlias := docsRouteAliasForPath(r.URL.Path)
 			requestctx.SetRoute(ctx, string(docsAlias))
 			r = r.WithContext(ctx)
@@ -44,7 +44,7 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 				return
 			}
 
-			ip := utils.ClientIP(r)
+			ip := clientIP
 			if err = securitylogic.NewSecurityLogic(ctx, svcCtx).CheckAdminAccess(identity.UserID, string(docsAlias), ip, identity.LoginIP); err != nil {
 				switch {
 				case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
@@ -91,7 +91,7 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 			}
 
 			requestctx.SetAccessToken(ctx, identity.Token)
-			requestctx.SetUser(ctx, identity.UserID, identity.UserName, utils.ClientIP(r))
+			requestctx.SetUser(ctx, identity.UserID, identity.UserName, clientIP)
 			r = r.WithContext(loggerx.BindContext(ctx))
 			next(w, r)
 		}

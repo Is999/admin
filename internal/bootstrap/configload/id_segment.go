@@ -154,6 +154,26 @@ func (m *redisSegmentManager) SegmentID(namespace string) (int64, error) {
 	return state.nextID(m)
 }
 
+// Ready 检查 Segment 管理器状态和 Redis 连接。
+func (m *redisSegmentManager) Ready(ctx context.Context) error {
+	if m == nil {
+		return errors.New("ID Segment 管理器未初始化")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.mu.RLock()
+	closed := m.closed
+	m.mu.RUnlock()
+	if closed {
+		return errors.New("ID Segment 管理器已关闭")
+	}
+	if err := m.client.Ping(ctx).Err(); err != nil {
+		return errors.Wrap(err, "检查 ID Segment Redis 连接失败")
+	}
+	return nil
+}
+
 // Close 关闭 Segment 解析器并唤醒等待中的取号请求。
 func (m *redisSegmentManager) Close(context.Context) error {
 	if m == nil {

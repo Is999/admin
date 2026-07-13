@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS `admin_log` (
   `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `event_id` varchar(64) NOT NULL DEFAULT '' COMMENT 'Collector事件ID',
   `user_id` int unsigned NOT NULL DEFAULT '0' COMMENT '用户id',
   `user_name` varchar(20) NOT NULL DEFAULT '' COMMENT '用户账户',
   `action` varchar(100) NOT NULL DEFAULT '0' COMMENT '动作名称',
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS `admin_log` (
   `error_message` varchar(500) NOT NULL DEFAULT '' COMMENT '错误信息',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_event_id` (`event_id`),
   KEY `idx_created_at` (`created_at`),
   KEY `idx_trace_id` (`trace_id`),
   KEY `idx_action` (`action`),

@@ -26,6 +26,7 @@ const (
 	defaultSnowflakeRedisLeaseSeconds         = 120       // 默认 node_id 租约 TTL
 	defaultSnowflakeRedisRenewIntervalSeconds = 30        // 默认 node_id 续约间隔
 	minSnowflakeRedisLeaseSeconds             = 10        // 最小租约 TTL，避免续约抖动导致频繁失效
+	maxSnowflakeRedisLeaseSeconds             = 86400     // 最大租约 TTL，避免极端整数转换溢出并限制故障恢复窗口
 	snowflakeLeaseOwnerRandomBytes            = 8         // 租约 owner 随机后缀字节数
 )
 
@@ -50,12 +51,26 @@ var snowflakeLeaseReleaseScriptText string
 
 // SnowflakeLease 表示 ID 生成器持有的运行期资源。
 type SnowflakeLease interface {
+	Ready(context.Context) error
 	Close(context.Context) error
 }
 
 // idGeneratorRuntimeGroup 聚合雪花租约和 Segment 号段等 ID 生成运行期资源。
 type idGeneratorRuntimeGroup struct {
 	resources []SnowflakeLease // resources 按创建顺序保存，关闭时也按该顺序释放
+}
+
+// Ready 检查当前 ID 生成运行资源是否仍可用。
+func (g idGeneratorRuntimeGroup) Ready(ctx context.Context) error {
+	for _, resource := range g.resources {
+		if resource == nil {
+			continue
+		}
+		if err := resource.Ready(ctx); err != nil {
+			return errors.Tag(err)
+		}
+	}
+	return nil
 }
 
 // snowflakeRedisLeaseManager 管理当前实例按业务命名空间持有的 Redis node_id 租约。
@@ -80,6 +95,8 @@ type snowflakeRedisLease struct {
 	renewInterval time.Duration         // 租约续约间隔
 	stop          chan struct{}         // 关闭续约循环信号
 	done          chan struct{}         // 续约循环退出信号
+	closeDone     chan struct{}         // 租约关闭流程完成信号
+	closeErr      error                 // 首次关闭流程结果
 	closeOnce     sync.Once             // 确保租约只释放一次
 	releaseOnce   sync.Once             // 确保本地 worker 状态只释放一次
 	onRelease     func(string, int64)   // 本地租约丢失后的管理器回调
@@ -210,6 +227,26 @@ func (m *snowflakeRedisLeaseManager) SnowflakeWorkerID(namespace string) (int64,
 	return lease.workerID, nil
 }
 
+// Ready 检查租约管理器状态和 Redis 连接。
+func (m *snowflakeRedisLeaseManager) Ready(ctx context.Context) error {
+	if m == nil {
+		return errors.New("雪花 Redis 租约管理器未初始化")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
+	if closed {
+		return errors.New("雪花 Redis 租约管理器已关闭")
+	}
+	if err := m.client.Ping(ctx).Err(); err != nil {
+		return errors.Wrap(err, "检查雪花 Redis 租约连接失败")
+	}
+	return nil
+}
+
 // Close 停止并释放当前实例持有的所有业务 namespace node_id 租约。
 func (m *snowflakeRedisLeaseManager) Close(ctx context.Context) error {
 	if m == nil {
@@ -307,6 +344,7 @@ func activateSnowflakeRedisLease(ctx context.Context, client redis.UniversalClie
 		renewInterval: time.Duration(cfg.RenewIntervalSeconds) * time.Second,
 		stop:          make(chan struct{}),
 		done:          make(chan struct{}),
+		closeDone:     make(chan struct{}),
 		onRelease:     onRelease,
 	}
 	lease.start()
@@ -382,14 +420,25 @@ func (l *snowflakeRedisLease) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var closeErr error
 	l.closeOnce.Do(func() {
 		close(l.stop)
-		<-l.done
 		l.releaseLocal()
-		closeErr = releaseSnowflakeRedisLease(ctx, l.client, l.key, l.owner)
+		go func() {
+			select {
+			case <-l.done:
+				l.closeErr = releaseSnowflakeRedisLease(ctx, l.client, l.key, l.owner)
+			case <-ctx.Done():
+				l.closeErr = errors.Wrap(ctx.Err(), "等待雪花租约续约协程退出超时")
+			}
+			close(l.closeDone)
+		}()
 	})
-	return errors.Tag(closeErr)
+	select {
+	case <-l.closeDone:
+		return errors.Tag(l.closeErr)
+	case <-ctx.Done():
+		return errors.Wrap(ctx.Err(), "关闭雪花 Redis 租约超时")
+	}
 }
 
 // releaseLocal 释放本地单个业务 namespace 的 worker 状态。

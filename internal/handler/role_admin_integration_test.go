@@ -3,9 +3,7 @@ package handler_test
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,13 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	codes "admin/common/codes"
+	keys "admin/common/rediskeys"
 	"admin/internal/bootstrap"
 	secretkeylogic "admin/internal/logic/secretkey"
 	securitylogic "admin/internal/logic/security"
@@ -77,12 +75,14 @@ type roleAdminIntegrationAdminItem struct {
 	Username string `json:"username"` // Username 表示用户名。
 }
 
-const (
-	// integrationAppID 表示测试使用的常量。
-	integrationAppID = "1"
-	// integrationSignatureMD5 表示测试使用的常量。
-	integrationSignatureMD5 = "M"
-)
+// roleAdminIntegrationClient 封装集成测试 HTTP 客户端和 AES 签名器。
+type roleAdminIntegrationClient struct {
+	*http.Client                 // Client 发起集成测试 HTTP 请求
+	signer       security.Signer // signer 按生产安全策略生成 AES 请求签名
+}
+
+// integrationAppID 表示集成测试使用的应用 ID。
+const integrationAppID = "1"
 
 // TestRoleAdminIntegrationFlows 验证登录、角色父子权限收敛、状态切换和管理员角色绑定过滤链路。
 func TestRoleAdminIntegrationFlows(t *testing.T) {
@@ -124,10 +124,13 @@ func TestRoleAdminIntegrationFlows(t *testing.T) {
 	baseURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
 	integrationWaitForServer(t, baseURL, startErrCh)
 
-	client := &http.Client{Timeout: 20 * time.Second}
 	testPassword := strings.TrimSpace(os.Getenv("CRON_ADMIN_TEST_PASSWORD"))
 	if testPassword == "" {
 		t.Skip("未设置 CRON_ADMIN_TEST_PASSWORD，跳过需要真实登录口令的集成测试")
+	}
+	client := &roleAdminIntegrationClient{
+		Client: &http.Client{Timeout: 20 * time.Second},
+		signer: integrationNewAESCipher(t, app.ServiceContext),
 	}
 	superToken := integrationLogin(t, client, baseURL, app.ServiceContext, "super999", testPassword)
 
@@ -319,13 +322,16 @@ func integrationIssueMFATwoStep(t *testing.T, svcCtx *svc.ServiceContext, adminI
 
 // integrationLogin 通过验证码登录接口获取访问令牌。
 // 注意：auth.login 响应可能包含加密后的 token 字段，集成测试需要在本地解密后再作为 Bearer token 使用。
-func integrationLogin(t *testing.T, client *http.Client, baseURL string, svcCtx *svc.ServiceContext, username string, password string) string {
+func integrationLogin(t *testing.T, client *roleAdminIntegrationClient, baseURL string, svcCtx *svc.ServiceContext, username string, password string) string {
 	t.Helper()
 
 	var captcha roleAdminIntegrationCaptchaResp
 	integrationMustDo(t, client, http.MethodGet, baseURL+"/api/auth/captcha", "auth.captcha", "", nil, &captcha)
-	svg := integrationDecodeCaptchaSVG(t, captcha.Image)
-	code := integrationExtractCaptchaCode(t, svg)
+	cacheKey := keys.WithPrefix(fmt.Sprintf(keys.LoginCaptcha, captcha.Key))
+	code, err := svcCtx.Rds.Get(context.Background(), cacheKey).Result()
+	if err != nil {
+		t.Fatalf("读取集成测试验证码失败: %v", err)
+	}
 
 	var loginResp roleAdminIntegrationLoginResp
 	integrationMustDo(t, client, http.MethodPost, baseURL+"/api/auth/login", "auth.login", "", map[string]any{
@@ -355,14 +361,7 @@ func integrationNormalizeBearerToken(t *testing.T, svcCtx *svc.ServiceContext, t
 	if svcCtx == nil {
 		t.Fatalf("登录 token 需要解密但 ServiceContext 为空")
 	}
-	aesKey, _, err := secretkeylogic.NewSecretKeyLogic(context.Background(), svcCtx).GetAESKey(integrationAppID, "", "")
-	if err != nil || aesKey == nil {
-		t.Fatalf("读取 AES Key 失败: %v", err)
-	}
-	cryptor, err := security.NewAESCipher(aesKey.Key, aesKey.IV)
-	if err != nil {
-		t.Fatalf("初始化 AES 解密器失败: %v", err)
-	}
+	cryptor := integrationNewAESCipher(t, svcCtx)
 	plain, err := cryptor.Decrypt(token)
 	if err != nil {
 		t.Fatalf("登录 token 解密失败: %v", err)
@@ -371,6 +370,23 @@ func integrationNormalizeBearerToken(t *testing.T, svcCtx *svc.ServiceContext, t
 		t.Fatalf("登录 token 解密后仍不是 JWT: %s", plain)
 	}
 	return plain
+}
+
+// integrationNewAESCipher 使用当前应用秘钥创建集成测试 AES 签名和加解密实现。
+func integrationNewAESCipher(t *testing.T, svcCtx *svc.ServiceContext) *security.AESCipher {
+	t.Helper()
+	if svcCtx == nil {
+		t.Fatal("初始化 AES 实现失败: ServiceContext 为空")
+	}
+	aesKey, _, err := secretkeylogic.NewSecretKeyLogic(context.Background(), svcCtx).GetAESKey(integrationAppID, "", "")
+	if err != nil || aesKey == nil {
+		t.Fatalf("读取 AES Key 失败: %v", err)
+	}
+	cipherObj, err := security.NewAESCipher(aesKey.Key, aesKey.IV)
+	if err != nil {
+		t.Fatalf("初始化 AES 实现失败: %v", err)
+	}
+	return cipherObj
 }
 
 // integrationLooksLikeJWT 判断字符串是否形如 `header.payload.signature` 的 JWT 结构。
@@ -411,58 +427,34 @@ func integrationTimestamp() string {
 	return fmt.Sprintf("%d", time.Now().Unix())
 }
 
-// integrationSignValue 返回集成测试辅助数据。
-func integrationSignValue(signText string) string {
-	sum := md5.Sum([]byte(signText))
-	return hex.EncodeToString(sum[:])
+// integrationSignValue 使用 AES 签名器生成集成测试请求签名。
+func integrationSignValue(t *testing.T, signer security.Signer, signText string) string {
+	t.Helper()
+	if signer == nil {
+		t.Fatal("生成集成测试签名失败: 签名器为空")
+	}
+	sign, err := signer.Sign(signText)
+	if err != nil {
+		t.Fatalf("生成集成测试签名失败: %v", err)
+	}
+	return sign
 }
 
-// integrationAttachSignature 返回集成测试辅助数据。
-func integrationAttachSignature(alias string, payload map[string]any, traceID string, timestamp string) map[string]any {
+// integrationAttachSignature 为集成测试请求参数附加 AES 签名。
+func integrationAttachSignature(t *testing.T, signer security.Signer, alias string, payload map[string]any, traceID string, timestamp string) map[string]any {
+	t.Helper()
 	next := make(map[string]any, len(payload)+1)
 	for k, v := range payload {
 		next[k] = v
 	}
 	policy := security.PolicyByRoute(alias)
 	signText := security.BuildSignString(next, policy.RequestSign, traceID, timestamp, integrationAppID)
-	next["sign"] = integrationSignValue(signText)
+	next["sign"] = integrationSignValue(t, signer, signText)
 	return next
 }
 
-// integrationDecodeCaptchaSVG 解析 data url 中的 base64 SVG。
-func integrationDecodeCaptchaSVG(t *testing.T, image string) string {
-	t.Helper()
-	parts := strings.SplitN(strings.TrimSpace(image), ",", 2)
-	if len(parts) != 2 {
-		t.Fatalf("验证码图片格式不合法: %s", image)
-	}
-	raw, err := base64.StdEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("解码验证码图片失败: %v", err)
-	}
-	return string(raw)
-}
-
-// integrationExtractCaptchaCode 从 SVG 文本节点中抽取验证码内容。
-func integrationExtractCaptchaCode(t *testing.T, svg string) string {
-	t.Helper()
-	matches := regexp.MustCompile(`<text[^>]*>([^<]+)</text>`).FindAllStringSubmatch(svg, -1)
-	if len(matches) == 0 {
-		t.Fatalf("验证码 SVG 中未找到文本节点: %s", svg)
-	}
-	var builder strings.Builder
-	for _, match := range matches {
-		builder.WriteString(match[1])
-	}
-	code := strings.TrimSpace(builder.String())
-	if code == "" {
-		t.Fatalf("验证码内容为空: %s", svg)
-	}
-	return code
-}
-
 // integrationMustDo 发起一次接口请求，并断言业务响应为成功。
-func integrationMustDo(t *testing.T, client *http.Client, method string, urlText string, alias string, token string, payload any, out any) {
+func integrationMustDo(t *testing.T, client *roleAdminIntegrationClient, method string, urlText string, alias string, token string, payload any, out any) {
 	t.Helper()
 	signEnabled := integrationShouldSign(alias)
 	traceID := ""
@@ -505,12 +497,12 @@ func integrationMustDo(t *testing.T, client *http.Client, method string, urlText
 		// GET/DELETE 走 query 参数承载签名；POST/PUT/PATCH 走 body 承载签名。
 		// 这里必须使用“最终待提交的业务参数”参与签名，避免出现“签名只覆盖空参数”的误判。
 		if queryCarrier {
-			signed := integrationAttachSignature(alias, signParams, traceID, timestamp)
+			signed := integrationAttachSignature(t, client.signer, alias, signParams, traceID, timestamp)
 			for k, v := range signed {
 				queryParams.Set(k, fmt.Sprint(v))
 			}
 		} else {
-			payloadMap = integrationAttachSignature(alias, payloadMap, traceID, timestamp)
+			payloadMap = integrationAttachSignature(t, client.signer, alias, payloadMap, traceID, timestamp)
 		}
 	}
 	parsedURL.RawQuery = queryParams.Encode()
@@ -539,7 +531,7 @@ func integrationMustDo(t *testing.T, client *http.Client, method string, urlText
 		req.Header.Set("X-App-Id", integrationAppHeader())
 		req.Header.Set("X-Trace-Id", traceID)
 		req.Header.Set("X-Timestamp", timestamp)
-		req.Header.Set("X-Signature", integrationSignatureMD5)
+		req.Header.Set("X-Signature", security.SignatureTypeAES)
 	}
 	if strings.TrimSpace(token) != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -571,7 +563,7 @@ func integrationMustDo(t *testing.T, client *http.Client, method string, urlText
 // integrationDo 发起一次接口请求并返回业务响应结构。
 // 该方法主要用于集成测试的“环境探测”场景：部分环境可能强制 MFA 校验或存在运维限流，
 // 这类场景不适合直接用 integrationMustDo 做强断言。
-func integrationDo(t *testing.T, client *http.Client, method string, urlText string, alias string, token string, payload any) roleAdminIntegrationResp {
+func integrationDo(t *testing.T, client *roleAdminIntegrationClient, method string, urlText string, alias string, token string, payload any) roleAdminIntegrationResp {
 	t.Helper()
 
 	signEnabled := integrationShouldSign(alias)
@@ -613,12 +605,12 @@ func integrationDo(t *testing.T, client *http.Client, method string, urlText str
 		traceID = integrationTraceID()
 		timestamp = integrationTimestamp()
 		if queryCarrier {
-			signed := integrationAttachSignature(alias, signParams, traceID, timestamp)
+			signed := integrationAttachSignature(t, client.signer, alias, signParams, traceID, timestamp)
 			for k, v := range signed {
 				queryParams.Set(k, fmt.Sprint(v))
 			}
 		} else {
-			payloadMap = integrationAttachSignature(alias, payloadMap, traceID, timestamp)
+			payloadMap = integrationAttachSignature(t, client.signer, alias, payloadMap, traceID, timestamp)
 		}
 	}
 	parsedURL.RawQuery = queryParams.Encode()
@@ -647,7 +639,7 @@ func integrationDo(t *testing.T, client *http.Client, method string, urlText str
 		req.Header.Set("X-App-Id", integrationAppHeader())
 		req.Header.Set("X-Trace-Id", traceID)
 		req.Header.Set("X-Timestamp", timestamp)
-		req.Header.Set("X-Signature", integrationSignatureMD5)
+		req.Header.Set("X-Signature", security.SignatureTypeAES)
 	}
 	if strings.TrimSpace(token) != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -695,7 +687,7 @@ func integrationPickPermissionIDs(t *testing.T, tree []roleAdminIntegrationPermi
 }
 
 // integrationGetCheckedPermissionIDs 读取角色权限树里当前已勾选的权限 ID。
-func integrationGetCheckedPermissionIDs(t *testing.T, client *http.Client, baseURL string, token string, roleID int) []int {
+func integrationGetCheckedPermissionIDs(t *testing.T, client *roleAdminIntegrationClient, baseURL string, token string, roleID int) []int {
 	t.Helper()
 	var tree []roleAdminIntegrationPermissionItem
 	integrationMustDo(t, client, http.MethodGet, fmt.Sprintf("%s/api/roles/permissions/tree/%d/n", baseURL, roleID), "role.permission.tree", token, nil, &tree)

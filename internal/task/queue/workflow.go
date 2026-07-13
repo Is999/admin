@@ -50,14 +50,20 @@ const (
 	// NodeStatusSkipped 表示节点因灰度被整体跳过。
 	NodeStatusSkipped = "skipped"
 
-	// workflowNodeInstanceFieldPrefix 是节点 hash 内部的分片终态去重字段前缀。
-	// 去重标记与成功/失败计数放在同一个 Redis hash 中，避免 Redis Cluster Lua 跨 slot 写多 key。
+	// workflowNodeInstanceFieldPrefix 是节点 hash 内部的分片结果状态字段前缀。
+	// 结果状态与成功/失败计数放在同一个 Redis hash 中，避免 Redis Cluster Lua 跨 slot 写多 key。
 	workflowNodeInstanceFieldPrefix = "__instance_done:"
 	// workflowNodeTraceFieldPrefix 是节点 hash 内部的分片处理量快照字段前缀。
 	workflowNodeTraceFieldPrefix = "executionTrace:shard:"
+	// workflowNodeBusinessFailureFieldPrefix 是节点 hash 内部的业务失败次数前缀。
+	workflowNodeBusinessFailureFieldPrefix = "__business_failures:"
+	// workflowNodeOutcomeRerunPrepared 表示失败分片已完成重跑准备，可安全重复调用 RunTask。
+	workflowNodeOutcomeRerunPrepared = "rerun_prepared"
+	// workflowRepairRetryCount 是根节点或下游分片投递失败时预留的编排重试次数。
+	workflowRepairRetryCount = 3
 )
 
-// workflowNodeInstanceField 返回节点 hash 中单个分片的终态去重字段名。
+// workflowNodeInstanceField 返回节点 hash 中单个分片的结果状态字段名。
 func workflowNodeInstanceField(shardIndex int) string {
 	return fmt.Sprintf("%s%d", workflowNodeInstanceFieldPrefix, shardIndex)
 }
@@ -65,6 +71,11 @@ func workflowNodeInstanceField(shardIndex int) string {
 // workflowNodeTraceField 返回节点 hash 中单个分片的处理量快照字段名。
 func workflowNodeTraceField(shardIndex int) string {
 	return fmt.Sprintf("%s%d", workflowNodeTraceFieldPrefix, shardIndex)
+}
+
+// workflowNodeBusinessFailureField 返回单个分片的业务失败次数 Redis 字段名。
+func workflowNodeBusinessFailureField(shardIndex int) string {
+	return fmt.Sprintf("%s%d", workflowNodeBusinessFailureFieldPrefix, shardIndex)
 }
 
 // WorkflowStartSpec 表示工作流实例的启动参数。
@@ -77,6 +88,7 @@ type WorkflowStartSpec struct {
 	GrayPercent       int           // 灰度执行百分比
 	Source            string        // 触发来源
 	PeriodicName      string        // 周期任务原始名称
+	ScheduledAt       string        // 周期任务本轮计划触发时间，RFC3339
 	TriggeredByUserID int           // 触发人用户 ID
 	TriggeredByUser   string        // 触发人用户名
 	TraceID           string        // 上游链路追踪 ID
@@ -89,11 +101,12 @@ type WorkflowStartSpec struct {
 // WorkflowDefinition 描述一个 DAG 工作流定义。
 // 节点图在进程启动时注册到内存中，实例状态则落在 Redis 中以支持多实例协同。
 type WorkflowDefinition struct {
-	Name          string                             // 工作流名称
-	Description   string                             // 工作流默认说明，注册表展示优先使用多语言展示元数据
-	DefaultQueue  string                             // 默认执行队列
-	MaxShardTotal int                                // 允许的最大分片数，0 表示不限制
-	Nodes         map[string]*WorkflowNodeDefinition // 节点定义集合，key 为节点名
+	Name                     string                             // 工作流名称
+	Description              string                             // 工作流默认说明，注册表展示优先使用多语言展示元数据
+	DefaultQueue             string                             // 默认执行队列
+	MaxShardTotal            int                                // 允许的最大分片数，0 表示不限制
+	PeriodicUniqueBySchedule bool                               // 周期触发时是否按计划时刻隔离幂等键，避免延迟执行吞掉下一周期实例
+	Nodes                    map[string]*WorkflowNodeDefinition // 节点定义集合，key 为节点名
 }
 
 // WorkflowNodeDefinition 描述 DAG 中的单个节点。
@@ -105,7 +118,6 @@ type WorkflowNodeDefinition struct {
 	DependsOn        []string                                                                                               // 依赖的上游节点列表，只有依赖全部完成后才会调度
 	MaxRetry         int                                                                                                    // 节点最大重试次数，0 表示不自动重试，负数表示禁止工作流全局重试覆盖
 	Timeout          time.Duration                                                                                          // 单个节点任务的超时时间
-	UniqueTTL        time.Duration                                                                                          // 节点任务去重窗口，避免短时间重复投递
 	SupportsSharding bool                                                                                                   // 是否支持按目标集合切成多个分片并行执行
 	SupportsGray     bool                                                                                                   // 是否支持按灰度百分比跳过部分分片
 	BuildPayload     func(spec WorkflowStartSpec, node *WorkflowNodeDefinition, shardIndex, shardTotal int) ([]byte, error) // 根据启动参数和分片信息构造节点任务负载
@@ -195,16 +207,9 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 	if spec.Source == "" {
 		spec.Source = WorkflowSourceInternal
 	}
-	if spec.UniqueKey != "" && spec.UniqueTTL > 0 {
-		locked, lockErr := m.ensureWorkflowUnique(ctx, spec.Name, spec.UniqueKey, spec.WorkflowID, spec.UniqueTTL)
-		if lockErr != nil {
-			return "", errors.Wrap(lockErr, "锁定工作流唯一键失败")
-		}
-		if !locked {
-			return spec.WorkflowID, ErrWorkflowAlreadyExists
-		}
+	if err = applyPeriodicScheduleUniqueKey(def, &spec); err != nil {
+		return "", errors.Tag(err)
 	}
-
 	metaKey := m.workflowMetaKey(spec.WorkflowID)
 	exists, err := m.redis.Exists(ctx, metaKey).Result()
 	if err != nil {
@@ -216,12 +221,42 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 			return "", errors.Tag(completeErr)
 		}
 		if complete {
+			status, statusErr := m.redis.HGet(ctx, metaKey, "status").Result()
+			if statusErr != nil {
+				return "", errors.Wrap(statusErr, "读取工作流状态失败")
+			}
+			if status == WorkflowStatusSuccess || status == WorkflowStatusFailed {
+				return spec.WorkflowID, nil
+			}
+			if status == WorkflowStatusPending {
+				if statusErr = m.updateWorkflowMeta(ctx, spec.WorkflowID, map[string]any{"status": WorkflowStatusRunning}); statusErr != nil {
+					return "", errors.Wrap(statusErr, "恢复工作流运行状态失败")
+				}
+			}
+			storedSpec, specErr := m.workflowSpecByID(ctx, spec.WorkflowID)
+			if specErr != nil {
+				return "", errors.Tag(specErr)
+			}
+			for _, nodeName := range sortedNodeNames(def) {
+				if scheduleErr := m.scheduleNode(ctx, def, storedSpec, nodeName); scheduleErr != nil {
+					return "", errors.Tag(scheduleErr)
+				}
+			}
 			return spec.WorkflowID, nil
 		}
 		// Redis 异常可能留下只有 meta、缺少 nodes/node hash 的半初始化数据。
 		// 这里先按精确 key 清理，再重建完整工作流元数据，避免后续误判工作流已存在但无法推进。
 		if err = m.cleanupIncompleteWorkflowMetadata(ctx, spec.WorkflowID, def); err != nil {
 			return "", errors.Tag(err)
+		}
+	}
+	if spec.UniqueKey != "" && spec.UniqueTTL > 0 {
+		locked, lockErr := m.ensureWorkflowUnique(ctx, spec.Name, spec.UniqueKey, spec.WorkflowID, spec.UniqueTTL)
+		if lockErr != nil {
+			return "", errors.Wrap(lockErr, "锁定工作流唯一键失败")
+		}
+		if !locked {
+			return spec.WorkflowID, ErrWorkflowAlreadyExists
 		}
 	}
 
@@ -231,19 +266,22 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 	// 初始化写入使用普通 pipeline，由完整性检查负责清理并重建极端情况下的半初始化数据。
 	pipe := m.redis.Pipeline()
 	metaValues := map[string]any{
-		"workflowId":   spec.WorkflowID,
-		"workflowName": spec.Name,
-		"status":       WorkflowStatusPending,
-		"source":       spec.Source,
-		"periodicName": spec.PeriodicName,
-		"queue":        spec.Queue,
-		"targets":      mustJSON(spec.Targets),
-		"shardTotal":   spec.ShardTotal,
-		"grayPercent":  spec.GrayPercent,
-		"errorMessage": "",
-		"createdAt":    now,
-		"updatedAt":    now,
-		"finishedAt":   "",
+		"workflowId":       spec.WorkflowID,
+		"workflowName":     spec.Name,
+		"status":           WorkflowStatusPending,
+		"source":           spec.Source,
+		"periodicName":     spec.PeriodicName,
+		"scheduledAt":      spec.ScheduledAt,
+		"queue":            spec.Queue,
+		"targets":          mustJSON(spec.Targets),
+		"shardTotal":       spec.ShardTotal,
+		"grayPercent":      spec.GrayPercent,
+		"uniqueKey":        spec.UniqueKey,
+		"uniqueTTLSeconds": int64(spec.UniqueTTL / time.Second),
+		"errorMessage":     "",
+		"createdAt":        now,
+		"updatedAt":        now,
+		"finishedAt":       "",
 	}
 	if spec.RetryOverride != nil {
 		metaValues["retryOverride"] = *spec.RetryOverride
@@ -252,7 +290,6 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 		metaValues["timeoutOverrideSeconds"] = int64(spec.TimeoutOverride / time.Second)
 	}
 	pipe.HSet(ctx, metaKey, metaValues)
-	pipe.Expire(ctx, metaKey, m.workflowRetention())
 	for _, nodeName := range nodeNames {
 		node := def.Nodes[nodeName]
 		pipe.SAdd(ctx, m.workflowNodesKey(spec.WorkflowID), nodeName)
@@ -272,9 +309,7 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 			"startedAt", "",
 			"finishedAt", "",
 		)
-		pipe.Expire(ctx, nodeKey, m.workflowRetention())
 	}
-	pipe.Expire(ctx, m.workflowNodesKey(spec.WorkflowID), m.workflowRetention())
 	if _, err = pipe.Exec(ctx); err != nil {
 		return "", errors.Wrap(err, "保存工作流元数据失败")
 	}
@@ -284,15 +319,52 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 	}
 	for _, nodeName := range rootNodeNames(def) {
 		if err = m.scheduleNode(ctx, def, spec, nodeName); err != nil {
-			_ = m.failWorkflow(ctx, spec.WorkflowID, fmt.Sprintf("调度根节点 %s 失败: %v", nodeName, err))
 			return "", errors.Tag(err)
 		}
 	}
 	return spec.WorkflowID, nil
 }
 
+// workflowUniqueKeyForSchedule 把周期实例的计划时刻加入幂等键，同一时刻防重、相邻周期互不吞任务。
+func workflowUniqueKeyForSchedule(baseKey, scheduledAt string) (string, error) {
+	baseKey = strings.TrimSpace(baseKey)
+	scheduledAt = strings.TrimSpace(scheduledAt)
+	if baseKey == "" {
+		return "", errors.Errorf("周期工作流幂等键不能为空")
+	}
+	parsed, err := time.Parse(time.RFC3339, scheduledAt)
+	if err != nil {
+		return "", errors.Wrap(err, "解析周期工作流计划触发时间失败")
+	}
+	if parsed.Nanosecond() != 0 {
+		return "", errors.Errorf("周期工作流计划触发时间必须按整秒对齐: %s", scheduledAt)
+	}
+	return baseKey + ":" + strconv.FormatInt(parsed.Unix(), 10), nil
+}
+
+// applyPeriodicScheduleUniqueKey 仅为声明该语义的周期工作流加入计划时刻后缀。
+func applyPeriodicScheduleUniqueKey(def *WorkflowDefinition, spec *WorkflowStartSpec) error {
+	if def == nil || spec == nil || !def.PeriodicUniqueBySchedule || spec.Source != WorkflowSourcePeriodic || spec.UniqueKey == "" || spec.UniqueTTL <= 0 {
+		return nil
+	}
+	uniqueKey, err := workflowUniqueKeyForSchedule(spec.UniqueKey, spec.ScheduledAt)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	spec.UniqueKey = uniqueKey
+	return nil
+}
+
 // scheduleNode 在依赖满足后调度指定节点，并按分片策略拆分为多个任务实例。
 func (m *Manager) scheduleNode(ctx context.Context, def *WorkflowDefinition, spec WorkflowStartSpec, nodeName string) error {
+	if err := m.scheduleNodeTasks(ctx, def, spec, nodeName); err != nil {
+		return errors.Join(ErrWorkflowDispatch, err)
+	}
+	return nil
+}
+
+// scheduleNodeTasks 执行单个节点的状态初始化与分片投递。
+func (m *Manager) scheduleNodeTasks(ctx context.Context, def *WorkflowDefinition, spec WorkflowStartSpec, nodeName string) error {
 	node := def.Nodes[nodeName]
 	if node == nil {
 		return errors.Errorf("节点不存在: %s", nodeName)
@@ -305,72 +377,153 @@ func (m *Manager) scheduleNode(ctx context.Context, def *WorkflowDefinition, spe
 		return nil
 	}
 
-	scheduled, err := m.redis.SetNX(ctx, m.workflowNodeScheduledKey(spec.WorkflowID, nodeName), "1", m.workflowRetention()).Result()
-	if err != nil {
-		return errors.Wrap(err, "标记节点已调度失败")
+	nodeKey := m.workflowNodeKey(spec.WorkflowID, nodeName)
+	status, err := m.redis.HGet(ctx, nodeKey, "status").Result()
+	if err != nil && err != redis.Nil {
+		return errors.Wrap(err, "读取节点调度状态失败")
 	}
-	if !scheduled {
+	if status == NodeStatusSuccess || status == NodeStatusSkipped || status == NodeStatusFailed {
 		return nil
 	}
 
 	queue := helper.FirstNonEmptyString(node.Queue, spec.Queue, m.defaultWorkflowQueue())
 	selectedShards := selectedShardIndexes(spec.WorkflowID, nodeName, effectiveShardTotal(node, spec), spec.GrayPercent, node.SupportsGray)
-	now := time.Now().Format(time.RFC3339)
-	updates := map[string]any{
-		"queue":     queue,
-		"status":    NodeStatusRunning,
-		"expected":  len(selectedShards),
-		"startedAt": now,
-		"updatedAt": now,
+	if status == "" || status == NodeStatusPending {
+		now := time.Now().Format(time.RFC3339)
+		updates := map[string]any{
+			"queue":     queue,
+			"status":    NodeStatusRunning,
+			"expected":  len(selectedShards),
+			"startedAt": now,
+			"updatedAt": now,
+		}
+		if len(selectedShards) == 0 {
+			updates["status"] = NodeStatusSkipped
+			updates["skipped"] = effectiveShardTotal(node, spec)
+			updates["finishedAt"] = now
+		}
+		if err = m.updateWorkflowNode(ctx, spec.WorkflowID, nodeName, updates); err != nil {
+			return errors.Tag(err)
+		}
+		if len(selectedShards) == 0 {
+			return m.onNodeCompleted(ctx, def, spec, nodeName)
+		}
 	}
-	if len(selectedShards) == 0 {
-		updates["status"] = NodeStatusSkipped
-		updates["skipped"] = effectiveShardTotal(node, spec)
-		updates["finishedAt"] = now
+	instanceFields := make([]string, 0, len(selectedShards))
+	for _, shardIndex := range selectedShards {
+		instanceFields = append(instanceFields, workflowNodeInstanceField(shardIndex))
 	}
-	if err = m.updateWorkflowNode(ctx, spec.WorkflowID, nodeName, updates); err != nil {
-		return errors.Tag(err)
-	}
-	if len(selectedShards) == 0 {
-		return m.onNodeCompleted(ctx, def, spec, nodeName)
+	instanceOutcomes, err := m.redis.HMGet(ctx, nodeKey, instanceFields...).Result()
+	if err != nil {
+		return errors.Wrap(err, "读取节点分片终态失败")
 	}
 
-	for _, shardIndex := range selectedShards {
+	for index, shardIndex := range selectedShards {
+		if outcome, _ := instanceOutcomes[index].(string); outcome == "succeeded" {
+			continue
+		}
+		businessRetry := effectiveRetry(node, spec)
 		payload, buildErr := node.BuildPayload(spec, node, shardIndex, effectiveShardTotal(node, spec))
 		if buildErr != nil {
 			return errors.Wrapf(buildErr, "构建节点负载失败 node=%s shard=%d", nodeName, shardIndex)
 		}
 		headers := map[string]string{
-			headerTaskName:     workflowNodeTaskName(spec.Name, nodeName, node.TaskType),
-			headerWorkflowID:   spec.WorkflowID,
-			headerWorkflowName: spec.Name,
-			headerWorkflowNode: nodeName,
-			headerShardIndex:   fmt.Sprintf("%d", shardIndex),
-			headerShardTotal:   fmt.Sprintf("%d", effectiveShardTotal(node, spec)),
+			headerTaskName:      workflowNodeTaskName(spec.Name, nodeName, node.TaskType),
+			headerWorkflowID:    spec.WorkflowID,
+			headerWorkflowName:  spec.Name,
+			headerWorkflowNode:  nodeName,
+			headerShardIndex:    fmt.Sprintf("%d", shardIndex),
+			headerShardTotal:    fmt.Sprintf("%d", effectiveShardTotal(node, spec)),
+			headerBusinessRetry: strconv.Itoa(businessRetry),
 		}
 		if spec.PeriodicName != "" {
 			headers[HeaderPeriodicName] = spec.PeriodicName
 			headers[headerTaskSource] = spec.Source
 		}
+		if spec.ScheduledAt != "" {
+			headers[HeaderScheduledAt] = spec.ScheduledAt
+		}
 		task := m.newTask(ctx, node.TaskType, payload, headers)
+		maxRetry := workflowTaskRetryBudget(businessRetry)
+		if node.MaxRetry < 0 {
+			maxRetry = 0
+		}
 		opts := []asynq.Option{
 			asynq.Queue(m.namespacedQueueName(queue)),
-			asynq.MaxRetry(effectiveRetry(node, spec)),
-		}
-		if retention := m.completedRetention(); retention > 0 {
-			opts = append(opts, asynq.Retention(retention))
+			asynq.MaxRetry(maxRetry),
+			asynq.TaskID(workflowNodeTaskID(spec.WorkflowID, nodeName, shardIndex)),
+			asynq.Retention(taskCompletedRetention),
 		}
 		if timeout := effectiveTimeout(node, spec); timeout > 0 {
 			opts = append(opts, asynq.Timeout(timeout))
 		}
-		if node.UniqueTTL > 0 {
-			opts = append(opts, asynq.Unique(node.UniqueTTL))
-		}
 		if _, err = m.client.EnqueueContext(ctx, task, opts...); err != nil {
+			if errors.Is(err, asynq.ErrTaskIDConflict) {
+				continue
+			}
 			return errors.Wrapf(err, "投递节点任务失败 node=%s shard=%d", nodeName, shardIndex)
 		}
 	}
 	return nil
+}
+
+// workflowTaskSettled 判断工作流或分片是否已终结，技术重试据此跳过重复业务执行。
+func (m *Manager) workflowTaskSettled(ctx context.Context, task *asynq.Task) (bool, error) {
+	meta := workflowTaskMetaFromTask(task)
+	if meta.WorkflowID == "" || meta.WorkflowNode == "" {
+		return false, nil
+	}
+	status, err := m.redis.HGet(ctx, m.workflowMetaKey(meta.WorkflowID), "status").Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, errors.Join(ErrWorkflowDispatch, errors.Wrapf(err, "读取工作流终态失败 workflow_id=%s", meta.WorkflowID))
+	}
+	if status == WorkflowStatusFailed {
+		outcome, outcomeErr := m.redis.HGet(ctx, m.workflowNodeKey(meta.WorkflowID, meta.WorkflowNode), workflowNodeInstanceField(meta.ShardIndex)).Result()
+		if outcomeErr != nil && outcomeErr != redis.Nil {
+			return false, errors.Join(ErrWorkflowDispatch, errors.Wrapf(outcomeErr, "读取失败工作流分片状态失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex))
+		}
+		switch outcome {
+		case "succeeded", "failed":
+			return true, nil
+		case workflowNodeOutcomeRerunPrepared:
+			return false, errors.Wrap(asynq.SkipRetry, "手工重跑期间工作流已再次失败")
+		default:
+			return false, errors.Wrap(asynq.SkipRetry, "工作流已失败，未执行分片转入归档")
+		}
+	}
+	outcome, err := m.redis.HGet(ctx, m.workflowNodeKey(meta.WorkflowID, meta.WorkflowNode), workflowNodeInstanceField(meta.ShardIndex)).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, errors.Join(ErrWorkflowDispatch, errors.Wrapf(err, "读取工作流分片终态失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex))
+	}
+	return outcome == "succeeded", nil
+}
+
+// applyWorkflowBusinessRetryLimit 按实际业务失败次数收口重试，编排补投失败不占用业务预算。
+func (m *Manager) applyWorkflowBusinessRetryLimit(ctx context.Context, task *asynq.Task, runErr error) error {
+	if runErr == nil || errors.Is(runErr, asynq.SkipRetry) || errors.Is(runErr, asynq.RevokeTask) {
+		return runErr
+	}
+	meta := workflowTaskMetaFromTask(task)
+	if meta.WorkflowID == "" || meta.WorkflowNode == "" {
+		return runErr
+	}
+	businessRetry := max(toInt(task.Headers()[headerBusinessRetry]), 0)
+	nodeKey := m.workflowNodeKey(meta.WorkflowID, meta.WorkflowNode)
+	failures, err := m.redis.HIncrBy(ctx, nodeKey, workflowNodeBusinessFailureField(meta.ShardIndex), 1).Result()
+	if err != nil {
+		return errors.Join(ErrWorkflowDispatch,
+			errors.Wrapf(err, "记录工作流分片业务失败次数失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex))
+	}
+	if failures > int64(businessRetry) {
+		return errors.Wrap(asynq.SkipRetry, runErr.Error())
+	}
+	return runErr
 }
 
 // markTaskSuccess 记录单个节点分片任务成功，并在达到预期实例数后推进 DAG。
@@ -378,11 +531,24 @@ func (m *Manager) markTaskSuccess(ctx context.Context, meta WorkflowTaskMeta) er
 	if meta.WorkflowID == "" || meta.WorkflowNode == "" {
 		return nil
 	}
-	// 单 key Lua 原子记录节点结果，并在重跑成功时修正失败计数。
-	_, err := recordNodeOutcomeScript.Run(ctx, m.redis, []string{
+	// 先原子记录业务成功结果；即使工作流被其它分片并发置为 failed，也必须保留本分片终态供手工重跑汇合。
+	result, err := recordNodeOutcomeScript.Run(ctx, m.redis, []string{
 		m.workflowNodeKey(meta.WorkflowID, meta.WorkflowNode),
-	}, workflowNodeInstanceField(meta.ShardIndex), m.workflowRetention().Milliseconds(), "succeeded").Result()
+	}, workflowNodeInstanceField(meta.ShardIndex), "succeeded").Int()
 	if err != nil {
+		return errors.Tag(err)
+	}
+	if result == -2 {
+		return nil
+	}
+	if result < 0 {
+		return errors.Errorf("记录工作流节点成功终态返回非法结果 workflow_id=%s node=%s shard=%d result=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex, result)
+	}
+	if err = m.redis.HDel(ctx, m.workflowNodeKey(meta.WorkflowID, meta.WorkflowNode), workflowNodeBusinessFailureField(meta.ShardIndex)).Err(); err != nil {
+		return errors.Wrapf(err, "清理工作流分片业务失败次数失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
+	}
+	failed, err := m.workflowFailed(ctx, meta.WorkflowID)
+	if err != nil || failed {
 		return errors.Tag(err)
 	}
 	def, err := m.workflowDefinition(meta.WorkflowName)
@@ -397,9 +563,6 @@ func (m *Manager) markTaskSuccess(ctx context.Context, meta WorkflowTaskMeta) er
 	if err != nil || !finished {
 		return errors.Tag(err)
 	}
-	if err = m.redis.Del(ctx, m.workflowFailedKey(meta.WorkflowID)).Err(); err != nil {
-		return errors.Wrapf(err, "清理工作流失败终态标记失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
-	}
 	return m.onNodeCompleted(ctx, def, spec, meta.WorkflowNode)
 }
 
@@ -411,12 +574,15 @@ func (m *Manager) markTaskFailure(ctx context.Context, meta WorkflowTaskMeta, er
 	}
 	result, setErr := recordNodeOutcomeScript.Run(ctx, m.redis, []string{
 		m.workflowNodeKey(meta.WorkflowID, meta.WorkflowNode),
-	}, workflowNodeInstanceField(meta.ShardIndex), m.workflowRetention().Milliseconds(), "failed").Result()
+	}, workflowNodeInstanceField(meta.ShardIndex), "failed").Int()
 	if setErr != nil {
 		return false, errors.Wrapf(setErr, "记录工作流节点失败终态失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
 	}
-	if toInt(result) <= 0 {
+	if result == -2 {
 		return false, nil
+	}
+	if result < 0 {
+		return false, errors.Errorf("记录工作流节点失败终态返回非法结果 workflow_id=%s node=%s shard=%d result=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex, result)
 	}
 	message := ""
 	if err != nil {
@@ -432,7 +598,7 @@ func (m *Manager) markTaskFailure(ctx context.Context, meta WorkflowTaskMeta, er
 	if failErr := m.failWorkflow(ctx, meta.WorkflowID, fmt.Sprintf("节点执行失败 node=%s shard=%d err=%s", meta.WorkflowNode, meta.ShardIndex, message)); failErr != nil {
 		return true, errors.Wrapf(failErr, "标记工作流失败失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
 	}
-	return true, nil
+	return result > 0, nil
 }
 
 // recordWorkflowTaskStats 保存单个节点分片的处理量快照，供工作流状态页按节点和分片聚合展示。
@@ -460,8 +626,8 @@ func (m *Manager) recordWorkflowTaskStats(ctx context.Context, meta WorkflowTask
 
 // onNodeCompleted 在节点全部完成后推进下游节点，并判断工作流是否整体结束。
 func (m *Manager) onNodeCompleted(ctx context.Context, def *WorkflowDefinition, spec WorkflowStartSpec, nodeName string) error {
-	finalized, err := m.redis.SetNX(ctx, m.workflowNodeFinalizedKey(spec.WorkflowID, nodeName), "1", m.workflowRetention()).Result()
-	if err != nil || !finalized {
+	failed, err := m.workflowFailed(ctx, spec.WorkflowID)
+	if err != nil || failed {
 		return errors.Tag(err)
 	}
 	nodeKey := m.workflowNodeKey(spec.WorkflowID, nodeName)
@@ -469,7 +635,7 @@ func (m *Manager) onNodeCompleted(ctx context.Context, def *WorkflowDefinition, 
 	if err != nil && err != redis.Nil {
 		return errors.Tag(err)
 	}
-	if nodeStatus != NodeStatusSkipped {
+	if nodeStatus != NodeStatusSkipped && nodeStatus != NodeStatusSuccess {
 		if err = m.updateWorkflowNode(ctx, spec.WorkflowID, nodeName, map[string]any{
 			"status":       NodeStatusSuccess,
 			"errorMessage": "",
@@ -491,6 +657,20 @@ func (m *Manager) onNodeCompleted(ctx context.Context, def *WorkflowDefinition, 
 		return m.completeWorkflow(ctx, spec.WorkflowID)
 	}
 	return nil
+}
+
+// workflowFailed 判断工作流是否已经进入不可逆失败终态。
+func (m *Manager) workflowFailed(ctx context.Context, workflowID string) (bool, error) {
+	status, err := m.redis.HGet(ctx, m.workflowMetaKey(workflowID), "status").Result()
+	if err != nil {
+		return false, errors.Wrapf(err, "读取工作流状态失败 workflow_id=%s", workflowID)
+	}
+	return status == WorkflowStatusFailed, nil
+}
+
+// workflowNodeTaskID 返回工作流分片稳定任务 ID，重复调度时只补齐缺失分片。
+func workflowNodeTaskID(workflowID, nodeName string, shardIndex int) string {
+	return workflowID + ":" + nodeName + ":" + strconv.Itoa(shardIndex)
 }
 
 // workflowAllCompleted 检查工作流中所有节点是否都已达到成功或跳过终态。
@@ -537,32 +717,196 @@ func (m *Manager) nodeReachedExpected(ctx context.Context, workflowID, nodeName 
 
 // completeWorkflow 把工作流整体标记为成功完成。
 func (m *Manager) completeWorkflow(ctx context.Context, workflowID string) error {
-	ok, err := m.redis.SetNX(ctx, m.workflowCompletedKey(workflowID), "1", m.workflowRetention()).Result()
-	if err != nil || !ok {
+	transition, err := m.transitionWorkflowStatus(ctx, workflowID, WorkflowStatusSuccess, "")
+	if err != nil || transition < 0 {
 		return errors.Tag(err)
 	}
-	return m.updateWorkflowMeta(ctx, workflowID, map[string]any{
-		"status":     WorkflowStatusSuccess,
-		"updatedAt":  time.Now().Format(time.RFC3339),
-		"finishedAt": time.Now().Format(time.RFC3339),
-	})
+	return m.expireWorkflowState(ctx, workflowID)
 }
 
 // failWorkflow 把工作流整体标记为失败，并记录错误摘要。
 func (m *Manager) failWorkflow(ctx context.Context, workflowID, message string) error {
-	ok, err := m.redis.SetNX(ctx, m.workflowFailedKey(workflowID), "1", m.workflowRetention()).Result()
-	if err != nil || !ok {
+	transition, err := m.transitionWorkflowStatus(ctx, workflowID, WorkflowStatusFailed, message)
+	if err != nil || transition < 0 {
 		return errors.Tag(err)
 	}
-	return m.updateWorkflowMeta(ctx, workflowID, map[string]any{
-		"status":       WorkflowStatusFailed,
-		"updatedAt":    time.Now().Format(time.RFC3339),
-		"finishedAt":   time.Now().Format(time.RFC3339),
-		"errorMessage": message,
-	})
+	return m.expireWorkflowState(ctx, workflowID)
 }
 
-// updateWorkflowMeta 局部更新工作流主记录，并刷新其过期时间。
+// failWorkflowDispatch 收口编排重试耗尽的实例，并仅释放仍由当前实例持有的唯一键。
+func (m *Manager) failWorkflowDispatch(ctx context.Context, task *asynq.Task, meta WorkflowTaskMeta, runErr error) error {
+	if strings.TrimSpace(meta.WorkflowID) == "" {
+		return nil
+	}
+	spec, err := m.workflowSpecByID(ctx, meta.WorkflowID)
+	if err == redis.Nil {
+		spec = workflowStartSpecFromTriggerTask(task)
+		spec.WorkflowID = meta.WorkflowID
+		if definition, definitionErr := m.workflowDefinition(spec.Name); definitionErr == nil {
+			if err = applyPeriodicScheduleUniqueKey(definition, &spec); err != nil {
+				return errors.Wrapf(err, "还原编排失败工作流唯一键失败 workflow_id=%s", meta.WorkflowID)
+			}
+		}
+	} else if err != nil {
+		return errors.Wrapf(err, "读取编排失败工作流参数失败 workflow_id=%s", meta.WorkflowID)
+	}
+	triggerSpec := workflowStartSpecFromTriggerTask(task)
+	if spec.Name == "" {
+		spec.Name = triggerSpec.Name
+	}
+	if spec.UniqueKey == "" {
+		spec.UniqueKey = triggerSpec.UniqueKey
+	}
+	exists, err := m.redis.Exists(ctx, m.workflowMetaKey(meta.WorkflowID)).Result()
+	if err != nil {
+		return errors.Wrapf(err, "检查编排失败工作流元数据失败 workflow_id=%s", meta.WorkflowID)
+	}
+	if exists > 0 {
+		status, statusErr := m.redis.HGet(ctx, m.workflowMetaKey(meta.WorkflowID), "status").Result()
+		if statusErr != nil {
+			return errors.Wrapf(statusErr, "读取编排失败工作流状态失败 workflow_id=%s", meta.WorkflowID)
+		}
+		if status == WorkflowStatusSuccess {
+			return nil
+		}
+		message := "工作流编排重试耗尽"
+		if runErr != nil {
+			message = runErr.Error()
+		}
+		if err = m.failWorkflow(ctx, meta.WorkflowID, message); err != nil {
+			return errors.Wrapf(err, "标记编排失败工作流终态失败 workflow_id=%s", meta.WorkflowID)
+		}
+		status, err = m.redis.HGet(ctx, m.workflowMetaKey(meta.WorkflowID), "status").Result()
+		if err != nil {
+			return errors.Wrapf(err, "确认编排失败工作流终态失败 workflow_id=%s", meta.WorkflowID)
+		}
+		if status != WorkflowStatusFailed {
+			return nil
+		}
+	}
+	if spec.Name != "" && spec.UniqueKey != "" {
+		if err = m.releaseWorkflowUniqueReservation(ctx, spec.Name, spec.UniqueKey, meta.WorkflowID); err != nil {
+			return errors.Wrapf(err, "释放编排失败工作流唯一键失败 workflow_id=%s", meta.WorkflowID)
+		}
+	}
+	return nil
+}
+
+// workflowStartSpecFromTriggerTask 从入口任务载荷提取唯一键等终态清理参数。
+func workflowStartSpecFromTriggerTask(task *asynq.Task) WorkflowStartSpec {
+	if task == nil || task.Type() != TypeWorkflowTrigger {
+		return WorkflowStartSpec{}
+	}
+	var payload WorkflowTriggerPayload
+	if json.Unmarshal(task.Payload(), &payload) != nil {
+		return WorkflowStartSpec{}
+	}
+	return WorkflowStartSpec{
+		WorkflowID:  payload.WorkflowID,
+		Name:        payload.WorkflowName,
+		Source:      payload.Source,
+		ScheduledAt: strings.TrimSpace(task.Headers()[HeaderScheduledAt]),
+		UniqueKey:   payload.UniqueKey,
+		UniqueTTL:   time.Duration(payload.UniqueTTLSeconds) * time.Second,
+	}
+}
+
+// transitionWorkflowStatus 原子写入工作流终态，返回 1 表示首次迁移、0 表示同终态重放、负数表示已处于相反终态。
+func (m *Manager) transitionWorkflowStatus(ctx context.Context, workflowID, status, message string) (int, error) {
+	now := time.Now().Format(time.RFC3339)
+	result, err := transitionWorkflowStatusScript.Run(ctx, m.redis, []string{m.workflowMetaKey(workflowID)},
+		status, now, message, taskCompletedRetention.Milliseconds()).Int()
+	if err != nil {
+		return 0, errors.Wrapf(err, "迁移工作流终态失败 workflow_id=%s status=%s", workflowID, status)
+	}
+	if result == -2 {
+		return result, errors.Errorf("工作流元数据不存在 workflow_id=%s", workflowID)
+	}
+	return result, nil
+}
+
+// workflowStateKeys 返回单个工作流实例的全部精确状态 key，不使用通配扫描。
+func (m *Manager) workflowStateKeys(ctx context.Context, workflowID string) ([]string, error) {
+	nodeNames, err := m.redis.SMembers(ctx, m.workflowNodesKey(workflowID)).Result()
+	if err != nil {
+		return nil, errors.Wrapf(err, "读取工作流节点集合失败 workflow_id=%s", workflowID)
+	}
+	keys := []string{m.workflowMetaKey(workflowID), m.workflowNodesKey(workflowID)}
+	for _, nodeName := range nodeNames {
+		keys = append(keys, m.workflowNodeKey(workflowID, nodeName))
+	}
+	return keys, nil
+}
+
+// expireWorkflowState 在实例进入终态后为全部精确状态 key 设置统一保留时间。
+func (m *Manager) expireWorkflowState(ctx context.Context, workflowID string) error {
+	keys, err := m.workflowStateKeys(ctx, workflowID)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	for _, key := range keys {
+		if err = m.redis.Expire(ctx, key, taskCompletedRetention).Err(); err != nil {
+			return errors.Wrapf(err, "设置工作流终态保留时间失败 workflow_id=%s key=%s", workflowID, key)
+		}
+	}
+	return nil
+}
+
+// persistWorkflowState 在手工重开时清除全部精确状态 key 的终态 TTL。
+func (m *Manager) persistWorkflowState(ctx context.Context, workflowID string) error {
+	keys, err := m.workflowStateKeys(ctx, workflowID)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	for _, key := range keys {
+		if err = m.redis.Persist(ctx, key).Err(); err != nil {
+			return errors.Wrapf(err, "清除运行态工作流过期时间失败 workflow_id=%s key=%s", workflowID, key)
+		}
+	}
+	return nil
+}
+
+// persistWorkflowManualRerunState 清除运行态 TTL，并在并发终态覆盖时恢复统一保留时间。
+func (m *Manager) persistWorkflowManualRerunState(ctx context.Context, workflowID string) error {
+	if err := m.persistWorkflowState(ctx, workflowID); err != nil {
+		return errors.Join(err, m.restoreWorkflowTerminalRetention(ctx, workflowID))
+	}
+	values, err := m.redis.HMGet(ctx, m.workflowMetaKey(workflowID), "status", "manualRerun").Result()
+	if err != nil {
+		return errors.Wrapf(err, "确认手工重跑工作流状态失败 workflow_id=%s", workflowID)
+	}
+	status, _ := values[0].(string)
+	manualRerun, _ := values[1].(string)
+	status = strings.TrimSpace(status)
+	manualRerun = strings.TrimSpace(manualRerun)
+	if status == WorkflowStatusSuccess || status == WorkflowStatusFailed {
+		return errors.Join(
+			errors.Errorf("手工重跑期间工作流已进入终态 workflow_id=%s status=%s", workflowID, status),
+			m.expireWorkflowState(ctx, workflowID),
+		)
+	}
+	if status != WorkflowStatusRunning || manualRerun != "1" {
+		return errors.Errorf("手工重跑工作流状态无效 workflow_id=%s status=%s manual_rerun=%s", workflowID, status, manualRerun)
+	}
+	return nil
+}
+
+// restoreWorkflowTerminalRetention 在并发手工重跑错误路径恢复终态 key 的统一保留时间。
+func (m *Manager) restoreWorkflowTerminalRetention(ctx context.Context, workflowID string) error {
+	status, err := m.redis.HGet(ctx, m.workflowMetaKey(workflowID), "status").Result()
+	if err == redis.Nil {
+		return nil
+	}
+	if err != nil {
+		return errors.Wrapf(err, "读取并发工作流终态失败 workflow_id=%s", workflowID)
+	}
+	if status != WorkflowStatusSuccess && status != WorkflowStatusFailed {
+		return nil
+	}
+	return m.expireWorkflowState(ctx, workflowID)
+}
+
+// updateWorkflowMeta 局部更新运行态工作流主记录。
 func (m *Manager) updateWorkflowMeta(ctx context.Context, workflowID string, values map[string]any) error {
 	if len(values) == 0 {
 		return nil
@@ -571,10 +915,10 @@ func (m *Manager) updateWorkflowMeta(ctx context.Context, workflowID string, val
 	if err := m.redis.HSet(ctx, m.workflowMetaKey(workflowID), values).Err(); err != nil {
 		return errors.Tag(err)
 	}
-	return errors.Tag(m.redis.Expire(ctx, m.workflowMetaKey(workflowID), m.workflowRetention()).Err())
+	return nil
 }
 
-// updateWorkflowNode 局部更新单个节点状态记录，并刷新其过期时间。
+// updateWorkflowNode 局部更新运行态节点状态。
 func (m *Manager) updateWorkflowNode(ctx context.Context, workflowID, nodeName string, values map[string]any) error {
 	if len(values) == 0 {
 		return nil
@@ -582,7 +926,7 @@ func (m *Manager) updateWorkflowNode(ctx context.Context, workflowID, nodeName s
 	if err := m.redis.HSet(ctx, m.workflowNodeKey(workflowID, nodeName), values).Err(); err != nil {
 		return errors.Tag(err)
 	}
-	return errors.Tag(m.redis.Expire(ctx, m.workflowNodeKey(workflowID, nodeName), m.workflowRetention()).Err())
+	return nil
 }
 
 // workflowDefinition 按名称读取已注册的工作流定义。
@@ -726,6 +1070,11 @@ func effectiveRetry(node *WorkflowNodeDefinition, spec WorkflowStartSpec) int {
 		return node.MaxRetry
 	}
 	return 0
+}
+
+// workflowTaskRetryBudget 在业务重试之外预留固定编排重试，避免投递故障挤占业务预算。
+func workflowTaskRetryBudget(businessRetry int) int {
+	return max(businessRetry, 0) + workflowRepairRetryCount
 }
 
 // effectiveTimeout 返回节点本次实际生效的超时时间。
@@ -948,6 +1297,8 @@ func workflowShardStatus(raw string, hasTrace bool) string {
 		return NodeStatusSkipped
 	case NodeStatusRunning:
 		return NodeStatusRunning
+	case workflowNodeOutcomeRerunPrepared:
+		return NodeStatusRunning
 	case NodeStatusPending:
 		return NodeStatusPending
 	}
@@ -991,6 +1342,11 @@ func (m *Manager) workflowSpecByID(ctx context.Context, workflowID string) (Work
 		GrayPercent:  toInt(metaMap["grayPercent"]),
 		Source:       metaMap["source"],
 		PeriodicName: metaMap["periodicName"],
+		ScheduledAt:  metaMap["scheduledAt"],
+		UniqueKey:    metaMap["uniqueKey"],
+	}
+	if uniqueTTLSeconds := toInt(metaMap["uniqueTTLSeconds"]); uniqueTTLSeconds > 0 {
+		spec.UniqueTTL = time.Duration(uniqueTTLSeconds) * time.Second
 	}
 	if rawRetry, ok := metaMap["retryOverride"]; ok {
 		retry := toInt(rawRetry)
@@ -1042,7 +1398,7 @@ func (m *Manager) workflowMetadataComplete(ctx context.Context, workflowID strin
 }
 
 // cleanupIncompleteWorkflowMetadata 清理半初始化工作流元数据。
-// 删除操作逐 key 执行，避免 Redis Cluster 多 key DEL 跨 slot；所有 key 都有 TTL，这里只是加速恢复。
+// 删除操作逐 key 执行，避免 Redis Cluster 多 key DEL 跨 slot。
 func (m *Manager) cleanupIncompleteWorkflowMetadata(ctx context.Context, workflowID string, def *WorkflowDefinition) error {
 	if m == nil || def == nil || strings.TrimSpace(workflowID) == "" {
 		return nil
@@ -1050,14 +1406,10 @@ func (m *Manager) cleanupIncompleteWorkflowMetadata(ctx context.Context, workflo
 	keys := []string{
 		m.workflowMetaKey(workflowID),
 		m.workflowNodesKey(workflowID),
-		m.workflowCompletedKey(workflowID),
-		m.workflowFailedKey(workflowID),
 	}
 	for _, nodeName := range sortedNodeNames(def) {
 		keys = append(keys,
 			m.workflowNodeKey(workflowID, nodeName),
-			m.workflowNodeScheduledKey(workflowID, nodeName),
-			m.workflowNodeFinalizedKey(workflowID, nodeName),
 		)
 	}
 	for _, key := range keys {
@@ -1088,18 +1440,15 @@ func (m *Manager) ensureWorkflowUnique(ctx context.Context, name, key, workflowI
 	if m == nil || strings.TrimSpace(name) == "" || strings.TrimSpace(key) == "" || strings.TrimSpace(workflowID) == "" || ttl <= 0 {
 		return true, nil
 	}
-	lockKey := m.workflowUniqueKey(name, key)
-	currentID, err := m.redis.Get(ctx, lockKey).Result()
-	switch {
-	case err == nil:
-		if currentID != workflowID {
-			return false, nil
-		}
-		return true, errors.Tag(m.redis.Expire(ctx, lockKey, ttl).Err())
-	case err != redis.Nil:
-		return false, errors.Tag(err)
+	ttlMilliseconds := ttl.Milliseconds()
+	if ttlMilliseconds <= 0 {
+		return false, errors.Errorf("工作流唯一键 TTL 必须不少于 1 毫秒")
 	}
-	return m.reserveWorkflowUnique(ctx, name, key, workflowID, ttl)
+	result, err := ensureWorkflowUniqueScript.Run(ctx, m.redis, []string{m.workflowUniqueKey(name, key)}, workflowID, ttlMilliseconds).Int()
+	if err != nil {
+		return false, errors.Wrap(err, "确认工作流唯一键失败")
+	}
+	return result == 1, nil
 }
 
 // releaseWorkflowUniqueReservation 释放本次触发流程预占的唯一键记录。

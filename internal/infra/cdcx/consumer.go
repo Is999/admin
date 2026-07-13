@@ -42,8 +42,9 @@ func (fn ProcessorFunc) ProcessCDC(ctx context.Context, event Event) error {
 
 // Consumer 负责订阅 Debezium Topic 并分发表级处理器。
 type Consumer struct {
-	cfg        config.CDCConfig     // CDC 消费配置
-	processors map[string]Processor // db.table 到处理器的映射
+	cfg           config.CDCConfig     // CDC 消费配置
+	processors    map[string]Processor // db.table 到处理器的映射
+	metadataProbe topicMetadataProbe   // Kafka Topic 元数据只读探针
 
 	mu         sync.RWMutex          // 保护 processors、attempts 和状态快照
 	attempts   map[string]int        // 位点失败次数
@@ -60,6 +61,41 @@ type Consumer struct {
 type messageWriter interface {
 	WriteMessages(context.Context, ...kafka.Message) error
 	Close() error
+}
+
+// topicMetadataProbe 只读校验 Kafka Topic 元数据，不在 readiness 中写测试消息。
+type topicMetadataProbe interface {
+	Check(context.Context, []string, string) error
+}
+
+// kafkaTopicMetadataProbe 使用 Kafka 元数据接口校验 Topic 是否存在且包含分区。
+type kafkaTopicMetadataProbe struct {
+	dialer *kafka.Dialer // Kafka 元数据连接器
+}
+
+// Check 依次尝试可用 broker，任一返回目标 Topic 分区即视为成功。
+func (p kafkaTopicMetadataProbe) Check(ctx context.Context, brokers []string, topic string) error {
+	if p.dialer == nil {
+		return errors.New("CDC Kafka 元数据探针未初始化")
+	}
+	var lastErr error
+	for _, broker := range brokers {
+		partitions, err := p.dialer.LookupPartitions(ctx, "tcp", broker, topic)
+		if err == nil && len(partitions) > 0 {
+			return nil
+		}
+		if err == nil {
+			err = errors.Errorf("CDC Topic不存在或无分区 topic=%s", topic)
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.Errorf("CDC Kafka broker为空 topic=%s", topic)
+	}
+	return errors.Tag(lastErr)
 }
 
 // New 创建 CDC 消费器。
@@ -93,10 +129,11 @@ func New(cfg config.CDCConfig) (*Consumer, error) {
 	cfg.Brokers = normalizeStrings(cfg.Brokers)
 	cfg.Topics = normalizeTopics(cfg.Topics)
 	return &Consumer{
-		cfg:        cfg,
-		processors: make(map[string]Processor),
-		attempts:   make(map[string]int),
-		topicStats: make(map[string]TopicStats),
+		cfg:           cfg,
+		processors:    make(map[string]Processor),
+		metadataProbe: kafkaTopicMetadataProbe{dialer: &kafka.Dialer{Timeout: time.Second}},
+		attempts:      make(map[string]int),
+		topicStats:    make(map[string]TopicStats),
 	}, nil
 }
 
@@ -156,6 +193,56 @@ func (c *Consumer) RegisteredTables() []string {
 	return tables
 }
 
+// Ready 检查 CDC 处理器、后台运行态和已启用 Kafka Topic 的元数据连通性。
+func (c *Consumer) Ready(ctx context.Context, requireWorker bool) error {
+	if c == nil {
+		return errors.New("CDC consumer 未初始化")
+	}
+	if !c.cfg.Enabled {
+		return nil
+	}
+	if err := c.ValidateProcessors(); err != nil {
+		return errors.Tag(err)
+	}
+	if requireWorker && !c.Snapshot().Running {
+		return errors.New("CDC consumer 未运行")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c.metadataProbe == nil {
+		return errors.New("CDC Kafka 元数据探针未初始化")
+	}
+	for _, topic := range c.readinessTopics() {
+		if err := c.metadataProbe.Check(ctx, c.cfg.Brokers, topic); err != nil {
+			return errors.Wrapf(err, "CDC Kafka Topic不可用 topic=%s", topic)
+		}
+	}
+	return nil
+}
+
+// readinessTopics 返回所有启用源 Topic 和死信 Topic，去重后稳定排序。
+func (c *Consumer) readinessTopics() []string {
+	if c == nil {
+		return nil
+	}
+	unique := make(map[string]struct{}, len(c.cfg.Topics)+1)
+	for _, topic := range c.cfg.Topics {
+		if topic.Enabled && strings.TrimSpace(topic.Topic) != "" {
+			unique[strings.TrimSpace(topic.Topic)] = struct{}{}
+		}
+	}
+	if topic := strings.TrimSpace(c.cfg.DeadLetterTopic); topic != "" {
+		unique[topic] = struct{}{}
+	}
+	topics := make([]string, 0, len(unique))
+	for topic := range unique {
+		topics = append(topics, topic)
+	}
+	sort.Strings(topics)
+	return topics
+}
+
 // RegisterProcessorFunc 注册函数式表级 CDC 处理器。
 func (c *Consumer) RegisterProcessorFunc(table string, fn ProcessorFunc) error {
 	if fn == nil {
@@ -208,8 +295,19 @@ func (c *Consumer) Stop(ctx context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
+	var firstErr error
+	recordErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = errors.Tag(err)
+		}
+	}
+	readerClosers := make([]func() error, 0, len(c.readers))
 	for _, reader := range c.readers {
-		_ = reader.Close()
+		readerClosers = append(readerClosers, reader.Close)
+	}
+	recordErr(closeAllWithContext(ctx, readerClosers))
+	if ctx.Err() != nil {
+		return errors.Tag(firstErr)
 	}
 	done := make(chan struct{})
 	go func() {
@@ -219,13 +317,47 @@ func (c *Consumer) Stop(ctx context.Context) error {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		return errors.Tag(ctx.Err())
+		recordErr(errors.Wrap(ctx.Err(), "等待 CDC 消费协程退出超时"))
+		return errors.Tag(firstErr)
 	}
 	if c.deadWriter != nil {
-		_ = c.deadWriter.Close()
+		recordErr(closeAllWithContext(ctx, []func() error{c.deadWriter.Close}))
 	}
 	c.markStopped()
-	return nil
+	return errors.Tag(firstErr)
+}
+
+// closeAllWithContext 并发关闭彼此独立的 Kafka 资源，并受应用停止期限约束。
+func closeAllWithContext(ctx context.Context, closeFns []func() error) error {
+	if len(closeFns) == 0 {
+		return nil
+	}
+	errs := make(chan error, len(closeFns))
+	var wg sync.WaitGroup
+	wg.Add(len(closeFns))
+	for _, closeFn := range closeFns {
+		go func() {
+			defer wg.Done()
+			errs <- closeFn()
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				return errors.Tag(err)
+			}
+		}
+		return nil
+	case <-ctx.Done():
+		return errors.Tag(ctx.Err())
+	}
 }
 
 // runTopic 持续消费单个 Topic，处理成功后才提交 offset。
@@ -259,13 +391,28 @@ func (c *Consumer) runTopic(rule config.CDCTopicConfig, reader *kafka.Reader) {
 		if !c.processFetchedMessage(rule, msg) {
 			return
 		}
-		if err = reader.CommitMessages(c.ctx, msg); err != nil {
+		if !c.commitFetchedMessage(msg, reader.CommitMessages) {
+			return
+		}
+	}
+}
+
+// commitFetchedMessage 原位重试当前消息位点，禁止后续高位点掩盖提交失败。
+func (c *Consumer) commitFetchedMessage(msg kafka.Message, commit func(context.Context, ...kafka.Message) error) bool {
+	for {
+		if c.ctx == nil || c.ctx.Err() != nil {
+			return false
+		}
+		if err := commit(c.ctx, msg); err == nil {
+			return true
+		} else {
 			loggerx.Errorw(c.ctx, "CDC 提交 Kafka offset 失败", err,
 				logx.Field("topic", msg.Topic),
 				logx.Field("partition", msg.Partition),
 				logx.Field("offset", msg.Offset),
 			)
 		}
+		c.sleepAfterFailure()
 	}
 }
 

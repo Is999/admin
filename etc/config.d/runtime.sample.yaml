@@ -95,8 +95,8 @@ task_periodic:
     workflow: "user_tag.delta.refresh"
     # 投递队列名。
     queue: "maintenance"
-    # 目标列表；增量默认为空。
-    targets: [ ]
+    # 骨架阶段固定传 dry_run=1，业务计算实现前不得移除。
+    targets: ["dry_run=1"]
     # 分片总数；与数据量和处理吞吐匹配，默认单分片。
     shard_total: 1
     # 失败自动重试次数。
@@ -150,7 +150,7 @@ task_periodic:
   - name: "task-report-daily-summary"
     # 是否启用该任务；发送前仍受 alert.lark.enabled 控制。
     enabled: true
-    # 默认每天 10 点发送；改调度时间后，统计窗口会随执行时间向前回看 24 小时。
+    # 默认每天 10 点发送；改调度时间后，统计窗口以计划触发时间为终点回看 24 小时。
     cron: "0 10 * * *"
     # 触发的工作流名称。
     workflow: "task_report.daily_summary"

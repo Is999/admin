@@ -3,6 +3,7 @@ package admin
 import (
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
+	filelogic "admin/internal/logic/file"
 	securitylogic "admin/internal/logic/security"
 	"context"
 	"strings"
@@ -69,6 +70,12 @@ func (l *AdminBootstrapLogic) InitAdminBootstrap(req *types.InitAdminBootstrapRe
 		Status:            admin.Status,
 		Operation:         adminBootstrapOperationReset,
 	}
+	if err := l.finalizeBootstrapAdminRuntime(admin.ID); err != nil {
+		resp.SyncPending = true
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.Success, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminBootstrapLogic.InitAdminBootstrap 超级管理员账号[%s]ID[%d]安全缓存失效失败", req.Username, admin.ID).
+			WithData(resp)
+	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeySuccess).
 		WithData(resp)
@@ -91,12 +98,17 @@ func (l *AdminBootstrapLogic) resetExistingSuperAdmin(req *types.InitAdminBootst
 		if existing == nil {
 			return gorm.ErrRecordNotFound
 		}
-		isSuperAdmin, checkErr := l.bootstrapTargetIsSuperAdmin(existing.ID)
+		isSuperAdmin, checkErr := bootstrapTargetIsSuperAdminTx(tx, existing.ID)
 		if checkErr != nil {
 			return errors.Wrapf(checkErr, "AdminBootstrapLogic.resetExistingSuperAdmin 校验账号[%s]超级管理员角色失败", req.Username)
 		}
 		if !isSuperAdmin {
 			return errAdminBootstrapTargetNotSuperAdmin
+		}
+		// 重置可能替换托管头像，先投递引用复查型清理任务；事务失败时旧引用会阻止删除。
+		if err := filelogic.NewFileTransferLogicWithContext(l.Ctx, l.Svc).
+			ScheduleReplacedAdminAvatarCleanup(existing.Avatar, chooseBootstrapString(req.Avatar, existing.Avatar)); err != nil {
+			return errors.Wrapf(err, "投递超级管理员账号[%s]旧头像清理任务失败", req.Username)
 		}
 
 		resetAdmin, resetErr := l.resetBootstrapAdminTx(tx, existing, req)
@@ -113,11 +125,27 @@ func (l *AdminBootstrapLogic) resetExistingSuperAdmin(req *types.InitAdminBootst
 		return nil, errors.Errorf("AdminBootstrapLogic.resetExistingSuperAdmin 未生成管理员结果")
 	}
 
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, admin.ID)
-	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
-	_ = securityLogic.ClearLoginMFACompleted(admin.ID)
-	l.clearAdminMFATwoStepTickets(admin.ID)
 	return admin, nil
+}
+
+// finalizeBootstrapAdminRuntime 清理已重置管理员的会话、权限缓存和 MFA 票据。
+func (l *AdminBootstrapLogic) finalizeBootstrapAdminRuntime(adminID int) error {
+	var firstErr error
+	recordFailure := func(err error, message string) {
+		if err == nil {
+			return
+		}
+		corelogic.LogWrappedError(l.Logger, err, "%s admin_id=%d", message, adminID)
+		if firstErr == nil {
+			firstErr = errors.Wrapf(err, "%s admin_id=%d", message, adminID)
+		}
+	}
+
+	recordFailure(cachelogic.InvalidateAdminRelationCache(l.BaseLogic, adminID), "重置超级管理员后失效登录态和权限缓存失败")
+	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
+	recordFailure(securityLogic.ClearLoginMFACompleted(adminID), "重置超级管理员后清理登录 MFA 标记失败")
+	recordFailure(securityLogic.ClearAdminMFATwoStepTickets(adminID), "重置超级管理员后清理 MFA 二次票据失败")
+	return errors.Tag(firstErr)
 }
 
 // resetBootstrapAdminTx 在事务内把既有超级管理员重置为首次登录前状态，不修改角色关系。
@@ -126,7 +154,7 @@ func (l *AdminBootstrapLogic) resetBootstrapAdminTx(tx *gorm.DB, admin *model.Ad
 		return nil, errors.Errorf("管理员不存在")
 	}
 
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(admin.PasswordWithSalt(strings.TrimSpace(req.Password))), bcrypt.DefaultCost)
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(req.Password)), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, errors.Wrapf(err, "AdminBootstrapLogic.resetBootstrapAdminTx 生成账号[%s]密码哈希失败", req.Username)
 	}
@@ -168,25 +196,27 @@ func (l *AdminBootstrapLogic) resetBootstrapAdminTx(tx *gorm.DB, admin *model.Ad
 	return admin, nil
 }
 
-// bootstrapTargetIsSuperAdmin 判断目标管理员当前是否已拥有超级管理员角色。
-func (l *AdminBootstrapLogic) bootstrapTargetIsSuperAdmin(adminID int) (bool, error) {
-	roleIDs, err := securitylogic.NewSecurityLogic(l.Ctx, l.Svc).EnabledRoleIDs(adminID)
+// bootstrapTargetIsSuperAdminTx 在当前写事务内校验目标账号仍绑定启用的超级管理员角色。
+func bootstrapTargetIsSuperAdminTx(tx *gorm.DB, adminID int) (bool, error) {
+	if tx == nil || adminID <= 0 {
+		return false, nil
+	}
+	var row struct {
+		RoleID int `gorm:"column:role_id"` // 超级管理员角色 ID
+	}
+	// admin_role_rel 的联合主键从 user_id 起始，admin_role 使用主键 id；该查询最多读取一行。
+	err := tx.Table(model.TableNameAdminRoleRel+" AS rel").
+		Select("rel.role_id").
+		Joins("JOIN "+model.TableNameAdminRole+" AS role ON role.id = rel.role_id").
+		Where("rel.user_id = ? AND rel.role_id = ? AND role.status = 1 AND role.is_delete = 0", adminID, corelogic.AdminSuperRoleID).
+		Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
 	if err != nil {
 		return false, errors.Tag(err)
 	}
-	for _, roleID := range roleIDs {
-		if roleID == corelogic.AdminSuperRoleID {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// clearAdminMFATwoStepTickets 清理管理员历史 MFA 二次票据，避免未过期票据影响首次上线初始化后的状态。
-func (l *AdminBootstrapLogic) clearAdminMFATwoStepTickets(adminID int) {
-	if err := securitylogic.NewSecurityLogic(l.Ctx, l.Svc).ClearAdminMFATwoStepTickets(adminID); err != nil {
-		corelogic.LogWrappedError(l.Logger, err, "AdminBootstrapLogic.clearAdminMFATwoStepTickets 清理管理员ID[%d]MFA二次票据失败", adminID)
-	}
+	return row.RoleID == corelogic.AdminSuperRoleID, nil
 }
 
 // chooseBootstrapString 在内网初始化时优先采用显式传入的新值，否则保留既有字段值。

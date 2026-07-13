@@ -1,7 +1,7 @@
 package config
 
 import (
-	cachelogic "admin/internal/logic/cache"
+	corelogic "admin/internal/logic"
 	"admin/internal/svc"
 	"context"
 	"encoding/json"
@@ -22,6 +22,7 @@ import (
 	"admin/internal/model"
 	"admin/internal/types"
 	pkgexcel "admin/pkg/excel"
+	"admin/pkg/transfer"
 
 	"gorm.io/gorm"
 )
@@ -87,7 +88,7 @@ func (l *SysConfigLogic) ExportExcel(req *types.SysConfigExcelExportReq) (string
 // ImportExcel 从已上传的 Excel 文件导入字典配置。
 func (l *SysConfigLogic) ImportExcel(req *types.SysConfigExcelImportReq) *types.BizResult {
 	fileTransferLogic := filelogic.NewFileTransferLogicWithContext(l.Ctx, l.Svc)
-	importFilePath, cleanup, err := l.resolveImportExcelFile(req, fileTransferLogic)
+	importFilePath, importSession, cleanup, err := l.resolveImportExcelFile(req, fileTransferLogic)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -125,53 +126,67 @@ func (l *SysConfigLogic) ImportExcel(req *types.SysConfigExcelImportReq) *types.
 		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 			"SysConfigLogic.ImportExcel 导入字典配置失败").ToBizResult()
 	}
+	if cleanupErr := fileTransferLogic.DeleteImportedObject(importSession); cleanupErr != nil {
+		// 数据库导入已经提交，删除失败交给上传时预投递的延迟任务重试，不能把成功导入误报为失败。
+		corelogic.LogWrappedError(l.Logger, cleanupErr,
+			"SysConfigLogic.ImportExcel 删除已消费上传对象失败 upload_id=%s", importSession.UploadID)
+	}
+	var cacheErr error
 	for uuid := range changedUUIDs {
-		_ = l.RdsDelKeys(cachelogic.TableCachePhysicalKeys(l.BaseLogic, fmt.Sprintf(keys.SysConfigUUID, uuid))...)
-		_ = l.RenewByUUID(uuid)
+		if err := l.RenewByUUID(uuid); err != nil && cacheErr == nil {
+			cacheErr = errors.Wrapf(err, "刷新配置UUID[%s]缓存失败", uuid)
+		}
+	}
+	if cacheErr != nil {
+		result.SyncPending = true
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, cacheErr,
+			"SysConfigLogic.ImportExcel 批量配置缓存同步失败").WithData(result)
 	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess).
 		WithData(result)
 }
 
-// resolveImportExcelFile 解析导入 Excel 文件。
-func (l *SysConfigLogic) resolveImportExcelFile(req *types.SysConfigExcelImportReq, fileTransferLogic *filelogic.FileTransferLogic) (string, func(), error) {
+// resolveImportExcelFile 解析导入 Excel 文件，并返回已校验的上传会话供成功后删除源对象。
+func (l *SysConfigLogic) resolveImportExcelFile(req *types.SysConfigExcelImportReq, fileTransferLogic *filelogic.FileTransferLogic) (string, *transfer.UploadSession, func(), error) {
 	if req == nil {
-		return "", nil, errors.Errorf("导入请求不能为空")
+		return "", nil, nil, errors.Errorf("导入请求不能为空")
 	}
 	if strings.TrimSpace(req.UploadID) != "" {
 		session, err := fileTransferLogic.GetSession(req.UploadID)
 		if err != nil {
-			return "", nil, errors.Wrapf(err, "读取导入文件会话[%s]失败", req.UploadID)
+			return "", nil, nil, errors.Wrapf(err, "读取导入文件会话[%s]失败", req.UploadID)
 		}
 		if err := fileTransferLogic.EnsureSessionOwner(session); err != nil {
-			return "", nil, errors.Tag(err)
+			return "", nil, nil, errors.Tag(err)
 		}
 		if !fileTransferLogic.IsCompletedSession(session) {
-			return "", nil, errors.Errorf("导入文件尚未上传完成")
+			return "", nil, nil, errors.Errorf("导入文件尚未上传完成")
 		}
 		if strings.TrimSpace(session.BizType) != filelogic.FileTransferBizSysConfigExcelImport {
-			return "", nil, errors.Errorf("导入文件业务类型不合法")
+			return "", nil, nil, errors.Errorf("导入文件业务类型不合法")
 		}
-		return fileTransferLogic.MaterializeSessionObject(session)
+		filePath, cleanup, err := fileTransferLogic.MaterializeSessionObject(session)
+		return filePath, session, cleanup, errors.Tag(err)
 	}
 	if strings.TrimSpace(req.FileURL) == "" {
-		return "", nil, errors.Errorf("导入文件地址不能为空")
+		return "", nil, nil, errors.Errorf("导入文件地址不能为空")
 	}
 	session, err := fileTransferLogic.ResolveManagedSessionByFileURL(req.FileURL)
 	if err != nil {
-		return "", nil, errors.Wrap(err, "根据文件地址反查上传会话失败")
+		return "", nil, nil, errors.Wrap(err, "根据文件地址反查上传会话失败")
 	}
 	if err := fileTransferLogic.EnsureSessionOwner(session); err != nil {
-		return "", nil, errors.Tag(err)
+		return "", nil, nil, errors.Tag(err)
 	}
 	if !fileTransferLogic.IsCompletedSession(session) {
-		return "", nil, errors.Errorf("导入文件尚未上传完成")
+		return "", nil, nil, errors.Errorf("导入文件尚未上传完成")
 	}
 	if strings.TrimSpace(session.BizType) != filelogic.FileTransferBizSysConfigExcelImport {
-		return "", nil, errors.Errorf("导入文件业务类型不合法")
+		return "", nil, nil, errors.Errorf("导入文件业务类型不合法")
 	}
-	return fileTransferLogic.MaterializeSessionObject(session)
+	filePath, cleanup, err := fileTransferLogic.MaterializeSessionObject(session)
+	return filePath, session, cleanup, errors.Tag(err)
 }
 
 // querySysConfigExportPage 查询字典配置导出分页数据。

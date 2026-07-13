@@ -111,15 +111,15 @@ func DownloadUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 // AccessUploadedFileHandler 公开访问允许匿名预览的上传文件。
 func AccessUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req types.FileUploadStatusReq
+		var req types.FilePublicAccessReq
 		if err := httpx.Parse(r, &req); err != nil {
 			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
 		logicObj := filelogic.NewFileTransferLogic(r, sCtx)
-		session, err := logicObj.PreparePublicAccess(req.UploadID)
+		session, err := logicObj.PreparePublicAccess(req.ObjectKey)
 		if err != nil {
-			resp := buildFileTransferAccessResp(err, "AccessUploadedFileHandler 访问上传会话失败")
+			resp := buildFileTransferAccessResp(err, "AccessUploadedFileHandler 访问公开对象失败")
 			resp.WithReq(&req)
 			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 			return
@@ -127,7 +127,7 @@ func AccessUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 		objectStream, err := logicObj.OpenSessionObject(session, r.Header.Get("Range"))
 		if err != nil {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
-				"AccessUploadedFileHandler 打开上传会话[%s]对象失败", req.UploadID).ToBizResult()
+				"AccessUploadedFileHandler 打开公开对象[%s]失败", req.ObjectKey).ToBizResult()
 			resp.WithReq(&req)
 			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 			return
@@ -145,7 +145,7 @@ func AccessUploadedFileHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			objectStream.ContentRange,
 		); err != nil {
 			resp := types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
-				"AccessUploadedFileHandler 输出上传会话[%s]文件失败", req.UploadID).ToBizResult()
+				"AccessUploadedFileHandler 输出公开对象[%s]失败", req.ObjectKey).ToBizResult()
 			resp.WithReq(&req)
 			shared.WriteBizResponse(w, r, logicObj, resp, nil)
 		}

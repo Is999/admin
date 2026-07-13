@@ -82,15 +82,30 @@ func (m *Manager) notifyTaskRuntimeAlert(ctx context.Context, alert TaskRuntimeA
 		ctx = context.Background()
 	}
 	fields := taskRuntimeAlertLogFields(alert)
+	hookFailed := false
 	for _, hook := range hooks {
 		if hook == nil {
 			continue
 		}
 		hookCtx, cancel := m.taskFinalWriteContext(ctx)
 		if err := hook(hookCtx, alert); err != nil {
+			hookFailed = true
 			loggerx.Errorw(hookCtx, "任务运行异常告警钩子执行失败", err, fields...)
 		}
 		cancel()
+	}
+	if hookFailed {
+		m.mu.Lock()
+		current := m.runtimeAlertedMap[key]
+		if current.LastSentAt.Equal(now) {
+			state.SuppressedCount += current.SuppressedCount
+			if state.LastSentAt.IsZero() && state.SuppressedCount == 0 {
+				delete(m.runtimeAlertedMap, key)
+			} else {
+				m.runtimeAlertedMap[key] = state
+			}
+		}
+		m.mu.Unlock()
 	}
 }
 

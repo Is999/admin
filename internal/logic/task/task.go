@@ -21,15 +21,16 @@ import (
 )
 
 const (
-	taskStatePending     = "pending"     // 待执行任务状态，表示任务已入队等待 Worker 消费
-	taskStateActive      = "active"      // 执行中任务状态，表示任务已被 Worker 领取
-	taskStateScheduled   = "scheduled"   // 定时任务状态，表示任务将在指定时间进入待执行队列
-	taskStateRetry       = "retry"       // 重试任务状态，表示任务失败后等待下一次自动重试
-	taskStateArchived    = "archived"    // 归档任务状态，表示任务已终止自动重试，通常需要人工补偿
-	taskStateCompleted   = "completed"   // 已完成任务状态，表示任务成功执行且处于保留窗口内
-	taskStateAggregating = "aggregating" // 聚合中任务状态，表示任务等待同组聚合后再执行
-	taskListScanPageSize = 100           // 任务列表多状态聚合的单页扫描大小
-	taskListScanMaxPages = 50            // 任务列表多状态聚合最大扫描页数，避免宽范围查询拖慢接口
+	taskStatePending     = "pending"                                   // 待执行任务状态，表示任务已入队等待 Worker 消费
+	taskStateActive      = "active"                                    // 执行中任务状态，表示任务已被 Worker 领取
+	taskStateScheduled   = "scheduled"                                 // 定时任务状态，表示任务将在指定时间进入待执行队列
+	taskStateRetry       = "retry"                                     // 重试任务状态，表示任务失败后等待下一次自动重试
+	taskStateArchived    = "archived"                                  // 归档任务状态，表示任务已终止自动重试，通常需要人工补偿
+	taskStateCompleted   = "completed"                                 // 已完成任务状态，表示任务成功执行且处于保留窗口内
+	taskStateAggregating = "aggregating"                               // 聚合中任务状态，表示任务等待同组聚合后再执行
+	taskListScanPageSize = 100                                         // 任务列表多状态聚合的单页扫描大小
+	taskListScanMaxPages = 50                                          // 任务列表多状态聚合最大扫描页数，避免宽范围查询拖慢接口
+	taskListScanMaxRows  = taskListScanPageSize * taskListScanMaxPages // 单次聚合最多读取的任务数
 )
 
 // taskOverviewStateKeys 定义任务总览页需要返回统计的状态顺序。
@@ -191,6 +192,8 @@ func (l *TaskLogic) ListTasks(req *types.ListTaskItemsReq) *types.BizResult {
 			WithError(corelogic.WrapLogicError(err, "TaskLogic.ListTasks 任务系统未启用"))
 	case errors.Is(err, asynq.ErrQueueNotFound):
 		return types.NotFound(i18n.MsgKeyTaskQueueNotFound, err).ToBizResult()
+	case errors.Is(err, taskqueue.ErrTaskListScanLimitExceeded):
+		return types.ParamError(err).ToBizResult()
 	default:
 		return types.ServerError(i18n.MsgKeyTaskQueryFail, err).ToBizResult()
 	}
@@ -214,6 +217,10 @@ func (l *TaskLogic) ListTasksOverview(req *types.ListTaskItemsOverviewReq) *type
 		return types.NewBizResult(codes.ServiceBusy).
 			SetI18nMessage(i18n.MsgKeyTaskDisabled).
 			WithError(corelogic.WrapLogicError(err, "TaskLogic.ListTasksOverview 任务系统未启用"))
+	case errors.Is(err, asynq.ErrQueueNotFound):
+		return types.NotFound(i18n.MsgKeyTaskQueueNotFound, err).ToBizResult()
+	case errors.Is(err, taskqueue.ErrTaskListScanLimitExceeded):
+		return types.ParamError(err).ToBizResult()
 	default:
 		return types.ServerError(i18n.MsgKeyTaskQueryFail, err).ToBizResult()
 	}
@@ -221,12 +228,9 @@ func (l *TaskLogic) ListTasksOverview(req *types.ListTaskItemsOverviewReq) *type
 
 // listTasksOverview 执行受控聚合查询，避免前端首屏并发请求风暴。
 func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*types.TaskListOverviewResp, error) {
-	queueNames, err := l.resolveOverviewQueueNames(strings.TrimSpace(req.Queue))
+	queueNames, stateTotals, err := l.resolveOverviewQueues(strings.TrimSpace(req.Queue))
 	if err != nil {
 		return nil, errors.Tag(err)
-	}
-	if len(queueNames) == 0 {
-		queueNames = []string{strings.TrimSpace(req.Queue)}
 	}
 	startTime := strings.TrimSpace(req.StartTime)
 	endTime := strings.TrimSpace(req.EndTime)
@@ -244,7 +248,7 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 		PageSize:      req.PageSize,
 		AggregateMode: len(queueNames) > 1,
 		Queues:        append([]string(nil), queueNames...),
-		StateTotals:   l.buildOverviewStateTotals(queueNames),
+		StateTotals:   stateTotals,
 		Tasks:         make([]types.TaskItem, 0),
 	}
 	if taskOverviewHasTimeRange(req) && strings.TrimSpace(req.State) == "" {
@@ -265,21 +269,13 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 		resp.Tasks = currentResp.Tasks
 		return resp, nil
 	}
-	for _, state := range stateCandidates {
-		currentResp, err := l.aggregateTasksByState(queueNames, state, strings.TrimSpace(req.Group), strings.TrimSpace(req.TaskID), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		if currentResp.Total > 0 || len(currentResp.Tasks) > 0 {
-			resp.EffectiveState = state
-			resp.Total = currentResp.Total
-			resp.Tasks = currentResp.Tasks
-			return resp, nil
-		}
+	currentResp, err := l.aggregateTasksByStates(queueNames, stateCandidates, strings.TrimSpace(req.Group), strings.TrimSpace(req.TaskID), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
+	if err != nil {
+		return nil, errors.Tag(err)
 	}
-	if len(stateCandidates) == 1 {
-		resp.EffectiveState = stateCandidates[0]
-	}
+	resp.EffectiveState = stateCandidates[0]
+	resp.Total = currentResp.Total
+	resp.Tasks = currentResp.Tasks
 	return resp, nil
 }
 
@@ -291,35 +287,24 @@ func taskOverviewHasTimeRange(req *types.ListTaskItemsOverviewReq) bool {
 	return strings.TrimSpace(req.StartTime) != "" || strings.TrimSpace(req.EndTime) != ""
 }
 
-// buildOverviewStateTotals 汇总当前可见队列的状态计数。
-// 该计数来自 Asynq 队列快照，真实列表仍以 ListTasks 查询结果为准。
-func (l *TaskLogic) buildOverviewStateTotals(queueNames []string) map[string]int64 {
+// resolveOverviewQueues 从一次 Asynq 队列快照解析查询队列与状态计数，避免同一请求重复探测 Redis。
+func (l *TaskLogic) resolveOverviewQueues(queue string) ([]string, map[string]int64, error) {
 	totals := newTaskStateTotals()
-	if l == nil || l.Svc == nil || l.Svc.Task == nil {
-		return totals
-	}
-	queueSet := make(map[string]struct{}, len(queueNames))
-	for _, queueName := range queueNames {
-		queueName = strings.TrimSpace(queueName)
-		if queueName == "" {
-			continue
-		}
-		queueSet[queueName] = struct{}{}
-	}
 	queueResp, err := l.Svc.Task.ListQueues(l.Ctx)
-	if err != nil || queueResp == nil {
-		return totals
+	if err != nil {
+		return nil, nil, errors.Tag(err)
 	}
+	queue = strings.TrimSpace(queue)
+	queueNames := make([]string, 0, len(queueResp.Queues))
 	for _, item := range queueResp.Queues {
 		queueName := strings.TrimSpace(item.Name)
 		if queueName == "" {
 			continue
 		}
-		if len(queueSet) > 0 {
-			if _, ok := queueSet[queueName]; !ok {
-				continue
-			}
+		if queue != "" && queueName != queue {
+			continue
 		}
+		queueNames = append(queueNames, queueName)
 		totals[taskStatePending] += int64(item.Pending)
 		totals[taskStateActive] += int64(item.Active)
 		totals[taskStateScheduled] += int64(item.Scheduled)
@@ -328,7 +313,10 @@ func (l *TaskLogic) buildOverviewStateTotals(queueNames []string) map[string]int
 		totals[taskStateCompleted] += int64(item.Completed)
 		totals[taskStateAggregating] += int64(item.Aggregating)
 	}
-	return totals
+	if queue != "" && len(queueNames) == 0 {
+		return nil, nil, asynq.ErrQueueNotFound
+	}
+	return queueNames, totals, nil
 }
 
 // newTaskStateTotals 返回任务列表固定状态集合，避免前端因为缺少某个 key 误判为后端未返回统计。
@@ -340,32 +328,20 @@ func newTaskStateTotals() map[string]int64 {
 	return totals
 }
 
-// resolveOverviewQueueNames 根据指定队列或当前可见队列快照解析本次聚合查询队列列表。
-func (l *TaskLogic) resolveOverviewQueueNames(queue string) ([]string, error) {
-	if strings.TrimSpace(queue) != "" {
-		return []string{strings.TrimSpace(queue)}, nil
+// aggregateTasksByStates 聚合多个任务状态，并按任务活动时间统一排序分页。
+func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string, group string, taskID string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) (*types.TaskListResp, error) {
+	mergedTasks := make([]types.TaskItem, 0)
+	var total int64
+	page, pageSize = normalizeTaskListPage(page, pageSize)
+	if page*pageSize > taskListScanMaxRows {
+		return nil, errors.Wrapf(taskqueue.ErrTaskListScanLimitExceeded,
+			"任务总览最多查询前 %d 条记录，请缩小页码或筛选范围", taskListScanMaxRows)
 	}
-	queueResp, err := l.Svc.Task.ListQueues(l.Ctx)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	queueNames := make([]string, 0, len(queueResp.Queues))
-	for _, item := range queueResp.Queues {
-		queueName := strings.TrimSpace(item.Name)
-		if queueName == "" {
-			continue
-		}
-		queueNames = append(queueNames, queueName)
-	}
-	return queueNames, nil
-}
-
-// aggregateTasksByState 对指定状态执行单次队列聚合，并统一排序与分页。
-func (l *TaskLogic) aggregateTasksByState(queueNames []string, state string, group string, taskID string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) (*types.TaskListResp, error) {
-	if len(queueNames) == 1 {
+	// 单队列单状态直接使用 Asynq 原生分页，避免为了聚合扫描前置页。
+	if len(queueNames) == 1 && len(states) == 1 {
 		return l.Svc.Task.ListTasks(l.Ctx, &types.ListTaskItemsReq{
 			Queue:      queueNames[0],
-			State:      state,
+			State:      states[0],
 			Group:      group,
 			TaskID:     taskID,
 			WorkflowID: workflowID,
@@ -376,65 +352,6 @@ func (l *TaskLogic) aggregateTasksByState(queueNames []string, state string, gro
 			PageSize:   pageSize,
 		})
 	}
-	mergedTasks := make([]types.TaskItem, 0)
-	resultMap := make(map[string]types.TaskItem)
-	var total int64
-	for _, queueName := range queueNames {
-		currentResp, err := l.Svc.Task.ListTasks(l.Ctx, &types.ListTaskItemsReq{
-			Queue:      queueName,
-			State:      state,
-			Group:      group,
-			TaskID:     taskID,
-			WorkflowID: workflowID,
-			TaskName:   taskName,
-			StartTime:  startTime,
-			EndTime:    endTime,
-			Page:       1,
-			PageSize:   100,
-		})
-		if err != nil {
-			continue
-		}
-		total += currentResp.Total
-		for _, item := range currentResp.Tasks {
-			resultMap[item.Queue+":"+item.ID] = item
-		}
-	}
-	for _, item := range resultMap {
-		mergedTasks = append(mergedTasks, item)
-	}
-	slices.SortFunc(mergedTasks, func(left, right types.TaskItem) int {
-		return cmp.Compare(buildTaskItemSortValue(right), buildTaskItemSortValue(left))
-	})
-	start := (page - 1) * pageSize
-	if start < 0 {
-		start = 0
-	}
-	if start >= len(mergedTasks) {
-		mergedTasks = []types.TaskItem{}
-	} else {
-		end := minTaskPageEnd(start+pageSize, len(mergedTasks))
-		mergedTasks = mergedTasks[start:end]
-	}
-	return &types.TaskListResp{
-		State:     state,
-		Group:     group,
-		TaskID:    taskID,
-		TaskName:  taskName,
-		StartTime: startTime,
-		EndTime:   endTime,
-		Page:      page,
-		PageSize:  pageSize,
-		Total:     total,
-		Tasks:     mergedTasks,
-	}, nil
-}
-
-// aggregateTasksByStates 聚合多个任务状态，并按任务活动时间统一排序分页。
-func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string, group string, taskID string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) (*types.TaskListResp, error) {
-	mergedTasks := make([]types.TaskItem, 0)
-	var total int64
-	page, pageSize = normalizeTaskListPage(page, pageSize)
 	needsWidePage := taskListAggregateNeedsWidePage(taskID, workflowID, taskName, startTime, endTime)
 	maxPages := taskListAggregateMaxPages(taskID, workflowID, taskName, startTime, endTime, page, pageSize)
 	for _, state := range states {
@@ -450,13 +367,17 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 					StartTime:  startTime,
 					EndTime:    endTime,
 					Page:       1,
-					PageSize:   taskListScanPageSize * taskListScanMaxPages,
+					PageSize:   taskListScanMaxRows,
 				})
 				if err != nil {
 					return nil, errors.Tag(err)
 				}
 				total += currentResp.Total
 				mergedTasks = append(mergedTasks, currentResp.Tasks...)
+				if currentResp.Total > int64(len(currentResp.Tasks)) {
+					return nil, errors.Wrapf(taskqueue.ErrTaskListScanLimitExceeded,
+						"任务筛选结果超过 %d 条，请缩小筛选范围", taskListScanMaxRows)
+				}
 				continue
 			}
 			for currentPage := 1; currentPage <= maxPages; currentPage++ {
@@ -519,9 +440,6 @@ func taskListAggregateMaxPages(taskID string, workflowID string, taskName string
 	page, pageSize = normalizeTaskListPage(page, pageSize)
 	neededRows := page * pageSize
 	neededPages := (neededRows + taskListScanPageSize - 1) / taskListScanPageSize
-	if neededPages > taskListScanMaxPages {
-		return taskListScanMaxPages
-	}
 	return neededPages
 }
 

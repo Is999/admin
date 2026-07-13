@@ -150,7 +150,7 @@ func (m *Manager) listDescZSetTaskInfoPage(ctx context.Context, internalQueue st
 		ids   []string
 		total int64
 	)
-	if minScore, maxScore, ok := descZSetScoreRange(state, timeRange, m.completedRetention()); ok {
+	if minScore, maxScore, ok := descZSetScoreRange(state, timeRange, taskCompletedRetention); ok {
 		total, err = m.redis.ZCount(ctx, key, minScore, maxScore).Result()
 		if err != nil {
 			return nil, 0, errors.Tag(err)
@@ -192,7 +192,7 @@ func (m *Manager) listDescZSetTaskInfoPage(ctx context.Context, internalQueue st
 }
 
 // descZSetScoreRange 返回可直接用 zset 分数过滤的任务时间范围。
-// archived 分数就是失败时间；completed 分数是完成时间加保留时长，按当前统一保留配置反推查询范围。
+// archived 分数就是失败时间；completed 分数是完成时间加固定保留时长，按该时长反推查询范围。
 func descZSetScoreRange(state string, timeRange taskListTimeRange, retention time.Duration) (string, string, bool) {
 	if !timeRange.hasRange {
 		return "", "", false
@@ -312,12 +312,15 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 	taskID = strings.TrimSpace(taskID)
 	workflowID = strings.TrimSpace(workflowID)
 	taskName = strings.TrimSpace(taskName)
+	// reachedScanLimit 标记是否完整读满受控扫描窗口；读满后必须确认没有下一页，禁止返回截断总数。
+	reachedScanLimit := true
 	for currentPage := 1; currentPage <= taskListFilterMaxPages; currentPage++ {
 		items, _, err := m.listTaskInfoPage(ctx, internalQueue, internalGroup, state, currentPage, taskListFilterPageSize, timeRange)
 		if err != nil {
 			return nil, 0, errors.Tag(err)
 		}
 		if len(items) == 0 {
+			reachedScanLimit = false
 			break
 		}
 		for _, item := range items {
@@ -331,7 +334,18 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 			matchedTasks = append(matchedTasks, taskItem)
 		}
 		if len(items) < taskListFilterPageSize {
+			reachedScanLimit = false
 			break
+		}
+	}
+	if reachedScanLimit {
+		nextItems, _, err := m.listTaskInfoPage(ctx, internalQueue, internalGroup, state, taskListFilterMaxPages+1, 1, timeRange)
+		if err != nil {
+			return nil, 0, errors.Tag(err)
+		}
+		if len(nextItems) > 0 {
+			return nil, 0, errors.Wrapf(ErrTaskListScanLimitExceeded,
+				"队列[%s]状态[%s]最多扫描%d条任务，请缩小筛选范围", internalQueue, state, taskListFilterPageSize*taskListFilterMaxPages)
 		}
 	}
 	sortTaskItemsByTimeDesc(matchedTasks)

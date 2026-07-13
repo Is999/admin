@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"admin/internal/infra/loggerx"
+	"admin/internal/requestctx"
 	"admin/internal/task/queue"
+	"admin/internal/task/taskwire"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
@@ -59,6 +61,13 @@ func (r *Runtime) handleWorkflowTrigger(ctx context.Context, task *asynq.Task) e
 	if strings.TrimSpace(payload.WorkflowName) == "" {
 		return errors.Errorf("工作流名称不能为空")
 	}
+	taskID, _ := asynq.GetTaskID(ctx)
+	workflowID, err := workflowTriggerID(payload.WorkflowID, taskID)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	payload.WorkflowID = workflowID
+	requestctx.SetWorkflow(ctx, workflowID, payload.WorkflowName, "", 0, 0)
 	// 把触发任务载荷转换成运行时统一的工作流启动参数，后续由 Manager 负责实际编排。
 	spec := taskqueue.WorkflowStartSpec{
 		WorkflowID:        payload.WorkflowID,
@@ -69,6 +78,7 @@ func (r *Runtime) handleWorkflowTrigger(ctx context.Context, task *asynq.Task) e
 		GrayPercent:       payload.GrayPercent,
 		Source:            payload.Source,
 		PeriodicName:      payload.PeriodicName,
+		ScheduledAt:       strings.TrimSpace(task.Headers()[taskwire.HeaderScheduledAt]),
 		TriggeredByUserID: payload.TriggeredByUserID,
 		TriggeredByUser:   payload.TriggeredByUser,
 		UniqueKey:         payload.UniqueKey,
@@ -102,6 +112,17 @@ func (r *Runtime) handleWorkflowTrigger(ctx context.Context, task *asynq.Task) e
 		return errors.Tag(err)
 	}
 	return nil
+}
+
+// workflowTriggerID 优先复用载荷 ID；周期触发则使用不会随重试变化的 Asynq 任务 ID。
+func workflowTriggerID(payloadID, taskID string) (string, error) {
+	if payloadID = strings.TrimSpace(payloadID); payloadID != "" {
+		return payloadID, nil
+	}
+	if taskID = strings.TrimSpace(taskID); taskID != "" {
+		return taskID, nil
+	}
+	return "", errors.Errorf("工作流触发任务缺少稳定任务 ID")
 }
 
 // handleWorkflowNoop 作为工作流结束节点的空实现，主要用于串联依赖关系。
@@ -167,9 +188,7 @@ func (r *Runtime) aggregateCacheRefreshTasks(tasks []*asynq.Task) *asynq.Task {
 		asynq.MaxRetry(3),
 	}
 	if r != nil && r.manager != nil {
-		if retention := r.manager.CompletedRetention(); retention > 0 {
-			opts = append(opts, asynq.Retention(retention))
-		}
+		opts = append(opts, asynq.Retention(r.manager.CompletedRetention()))
 	}
 	return asynq.NewTaskWithHeaders(taskqueue.TypeCacheRefreshBatch, body, headers, opts...)
 }

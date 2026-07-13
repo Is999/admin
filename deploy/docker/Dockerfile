@@ -1,4 +1,4 @@
-FROM golang:1.26 AS build
+FROM golang:1.26.5 AS build
 
 ARG VERSION=dev
 
@@ -12,8 +12,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.buildVersion=${VERS
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl tzdata \
+  && apt-get install -y --no-install-recommends ca-certificates clamdscan curl tzdata \
   && rm -rf /var/lib/apt/lists/*
+COPY deploy/docker/clamd.conf /etc/clamav/clamd.conf
 
 WORKDIR /app
 RUN groupadd --system app && useradd --system --gid app --home-dir /app --no-create-home app \

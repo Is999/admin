@@ -23,7 +23,7 @@ type ConsumerStatus struct {
 
 // TopicStats 描述单个 Topic 的消费状态。
 type TopicStats struct {
-	Topic              string    `json:"topic"`                 // Kafka Topic
+	Topic              string    `json:"topic"`                 // Kafka 主题
 	Fetched            int64     `json:"fetched"`               // 已拉取消息数
 	Processed          int64     `json:"processed"`             // 已成功处理消息数
 	Skipped            int64     `json:"skipped"`               // 已主动跳过消息数

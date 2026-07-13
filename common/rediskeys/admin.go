@@ -16,11 +16,6 @@ func AdminInfoPatternRedisKey() string {
 	return prefixedPattern(AdminInfoPattern)
 }
 
-// AdminLogoutTokenRedisKey 返回管理员显式登出标记 Redis key。
-func AdminLogoutTokenRedisKey(adminID int) string {
-	return WithPrefix(fmt.Sprintf(AdminLogoutToken, adminID))
-}
-
 // LoginCheckMFAFlagRedisKey 返回管理员登录 MFA 完成标记 Redis key。
 func LoginCheckMFAFlagRedisKey(adminID int) string {
 	return WithPrefix(fmt.Sprintf(LoginCheckMFAFlag, adminID))
@@ -39,11 +34,6 @@ func AdminMFATwoStepIndexRedisKey(adminID int) string {
 // AdminInfoLogicalKey 返回去掉 app_id 命名空间后的管理员登录态业务段。
 func AdminInfoLogicalKey(adminID int) string {
 	return fmt.Sprintf(AdminInfo, adminID)
-}
-
-// AdminLogoutTokenLogicalKey 返回去掉 app_id 命名空间后的管理员登出标记业务段。
-func AdminLogoutTokenLogicalKey(adminID int) string {
-	return fmt.Sprintf(AdminLogoutToken, adminID)
 }
 
 // AdminInfoLogicalPattern 返回去掉 app_id 命名空间后的管理员登录态展示模板。

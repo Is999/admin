@@ -257,6 +257,48 @@
       ],
       "title": "ID Segment 本地剩余号段",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (lease, result) (rate(admin_collector_lease_renew_total[5m]))",
+          "legendFormat": "{{lease}} / {{result}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Collector 所有权租约续期",
+      "type": "timeseries"
     }
   ],
   "schemaVersion": 39,

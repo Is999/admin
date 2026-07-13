@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"admin/common/runtimecfg"
 	"admin/internal/bootstrap"
@@ -29,6 +30,10 @@ const (
 	actionDryRun = "dry-run"
 	// actionUp 执行未完成迁移。
 	actionUp = "up"
+	// migrationLockName 与 API 共用迁移锁，避免同实例并发修改库结构。
+	migrationLockName = "app:schema-migration"
+	// migrationLockWait 限制发布任务等待已有迁移结束的时间。
+	migrationLockWait = time.Minute
 )
 
 // migrationCommandOptions 表示迁移命令行参数。
@@ -101,10 +106,15 @@ func run(ctx context.Context, options migrationCommandOptions, output io.Writer)
 		}
 	}()
 
-	results, err := database.RunMigrations(ctx, database.NewGormMigrationStore(db), database.DefaultMigrations(), database.MigrationRunOptions{
-		DryRun:           resolvedAction != actionUp,
-		AllowBootstrap:   options.AllowBootstrap,
-		AllowDestructive: options.AllowDestructive,
+	var results []database.MigrationRunItem
+	err = database.WithMigrationLock(ctx, sqlDB, migrationLockName, migrationLockWait, func() error {
+		var runErr error
+		results, runErr = database.RunMigrations(ctx, database.NewGormMigrationStore(db), database.DefaultMigrations(), database.MigrationRunOptions{
+			DryRun:           resolvedAction != actionUp,
+			AllowBootstrap:   options.AllowBootstrap,
+			AllowDestructive: options.AllowDestructive,
+		})
+		return errors.Tag(runErr)
 	})
 	if printErr := printResults(output, results); printErr != nil {
 		return errors.Wrap(printErr, "输出迁移结果失败")
@@ -174,11 +184,11 @@ func permissionCacheRefreshRequired(action string, results []database.MigrationR
 // isPermissionDataMigration 判断迁移是否会影响权限定义或角色授权关系。
 func isPermissionDataMigration(item database.MigrationRunItem) bool {
 	switch strings.TrimSpace(item.Name) {
-	case "sync_document_permissions":
+	case "bootstrap_admin_permission":
 		return true
 	}
 	switch strings.TrimSpace(item.Asset) {
-	case "document_permission_seed.sql":
+	case "admin_permission.sql":
 		return true
 	}
 	return false
@@ -209,7 +219,9 @@ func refreshPermissionCacheAfterMigration(ctx context.Context, cfg config.Config
 	logicObj := &rbaclogic.AdminPermissionLogic{
 		BaseLogic: corelogic.NewBaseLogicWithContext(ctx, svcCtx),
 	}
-	logicObj.RefreshPermissionRelatedCache()
+	if err = logicObj.RefreshPermissionRelatedCache(); err != nil {
+		return errors.Wrap(err, "清理权限相关缓存失败")
+	}
 	return nil
 }
 

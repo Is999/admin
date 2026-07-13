@@ -66,7 +66,6 @@ var defaultMigrationSpecs = []migrationSpec{
 	{version: "202606050021", name: "bootstrap_runtime_config_state", asset: "runtime_config_state.sql", bootstrapOnly: true},
 	{version: "202606050022", name: "bootstrap_runtime_task_periodic", asset: "runtime_task_periodic.sql", bootstrapOnly: true},
 	{version: "202606050023", name: "bootstrap_runtime_archive_job", asset: "runtime_archive_job.sql", bootstrapOnly: true},
-	{version: "202606240002", name: "sync_document_permissions", asset: "document_permission_seed.sql"},
 }
 
 // SchemaMigrationsSQL 返回剥离文件头说明后的迁移版本表 DDL。

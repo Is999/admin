@@ -166,14 +166,14 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext, module
 // bootstrap 统一注册中心会调用该入口，避免 handler 包再次隐式追加内置路由造成重复注册。
 func RegisterHandlersWithModules(server *rest.Server, serverCtx *svc.ServiceContext, modules ...RouteModule) {
 	server.Use(middleware.NewRecoverMiddleware().Handle)
-	server.Use(middleware.NewTraceMiddleware().Handle)
+	server.Use(middleware.NewTraceMiddleware(serverCtx).Handle)
 	server.Use(middleware.NewAccessLogMiddleware().Handle)
 	server.Use(middleware.NewRecoverMiddleware().Handle)
 
 	// 统一在这里构造领域级中间件，避免各模块重复创建。
 	authMw := middleware.NewAuthMiddleware(serverCtx)
 	// 内网服务中间件
-	internalMw := middleware.NewInternalOnlyMiddleware()
+	internalMw := middleware.NewInternalOnlyMiddleware(serverCtx)
 	scope := &RouteScope{
 		Server:             server,
 		ServiceContext:     serverCtx,

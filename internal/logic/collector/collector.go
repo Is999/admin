@@ -184,9 +184,8 @@ func (l *CollectorLogic) buildOverview(db *gorm.DB) (*types.CollectorOverviewRes
 		return nil, errors.Tag(err)
 	}
 
-	leaseCutoff := now.Add(-time.Duration(resp.RunningLeaseSeconds) * time.Second)
 	if err := freshDB(db).Model(&model.CollectorFailedEvent{}).
-		Where("state = ? AND started_at IS NOT NULL AND started_at <= ?", model.CollectorFailedEventStateRunning, leaseCutoff).
+		Where("state = ? AND lease_until IS NOT NULL AND lease_until <= ?", model.CollectorFailedEventStateRunning, now).
 		Count(&resp.RunningTimeoutCount).Error; err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -367,6 +366,8 @@ func (l *CollectorLogic) RetryFailures(req *types.RetryCollectorFailuresReq) *ty
 		"updated_at":  now,
 		"started_at":  nil,
 		"finished_at": nil,
+		"claim_token": "",
+		"lease_until": nil,
 	}
 	if resetAttempt {
 		updates["attempt"] = 0

@@ -48,12 +48,16 @@ const (
 	userExportMaxConcurrentShards = 4
 	// userExportProgressMinInterval 表示前台用户导出进度最小上报时间间隔。
 	userExportProgressMinInterval = 500 * time.Millisecond
-	// userExportProgressMinRows 表示前台用户导出进度最小上报行数增量。
-	userExportProgressMinRows = 400
+	// userExportRunningMaxProgress 表示运行态百分比上限，完成状态统一写入 100%。
+	userExportRunningMaxProgress = 99
 	// userExportTriggerLockTTL 表示前台用户导出同条件触发锁 TTL。
 	userExportTriggerLockTTL = 15 * time.Second
-	// userExportReuseIndexTTL 表示前台用户导出同条件复用索引保留时间。
-	userExportReuseIndexTTL = 24 * time.Hour
+	// userExportActiveIndexTTL 表示排队和执行中任务的同条件复用索引保留时间。
+	userExportActiveIndexTTL = 24 * time.Hour
+	// userExportCompletedReuseTTL 表示已完成导出结果允许复用的时间。
+	userExportCompletedReuseTTL = 20 * time.Minute
+	// userExportFileRetention 表示导出文件完成后的保留时间。
+	userExportFileRetention = 24 * time.Hour
 	// userExportTaskTimeoutSeconds 表示前台用户大批量导出任务的默认超时秒数。
 	userExportTaskTimeoutSeconds = 3600
 	// userExportDefaultSplitRows 表示缺省单文件拆分行数。
@@ -250,14 +254,21 @@ func (l *Logic) RunExportTask(payload *types.UserExportTaskPayload) error {
 	if err != nil {
 		return errors.Wrapf(err, "UserLogic.RunExportTask 查询前台用户导出任务[%s]失败", payload.JobID)
 	}
+	if status.Status == types.UserExportStatusSucceeded {
+		return l.keepCompletedUserExportReuseIndex(status, time.Now())
+	}
+	if len(status.Files) > 0 {
+		if err := l.deleteUserExportObjects(status.Files); err != nil {
+			return errors.Wrapf(err, "UserLogic.RunExportTask 清理前台用户导出任务[%s]重试残留文件失败", payload.JobID)
+		}
+	}
+	resetUserExportFiles(status)
 
 	now := time.Now()
 	status.Status = types.UserExportStatusRunning
 	status.ErrorMessage = ""
 	status.OperatorID = payload.OperatorID
-	if status.StartedAt == "" {
-		status.StartedAt = excel.FormatDateTime(now)
-	}
+	status.StartedAt = excel.FormatDateTime(now)
 	if status.SplitRows <= 0 {
 		status.SplitRows = l.userExportSplitRows()
 	}
@@ -280,6 +291,14 @@ func (l *Logic) RunExportTask(payload *types.UserExportTaskPayload) error {
 	if err != nil {
 		_ = l.markUserExportFailed(status, errors.Wrap(err, "校验前台用户导出查询路径失败"))
 		return errors.Wrapf(err, "UserLogic.RunExportTask 校验前台用户导出查询路径失败 jobId=%s", payload.JobID)
+	}
+	status.Total, err = l.countUserExportRows(l.Ctx, &payload.Request, useIdentityPath)
+	if err != nil {
+		_ = l.markUserExportFailed(status, errors.Wrap(err, "统计前台用户导出总量失败"))
+		return errors.Wrapf(err, "UserLogic.RunExportTask 统计前台用户导出总量失败 jobId=%s", payload.JobID)
+	}
+	if err := l.saveUserExportStatus(status); err != nil {
+		return errors.Wrapf(err, "UserLogic.RunExportTask 保存前台用户导出总量失败 jobId=%s", payload.JobID)
 	}
 	cursorID := int64(0)
 	partNo := 1
@@ -337,7 +356,7 @@ func (l *Logic) RunExportTask(payload *types.UserExportTaskPayload) error {
 	finishedAt := time.Now()
 	status.Status = types.UserExportStatusSucceeded
 	status.Progress = 100
-	status.Total = max(status.Total, status.Processed)
+	status.Total = status.Processed
 	status.EstimatedSeconds = 0
 	status.DownloadReady = len(userExportReadyFiles(status)) > 0
 	status.FinishedAt = excel.FormatDateTime(finishedAt)
@@ -345,10 +364,19 @@ func (l *Logic) RunExportTask(payload *types.UserExportTaskPayload) error {
 	if status.Total <= 0 {
 		status.AverageRowsPerSec = status.Processed
 	}
+	if err := l.scheduleUserExportCleanup(status); err != nil {
+		cleanupErr := l.deleteUserExportObjects(status.Files)
+		if cleanupErr == nil {
+			resetUserExportFiles(status)
+		}
+		wrappedErr := errors.Wrap(err, "投递前台用户导出文件清理任务失败")
+		_ = l.markUserExportFailed(status, userExportFirstNonNilError(cleanupErr, wrappedErr))
+		return errors.Tag(wrappedErr)
+	}
 	if err := l.saveUserExportStatus(status); err != nil {
 		return errors.Wrapf(err, "UserLogic.RunExportTask 保存前台用户导出完成状态失败 jobId=%s", payload.JobID)
 	}
-	return nil
+	return l.keepCompletedUserExportReuseIndex(status, finishedAt)
 }
 
 // validateUserExportQueryBoundary 校验当前导出筛选在单表或分表阶段是否可执行。
@@ -423,7 +451,7 @@ func (l *Logic) triggerOrReuseUserExportUnderLock(req *types.UserExportReq, fing
 	if err := l.saveUserExportStatus(status); err != nil {
 		return nil, errors.Wrap(err, "初始化前台用户导出任务失败")
 	}
-	if err := l.saveUserExportRequestIndex(fingerprint, jobID); err != nil {
+	if err := l.saveUserExportRequestIndex(fingerprint, jobID, userExportActiveIndexTTL); err != nil {
 		return nil, errors.Wrap(err, "保存前台用户导出复用索引失败")
 	}
 	payloadBody, err := json.Marshal(types.UserExportTaskPayload{
@@ -441,7 +469,7 @@ func (l *Logic) triggerOrReuseUserExportUnderLock(req *types.UserExportReq, fing
 	if timeoutSeconds < userExportTaskTimeoutSeconds {
 		timeoutSeconds = userExportTaskTimeoutSeconds
 	}
-	uniqueTTLSeconds := int(userExportReuseIndexTTL.Seconds())
+	uniqueTTLSeconds := int(userExportActiveIndexTTL.Seconds())
 	enqueueResp, err := l.Svc.Task.EnqueueRegisteredTask(l.Ctx, &types.EnqueueTaskReq{
 		TaskType:         types.UserExportTaskType,
 		Payload:          payloadBody,
@@ -483,6 +511,11 @@ func (l *Logic) tryReuseUserExportJob(fingerprint string, operatorID int) (*type
 		}
 		return l.buildUserExportTriggerResp(status), nil
 	case types.UserExportStatusSucceeded:
+		reuseTTL := userExportCompletedReuseRemaining(status, time.Now())
+		if reuseTTL <= 0 {
+			_ = l.clearUserExportRequestIndex(fingerprint)
+			return nil, nil
+		}
 		if !l.hasReusableUserExportDownloadObject(status) {
 			_ = l.clearUserExportRequestIndex(fingerprint)
 			return nil, nil
@@ -491,6 +524,9 @@ func (l *Logic) tryReuseUserExportJob(fingerprint string, operatorID int) (*type
 			if saveErr := l.saveUserExportStatus(status); saveErr != nil {
 				return nil, errors.Wrapf(saveErr, "保存前台用户导出授权人失败 job_id=%s operator_id=%d", status.JobID, operatorID)
 			}
+		}
+		if err := l.saveUserExportRequestIndex(fingerprint, status.JobID, reuseTTL); err != nil {
+			return nil, errors.Tag(err)
 		}
 		return l.buildUserExportTriggerResp(status), nil
 	default:
@@ -515,6 +551,27 @@ func (l *Logic) useUserExportIdentityPath(req *types.UserExportReq) (bool, error
 		}
 	}
 	return useIdentity, nil
+}
+
+// countUserExportRows 按实际导出查询统计总行数，供百分比和剩余时间计算。
+func (l *Logic) countUserExportRows(ctx context.Context, req *types.UserExportReq, useIdentityPath bool) (int64, error) {
+	var (
+		dbq *gorm.DB
+		err error
+	)
+	if useIdentityPath {
+		dbq, _, err = l.userExportIdentityQuery(ctx, req)
+	} else {
+		dbq, err = l.userExportQuery(ctx, req)
+	}
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	total := int64(0)
+	if err := dbq.Count(&total).Error; err != nil {
+		return 0, errors.Wrap(err, "统计前台用户导出总行数失败")
+	}
+	return total, nil
 }
 
 // listUserExportShardBatch 按分片范围和 ID 游标顺序读取一批导出数据。
@@ -589,15 +646,18 @@ func (l *Logic) listUserIdentityShardBatch(ctx context.Context, req *types.UserE
 	userDB = userDB.WithContext(ctx)
 	for index := range identities {
 		identities[index].IdentityType = identityType
+	}
+	users, err := model.FindUsersByIdentityRows(userDB, identities)
+	if err != nil {
+		return nil, errors.Wrap(err, "批量读取前台用户失败")
+	}
+	for index := range identities {
 		identity := identities[index]
-		row, err := model.FindUserByIdentityRow(userDB, &identity)
-		if err != nil {
-			return nil, errors.Wrapf(err, "读取前台用户 ID[%d]失败", identity.UserID)
-		}
-		if row == nil || !userExportMatchedByUsername(*row, req.Username) {
+		row := users[identity.UserID]
+		if !userExportMatchedByUsername(row, req.Username) {
 			continue
 		}
-		rows = append(rows, userExportRow{User: *row, CursorID: identity.UserID})
+		rows = append(rows, userExportRow{User: row, CursorID: identity.UserID})
 	}
 	page := &excel.CursorPage[userExportRow, int64]{Items: rows}
 	if len(identities) > 0 {
@@ -624,6 +684,13 @@ func (l *Logic) runUserExportPart(req *types.UserExportReq, status *types.UserEx
 	splitRows := status.SplitRows
 	if splitRows <= 0 {
 		splitRows = l.userExportSplitRows()
+	}
+	startedAt, err := excel.ParseDateTime(status.StartedAt)
+	if err != nil {
+		return result, errors.Wrap(err, "解析前台用户导出开始时间失败")
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now()
 	}
 	baseProcessed := status.Processed
 	shards := buildUserExportShards()
@@ -685,27 +752,33 @@ func (l *Logic) runUserExportPart(req *types.UserExportReq, status *types.UserEx
 			return startCursor
 		}),
 		excel.WithStreamExportProgress[userExportRow, int64, userExportIDShard](func(progress excel.ExportProgress) error {
-			status.Processed = baseProcessed + progress.Processed
+			applyUserExportProgress(status, baseProcessed, startedAt, progress)
 			status.LastCursorID = result.LastCursor
 			status.PartCount = max(status.PartCount, partNo-1)
-			if status.Total > 0 {
-				status.Total = baseProcessed + progress.Total
-				status.Progress = progress.Progress
-				status.EstimatedSeconds = progress.EstimatedSeconds
-			} else {
-				status.Progress = 0
-				status.EstimatedSeconds = 0
-			}
-			status.AverageRowsPerSec = progress.AverageRowsPerSec
-			status.LastProcessedAt = excel.FormatDateTime(progress.LastProcessedAt)
 			return l.saveUserExportStatus(status)
 		}),
-		excel.WithStreamExportProgressThrottle[userExportRow, int64, userExportIDShard](userExportProgressMinInterval, userExportProgressMinRows),
+		// 进度仅按时间节流，避免高速导出按行数频繁写 Redis。
+		excel.WithStreamExportProgressThrottle[userExportRow, int64, userExportIDShard](userExportProgressMinInterval, 0),
 	)
 	if err := excel.StreamExportSharded(l.Ctx, exportOpt); err != nil {
 		return result, errors.Wrapf(err, "执行通用流式导出失败 part_no=%d", partNo)
 	}
 	return result, nil
+}
+
+// applyUserExportProgress 把单文件处理量换算为整个导出任务的进度和预计剩余时间。
+func applyUserExportProgress(status *types.UserExportStatusResp, baseProcessed int64, startedAt time.Time, progress excel.ExportProgress) {
+	status.Processed = baseProcessed + progress.Processed
+	status.LastProcessedAt = excel.FormatDateTime(progress.LastProcessedAt)
+	percent, averageRowsPerSec, estimatedSeconds := excel.BuildMetrics(status.Total, status.Processed, startedAt, progress.LastProcessedAt)
+	status.AverageRowsPerSec = averageRowsPerSec
+	if status.Total <= 0 {
+		status.Progress = 0
+		status.EstimatedSeconds = 0
+		return
+	}
+	status.Progress = min(percent, userExportRunningMaxProgress)
+	status.EstimatedSeconds = estimatedSeconds
 }
 
 // userExportPartQueryLimit 返回当前分片剩余可读取数量，避免单文件超过配置阈值。
@@ -813,7 +886,7 @@ func (l *Logic) userExportIdentityQuery(ctx context.Context, req *types.UserExpo
 		return nil, "", errors.Tag(err)
 	}
 	db = db.WithContext(ctx)
-	dbq := db.Model(&model.UserIdentity{}).Table(userIdentityListTableName(tableName, identityType, req.Username))
+	dbq := db.Model(&model.UserIdentity{}).Table(tableName)
 	if req.ID > 0 {
 		dbq = dbq.Where("user_id = ?", req.ID)
 	}
@@ -901,8 +974,8 @@ func (l *Logic) loadUserExportRequestIndex(fingerprint string) (string, error) {
 	return strings.TrimSpace(value), nil
 }
 
-// saveUserExportRequestIndex 保存同条件导出复用索引。
-func (l *Logic) saveUserExportRequestIndex(fingerprint string, jobID string) error {
+// saveUserExportRequestIndex 按指定时间保存同条件导出复用索引。
+func (l *Logic) saveUserExportRequestIndex(fingerprint string, jobID string, ttl time.Duration) error {
 	if err := l.ensureUserExportRedisEnabled(); err != nil {
 		return errors.Tag(err)
 	}
@@ -911,7 +984,10 @@ func (l *Logic) saveUserExportRequestIndex(fingerprint string, jobID string) err
 	if fingerprint == "" || jobID == "" {
 		return errors.Errorf("导出复用索引参数不能为空")
 	}
-	if err := l.Redis().Set(l.Ctx, l.userExportRequestIndexKey(fingerprint), jobID, userExportReuseIndexTTL).Err(); err != nil {
+	if ttl <= 0 {
+		return errors.Errorf("导出复用索引保留时间必须大于0")
+	}
+	if err := l.Redis().Set(l.Ctx, l.userExportRequestIndexKey(fingerprint), jobID, ttl).Err(); err != nil {
 		return errors.Wrap(err, "保存前台用户导出复用索引失败")
 	}
 	return nil
@@ -964,7 +1040,11 @@ func (l *Logic) saveUserExportStatus(status *types.UserExportStatusResp) error {
 	if status.DownloadURL == "" {
 		status.DownloadURL = buildUserExportDownloadURL(status.JobID)
 	}
-	if err := l.userExportStatusStore().Save(l.Ctx, status.JobID, newUserExportStatusSnapshot(status)); err != nil {
+	ttl := userExportStatusRemaining(status, now)
+	if ttl <= 0 {
+		return gorm.ErrRecordNotFound
+	}
+	if err := l.userExportStatusStore().SaveWithTTL(l.Ctx, status.JobID, newUserExportStatusSnapshot(status), ttl); err != nil {
 		return errors.Wrapf(err, "UserLogic.saveUserExportStatus 保存前台用户导出任务[%s]失败", status.JobID)
 	}
 	return nil
@@ -982,12 +1062,23 @@ func (l *Logic) markUserExportFailed(status *types.UserExportStatusResp, err err
 		status.ErrorMessage = err.Error()
 	}
 	status.FinishedAt = excel.FormatDateTime(time.Now())
+	cleanupErr := error(nil)
+	if len(userExportReadyFiles(status)) > 0 {
+		cleanupErr = l.scheduleUserExportCleanup(status)
+		if cleanupErr != nil {
+			if deleteErr := l.deleteUserExportObjects(status.Files); deleteErr == nil {
+				resetUserExportFiles(status)
+			} else {
+				cleanupErr = userExportFirstNonNilError(deleteErr, cleanupErr)
+			}
+		}
+	}
 	if clearErr := l.clearUserExportRequestIndex(status.RequestFingerprint); clearErr != nil {
 		corelogic.LogWrappedError(l, clearErr, "UserLogic.markUserExportFailed 清理前台用户导出复用索引失败")
 	}
 	saveErr := l.saveUserExportStatus(status)
-	l.notifyUserExportFailed(status, userExportFirstNonNilError(err, saveErr))
-	return saveErr
+	l.notifyUserExportFailed(status, userExportFirstNonNilError(err, cleanupErr, saveErr))
+	return userExportFirstNonNilError(saveErr, cleanupErr)
 }
 
 // notifyUserExportFailed 上报前台用户 Excel 异步导出失败。
@@ -995,7 +1086,7 @@ func (l *Logic) notifyUserExportFailed(status *types.UserExportStatusResp, err e
 	if l == nil || l.Svc == nil || status == nil || err == nil {
 		return
 	}
-	svc.NotifyTaskRuntimeAlert(l.Ctx, l.Svc.Task, svc.TaskRuntimeAlert{
+	svc.NotifyTaskRuntimeAlert(l.Ctx, l.Svc.RuntimeAlerter, svc.TaskRuntimeAlert{
 		Kind:      svc.TaskRuntimeAlertKindUserExcelExportFailed,
 		Title:     "【P1 Excel 异步导出失败】",
 		Status:    "导出任务已标记失败，已生成文件分片保留可下载状态",
@@ -1054,6 +1145,127 @@ func (l *Logic) publicUserExportStatus(status *types.UserExportStatusResp) *type
 // userExportStatusStore 返回前台用户导出复用的通用任务状态存储。
 func (l *Logic) userExportStatusStore() *excel.RedisStore {
 	return excel.NewRedisStore(l.Redis(), l.userExportJobKeyPattern(), userExportStatusTTL)
+}
+
+// CleanupExportFiles 删除已到保留期限的前台用户导出对象。
+func (l *Logic) CleanupExportFiles(payload *types.UserExportCleanupTaskPayload) error {
+	if payload == nil || strings.TrimSpace(payload.JobID) == "" {
+		return errors.Errorf("前台用户导出文件清理任务参数不完整")
+	}
+	files := make([]types.UserExportFileItem, 0, len(payload.ObjectKeys))
+	for _, objectKey := range helper.UniqueNonEmptyStrings(payload.ObjectKeys) {
+		files = append(files, types.UserExportFileItem{ObjectKey: objectKey})
+	}
+	if len(files) == 0 {
+		return errors.Errorf("前台用户导出文件清理任务缺少对象 key")
+	}
+	return l.deleteUserExportObjects(files)
+}
+
+// scheduleUserExportCleanup 投递导出完成 24 小时后的文件清理任务。
+func (l *Logic) scheduleUserExportCleanup(status *types.UserExportStatusResp) error {
+	if status == nil || l == nil || l.Svc == nil || l.Svc.Task == nil {
+		return errors.Errorf("前台用户导出文件清理任务系统未初始化")
+	}
+	objectKeys := make([]string, 0, len(status.Files))
+	for _, fileItem := range status.Files {
+		if objectKey := strings.TrimSpace(fileItem.ObjectKey); objectKey != "" {
+			objectKeys = append(objectKeys, objectKey)
+		}
+	}
+	objectKeys = helper.UniqueNonEmptyStrings(objectKeys)
+	if len(objectKeys) == 0 {
+		return errors.Errorf("前台用户导出文件清理任务缺少对象 key")
+	}
+	payload, err := json.Marshal(types.UserExportCleanupTaskPayload{
+		JobID:      status.JobID,
+		ObjectKeys: objectKeys,
+	})
+	if err != nil {
+		return errors.Wrap(err, "序列化前台用户导出文件清理任务失败")
+	}
+	return l.Svc.Task.EnqueueTask(l.Ctx, types.UserExportCleanupTaskType, payload,
+		svc.WithTaskQueue(taskqueue.QueueMaintenance),
+		svc.WithTaskRetry(5),
+		svc.WithTaskTimeout(10*time.Minute),
+		svc.WithTaskDelay(userExportFileRetention),
+	)
+}
+
+// deleteUserExportObjects 删除导出文件对象；删除失败时保留任务重试机会。
+func (l *Logic) deleteUserExportObjects(files []types.UserExportFileItem) error {
+	objectStorage, err := l.userExportObjectStorage()
+	if err != nil {
+		return errors.Tag(err)
+	}
+	for _, fileItem := range files {
+		objectKey := strings.TrimSpace(fileItem.ObjectKey)
+		if objectKey == "" {
+			continue
+		}
+		if err := objectStorage.Delete(l.Ctx, objectKey); err != nil {
+			return errors.Wrapf(err, "删除前台用户导出对象失败 object_key=%s", objectKey)
+		}
+	}
+	return nil
+}
+
+// keepCompletedUserExportReuseIndex 把完成结果复用索引限制在完成后的 20 分钟内。
+func (l *Logic) keepCompletedUserExportReuseIndex(status *types.UserExportStatusResp, now time.Time) error {
+	if status == nil || strings.TrimSpace(status.RequestFingerprint) == "" {
+		return nil
+	}
+	ttl := userExportCompletedReuseRemaining(status, now)
+	if ttl <= 0 {
+		return l.clearUserExportRequestIndex(status.RequestFingerprint)
+	}
+	return l.saveUserExportRequestIndex(status.RequestFingerprint, status.JobID, ttl)
+}
+
+// userExportCompletedReuseRemaining 返回完成结果剩余可复用时间。
+func userExportCompletedReuseRemaining(status *types.UserExportStatusResp, now time.Time) time.Duration {
+	if status == nil || status.Status != types.UserExportStatusSucceeded {
+		return 0
+	}
+	finishedAt, err := excel.ParseDateTime(status.FinishedAt)
+	if err != nil || finishedAt.IsZero() {
+		return 0
+	}
+	return userExportCompletedReuseTTL - now.Sub(finishedAt)
+}
+
+// userExportStatusRemaining 返回任务状态从完成时间起剩余的保留时间。
+func userExportStatusRemaining(status *types.UserExportStatusResp, now time.Time) time.Duration {
+	if status == nil || (status.Status != types.UserExportStatusSucceeded && status.Status != types.UserExportStatusFailed) {
+		return userExportStatusTTL
+	}
+	finishedAt, err := excel.ParseDateTime(status.FinishedAt)
+	if err != nil || finishedAt.IsZero() {
+		return userExportStatusTTL
+	}
+	return userExportStatusTTL - now.Sub(finishedAt)
+}
+
+// resetUserExportFiles 清空失败重试前已生成的文件状态。
+func resetUserExportFiles(status *types.UserExportStatusResp) {
+	if status == nil {
+		return
+	}
+	status.Files = nil
+	status.PartCount = 0
+	status.DownloadReady = false
+	status.FilePath = ""
+	status.ObjectKey = ""
+	status.StorageType = ""
+	status.Processed = 0
+	status.Total = 0
+	status.Progress = 0
+	status.EstimatedSeconds = 0
+	status.AverageRowsPerSec = 0
+	status.LastCursorID = 0
+	status.StartedAt = ""
+	status.LastProcessedAt = ""
+	status.FinishedAt = ""
 }
 
 // userExportRequestLockKey 返回当前 app_id 作用域下的前台用户导出条件互斥锁。
@@ -1297,12 +1509,16 @@ func buildUserExportPartFileName(jobID string, now time.Time, partNo int) string
 		partNo)
 }
 
-// buildUserExportPartStorageID 构造分片对象存储文件 ID，避免不同分片覆盖。
+// buildUserExportPartStorageID 生成单次导出分片的唯一存储 ID，避免失败重试覆盖仍待清理的旧对象。
 func buildUserExportPartStorageID(jobID string, partNo int) string {
 	if partNo <= 0 {
 		partNo = 1
 	}
-	return fmt.Sprintf("%s_part_%04d", strings.ReplaceAll(strings.TrimSpace(jobID), "-", ""), partNo)
+	return fmt.Sprintf("%s_part_%04d_%s",
+		strings.ReplaceAll(strings.TrimSpace(jobID), "-", ""),
+		partNo,
+		strings.ReplaceAll(uuid.NewString(), "-", ""),
+	)
 }
 
 // buildUserExportFilePath 构造前台用户导出文件的本地存储路径。

@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/plugin/dbresolver"
 )
 
 // TestUserPhysicalTableName 验证 2 的幂物理表数量路由规则稳定。
@@ -104,6 +105,44 @@ func TestUserIdentityTableNameRejectsMismatchedShardNo(t *testing.T) {
 	}
 }
 
+// TestUserIdentityIDsByTable 验证批量用户读取按真实物理表分组并去重。
+func TestUserIdentityIDsByTable(t *testing.T) {
+	firstID := int64(1)
+	firstShard := idgen.ShardNo(firstID)
+	firstTable, err := UserPhysicalTableName(firstShard, 2)
+	if err != nil {
+		t.Fatalf("UserPhysicalTableName(first) error = %v", err)
+	}
+	secondID := firstID + 1
+	for ; secondID < 100000; secondID++ {
+		secondTable, tableErr := UserPhysicalTableName(idgen.ShardNo(secondID), 2)
+		if tableErr != nil {
+			t.Fatalf("UserPhysicalTableName(second) error = %v", tableErr)
+		}
+		if secondTable != firstTable {
+			break
+		}
+	}
+	if secondID >= 100000 {
+		t.Fatal("未找到落入另一物理表的测试用户 ID")
+	}
+	identities := []UserIdentity{
+		{IdentityType: UserIdentityTypeUsername, IdentityValue: "first", UserID: firstID, UserShardNo: firstShard, UserRouteShardCount: 2},
+		{IdentityType: UserIdentityTypeUsername, IdentityValue: "first", UserID: firstID, UserShardNo: firstShard, UserRouteShardCount: 2},
+		{IdentityType: UserIdentityTypeUsername, IdentityValue: "second", UserID: secondID, UserShardNo: idgen.ShardNo(secondID), UserRouteShardCount: 2},
+	}
+	idsByTable, err := userIdentityIDsByTable(identities)
+	if err != nil {
+		t.Fatalf("userIdentityIDsByTable() error = %v", err)
+	}
+	if len(idsByTable) != 2 {
+		t.Fatalf("物理表分组数 = %d, want 2: %#v", len(idsByTable), idsByTable)
+	}
+	if got := idsByTable[firstTable]; len(got) != 1 || got[0] != firstID {
+		t.Fatalf("同表用户 ID 未正确去重: %#v", got)
+	}
+}
+
 // TestSafeUserUpdatesRejectsImmutableFields 验证通用更新不会修改用户分片和唯一账号字段。
 func TestSafeUserUpdatesRejectsImmutableFields(t *testing.T) {
 	got := safeUserUpdates(map[string]any{
@@ -111,16 +150,35 @@ func TestSafeUserUpdatesRejectsImmutableFields(t *testing.T) {
 		"shard_no":      12,
 		"username":      "changed",
 		"password_hash": "unsafe",
+		"auth_version":  uint64(99),
+		"status":        UserStatusDisabled,
 		"email":         "raw@example.com",
 		"email_hash":    " hash ",
-	}, false)
-	for _, key := range []string{"id", "shard_no", "username", "password_hash", "email"} {
+	})
+	for _, key := range []string{"id", "shard_no", "username", "password_hash", "auth_version", "status", "email"} {
 		if _, ok := got[key]; ok {
 			t.Fatalf("safeUserUpdates() should reject %s: %+v", key, got)
 		}
 	}
 	if got["email_hash"] != "hash" {
 		t.Fatalf("safeUserUpdates() should keep secure email fields: %+v", got)
+	}
+}
+
+// TestUserDBSessionPreservesResolverMode 验证动态表会话复制不会把显式主库或副本路由清空。
+func TestUserDBSessionPreservesResolverMode(t *testing.T) {
+	db := newUserDryRunDB(t)
+	for name, operation := range map[string]dbresolver.Operation{
+		"read":  dbresolver.Read,
+		"write": dbresolver.Write,
+	} {
+		t.Run(name, func(t *testing.T) {
+			key := "gorm:db_resolver:" + name
+			session := userDBSession(db.Clauses(operation))
+			if _, ok := session.Statement.Settings.Load(key); !ok {
+				t.Fatalf("userDBSession() should preserve %s resolver mode", name)
+			}
+		})
 	}
 }
 

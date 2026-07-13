@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"admin/internal/config"
+	"admin/internal/model"
+	"admin/internal/svc"
 	"admin/internal/types"
 
 	"gorm.io/gorm"
@@ -230,5 +232,31 @@ func TestArchiveReqToModelDefaultsDelayDays(t *testing.T) {
 	}
 	if row.DeleteDelayDays != 45 {
 		t.Fatalf("DeleteDelayDays=%d want 45", row.DeleteDelayDays)
+	}
+}
+
+// TestRuntimeConfigReloadMatchesRelease 验证只有完整匹配本次发布的重载回执才能标记已应用。
+func TestRuntimeConfigReloadMatchesRelease(t *testing.T) {
+	// release 表示本次已持久化的发布记录。
+	release := model.RuntimeConfigRelease{ID: 13, VersionNo: 7, Checksum: "checksum-7"}
+	// tests 覆盖无回执和各个字段不匹配的场景。
+	tests := []struct {
+		name   string                        // name 表示测试场景。
+		reload svc.RuntimeConfigReloadResult // reload 表示运行态重载回执。
+		want   bool                          // want 表示是否应标记已应用。
+	}{
+		{name: "missing receipt"},
+		{name: "release mismatch", reload: svc.RuntimeConfigReloadResult{ReleaseID: 12, VersionNo: 7, Checksum: "checksum-7"}},
+		{name: "version mismatch", reload: svc.RuntimeConfigReloadResult{ReleaseID: 13, VersionNo: 6, Checksum: "checksum-7"}},
+		{name: "checksum mismatch", reload: svc.RuntimeConfigReloadResult{ReleaseID: 13, VersionNo: 7, Checksum: "checksum-6"}},
+		{name: "exact match", reload: svc.RuntimeConfigReloadResult{ReleaseID: 13, VersionNo: 7, Checksum: "checksum-7"}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runtimeConfigReloadMatchesRelease(release, tt.reload); got != tt.want {
+				t.Fatalf("runtimeConfigReloadMatchesRelease() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -36,7 +36,11 @@ type CollectorFailedEvent struct {
 	// NextRunAt 下次允许处理时间。
 	NextRunAt time.Time `gorm:"column:next_run_at;type:datetime;not null;index:idx_biz_state_next,priority:3;index:idx_state_next,priority:2;index:idx_partition_state_next,priority:3;comment:下次可处理时间" json:"nextRunAt"`
 	// StartedAt 最近一次开始处理时间。
-	StartedAt *time.Time `gorm:"column:started_at;type:datetime;null;index:idx_state_started,priority:2;comment:开始处理时间" json:"startedAt,omitempty"`
+	StartedAt *time.Time `gorm:"column:started_at;type:datetime(3);null;comment:开始处理时间" json:"startedAt,omitempty"`
+	// ClaimToken 当前领取所有权令牌，仅用于服务端状态回写校验。
+	ClaimToken string `gorm:"column:claim_token;type:varchar(64);not null;default:'';comment:领取所有权令牌" json:"-"`
+	// LeaseUntil 当前领取租约到期时间。
+	LeaseUntil *time.Time `gorm:"column:lease_until;type:datetime(3);null;index:idx_state_lease,priority:2;comment:领取租约到期时间" json:"leaseUntil,omitempty"`
 	// FinishedAt 完成或死信时间。
 	FinishedAt *time.Time `gorm:"column:finished_at;type:datetime;null;index:idx_state_finished;comment:结束时间(完成/死信)" json:"finishedAt,omitempty"`
 	// LastError 最近一次失败原因摘要。

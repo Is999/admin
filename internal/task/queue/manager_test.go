@@ -3,9 +3,11 @@ package taskqueue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,6 +33,153 @@ func enabledTaskPeriodicConfig(item config.TaskPeriodicConfig) config.TaskPeriod
 	enabled := true
 	item.Enabled = &enabled
 	return item
+}
+
+// failNthEnqueuer 在指定调用处注入一次投递失败，复现分片部分入队窗口。
+type failNthEnqueuer struct {
+	mu       sync.Mutex   // mu 保护调用计数和单次失败状态
+	delegate taskEnqueuer // delegate 执行未注入失败的真实投递
+	failAt   int          // failAt 表示第几次投递返回错误，从 1 开始
+	calls    int          // calls 记录累计投递次数
+	failed   bool         // failed 保证故障只注入一次
+}
+
+// failFromEnqueuer 从指定调用起持续失败，用于验证技术重试耗尽收口。
+type failFromEnqueuer struct {
+	mu       sync.Mutex   // mu 保护调用计数
+	delegate taskEnqueuer // delegate 执行故障点之前的真实投递
+	failFrom int          // failFrom 表示从第几次投递起持续失败
+	calls    int          // calls 记录累计投递次数
+}
+
+// taskEnqueuerFunc 把测试闭包适配为任务投递器。
+type taskEnqueuerFunc func(context.Context, *asynq.Task, ...asynq.Option) (*asynq.TaskInfo, error)
+
+// EnqueueContext 执行测试注入的任务投递闭包。
+func (f taskEnqueuerFunc) EnqueueContext(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+	return f(ctx, task, opts...)
+}
+
+// EnqueueContext 实现从指定调用起持续失败的任务投递器。
+func (f *failFromEnqueuer) EnqueueContext(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+	f.mu.Lock()
+	f.calls++
+	shouldFail := f.failFrom > 0 && f.calls >= f.failFrom
+	f.mu.Unlock()
+	if shouldFail {
+		return nil, errors.New("persistent enqueue failure")
+	}
+	return f.delegate.EnqueueContext(ctx, task, opts...)
+}
+
+// EnqueueContext 实现 taskEnqueuer，并在目标调用处返回确定性故障。
+func (f *failNthEnqueuer) EnqueueContext(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+	f.mu.Lock()
+	f.calls++
+	shouldFail := !f.failed && f.failAt > 0 && f.calls == f.failAt
+	if shouldFail {
+		f.failed = true
+	}
+	f.mu.Unlock()
+	if shouldFail {
+		return nil, errors.New("injected enqueue failure")
+	}
+	return f.delegate.EnqueueContext(ctx, task, opts...)
+}
+
+// TestManagerReadyChecksRedisAndWorkerState 验证任务就绪检查下探 Redis 并校验部署模式要求的 Worker。
+func TestManagerReadyChecksRedisAndWorkerState(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if err := manager.Ready(context.Background(), false, false); err != nil {
+		t.Fatalf("仅投递模式任务就绪检查失败: %v", err)
+	}
+	if err := manager.Ready(context.Background(), true, false); err == nil || !strings.Contains(err.Error(), "Worker") {
+		t.Fatalf("未启动 Worker 时应判定未就绪，实际=%v", err)
+	}
+	if err := manager.StartWorker(); err != nil {
+		t.Fatalf("启动 Worker 失败: %v", err)
+	}
+	if err := manager.Ready(context.Background(), true, false); err != nil {
+		t.Fatalf("Worker 启动后应就绪: %v", err)
+	}
+	manager.recordWorkerHeartbeat(errors.New("worker heartbeat failed"))
+	if err := manager.Ready(context.Background(), true, false); err == nil || !strings.Contains(err.Error(), "心跳失败") {
+		t.Fatalf("Worker 内部心跳失败时应判定未就绪，实际=%v", err)
+	}
+	manager.recordWorkerHeartbeat(nil)
+	manager.workerHealthMu.Lock()
+	manager.workerHealth.lastHeartbeat = time.Now().Add(-workerHeartbeatMaxAge - time.Second)
+	manager.workerHealthMu.Unlock()
+	if err := manager.Ready(context.Background(), true, false); err == nil || !strings.Contains(err.Error(), "心跳已超时") {
+		t.Fatalf("Worker 心跳停滞时应判定未就绪，实际=%v", err)
+	}
+	manager.recordWorkerHeartbeat(nil)
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatalf("停止 Worker 失败: %v", err)
+	}
+	if err := manager.redis.Close(); err != nil {
+		t.Fatalf("关闭任务 Redis 失败: %v", err)
+	}
+	if err := manager.Ready(context.Background(), false, false); err == nil || !strings.Contains(err.Error(), "Redis") {
+		t.Fatalf("任务 Redis 关闭后应判定未就绪，实际=%v", err)
+	}
+}
+
+// TestManagerReadyChecksSchedulerState 验证 Scheduler 模式不会把未启动的选举循环误报为就绪。
+func TestManagerReadyChecksSchedulerState(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if err := manager.RegisterWorkflow(testWorkflowDefinition("ready.workflow")); err != nil {
+		t.Fatalf("注册就绪检查工作流失败: %v", err)
+	}
+	cfg := manager.CurrentConfig()
+	cfg.Scheduler.Enabled = true
+	cfg.Periodic = []config.TaskPeriodicConfig{enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
+		Name: "ready-periodic", Cron: "*/5 * * * *", Workflow: "ready.workflow",
+	})}
+	manager.UpdateConfig(cfg)
+	if err := manager.Ready(context.Background(), false, true); err == nil || !strings.Contains(err.Error(), "Scheduler") {
+		t.Fatalf("未启动 Scheduler 时应判定未就绪，实际=%v", err)
+	}
+	if err := manager.StartScheduler(); err != nil {
+		t.Fatalf("启动 Scheduler 失败: %v", err)
+	}
+	if err := manager.Ready(context.Background(), false, true); err != nil {
+		t.Fatalf("Scheduler 启动后应就绪: %v", err)
+	}
+	manager.leader.markHeartbeat(errors.New("scheduler heartbeat failed"))
+	if err := manager.Ready(context.Background(), false, true); err == nil || !strings.Contains(err.Error(), "心跳失败") {
+		t.Fatalf("Scheduler 选举心跳失败时应判定未就绪，实际=%v", err)
+	}
+	manager.leader.markHeartbeat(nil)
+	manager.leader.healthMu.Lock()
+	manager.leader.health.lastHeartbeat = time.Now().Add(-4 * manager.leader.renewInterval)
+	manager.leader.healthMu.Unlock()
+	if err := manager.Ready(context.Background(), false, true); err == nil || !strings.Contains(err.Error(), "心跳已超时") {
+		t.Fatalf("Scheduler 选举心跳停滞时应判定未就绪，实际=%v", err)
+	}
+	manager.leader.markHeartbeat(nil)
+}
+
+// TestManagerStopHonorsContextDeadline 确保后台协程未退出时不会突破应用统一停止期限。
+func TestManagerStopHonorsContextDeadline(t *testing.T) {
+	manager := &Manager{}
+	manager.wg.Add(1)
+	t.Cleanup(manager.wg.Done)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	err := manager.Stop(ctx)
+	if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("Stop() error = %v, want deadline exceeded", err)
+	}
+	if time.Since(startedAt) > time.Second {
+		t.Fatalf("Stop() ignored deadline, elapsed=%s", time.Since(startedAt))
+	}
 }
 
 // TestTaskLogMessageIncludesTaskIdentity 验证任务生命周期日志正文带上任务身份字段。
@@ -208,6 +357,116 @@ func TestEnrichTaskContextSetsModeField(t *testing.T) {
 	}
 }
 
+// TestTaskItemWorkflowIDUsesCompletedResult 验证周期触发任务可从成功结果补齐工作流实例 ID。
+func TestTaskItemWorkflowIDUsesCompletedResult(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	item := manager.toTaskItem(context.Background(), &asynq.TaskInfo{
+		ID:     "trigger-result-workflow",
+		Type:   TypeWorkflowTrigger,
+		Queue:  manager.namespacedQueueName(QueueMaintenance),
+		State:  asynq.TaskStateCompleted,
+		Result: []byte(`{"workflowId":"wf-result"}`),
+	})
+	if item.WorkflowID != "wf-result" {
+		t.Fatalf("任务工作流实例 ID=%q，期望=wf-result", item.WorkflowID)
+	}
+}
+
+// TestTaskItemWorkflowIDUsesPayloadOrTaskID 验证失败触发任务仍可恢复稳定工作流实例 ID。
+func TestTaskItemWorkflowIDUsesPayloadOrTaskID(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	fromPayload := manager.toTaskItem(context.Background(), &asynq.TaskInfo{
+		ID:      "trigger-payload-task",
+		Type:    TypeWorkflowTrigger,
+		Queue:   manager.namespacedQueueName(QueueMaintenance),
+		State:   asynq.TaskStateArchived,
+		Payload: []byte(`{"workflowId":"wf-payload"}`),
+	})
+	if fromPayload.WorkflowID != "wf-payload" {
+		t.Fatalf("载荷工作流实例 ID=%q，期望=wf-payload", fromPayload.WorkflowID)
+	}
+	fromTaskID := manager.toTaskItem(context.Background(), &asynq.TaskInfo{
+		ID:      "wf-task-id",
+		Type:    TypeWorkflowTrigger,
+		Queue:   manager.namespacedQueueName(QueueMaintenance),
+		State:   asynq.TaskStateArchived,
+		Payload: []byte(`{"workflowName":"archive.run"}`),
+	})
+	if fromTaskID.WorkflowID != "wf-task-id" {
+		t.Fatalf("任务 ID 恢复的工作流实例 ID=%q，期望=wf-task-id", fromTaskID.WorkflowID)
+	}
+}
+
+// TestGetWorkflowStatusMissingPreservesRedisNil 验证日报可区分快照过期与 Redis 读取故障。
+func TestGetWorkflowStatusMissingPreservesRedisNil(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	if _, err := manager.GetWorkflowStatus(context.Background(), "missing-workflow"); !errors.Is(err, redis.Nil) {
+		t.Fatalf("缺失工作流错误=%v，期望保留 redis.Nil", err)
+	}
+}
+
+// TestGetWorkflowStatusSummariesBatchesLightweightMetadata 验证日报只批量读取工作流主记录并忽略缺失实例。
+func TestGetWorkflowStatusSummariesBatchesLightweightMetadata(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	if err := manager.redis.HSet(ctx, manager.workflowMetaKey("wf-1"), "workflowName", "archive.run", "status", WorkflowStatusSuccess).Err(); err != nil {
+		t.Fatalf("写入工作流主记录失败: %v", err)
+	}
+	if err := manager.redis.HSet(ctx, manager.workflowMetaKey("wf-2"), "workflowName", "archive.run", "status", WorkflowStatusRunning).Err(); err != nil {
+		t.Fatalf("写入工作流主记录失败: %v", err)
+	}
+	items, err := manager.GetWorkflowStatusSummaries(ctx, []string{"wf-2", "wf-1", "wf-2", "missing", ""})
+	if err != nil {
+		t.Fatalf("GetWorkflowStatusSummaries() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("轻量工作流状态数量 = %d, want 2: %+v", len(items), items)
+	}
+	if items["wf-1"].WorkflowName != "archive.run" || items["wf-1"].Status != WorkflowStatusSuccess {
+		t.Fatalf("wf-1 轻量状态异常: %+v", items["wf-1"])
+	}
+	if items["wf-2"].Status != WorkflowStatusRunning {
+		t.Fatalf("wf-2 轻量状态异常: %+v", items["wf-2"])
+	}
+	if _, exists := items["missing"]; exists {
+		t.Fatalf("缺失工作流不应生成伪状态: %+v", items["missing"])
+	}
+}
+
+// TestGetWorkflowStatusSummariesChunksLargeInput 验证超过单 pipeline 上限时分批读取且结果完整。
+func TestGetWorkflowStatusSummariesChunksLargeInput(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	workflowIDs := make([]string, 0, workflowStatusBatchSize+1)
+	pipe := manager.redis.Pipeline()
+	for index := 0; index <= workflowStatusBatchSize; index++ {
+		workflowID := fmt.Sprintf("wf-batch-%04d", index)
+		workflowIDs = append(workflowIDs, workflowID)
+		pipe.HSet(ctx, manager.workflowMetaKey(workflowID), "workflowName", "archive.run", "status", WorkflowStatusSuccess)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		t.Fatalf("批量写入工作流主记录失败: %v", err)
+	}
+	pipe.Discard()
+	items, err := manager.GetWorkflowStatusSummaries(ctx, workflowIDs)
+	if err != nil {
+		t.Fatalf("GetWorkflowStatusSummaries() error = %v", err)
+	}
+	if len(items) != len(workflowIDs) {
+		t.Fatalf("分批工作流状态数量=%d, want %d", len(items), len(workflowIDs))
+	}
+	for _, workflowID := range workflowIDs {
+		if item := items[workflowID]; item == nil || item.Status != WorkflowStatusSuccess {
+			t.Fatalf("分批工作流状态缺失 workflow_id=%s item=%+v", workflowID, item)
+		}
+	}
+}
+
 // TestRegisterWorkflowRejectsDuplicateName 验证 Manager 层不会静默覆盖同名工作流定义。
 func TestRegisterWorkflowRejectsDuplicateName(t *testing.T) {
 	manager, cleanup := newTestManager(t)
@@ -377,6 +636,13 @@ func TestEnqueueWorkflowTriggerReservesUniqueBeforeEnqueue(t *testing.T) {
 	}
 	if resp.WorkflowID == "" {
 		t.Fatal("期望回执里包含工作流 ID")
+	}
+	info, err := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueDefault), resp.TaskID)
+	if err != nil {
+		t.Fatalf("读取工作流触发任务失败: %v", err)
+	}
+	if info.Retention != taskCompletedRetention {
+		t.Fatalf("工作流触发任务 retention=%s，期望=%s", info.Retention, taskCompletedRetention)
 	}
 	if _, err := manager.EnqueueWorkflowTrigger(context.Background(), req); !errors.Is(err, ErrWorkflowAlreadyExists) {
 		t.Fatalf("期望返回 ErrWorkflowAlreadyExists，实际为 %v", err)
@@ -626,6 +892,41 @@ func TestStartWorkflowAllowsReservedUniqueLock(t *testing.T) {
 	}
 }
 
+// TestEnsureWorkflowUniqueIsOwnerSafe 验证唯一键确认、续期和空 key 抢占由单个原子脚本完成。
+func TestEnsureWorkflowUniqueIsOwnerSafe(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	const (
+		workflowName = "owner-safe-workflow"
+		uniqueKey    = "daily"
+		firstOwner   = "workflow-a"
+		secondOwner  = "workflow-b"
+	)
+	key := manager.workflowUniqueKey(workflowName, uniqueKey)
+
+	if locked, err := manager.ensureWorkflowUnique(ctx, workflowName, uniqueKey, firstOwner, time.Minute); err != nil || !locked {
+		t.Fatalf("空唯一键抢占失败: locked=%v err=%v", locked, err)
+	}
+	manager.redis.Set(ctx, key, secondOwner, 30*time.Second)
+	beforeTTL := manager.redis.PTTL(ctx, key).Val()
+	if locked, err := manager.ensureWorkflowUnique(ctx, workflowName, uniqueKey, firstOwner, time.Hour); err != nil || locked {
+		t.Fatalf("旧 owner 不应确认新 owner 的唯一键: locked=%v err=%v", locked, err)
+	}
+	if owner := manager.redis.Get(ctx, key).Val(); owner != secondOwner {
+		t.Fatalf("唯一键 owner 被旧实例覆盖: %q", owner)
+	}
+	if afterTTL := manager.redis.PTTL(ctx, key).Val(); afterTTL > beforeTTL {
+		t.Fatalf("旧 owner 不应给新 owner 续期: before=%s after=%s", beforeTTL, afterTTL)
+	}
+	if locked, err := manager.ensureWorkflowUnique(ctx, workflowName, uniqueKey, secondOwner, time.Hour); err != nil || !locked {
+		t.Fatalf("当前 owner 续期失败: locked=%v err=%v", locked, err)
+	}
+	if ttl := manager.redis.PTTL(ctx, key).Val(); ttl < 59*time.Minute {
+		t.Fatalf("当前 owner 续期未生效: ttl=%s", ttl)
+	}
+}
+
 // TestStartWorkflowRebuildsIncompleteMetadata 验证工作流半初始化元数据会被清理并重建。
 func TestStartWorkflowRebuildsIncompleteMetadata(t *testing.T) {
 	manager, cleanup := newTestManager(t)
@@ -661,6 +962,30 @@ func TestStartWorkflowRebuildsIncompleteMetadata(t *testing.T) {
 	}
 	if !complete {
 		t.Fatal("期望工作流元数据已完整重建")
+	}
+}
+
+// TestStartWorkflowResumesCompletePendingMetadata 验证入口重试会恢复已完整但尚未转为运行态的工作流。
+func TestStartWorkflowResumesCompletePendingMetadata(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := testWorkflowDefinition("demo.pending.workflow")
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	if err = manager.redis.HSet(context.Background(), manager.workflowMetaKey(workflowID), "status", WorkflowStatusPending).Err(); err != nil {
+		t.Fatalf("准备 pending 工作流状态失败: %v", err)
+	}
+	if _, err = manager.StartWorkflow(context.Background(), WorkflowStartSpec{WorkflowID: workflowID, Name: def.Name}); err != nil {
+		t.Fatalf("恢复 pending 工作流失败: %v", err)
+	}
+	if status := manager.redis.HGet(context.Background(), manager.workflowMetaKey(workflowID), "status").Val(); status != WorkflowStatusRunning {
+		t.Fatalf("期望工作流恢复为 running，实际为 %s", status)
 	}
 }
 
@@ -728,9 +1053,10 @@ func TestRecordTaskRuntimeFinishUsesDetachedContext(t *testing.T) {
 	requestctx.SetTask(ctx, "task-timeout", "demo:timeout", QueueMaintenance)
 	cancel()
 
-	manager.recordTaskRuntimeFinish(ctx, "task-timeout", time.Now().Add(-time.Second), errors.New("boom"), nil)
+	attemptToken := manager.recordTaskRuntimeStart(context.Background(), QueueMaintenance, "task-timeout", time.Now().Add(-time.Second))
+	manager.recordTaskRuntimeFinish(ctx, QueueMaintenance, "task-timeout", attemptToken, time.Now().Add(-time.Second), errors.New("boom"), nil)
 
-	values, err := manager.redis.HGetAll(context.Background(), manager.taskRuntimeKey("task-timeout")).Result()
+	values, err := manager.redis.HGetAll(context.Background(), manager.taskRuntimeKey(QueueMaintenance, "task-timeout")).Result()
 	if err != nil {
 		t.Fatalf("读取任务耗时快照失败: %v", err)
 	}
@@ -745,6 +1071,149 @@ func TestRecordTaskRuntimeFinishUsesDetachedContext(t *testing.T) {
 	}
 	if !strings.Contains(values["lastErr"], "boom") {
 		t.Fatalf("期望失败原因写入 lastErr，实际 values=%+v", values)
+	}
+	if ttl := manager.redis.TTL(context.Background(), manager.taskRuntimeKey(QueueMaintenance, "task-timeout")).Val(); ttl <= 0 {
+		t.Fatalf("任务运行快照 TTL=%s，期望大于 0", ttl)
+	}
+}
+
+// TestRecordTaskRuntimeClearsPreviousFinalFields 验证同一任务 ID 再次运行不会继承旧错误和处理量。
+func TestRecordTaskRuntimeClearsPreviousFinalFields(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	key := manager.taskRuntimeKey(QueueDefault, "task-reused")
+	if err := manager.redis.HSet(ctx, key,
+		"status", "failed",
+		"finishedAt", "2026-07-18T09:00:00+08:00",
+		"durationMs", 99,
+		"executionTrace", `{"totalCount":1}`,
+		"traceTotalCount", 1,
+		"lastErr", "old failure",
+	).Err(); err != nil {
+		t.Fatalf("写入旧任务运行快照失败: %v", err)
+	}
+	manager.recordTaskRuntimeStart(ctx, QueueDefault, "task-reused", time.Now())
+	values, err := manager.redis.HGetAll(ctx, key).Result()
+	if err != nil {
+		t.Fatalf("读取重新开始后的任务运行快照失败: %v", err)
+	}
+	for _, field := range taskRuntimeFinalFields {
+		if _, exists := values[field]; exists {
+			t.Fatalf("重新开始后仍残留终态字段 %s: %+v", field, values)
+		}
+	}
+	if values["status"] != "running" {
+		t.Fatalf("重新开始后状态=%q，期望 running", values["status"])
+	}
+	if ttl := manager.redis.TTL(ctx, key).Val(); ttl <= 0 {
+		t.Fatalf("重新开始后的任务运行快照 TTL=%s，期望大于 0", ttl)
+	}
+}
+
+// TestTaskRuntimeIsolatesSameIDAcrossQueues 验证不同队列复用 TaskID 时运行快照互不覆盖。
+func TestTaskRuntimeIsolatesSameIDAcrossQueues(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	const taskID = "shared-task-id"
+	defaultStarted := time.Now().Add(-2 * time.Second)
+	maintenanceStarted := time.Now().Add(-time.Second)
+
+	defaultToken := manager.recordTaskRuntimeStart(ctx, QueueDefault, taskID, defaultStarted)
+	maintenanceToken := manager.recordTaskRuntimeStart(ctx, QueueMaintenance, taskID, maintenanceStarted)
+	manager.recordTaskRuntimeFinish(ctx, QueueDefault, taskID, defaultToken, defaultStarted, errors.New("default failed"), nil)
+	manager.recordTaskRuntimeFinish(ctx, QueueMaintenance, taskID, maintenanceToken, maintenanceStarted, nil, nil)
+	defaultRecord := manager.readTaskRuntime(ctx, QueueDefault, taskID)
+	maintenanceRecord := manager.readTaskRuntime(ctx, QueueMaintenance, taskID)
+	if defaultRecord.DurationMS <= maintenanceRecord.DurationMS || defaultRecord.FinishedAt == "" || maintenanceRecord.FinishedAt == "" {
+		t.Fatalf("跨队列运行快照未独立保存: default=%+v maintenance=%+v", defaultRecord, maintenanceRecord)
+	}
+	defaultValues := manager.redis.HGetAll(ctx, manager.taskRuntimeKey(QueueDefault, taskID)).Val()
+	maintenanceValues := manager.redis.HGetAll(ctx, manager.taskRuntimeKey(QueueMaintenance, taskID)).Val()
+	if !strings.Contains(defaultValues["lastErr"], "default failed") || maintenanceValues["lastErr"] != "" {
+		t.Fatalf("跨队列终态字段发生污染: default=%+v maintenance=%+v", defaultValues, maintenanceValues)
+	}
+}
+
+// TestTaskRuntimeRejectsStaleAttemptFinish 验证租约丢失后的迟到实例不会覆盖新 attempt 快照。
+func TestTaskRuntimeRejectsStaleAttemptFinish(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	const taskID = "leased-task"
+	oldStarted := time.Now().Add(-2 * time.Second)
+	newStarted := time.Now().Add(-time.Second)
+	oldToken := manager.recordTaskRuntimeStart(ctx, QueueMaintenance, taskID, oldStarted)
+	newToken := manager.recordTaskRuntimeStart(ctx, QueueMaintenance, taskID, newStarted)
+
+	manager.recordTaskRuntimeFinish(ctx, QueueMaintenance, taskID, oldToken, oldStarted, errors.New("stale failure"), nil)
+	values := manager.redis.HGetAll(ctx, manager.taskRuntimeKey(QueueMaintenance, taskID)).Val()
+	if values["attemptToken"] != newToken || values["status"] != "running" || values["lastErr"] != "" {
+		t.Fatalf("迟到 attempt 覆盖了新快照: %+v", values)
+	}
+
+	manager.recordTaskRuntimeFinish(ctx, QueueMaintenance, taskID, newToken, newStarted, nil, nil)
+	values = manager.redis.HGetAll(ctx, manager.taskRuntimeKey(QueueMaintenance, taskID)).Val()
+	if values["attemptToken"] != newToken || values["status"] != "success" || values["finishedAt"] == "" {
+		t.Fatalf("当前 attempt 未正确写入终态: %+v", values)
+	}
+}
+
+// TestReadTaskRuntimesUsesBoundedFields 验证日报只读取必要字段且把运行快照纳入字节预算。
+func TestReadTaskRuntimesUsesBoundedFields(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	key := manager.taskRuntimeKey(QueueMaintenance, "runtime-report")
+	if err := manager.redis.HSet(ctx, key, map[string]any{
+		"startedAt":      "2026-07-18T10:00:00Z",
+		"finishedAt":     "2026-07-18T10:00:01Z",
+		"durationMs":     "1000",
+		"executionTrace": `{"totalCount":2,"readCount":2}`,
+		"unused":         strings.Repeat("x", 2<<20),
+	}).Err(); err != nil {
+		t.Fatalf("写入日报运行快照测试数据失败: %v", err)
+	}
+	infos := []*asynq.TaskInfo{{ID: "runtime-report", Queue: manager.namespacedQueueName(QueueMaintenance)}}
+	records, usedBytes, limited, err := manager.readTaskRuntimes(ctx, infos, 1024)
+	if err != nil {
+		t.Fatalf("读取日报运行快照失败: %v", err)
+	}
+	record := records[taskRuntimeIdentity(infos[0].Queue, infos[0].ID)]
+	if limited || usedBytes <= 0 || usedBytes >= 1024 || record.DurationMS != 1000 || record.ExecutionTrace == nil || record.ExecutionTrace.ReadCount != 2 {
+		t.Fatalf("日报运行快照读取异常: limited=%t bytes=%d record=%+v", limited, usedBytes, record)
+	}
+	if records, usedBytes, limited, err = manager.readTaskRuntimes(ctx, infos, 1); err != nil || !limited || usedBytes != 0 || len(records) != 0 {
+		t.Fatalf("日报运行快照应受字节预算阻断: records=%+v bytes=%d limited=%t err=%v", records, usedBytes, limited, err)
+	}
+}
+
+// TestBoundedTaskStatsSnapshotPreservesTotals 验证处理量快照裁剪明细时保留聚合计数并限制序列化大小。
+func TestBoundedTaskStatsSnapshotPreservesTotals(t *testing.T) {
+	details := make([]taskstats.Detail, 0, 1000)
+	for index := 0; index < cap(details); index++ {
+		details = append(details, taskstats.Detail{Action: "read", Name: strings.Repeat("明细", 300), Count: int64(index + 1)})
+	}
+	original := &taskstats.Snapshot{
+		Name:       strings.Repeat("任务", 300),
+		StartedAt:  strings.Repeat("s", 100_000),
+		FinishedAt: strings.Repeat("f", 100_000),
+		TotalCount: 9_999,
+		ReadCount:  9_999,
+		Details:    details,
+	}
+	bounded := boundedTaskStatsSnapshot(original)
+	raw, err := json.Marshal(bounded)
+	if err != nil {
+		t.Fatalf("序列化受控处理量快照失败: %v", err)
+	}
+	if len(raw) > maxTaskExecutionTraceBytes || bounded.TotalCount != original.TotalCount || bounded.ReadCount != original.ReadCount || len(bounded.Details) > maxTaskExecutionTraceDetails {
+		t.Fatalf("处理量快照限制异常: bytes=%d bounded=%+v", len(raw), bounded)
+	}
+	if len(original.Details) != 1000 || original.Name == bounded.Name {
+		t.Fatalf("处理量快照限制不应修改原始快照")
 	}
 }
 
@@ -809,6 +1278,39 @@ func TestEffectiveRetryNodeCanBlockWorkflowRetryOverride(t *testing.T) {
 	got := effectiveRetry(&WorkflowNodeDefinition{MaxRetry: -1}, WorkflowStartSpec{RetryOverride: new(3)})
 	if got != 0 {
 		t.Fatalf("期望非幂等节点强制关闭重试，实际为 %d", got)
+	}
+}
+
+// TestNonIdempotentWorkflowNodeDisablesAllRetries 验证非幂等节点不会被编排重试预算重新开启重试。
+func TestNonIdempotentWorkflowNodeDisablesAllRetries(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.non-idempotent",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {
+				Name:         "root",
+				TaskType:     TypeWorkflowNoop,
+				MaxRetry:     -1,
+				BuildPayload: testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	retry := 3
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name, RetryOverride: &retry})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	info, err := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueDefault), workflowNodeTaskID(workflowID, "root", 0))
+	if err != nil {
+		t.Fatalf("读取非幂等节点任务失败: %v", err)
+	}
+	if info.MaxRetry != 0 {
+		t.Fatalf("非幂等节点不应保留任何重试预算，实际为 %d", info.MaxRetry)
 	}
 }
 
@@ -891,13 +1393,6 @@ func TestWorkflowShardedSuccessDedupesDuplicateShardAck(t *testing.T) {
 	if nodeDone != "succeeded" {
 		t.Fatalf("期望分片终态标记记录成功结果，实际为 %s", nodeDone)
 	}
-	instanceDoneKeys, err := manager.redis.Exists(context.Background(), keys.TaskWorkflowNodeInstanceKey(workflowID, "root", 0)).Result()
-	if err != nil {
-		t.Fatalf("读取分片实例散列 key 失败: %v", err)
-	}
-	if instanceDoneKeys != 0 {
-		t.Fatalf("期望不再创建分片实例散列 key，实际数量为 %d", instanceDoneKeys)
-	}
 	if err := manager.markTaskSuccess(context.Background(), successMeta); err != nil {
 		t.Fatalf("重复标记分片 0 成功失败: %v", err)
 	}
@@ -927,6 +1422,483 @@ func TestWorkflowShardedSuccessDedupesDuplicateShardAck(t *testing.T) {
 	}
 	if len(nodes) != 1 || nodes[0].Succeeded != 2 || nodes[0].Status != NodeStatusSuccess {
 		t.Fatalf("期望节点按 2 个分片成功完成，实际为 %+v", nodes)
+	}
+}
+
+// TestWorkflowRetryReplenishesMissingShard 验证工作流入口重试会按稳定任务 ID 补齐缺失分片。
+func TestWorkflowRetryReplenishesMissingShard(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.sharded.replenish",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {
+				Name:             "root",
+				TaskType:         TypeWorkflowNoop,
+				SupportsSharding: true,
+				BuildPayload:     testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name, ShardTotal: 3})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	queue := manager.namespacedQueueName(QueueDefault)
+	completedTaskID := workflowNodeTaskID(workflowID, "root", 0)
+	missingTaskID := workflowNodeTaskID(workflowID, "root", 1)
+	if err = manager.markTaskSuccess(context.Background(), WorkflowTaskMeta{
+		WorkflowID: workflowID, WorkflowName: def.Name, WorkflowNode: "root", ShardIndex: 0, ShardTotal: 3,
+	}); err != nil {
+		t.Fatalf("记录已完成分片失败: %v", err)
+	}
+	if err = manager.inspector.DeleteTask(queue, completedTaskID); err != nil {
+		t.Fatalf("删除已完成分片的任务留存失败: %v", err)
+	}
+	if err = manager.inspector.DeleteTask(queue, missingTaskID); err != nil {
+		t.Fatalf("删除待补齐分片失败: %v", err)
+	}
+	if _, err = manager.StartWorkflow(context.Background(), WorkflowStartSpec{WorkflowID: workflowID, Name: def.Name, ShardTotal: 3}); err != nil {
+		t.Fatalf("重试工作流补齐分片失败: %v", err)
+	}
+	if _, err = manager.inspector.GetTaskInfo(queue, completedTaskID); err == nil {
+		t.Fatalf("已完成分片不应因任务留存清理而重复投递 task_id=%s", completedTaskID)
+	}
+	for shardIndex := 1; shardIndex < 3; shardIndex++ {
+		taskID := workflowNodeTaskID(workflowID, "root", shardIndex)
+		if _, err = manager.inspector.GetTaskInfo(queue, taskID); err != nil {
+			t.Fatalf("分片任务未补齐 task_id=%s: %v", taskID, err)
+		}
+	}
+}
+
+// TestWorkflowRootPartialEnqueueRetryReplenishesMissingShards 验证根节点部分投递后按稳定 ID 自动补齐。
+func TestWorkflowRootPartialEnqueueRetryReplenishesMissingShards(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.root.partial.enqueue",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {
+				Name:             "root",
+				TaskType:         TypeWorkflowNoop,
+				SupportsSharding: true,
+				BuildPayload:     testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	base := manager.client
+	manager.client = &failNthEnqueuer{delegate: base, failAt: 2}
+	retry := 0
+	spec := WorkflowStartSpec{WorkflowID: "wf-root-partial", Name: def.Name, ShardTotal: 3, RetryOverride: &retry}
+	if _, err := manager.StartWorkflow(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "injected enqueue failure") {
+		t.Fatalf("期望第二个根分片投递失败，实际=%v", err)
+	}
+
+	queue := manager.namespacedQueueName(QueueDefault)
+	first, err := manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(spec.WorkflowID, "root", 0))
+	if err != nil {
+		t.Fatalf("首个根分片应已投递: %v", err)
+	}
+	if first.MaxRetry != workflowTaskRetryBudget(0) {
+		t.Fatalf("retry=0 的分片仍应预留编排重试，实际=%d 期望=%d", first.MaxRetry, workflowTaskRetryBudget(0))
+	}
+	for shardIndex := 1; shardIndex < 3; shardIndex++ {
+		if _, err = manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(spec.WorkflowID, "root", shardIndex)); !errors.Is(err, asynq.ErrTaskNotFound) {
+			t.Fatalf("故障后的分片不应已入队 shard=%d err=%v", shardIndex, err)
+		}
+	}
+
+	manager.client = base
+	if _, err = manager.StartWorkflow(context.Background(), spec); err != nil {
+		t.Fatalf("触发重试补齐根分片失败: %v", err)
+	}
+	for shardIndex := 0; shardIndex < 3; shardIndex++ {
+		if _, err = manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(spec.WorkflowID, "root", shardIndex)); err != nil {
+			t.Fatalf("根分片未补齐 shard=%d err=%v", shardIndex, err)
+		}
+	}
+}
+
+// TestWorkflowDispatchRetryExhaustionFailsAndFencesLateShard 验证编排重试耗尽会失败收口并归档晚到分片。
+func TestWorkflowDispatchRetryExhaustionFailsAndFencesLateShard(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.dispatch.exhausted",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {
+				Name:             "root",
+				TaskType:         TypeWorkflowNoop,
+				SupportsSharding: true,
+				BuildPayload:     testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	base := manager.client
+	manager.client = &failFromEnqueuer{delegate: base, failFrom: 2}
+	spec := WorkflowStartSpec{
+		WorkflowID: "wf-dispatch-exhausted",
+		Name:       def.Name,
+		ShardTotal: 3,
+		UniqueKey:  "periodic:dispatch-exhausted",
+		UniqueTTL:  time.Hour,
+	}
+	for attempt := 0; attempt <= workflowRepairRetryCount; attempt++ {
+		if _, err := manager.StartWorkflow(context.Background(), spec); !errors.Is(err, ErrWorkflowDispatch) {
+			t.Fatalf("第 %d 次持续投递失败应返回编排错误，实际=%v", attempt+1, err)
+		}
+	}
+	if owner := manager.redis.Get(context.Background(), manager.workflowUniqueKey(spec.Name, spec.UniqueKey)).Val(); owner != spec.WorkflowID {
+		t.Fatalf("终态收口前唯一键 owner 异常: %s", owner)
+	}
+
+	trigger := asynq.NewTaskWithHeaders(TypeWorkflowTrigger, mustJSONBytes(WorkflowTriggerPayload{
+		WorkflowID: spec.WorkflowID, WorkflowName: spec.Name, UniqueKey: spec.UniqueKey, UniqueTTLSeconds: int(spec.UniqueTTL / time.Second),
+	}), map[string]string{headerWorkflowID: spec.WorkflowID, headerWorkflowName: spec.Name})
+	terminalErr := errors.Join(ErrWorkflowDispatch, asynq.SkipRetry, errors.New("persistent enqueue failure"))
+	manager.handleTaskError(context.Background(), trigger, terminalErr)
+
+	meta, _, err := manager.readWorkflowStatus(context.Background(), spec.WorkflowID)
+	if err != nil {
+		t.Fatalf("读取终态工作流失败: %v", err)
+	}
+	if meta.Status != WorkflowStatusFailed {
+		t.Fatalf("编排重试耗尽后工作流未失败收口: %+v", meta)
+	}
+	if exists := manager.redis.Exists(context.Background(), manager.workflowUniqueKey(spec.Name, spec.UniqueKey)).Val(); exists != 0 {
+		t.Fatal("编排失败终态仍占用周期唯一键")
+	}
+
+	manager.client = base
+	queue := manager.namespacedQueueName(QueueDefault)
+	lateInfo, err := manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(spec.WorkflowID, "root", 0))
+	if err != nil {
+		t.Fatalf("读取故障前已投递分片失败: %v", err)
+	}
+	lateTask := asynq.NewTaskWithHeaders(lateInfo.Type, lateInfo.Payload, lateInfo.Headers)
+	var businessCalls atomic.Int32
+	runErr := manager.traceAndLogMiddleware()(asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
+		businessCalls.Add(1)
+		return nil
+	})).ProcessTask(context.Background(), lateTask)
+	if !errors.Is(runErr, asynq.SkipRetry) {
+		t.Fatalf("晚到未执行分片应进入归档，实际=%v", runErr)
+	}
+	if businessCalls.Load() != 0 {
+		t.Fatalf("失败终态后的晚到分片仍执行业务: %d", businessCalls.Load())
+	}
+	manager.handleTaskError(context.Background(), lateTask, runErr)
+	outcome := manager.redis.HGet(context.Background(), manager.workflowNodeKey(spec.WorkflowID, "root"), workflowNodeInstanceField(0)).Val()
+	if outcome != "failed" {
+		t.Fatalf("晚到未执行分片未记录可重跑失败终态 outcome=%q", outcome)
+	}
+	meta, _, err = manager.readWorkflowStatus(context.Background(), spec.WorkflowID)
+	if err != nil || meta.Status != WorkflowStatusFailed {
+		t.Fatalf("晚到成功分片反转工作流终态 meta=%+v err=%v", meta, err)
+	}
+}
+
+// TestWorkflowArchivedRerunBackfillsMissingShardsAfterEarlyFailure 验证早期失败不会让部分投递缺失分片永久丢失。
+func TestWorkflowArchivedRerunBackfillsMissingShardsAfterEarlyFailure(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.child.partial.early.failure",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {
+				Name:         "root",
+				TaskType:     TypeWorkflowNoop,
+				BuildPayload: testNoopPayload,
+			},
+			"child": {
+				Name:             "child",
+				TaskType:         TypeWorkflowNoop,
+				DependsOn:        []string{"root"},
+				SupportsSharding: true,
+				BuildPayload:     testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{
+		WorkflowID: "wf-child-partial-early-failure",
+		Name:       def.Name,
+		ShardTotal: 3,
+	})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	base := manager.client
+	enqueueCalls := 0
+	manager.client = taskEnqueuerFunc(func(ctx context.Context, task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+		enqueueCalls++
+		if enqueueCalls == 2 {
+			return nil, errors.New("injected child shard enqueue failure")
+		}
+		info, enqueueErr := base.EnqueueContext(ctx, task, opts...)
+		if enqueueErr != nil {
+			return nil, enqueueErr
+		}
+		if enqueueCalls == 1 {
+			if _, markErr := manager.markTaskFailure(ctx, WorkflowTaskMeta{
+				WorkflowID:   workflowID,
+				WorkflowName: def.Name,
+				WorkflowNode: "child",
+				ShardIndex:   0,
+				ShardTotal:   3,
+			}, errors.New("child shard 0 failed before remaining dispatch")); markErr != nil {
+				return nil, markErr
+			}
+		}
+		return info, nil
+	})
+	err = manager.markTaskSuccess(context.Background(), WorkflowTaskMeta{
+		WorkflowID:   workflowID,
+		WorkflowName: def.Name,
+		WorkflowNode: "root",
+		ShardTotal:   1,
+	})
+	if !errors.Is(err, ErrWorkflowDispatch) {
+		t.Fatalf("下游部分投递故障应返回编排错误，实际=%v", err)
+	}
+	manager.client = base
+	queue := manager.namespacedQueueName(QueueDefault)
+	if _, err = manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(workflowID, "child", 1)); !errors.Is(err, asynq.ErrTaskNotFound) {
+		t.Fatalf("故障窗口内 child shard 1 应尚未投递，实际=%v", err)
+	}
+	failedInfo, err := manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(workflowID, "child", 0))
+	if err != nil {
+		t.Fatalf("读取已投递失败分片失败: %v", err)
+	}
+	manager.client = &failNthEnqueuer{delegate: base, failAt: 3}
+	if err = manager.prepareWorkflowArchivedTaskRerun(context.Background(), failedInfo); !errors.Is(err, ErrWorkflowDispatch) {
+		t.Fatalf("首次手工重跑补投部分失败应保留编排错误，实际=%v", err)
+	}
+	if _, err = manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(workflowID, "child", 1)); err != nil {
+		t.Fatalf("首次手工重跑应已补入 child shard 1: %v", err)
+	}
+	if _, err = manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(workflowID, "child", 2)); !errors.Is(err, asynq.ErrTaskNotFound) {
+		t.Fatalf("注入故障后 child shard 2 应仍缺失，实际=%v", err)
+	}
+	manager.client = base
+	if err = manager.prepareWorkflowArchivedTaskRerun(context.Background(), failedInfo); err != nil {
+		t.Fatalf("重试准备失败分片后补齐剩余分片失败: %v", err)
+	}
+	for shard := 0; shard < 3; shard++ {
+		if _, err = manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(workflowID, "child", shard)); err != nil {
+			t.Fatalf("手工重跑未补齐 child shard %d: %v", shard, err)
+		}
+	}
+	for shard := 0; shard < 3; shard++ {
+		if err = manager.markTaskSuccess(context.Background(), WorkflowTaskMeta{
+			WorkflowID:   workflowID,
+			WorkflowName: def.Name,
+			WorkflowNode: "child",
+			ShardIndex:   shard,
+			ShardTotal:   3,
+		}); err != nil {
+			t.Fatalf("回写 child shard %d 成功结果失败: %v", shard, err)
+		}
+	}
+	meta, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取恢复后工作流状态失败: %v", err)
+	}
+	if meta.Status != WorkflowStatusSuccess || len(nodes) != 2 {
+		t.Fatalf("补齐并完成所有分片后工作流未成功 meta=%+v nodes=%+v", meta, nodes)
+	}
+}
+
+// TestWorkflowDownstreamPartialEnqueueRetrySkipsSucceededBusiness 验证业务成功后的技术重试只补齐下游分片。
+func TestWorkflowDownstreamPartialEnqueueRetrySkipsSucceededBusiness(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.child.partial.enqueue",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {Name: "root", TaskType: TypeWorkflowNoop, BuildPayload: testNoopPayload},
+			"child": {
+				Name:             "child",
+				TaskType:         TypeWorkflowNoop,
+				DependsOn:        []string{"root"},
+				SupportsSharding: true,
+				BuildPayload:     testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	retry := 0
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{
+		WorkflowID: "wf-child-partial", Name: def.Name, ShardTotal: 3, RetryOverride: &retry,
+	})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	queue := manager.namespacedQueueName(QueueDefault)
+	rootInfo, err := manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(workflowID, "root", 0))
+	if err != nil {
+		t.Fatalf("读取根节点任务失败: %v", err)
+	}
+	rootTask := asynq.NewTaskWithHeaders(rootInfo.Type, rootInfo.Payload, rootInfo.Headers)
+	var businessCalls atomic.Int32
+	wrapped := manager.traceAndLogMiddleware()(asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
+		businessCalls.Add(1)
+		return nil
+	}))
+
+	base := manager.client
+	manager.client = &failNthEnqueuer{delegate: base, failAt: 2}
+	if err = wrapped.ProcessTask(context.Background(), rootTask); err == nil || !strings.Contains(err.Error(), "injected enqueue failure") {
+		t.Fatalf("期望下游第二个分片投递失败，实际=%v", err)
+	}
+	if errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("编排投递错误不应占用 retry=0 的业务终态: %v", err)
+	}
+
+	manager.client = base
+	if err = wrapped.ProcessTask(context.Background(), rootTask); err != nil {
+		t.Fatalf("技术重试补齐下游分片失败: %v", err)
+	}
+	if businessCalls.Load() != 1 {
+		t.Fatalf("已成功根分片不应重复执行业务，实际执行=%d", businessCalls.Load())
+	}
+	for shardIndex := 0; shardIndex < 3; shardIndex++ {
+		if _, err = manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(workflowID, "child", shardIndex)); err != nil {
+			t.Fatalf("下游分片未补齐 shard=%d err=%v", shardIndex, err)
+		}
+	}
+	_, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取工作流状态失败: %v", err)
+	}
+	for _, node := range nodes {
+		if node.Name == "root" && (node.Succeeded != 1 || node.Status != NodeStatusSuccess) {
+			t.Fatalf("根节点重复 ack 后计数漂移: %+v", node)
+		}
+	}
+}
+
+// TestWorkflowBusinessRetryZeroMarksTerminalFailure 验证业务 retry=0 仍首次失败即进入工作流终态。
+func TestWorkflowBusinessRetryZeroMarksTerminalFailure(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := testWorkflowDefinition("dag.business.retry.zero")
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	retry := 0
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{
+		WorkflowID: "wf-business-retry-zero", Name: def.Name, RetryOverride: &retry,
+	})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	queue := manager.namespacedQueueName(QueueDefault)
+	info, err := manager.inspector.GetTaskInfo(queue, workflowNodeTaskID(workflowID, "root", 0))
+	if err != nil {
+		t.Fatalf("读取根节点任务失败: %v", err)
+	}
+	if info.MaxRetry != workflowTaskRetryBudget(0) {
+		t.Fatalf("技术重试预算不符合预期: %d", info.MaxRetry)
+	}
+	task := asynq.NewTaskWithHeaders(info.Type, info.Payload, info.Headers)
+	runErr := manager.traceAndLogMiddleware()(asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
+		return errors.New("business failed")
+	})).ProcessTask(context.Background(), task)
+	if !errors.Is(runErr, asynq.SkipRetry) {
+		t.Fatalf("retry=0 的首次业务失败应立即终止重试，实际=%v", runErr)
+	}
+	manager.handleTaskError(context.Background(), task, runErr)
+
+	meta, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取失败工作流状态失败: %v", err)
+	}
+	if meta.Status != WorkflowStatusFailed || len(nodes) != 1 || nodes[0].Status != NodeStatusFailed || nodes[0].Failed != 1 {
+		t.Fatalf("业务终态未正确回写 workflow=%+v nodes=%+v", meta, nodes)
+	}
+}
+
+// TestWorkflowBusinessFailureCounterErrorIsDispatchFailure 验证业务失败计数写入异常走编排故障收口。
+func TestWorkflowBusinessFailureCounterErrorIsDispatchFailure(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	task := asynq.NewTaskWithHeaders(TypeWorkflowNoop, nil, map[string]string{
+		headerWorkflowID:    "wf-counter-error",
+		headerWorkflowName:  "dag.counter.error",
+		headerWorkflowNode:  "root",
+		headerShardIndex:    "0",
+		headerBusinessRetry: "1",
+	})
+	if err := manager.redis.Close(); err != nil {
+		t.Fatalf("关闭测试 Redis 失败: %v", err)
+	}
+	runErr := manager.applyWorkflowBusinessRetryLimit(context.Background(), task, errors.New("business failed"))
+	if !errors.Is(runErr, ErrWorkflowDispatch) {
+		t.Fatalf("业务失败计数写入异常应标记为编排故障，实际=%v", runErr)
+	}
+}
+
+// TestWorkflowFinalizedParentCanReplenishChildShard 验证父节点重复完成回写仍会补齐下游缺失分片。
+func TestWorkflowFinalizedParentCanReplenishChildShard(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.child.replenish",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {Name: "root", TaskType: TypeWorkflowNoop, BuildPayload: testNoopPayload},
+			"child": {
+				Name:             "child",
+				TaskType:         TypeWorkflowNoop,
+				DependsOn:        []string{"root"},
+				SupportsSharding: true,
+				BuildPayload:     testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name, ShardTotal: 2})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	rootMeta := WorkflowTaskMeta{WorkflowID: workflowID, WorkflowName: def.Name, WorkflowNode: "root", ShardTotal: 1}
+	if err = manager.markTaskSuccess(context.Background(), rootMeta); err != nil {
+		t.Fatalf("完成根节点失败: %v", err)
+	}
+	queue := manager.namespacedQueueName(QueueDefault)
+	missingTaskID := workflowNodeTaskID(workflowID, "child", 1)
+	if err = manager.inspector.DeleteTask(queue, missingTaskID); err != nil {
+		t.Fatalf("删除下游分片失败: %v", err)
+	}
+	if err = manager.markTaskSuccess(context.Background(), rootMeta); err != nil {
+		t.Fatalf("重复完成根节点补齐下游失败: %v", err)
+	}
+	if _, err = manager.inspector.GetTaskInfo(queue, missingTaskID); err != nil {
+		t.Fatalf("下游分片未补齐 task_id=%s: %v", missingTaskID, err)
 	}
 }
 
@@ -1025,8 +1997,8 @@ func TestWorkflowShardedStatsVisibleInStatus(t *testing.T) {
 	}
 }
 
-// TestWorkflowShardFailureThenSuccessRepairsCounters 验证同一分片失败后成功回写会纠正失败计数并推进工作流。
-func TestWorkflowShardFailureThenSuccessRepairsCounters(t *testing.T) {
+// TestWorkflowShardFailureIgnoresLateSuccessAck 验证失败终态不会被迟到成功回执反转。
+func TestWorkflowShardFailureIgnoresLateSuccessAck(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -1066,14 +2038,67 @@ func TestWorkflowShardFailureThenSuccessRepairsCounters(t *testing.T) {
 		t.Fatal("首次分片失败应记录终态")
 	}
 	if err := manager.markTaskSuccess(context.Background(), meta); err != nil {
-		t.Fatalf("失败后标记分片成功失败: %v", err)
+		t.Fatalf("迟到成功回执应被幂等忽略: %v", err)
 	}
 	wf, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
 	if err != nil {
 		t.Fatalf("读取工作流状态失败: %v", err)
 	}
-	if wf.Status != WorkflowStatusSuccess || len(nodes) != 1 || nodes[0].Status != NodeStatusSuccess || nodes[0].Succeeded != 1 || nodes[0].Failed != 0 {
-		t.Fatalf("期望失败计数被成功回写纠正，实际 wf=%+v nodes=%+v", wf, nodes)
+	if wf.Status != WorkflowStatusFailed || len(nodes) != 1 || nodes[0].Status != NodeStatusFailed || nodes[0].Succeeded != 0 || nodes[0].Failed != 1 {
+		t.Fatalf("迟到成功回执反转了失败终态 wf=%+v nodes=%+v", wf, nodes)
+	}
+}
+
+// TestWorkflowNodeOutcomeFailureWinsLateSuccessRace 验证成功回执预读 running 后，节点失败终态仍不可被反转。
+func TestWorkflowNodeOutcomeFailureWinsLateSuccessRace(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := testWorkflowDefinition("dag.sharded.failure.success.race")
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	meta := WorkflowTaskMeta{
+		WorkflowID:   workflowID,
+		WorkflowName: def.Name,
+		WorkflowNode: "root",
+		ShardTotal:   1,
+	}
+	failed, err := manager.workflowFailed(context.Background(), workflowID)
+	if err != nil || failed {
+		t.Fatalf("成功回执预读时工作流应为 running failed=%v err=%v", failed, err)
+	}
+	nodeKey := manager.workflowNodeKey(workflowID, "root")
+	result, err := recordNodeOutcomeScript.Run(context.Background(), manager.redis, []string{nodeKey}, workflowNodeInstanceField(0), "failed").Int()
+	if err != nil || result != 1 {
+		t.Fatalf("并发失败回执写入节点终态失败 result=%d err=%v", result, err)
+	}
+	if err = manager.markTaskSuccess(context.Background(), meta); err != nil {
+		t.Fatalf("迟到成功回执应被节点 CAS 忽略: %v", err)
+	}
+	marker := manager.redis.HGet(context.Background(), nodeKey, workflowNodeInstanceField(0)).Val()
+	succeeded := manager.redis.HGet(context.Background(), nodeKey, "succeeded").Val()
+	failedCount := manager.redis.HGet(context.Background(), nodeKey, "failed").Val()
+	if marker != "failed" || succeeded != "0" || failedCount != "1" {
+		t.Fatalf("迟到成功回执反转了节点失败终态 marker=%q succeeded=%q failed=%q", marker, succeeded, failedCount)
+	}
+	failureRecorded, err := manager.markTaskFailure(context.Background(), meta, errors.New("failed before success ack"))
+	if err != nil {
+		t.Fatalf("重放失败回执收口工作流失败: %v", err)
+	}
+	if failureRecorded {
+		t.Fatal("同一失败终态重放不应重复增加失败计数")
+	}
+	wf, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取竞态后工作流状态失败: %v", err)
+	}
+	if wf.Status != WorkflowStatusFailed || len(nodes) != 1 || nodes[0].Status != NodeStatusFailed || nodes[0].Succeeded != 0 || nodes[0].Failed != 1 {
+		t.Fatalf("失败回执重放未收口工作流 wf=%+v nodes=%+v", wf, nodes)
 	}
 }
 
@@ -1169,6 +2194,9 @@ func TestWorkflowArchivedRerunRepairsMultipleFailedShards(t *testing.T) {
 		if !failureRecorded {
 			t.Fatalf("首次标记分片 %d 失败应记录终态", shard)
 		}
+		if err = manager.redis.HSet(context.Background(), manager.workflowNodeKey(workflowID, "root"), workflowNodeBusinessFailureField(shard), 2).Err(); err != nil {
+			t.Fatalf("写入分片 %d 业务失败次数失败: %v", shard, err)
+		}
 	}
 	for shard := 0; shard < 2; shard++ {
 		payload, err := testNoopPayload(WorkflowStartSpec{WorkflowID: workflowID, Name: def.Name}, def.Nodes["root"], shard, 2)
@@ -1199,6 +2227,26 @@ func TestWorkflowArchivedRerunRepairsMultipleFailedShards(t *testing.T) {
 	if len(nodes) != 1 || nodes[0].Failed != 0 || nodes[0].Status != NodeStatusRunning {
 		t.Fatalf("期望所有失败分片计数被撤销，实际 nodes=%+v", nodes)
 	}
+	if manualRerun := manager.redis.HGet(context.Background(), manager.workflowMetaKey(workflowID), "manualRerun").Val(); manualRerun != "1" {
+		t.Fatalf("期望多分片修复共用手工重跑窗口，实际 manualRerun=%q", manualRerun)
+	}
+	stateKeys, err := manager.workflowStateKeys(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取手工重跑状态 key 失败: %v", err)
+	}
+	for _, key := range stateKeys {
+		if ttl := manager.redis.TTL(context.Background(), key).Val(); ttl >= 0 {
+			t.Fatalf("手工重跑运行态 key 不应保留终态 TTL key=%s ttl=%s", key, ttl)
+		}
+	}
+	for shard := 0; shard < 2; shard++ {
+		if marker := manager.redis.HGet(context.Background(), manager.workflowNodeKey(workflowID, "root"), workflowNodeInstanceField(shard)).Val(); marker != workflowNodeOutcomeRerunPrepared {
+			t.Fatalf("分片 %d 未进入可重入的重跑准备态 marker=%q", shard, marker)
+		}
+		if exists := manager.redis.HExists(context.Background(), manager.workflowNodeKey(workflowID, "root"), workflowNodeBusinessFailureField(shard)).Val(); exists {
+			t.Fatalf("分片 %d 业务失败次数未被重置", shard)
+		}
+	}
 	for shard := 0; shard < 2; shard++ {
 		if err := manager.markTaskSuccess(context.Background(), WorkflowTaskMeta{
 			WorkflowID:   workflowID,
@@ -1216,6 +2264,306 @@ func TestWorkflowArchivedRerunRepairsMultipleFailedShards(t *testing.T) {
 	}
 	if meta.Status != WorkflowStatusSuccess || len(nodes) != 1 || nodes[0].Status != NodeStatusSuccess || nodes[0].Succeeded != 2 || nodes[0].Failed != 0 {
 		t.Fatalf("期望多失败分片重跑后推进成功，实际 meta=%+v nodes=%+v", meta, nodes)
+	}
+	if exists := manager.redis.HExists(context.Background(), manager.workflowMetaKey(workflowID), "manualRerun").Val(); exists {
+		t.Fatal("工作流再次进入终态后应清除手工重跑标记")
+	}
+	for _, key := range stateKeys {
+		if ttl := manager.redis.TTL(context.Background(), key).Val(); ttl <= 0 {
+			t.Fatalf("手工重跑完成后应恢复终态 TTL key=%s ttl=%s", key, ttl)
+		}
+	}
+}
+
+// TestWorkflowArchivedRerunRejectsSuccessWorkflow 验证成功终态无法被 archived 分片修复入口复活。
+func TestWorkflowArchivedRerunRejectsSuccessWorkflow(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := testWorkflowDefinition("dag.archived.rerun.reject.success")
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	nodeKey := manager.workflowNodeKey(workflowID, "root")
+	if _, err = recordNodeOutcomeScript.Run(context.Background(), manager.redis, []string{nodeKey}, workflowNodeInstanceField(0), "failed").Result(); err != nil {
+		t.Fatalf("构造失败分片标记失败: %v", err)
+	}
+	if err = manager.updateWorkflowNode(context.Background(), workflowID, "root", map[string]any{"status": NodeStatusFailed}); err != nil {
+		t.Fatalf("构造失败节点状态失败: %v", err)
+	}
+	if err = manager.completeWorkflow(context.Background(), workflowID); err != nil {
+		t.Fatalf("构造成功工作流终态失败: %v", err)
+	}
+	payload, err := testNoopPayload(WorkflowStartSpec{WorkflowID: workflowID, Name: def.Name}, def.Nodes["root"], 0, 1)
+	if err != nil {
+		t.Fatalf("构造归档任务负载失败: %v", err)
+	}
+	err = manager.prepareWorkflowArchivedTaskRerun(context.Background(), &asynq.TaskInfo{
+		Payload: payload,
+		Headers: map[string]string{
+			headerWorkflowID:   workflowID,
+			headerWorkflowName: def.Name,
+			headerWorkflowNode: "root",
+			headerShardIndex:   "0",
+			headerShardTotal:   "1",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "成功工作流不允许手工重跑") {
+		t.Fatalf("成功工作流应拒绝 archived 重跑，实际 err=%v", err)
+	}
+	status := manager.redis.HGet(context.Background(), manager.workflowMetaKey(workflowID), "status").Val()
+	marker := manager.redis.HGet(context.Background(), nodeKey, workflowNodeInstanceField(0)).Val()
+	if status != WorkflowStatusSuccess || marker != "failed" {
+		t.Fatalf("拒绝重跑后状态被修改 status=%q marker=%q", status, marker)
+	}
+}
+
+// TestWorkflowRunningStateOnlyExpiresAfterTerminal 验证运行态长期保留，进入终态后才统一设置保留时间。
+func TestWorkflowRunningStateOnlyExpiresAfterTerminal(t *testing.T) {
+	manager, server, cleanup := newTestManagerWithServer(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.running.state.retention",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {
+				Name:         "root",
+				TaskType:     TypeWorkflowNoop,
+				BuildPayload: testNoopPayload,
+			},
+			"child": {
+				Name:         "child",
+				TaskType:     TypeWorkflowNoop,
+				DependsOn:    []string{"root"},
+				BuildPayload: testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	stateKeys, err := manager.workflowStateKeys(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取工作流状态 key 失败: %v", err)
+	}
+	for _, key := range stateKeys {
+		if ttl := manager.redis.TTL(context.Background(), key).Val(); ttl >= 0 {
+			t.Fatalf("运行态 key 不应设置 TTL key=%s ttl=%s", key, ttl)
+		}
+	}
+	server.FastForward(taskCompletedRetention + time.Hour)
+	for _, key := range stateKeys {
+		if exists := manager.redis.Exists(context.Background(), key).Val(); exists != 1 {
+			t.Fatalf("运行态 key 被保留时间误删 key=%s", key)
+		}
+	}
+	if err = manager.failWorkflow(context.Background(), workflowID, "stop for retention test"); err != nil {
+		t.Fatalf("结束工作流失败: %v", err)
+	}
+	for _, key := range stateKeys {
+		if ttl := manager.redis.TTL(context.Background(), key).Val(); ttl <= 0 {
+			t.Fatalf("终态 key 应设置 TTL key=%s ttl=%s", key, ttl)
+		}
+	}
+	server.FastForward(taskCompletedRetention + time.Hour)
+	for _, key := range stateKeys {
+		if exists := manager.redis.Exists(context.Background(), key).Val(); exists != 0 {
+			t.Fatalf("终态保留时间后 key 仍存在 key=%s", key)
+		}
+	}
+}
+
+// TestPersistWorkflowManualRerunStateRestoresConcurrentTerminalTTL 验证并发终态覆盖后不会被迟到 PERSIST 永久保留。
+func TestPersistWorkflowManualRerunStateRestoresConcurrentTerminalTTL(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := testWorkflowDefinition("dag.manual.rerun.concurrent.terminal.ttl")
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	if _, err = manager.markTaskFailure(context.Background(), WorkflowTaskMeta{
+		WorkflowID:   workflowID,
+		WorkflowName: def.Name,
+		WorkflowNode: "root",
+		ShardTotal:   1,
+	}, errors.New("prepare concurrent terminal")); err != nil {
+		t.Fatalf("构造失败工作流失败: %v", err)
+	}
+	stateKeys, err := manager.workflowStateKeys(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取工作流状态 key 失败: %v", err)
+	}
+	if _, err = reopenWorkflowForManualRerunScript.Run(
+		context.Background(),
+		manager.redis,
+		[]string{manager.workflowMetaKey(workflowID)},
+		time.Now().Format(time.RFC3339),
+	).Result(); err != nil {
+		t.Fatalf("构造并发手工重跑窗口失败: %v", err)
+	}
+	if err = manager.completeWorkflow(context.Background(), workflowID); err != nil {
+		t.Fatalf("构造并发成功终态失败: %v", err)
+	}
+	err = manager.persistWorkflowManualRerunState(context.Background(), workflowID)
+	if err == nil || !strings.Contains(err.Error(), "已进入终态") {
+		t.Fatalf("迟到 PERSIST 应识别并发终态，实际 err=%v", err)
+	}
+	for _, key := range stateKeys {
+		if ttl := manager.redis.TTL(context.Background(), key).Val(); ttl <= 0 {
+			t.Fatalf("并发终态 key 的 TTL 未恢复 key=%s ttl=%s", key, ttl)
+		}
+	}
+}
+
+// TestWorkflowPreparedRerunArchivesAgainAfterConcurrentFailure 验证准备态任务遇到并发失败会重新归档而非假成功。
+func TestWorkflowPreparedRerunArchivesAgainAfterConcurrentFailure(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := testWorkflowDefinition("dag.manual.rerun.concurrent.failure")
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	meta := WorkflowTaskMeta{
+		WorkflowID:   workflowID,
+		WorkflowName: def.Name,
+		WorkflowNode: "root",
+		ShardTotal:   1,
+	}
+	if _, err = manager.markTaskFailure(context.Background(), meta, errors.New("first failure")); err != nil {
+		t.Fatalf("构造失败工作流失败: %v", err)
+	}
+	payload, err := testNoopPayload(WorkflowStartSpec{WorkflowID: workflowID, Name: def.Name}, def.Nodes["root"], 0, 1)
+	if err != nil {
+		t.Fatalf("构造任务负载失败: %v", err)
+	}
+	info := &asynq.TaskInfo{Payload: payload, Headers: map[string]string{
+		headerWorkflowID:   workflowID,
+		headerWorkflowName: def.Name,
+		headerWorkflowNode: "root",
+		headerShardIndex:   "0",
+		headerShardTotal:   "1",
+	}}
+	if err = manager.prepareWorkflowArchivedTaskRerun(context.Background(), info); err != nil {
+		t.Fatalf("准备归档重跑失败: %v", err)
+	}
+	if err = manager.failWorkflow(context.Background(), workflowID, "concurrent failure"); err != nil {
+		t.Fatalf("构造并发失败终态失败: %v", err)
+	}
+	task := manager.newTask(context.Background(), TypeWorkflowNoop, payload, info.Headers)
+	settled, err := manager.workflowTaskSettled(context.Background(), task)
+	if settled || !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("准备态任务遇到并发失败应重新归档 settled=%v err=%v", settled, err)
+	}
+}
+
+// TestWorkflowFailedShardArchivesUnsettledSiblingsAndRerunsToSuccess 验证并发失败后每个分片都有可恢复终态。
+func TestWorkflowFailedShardArchivesUnsettledSiblingsAndRerunsToSuccess(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	def := &WorkflowDefinition{
+		Name: "dag.sharded.concurrent.failure.recovery",
+		Nodes: map[string]*WorkflowNodeDefinition{
+			"root": {
+				Name:             "root",
+				TaskType:         TypeWorkflowNoop,
+				SupportsSharding: true,
+				BuildPayload:     testNoopPayload,
+			},
+		},
+	}
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: def.Name, ShardTotal: 3})
+	if err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	meta := func(shard int) WorkflowTaskMeta {
+		return WorkflowTaskMeta{
+			WorkflowID:   workflowID,
+			WorkflowName: def.Name,
+			WorkflowNode: "root",
+			ShardIndex:   shard,
+			ShardTotal:   3,
+		}
+	}
+	if _, err = manager.markTaskFailure(context.Background(), meta(0), errors.New("shard 0 failed")); err != nil {
+		t.Fatalf("标记首个分片失败失败: %v", err)
+	}
+	if err = manager.markTaskSuccess(context.Background(), meta(2)); err != nil {
+		t.Fatalf("工作流并发失败后记录已完成业务分片成功结果失败: %v", err)
+	}
+	pendingPayload, err := testNoopPayload(WorkflowStartSpec{WorkflowID: workflowID, Name: def.Name}, def.Nodes["root"], 1, 3)
+	if err != nil {
+		t.Fatalf("构造未执行分片负载失败: %v", err)
+	}
+	pendingTask := manager.newTask(context.Background(), TypeWorkflowNoop, pendingPayload, map[string]string{
+		headerWorkflowID:   workflowID,
+		headerWorkflowName: def.Name,
+		headerWorkflowNode: "root",
+		headerShardIndex:   "1",
+		headerShardTotal:   "3",
+	})
+	settled, settledErr := manager.workflowTaskSettled(context.Background(), pendingTask)
+	if settled || !errors.Is(settledErr, asynq.SkipRetry) {
+		t.Fatalf("失败工作流中的未执行分片应转归档 settled=%v err=%v", settled, settledErr)
+	}
+	if recorded, markErr := manager.markTaskFailure(context.Background(), meta(1), settledErr); markErr != nil || !recorded {
+		t.Fatalf("未执行分片归档终态写入失败 recorded=%v err=%v", recorded, markErr)
+	}
+	_, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取并发失败后的工作流状态失败: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Succeeded != 1 || nodes[0].Failed != 2 {
+		t.Fatalf("所有分片终态未完整记录 nodes=%+v", nodes)
+	}
+	for _, shard := range []int{0, 1} {
+		payload, payloadErr := testNoopPayload(WorkflowStartSpec{WorkflowID: workflowID, Name: def.Name}, def.Nodes["root"], shard, 3)
+		if payloadErr != nil {
+			t.Fatalf("构造失败分片 %d 重跑负载失败: %v", shard, payloadErr)
+		}
+		info := &asynq.TaskInfo{Payload: payload, Headers: map[string]string{
+			headerWorkflowID:   workflowID,
+			headerWorkflowName: def.Name,
+			headerWorkflowNode: "root",
+			headerShardIndex:   strconv.Itoa(shard),
+			headerShardTotal:   "3",
+		}}
+		if err = manager.prepareWorkflowArchivedTaskRerun(context.Background(), info); err != nil {
+			t.Fatalf("准备失败分片 %d 重跑失败: %v", shard, err)
+		}
+	}
+	for _, shard := range []int{0, 1} {
+		if err = manager.markTaskSuccess(context.Background(), meta(shard)); err != nil {
+			t.Fatalf("回写重跑分片 %d 成功结果失败: %v", shard, err)
+		}
+	}
+	wf, nodes, err := manager.readWorkflowStatus(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("读取重跑完成工作流状态失败: %v", err)
+	}
+	if wf.Status != WorkflowStatusSuccess || len(nodes) != 1 || nodes[0].Status != NodeStatusSuccess || nodes[0].Succeeded != 3 || nodes[0].Failed != 0 {
+		t.Fatalf("全部失败分片重跑后工作流未完成 wf=%+v nodes=%+v", wf, nodes)
 	}
 }
 
@@ -1433,10 +2781,6 @@ func TestWorkflowMarkSuccessFailureDoesNotSetTaskHashTTL(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
-	cfg := manager.CurrentConfig()
-	cfg.CompletedRetentionSeconds = 60
-	manager.UpdateConfig(cfg)
-
 	if err := manager.RegisterHandler("demo:workflow-mark-success-fail", asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
 		return nil
 	})); err != nil {
@@ -1476,7 +2820,6 @@ func TestArchivedTaskKeepsRuntimeSnapshotTTL(t *testing.T) {
 	defer cleanup()
 
 	cfg := manager.CurrentConfig()
-	cfg.CompletedRetentionSeconds = 60
 	cfg.ArchivedRetentionSeconds = 120
 	manager.UpdateConfig(cfg)
 
@@ -1516,7 +2859,7 @@ func TestArchivedTaskKeepsRuntimeSnapshotTTL(t *testing.T) {
 	if ttl != -1 {
 		t.Fatalf("归档终态任务不应设置项目 task hash TTL，实际 TTL=%s", ttl)
 	}
-	runtimeTTL := manager.redis.TTL(context.Background(), manager.taskRuntimeKey(resp.TaskID)).Val()
+	runtimeTTL := manager.redis.TTL(context.Background(), manager.taskRuntimeKey(QueueDefault, resp.TaskID)).Val()
 	expectedRuntimeTTL := manager.archivedRetention() + time.Hour
 	if runtimeTTL <= manager.archivedRetention() || runtimeTTL > expectedRuntimeTTL+time.Second {
 		t.Fatalf("归档终态任务 runtime TTL = %s，期望约为 %s", runtimeTTL, expectedRuntimeTTL)
@@ -1601,6 +2944,30 @@ func TestRunTaskRepairsArchivedWorkflowFailureState(t *testing.T) {
 		}
 		return false
 	})
+	realRunTask := manager.runInspectorTask
+	runTaskCalls := 0
+	manager.runInspectorTask = func(queue, taskID string) error {
+		runTaskCalls++
+		if runTaskCalls == 1 {
+			return errors.New("injected run task failure")
+		}
+		return realRunTask(queue, taskID)
+	}
+	if err = manager.RunTask(context.Background(), &types.OperateTaskReq{Queue: QueueDefault, TaskID: archivedTaskID}); err == nil {
+		t.Fatal("首次立即执行应返回注入故障")
+	}
+	metaAfterFailure, _, readErr := manager.readWorkflowStatus(context.Background(), workflowID)
+	if readErr != nil {
+		t.Fatalf("读取首次立即执行失败后的工作流状态失败: %v", readErr)
+	}
+	marker := manager.redis.HGet(context.Background(), manager.workflowNodeKey(workflowID, "root"), workflowNodeInstanceField(0)).Val()
+	if metaAfterFailure.Status != WorkflowStatusRunning || marker != workflowNodeOutcomeRerunPrepared {
+		t.Fatalf("首次立即执行失败后应保留可重入准备态 meta=%+v marker=%q", metaAfterFailure, marker)
+	}
+	infoAfterFailure, infoErr := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueDefault), archivedTaskID)
+	if infoErr != nil || infoAfterFailure.State != asynq.TaskStateArchived {
+		t.Fatalf("首次立即执行失败后任务应保持 archived info=%+v err=%v", infoAfterFailure, infoErr)
+	}
 	if err = manager.RunTask(context.Background(), &types.OperateTaskReq{Queue: QueueDefault, TaskID: archivedTaskID}); err != nil {
 		t.Fatalf("立即执行归档任务失败: %v", err)
 	}
@@ -1658,6 +3025,13 @@ func TestCompletedTaskWritesResult(t *testing.T) {
 	if item.State != "completed" {
 		t.Fatalf("期望任务已完成，实际状态为 %s", item.State)
 	}
+	info, err := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueDefault), resp.TaskID)
+	if err != nil {
+		t.Fatalf("读取已完成任务失败: %v", err)
+	}
+	if info.Retention != taskCompletedRetention {
+		t.Fatalf("普通任务 retention=%s，期望=%s", info.Retention, taskCompletedRetention)
+	}
 	if len(item.Result) == 0 {
 		t.Fatal("期望已完成任务写回结果摘要，实际为空")
 	}
@@ -1688,12 +3062,12 @@ func TestCompletedTaskWritesResult(t *testing.T) {
 	if taskTTL != -1 {
 		t.Fatalf("成功终态任务不应设置项目 task hash TTL，实际 TTL=%s", taskTTL)
 	}
-	runtimeTTL := manager.redis.TTL(context.Background(), manager.taskRuntimeKey(resp.TaskID)).Val()
-	expectedRuntimeTTL := manager.completedRetention() + time.Hour
-	if runtimeTTL <= manager.completedRetention() || runtimeTTL > expectedRuntimeTTL+time.Second {
+	runtimeTTL := manager.redis.TTL(context.Background(), manager.taskRuntimeKey(QueueDefault, resp.TaskID)).Val()
+	expectedRuntimeTTL := taskCompletedRetention + time.Hour
+	if runtimeTTL <= taskCompletedRetention || runtimeTTL > expectedRuntimeTTL+time.Second {
 		t.Fatalf("成功终态任务 runtime TTL = %s，期望约为 %s", runtimeTTL, expectedRuntimeTTL)
 	}
-	if err = manager.redis.Del(context.Background(), manager.taskRuntimeKey(resp.TaskID)).Err(); err != nil {
+	if err = manager.redis.Del(context.Background(), manager.taskRuntimeKey(QueueDefault, resp.TaskID)).Err(); err != nil {
 		t.Fatalf("删除 runtime 兜底测试 key 失败: %v", err)
 	}
 	fallbackItem, err := manager.GetTaskInfo(context.Background(), &types.GetTaskInfoReq{
@@ -1715,7 +3089,6 @@ func TestCompletedTaskHashUsesNamespacedQueue(t *testing.T) {
 
 	cfg := manager.CurrentConfig()
 	cfg.AppID = "17"
-	cfg.CompletedRetentionSeconds = 60
 	useRuntimeAppID(t, cfg.AppID)
 	manager.UpdateConfig(cfg)
 
@@ -1787,6 +3160,261 @@ func TestListCompletedTasksReturnsErrorForOrphanedZSetMember(t *testing.T) {
 	}
 	if !errors.Is(err, asynq.ErrTaskNotFound) {
 		t.Fatalf("期望暴露任务详情缺失错误，实际: %v", err)
+	}
+}
+
+// TestListReportTasksUsesBatchedWindowOffset 验证日报按原生页推进时无重复、无漏项且预算可控。
+func TestListReportTasksUsesBatchedWindowOffset(t *testing.T) {
+	manager, server, cleanup := newTestManagerWithServer(t)
+	defer cleanup()
+	const (
+		taskCount                  = taskReportListBatchSize + 5
+		reportPageByteLimitForTest = int64(64 << 20)
+	)
+	if err := manager.RegisterHandler("demo:report-batch", asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
+		return nil
+	})); err != nil {
+		t.Fatalf("注册日报批量测试处理器失败: %v", err)
+	}
+	knownIDs := make(map[string]struct{}, taskCount)
+	windowStart := time.Now().Add(-time.Minute)
+	for index := 0; index < taskCount; index++ {
+		resp, err := manager.EnqueueRegisteredTask(context.Background(), &types.EnqueueTaskReq{
+			TaskType: "demo:report-batch",
+			Payload:  json.RawMessage(fmt.Sprintf(`{"index":%d}`, index)),
+		})
+		if err != nil {
+			t.Fatalf("投递日报批量测试任务失败 index=%d err=%v", index, err)
+		}
+		knownIDs[resp.TaskID] = struct{}{}
+	}
+	if err := manager.StartWorker(); err != nil {
+		t.Fatalf("启动日报批量测试 worker 失败: %v", err)
+	}
+	defer func() { _ = manager.Stop(context.Background()) }()
+	waitForCondition(t, 10*time.Second, func() bool {
+		info, infoErr := manager.inspector.GetQueueInfo(manager.namespacedQueueName(QueueDefault))
+		return infoErr == nil && info.Completed >= taskCount
+	})
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatalf("停止日报批量测试 worker 失败: %v", err)
+	}
+	req := &types.ListTaskItemsReq{
+		Queue:     QueueDefault,
+		State:     asynq.TaskStateCompleted.String(),
+		StartTime: windowStart.Format(time.RFC3339),
+		EndTime:   time.Now().Add(time.Minute).Format(time.RFC3339),
+	}
+	limitedResp, limitedUsage, err := manager.ListReportTasks(context.Background(), req, 0, taskReportListBatchSize, 1)
+	if err != nil {
+		t.Fatalf("日报原生页字节预算预检失败: %v", err)
+	}
+	if limitedResp.Total != taskCount || len(limitedResp.Tasks) != 0 || !limitedUsage.ByteLimited || limitedUsage.Tasks != taskReportListBatchSize {
+		t.Fatalf("日报原生页应受字节预算阻断: resp=%+v usage=%+v", limitedResp, limitedUsage)
+	}
+	commandsBefore := server.CommandCount()
+	first, firstUsage, err := manager.ListReportTasks(context.Background(), req, 0, taskReportListBatchSize, reportPageByteLimitForTest)
+	if err != nil {
+		t.Fatalf("读取日报首个原生页片段失败: %v", err)
+	}
+	if first.Total != taskCount || len(first.Tasks) != 5 || firstUsage.Tasks != taskReportListBatchSize || firstUsage.ByteLimited {
+		t.Fatalf("日报首个原生页片段 total=%d len=%d usage=%+v, want total=%d len=5 scanned=%d", first.Total, len(first.Tasks), firstUsage, taskCount, taskReportListBatchSize)
+	}
+	batchCommandCount := server.CommandCount() - commandsBefore
+	legacyCommandsBefore := server.CommandCount()
+	legacy, err := manager.ListTasks(context.Background(), &types.ListTaskItemsReq{
+		Queue:     req.Queue,
+		State:     req.State,
+		Page:      1,
+		PageSize:  taskReportListBatchSize,
+		StartTime: req.StartTime,
+		EndTime:   req.EndTime,
+	})
+	if err != nil {
+		t.Fatalf("读取通用任务列表基准失败: %v", err)
+	}
+	if legacy.Total != taskCount || len(legacy.Tasks) != taskReportListBatchSize {
+		t.Fatalf("通用任务列表基准 total=%d len=%d, want total=%d len=%d", legacy.Total, len(legacy.Tasks), taskCount, taskReportListBatchSize)
+	}
+	legacyCommandCount := server.CommandCount() - legacyCommandsBefore
+	if batchCommandCount >= legacyCommandCount {
+		t.Fatalf("日报批量读取 Redis 命令数=%d，不应达到通用逐任务路径=%d", batchCommandCount, legacyCommandCount)
+	}
+	for index := range first.Tasks {
+		if first.Tasks[index].ID != legacy.Tasks[index].ID {
+			t.Fatalf("日报首段第 %d 条任务=%s，期望与通用倒序基准=%s 一致", index, first.Tasks[index].ID, legacy.Tasks[index].ID)
+		}
+	}
+	second, secondUsage, err := manager.ListReportTasks(context.Background(), req, len(first.Tasks), taskReportListBatchSize, reportPageByteLimitForTest)
+	if err != nil {
+		t.Fatalf("读取日报下一原生页失败: %v", err)
+	}
+	if second.Total != taskCount || len(second.Tasks) != taskReportListBatchSize || secondUsage.Tasks != taskReportListBatchSize || secondUsage.ByteLimited {
+		t.Fatalf("日报下一原生页 total=%d len=%d usage=%+v, want total=%d len=%d scanned=%d", second.Total, len(second.Tasks), secondUsage, taskCount, taskReportListBatchSize, taskReportListBatchSize)
+	}
+	combined := append(append([]types.TaskItem(nil), first.Tasks...), second.Tasks...)
+	seen := make(map[string]struct{}, len(combined))
+	for _, item := range combined {
+		if _, ok := knownIDs[item.ID]; !ok {
+			t.Fatalf("日报返回未知任务 ID: %s", item.ID)
+		}
+		if _, duplicated := seen[item.ID]; duplicated {
+			t.Fatalf("日报原生页拼接返回重复任务 ID: %s", item.ID)
+		}
+		seen[item.ID] = struct{}{}
+	}
+	legacyTail, err := manager.ListTasks(context.Background(), &types.ListTaskItemsReq{
+		Queue:     req.Queue,
+		State:     req.State,
+		Page:      2,
+		PageSize:  taskReportListBatchSize,
+		StartTime: req.StartTime,
+		EndTime:   req.EndTime,
+	})
+	if err != nil {
+		t.Fatalf("读取通用任务列表尾页基准失败: %v", err)
+	}
+	expected := append(append([]types.TaskItem(nil), legacy.Tasks...), legacyTail.Tasks...)
+	if len(combined) != len(expected) {
+		t.Fatalf("日报原生页拼接长度=%d，期望=%d", len(combined), len(expected))
+	}
+	for index := range combined {
+		if combined[index].ID != expected[index].ID {
+			t.Fatalf("日报拼接第 %d 条任务=%s，期望=%s", index, combined[index].ID, expected[index].ID)
+		}
+	}
+}
+
+// TestListReportNativePageHonorsContext 验证 Asynq 原生详情页不会绕过日报取消信号。
+func TestListReportNativePageHonorsContext(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := manager.listReportNativePage(ctx, manager.namespacedQueueName(QueueDefault), asynq.TaskStateCompleted.String(), 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("日报原生详情页 error=%v, want context.Canceled", err)
+	}
+}
+
+// TestListReportQueuesUsesFixedMetadataLimit 验证日报队列入口只读取固定数量的队列元数据。
+func TestListReportQueuesUsesFixedMetadataLimit(t *testing.T) {
+	manager, server, cleanup := newTestManagerWithServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	queueNames := []string{QueueCritical, QueueDefault, QueueMaintenance}
+	for index := 0; index < 35; index++ {
+		queueNames = append(queueNames, fmt.Sprintf("report-extra-%02d", index))
+	}
+	cfg := manager.CurrentConfig()
+	cfg.Queues = make(map[string]int, len(queueNames))
+	for _, queueName := range queueNames {
+		cfg.Queues[queueName] = 1
+	}
+	manager.UpdateConfig(cfg)
+	if err := manager.redis.LPush(ctx, keys.TaskAsynqPendingKey(manager.namespacedQueueName(QueueCritical)), "critical-task").Err(); err != nil {
+		t.Fatalf("写入日报 pending 计数失败: %v", err)
+	}
+	if err := manager.redis.LPush(ctx, keys.TaskAsynqActiveKey(manager.namespacedQueueName(QueueDefault)), "default-task").Err(); err != nil {
+		t.Fatalf("写入日报 active 计数失败: %v", err)
+	}
+	commandsBefore := server.CommandCount()
+	resp, limited, err := manager.ListReportQueues(ctx, 2)
+	if err != nil {
+		t.Fatalf("读取有界日报队列概览失败: %v", err)
+	}
+	if !limited || resp == nil || len(resp.Queues) != 2 {
+		t.Fatalf("日报队列概览未按固定上限截断: limited=%t resp=%+v", limited, resp)
+	}
+	if resp.Queues[0].Name != QueueCritical || resp.Queues[1].Name != QueueDefault {
+		t.Fatalf("日报队列优先顺序异常: %+v", resp.Queues)
+	}
+	if resp.Queues[0].Pending != 1 || resp.Queues[1].Active != 1 {
+		t.Fatalf("日报队列基础计数异常: %+v", resp.Queues)
+	}
+	if commands := server.CommandCount() - commandsBefore; commands != 12 {
+		t.Fatalf("日报两个队列应固定执行 12 条 O(1) 计数命令，实际=%d", commands)
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err = manager.ListReportQueues(canceledCtx, 2); !errors.Is(err, context.Canceled) {
+		t.Fatalf("日报队列读取应响应 context 取消，实际 error=%v", err)
+	}
+}
+
+// TestListReportQueuesReadsDefaultQueues 验证未配置队列权重时日报仍读取 Worker 默认队列的真实计数。
+func TestListReportQueuesReadsDefaultQueues(t *testing.T) {
+	manager, _, cleanup := newTestManagerWithServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	cfg := manager.CurrentConfig()
+	cfg.Queues = nil
+	manager.UpdateConfig(cfg)
+
+	if err := manager.redis.LPush(ctx, keys.TaskAsynqPendingKey(manager.namespacedQueueName(QueueCritical)), "critical-task").Err(); err != nil {
+		t.Fatalf("写入默认 critical 队列 pending 计数失败: %v", err)
+	}
+	if err := manager.redis.ZAdd(ctx, keys.TaskAsynqScheduledKey(manager.namespacedQueueName(QueueMaintenance)), redis.Z{
+		Score:  float64(time.Now().Unix()),
+		Member: "maintenance-task",
+	}).Err(); err != nil {
+		t.Fatalf("写入默认 maintenance 队列 scheduled 计数失败: %v", err)
+	}
+
+	resp, limited, err := manager.ListReportQueues(ctx, 3)
+	if err != nil {
+		t.Fatalf("读取默认日报队列概览失败: %v", err)
+	}
+	if limited || resp == nil || len(resp.Queues) != 3 {
+		t.Fatalf("默认日报队列概览异常: limited=%t resp=%+v", limited, resp)
+	}
+	if resp.Queues[0].Name != QueueCritical || resp.Queues[0].Pending != 1 {
+		t.Fatalf("默认 critical 队列计数异常: %+v", resp.Queues[0])
+	}
+	if resp.Queues[1].Name != QueueDefault {
+		t.Fatalf("默认 default 队列顺序异常: %+v", resp.Queues)
+	}
+	if resp.Queues[2].Name != QueueMaintenance || resp.Queues[2].Scheduled != 1 {
+		t.Fatalf("默认 maintenance 队列计数异常: %+v", resp.Queues[2])
+	}
+}
+
+// TestReportTaskSnapshotStableDetectsRankShift 验证终态清理移动绝对排名时快照复核会失败关闭。
+func TestReportTaskSnapshotStableDetectsRankShift(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	key, err := keys.TaskAsynqStateZSetKey(manager.namespacedQueueName(QueueDefault), asynq.TaskStateCompleted.String())
+	if err != nil {
+		t.Fatalf("生成 completed key 失败: %v", err)
+	}
+	for index, id := range []string{"task-a", "task-b", "task-c", "task-d"} {
+		if err = manager.redis.ZAdd(ctx, key, redis.Z{Score: float64(index + 1), Member: id}).Err(); err != nil {
+			t.Fatalf("写入 completed 排名失败: %v", err)
+		}
+	}
+	ranked := []reportRankedTask{
+		{rank: 1, info: &asynq.TaskInfo{ID: "task-b"}},
+		{rank: 2, info: &asynq.TaskInfo{ID: "task-c"}},
+	}
+	stable, err := manager.reportTaskSnapshotStable(ctx, key, "-inf", "+inf", 4, 4, 1, 2, ranked)
+	if err != nil {
+		t.Fatalf("复核稳定快照失败: %v", err)
+	}
+	if !stable {
+		t.Fatal("未发生变化的终态排名应判定稳定")
+	}
+	if err = manager.redis.ZRem(ctx, key, "task-a").Err(); err != nil {
+		t.Fatalf("删除低排名任务失败: %v", err)
+	}
+	stable, err = manager.reportTaskSnapshotStable(ctx, key, "-inf", "+inf", 4, 4, 1, 2, ranked)
+	if err != nil {
+		t.Fatalf("复核变化快照失败: %v", err)
+	}
+	if stable {
+		t.Fatal("低排名任务清理后不应继续接受已位移的快照")
 	}
 }
 
@@ -1947,6 +3575,54 @@ func TestPeriodicConfigsSkipsInvalidAndKeepsValid(t *testing.T) {
 	}
 }
 
+// TestValidatePeriodicTaskConfigRequiresScheduledUnique 验证按计划时刻防重的工作流必须显式配置完整唯一键。
+func TestValidatePeriodicTaskConfigRequiresScheduledUnique(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	definition := testWorkflowDefinition("scheduled-unique-config")
+	definition.PeriodicUniqueBySchedule = true
+	if err := manager.RegisterWorkflow(definition); err != nil {
+		t.Fatalf("注册按计划时刻防重工作流失败: %v", err)
+	}
+	base := config.TaskPeriodicConfig{
+		Name:     "scheduled-unique-config",
+		Cron:     "0 10 * * *",
+		Workflow: definition.Name,
+		Queue:    QueueMaintenance,
+	}
+	tests := []struct {
+		name      string // 测试场景名称
+		uniqueKey string // 周期任务唯一键
+		uniqueTTL int    // 周期任务唯一键有效期秒数
+		wantErr   string // 期望错误片段，为空表示校验成功
+	}{
+		{name: "missing_unique_key", uniqueTTL: 60, wantErr: "unique_key"},
+		{name: "missing_unique_ttl", uniqueKey: "scheduled-unique-config", wantErr: "unique_ttl_seconds"},
+		{name: "valid", uniqueKey: "scheduled-unique-config", uniqueTTL: 60},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := base
+			item.UniqueKey = tt.uniqueKey
+			item.UniqueTTLSeconds = tt.uniqueTTL
+			normalized, err := manager.validatePeriodicTaskConfig(item)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("周期唯一配置校验 error=%v, want contains %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("合法周期唯一配置校验失败: %v", err)
+			}
+			if normalized.UniqueKey != tt.uniqueKey || normalized.UniqueTTLSeconds != tt.uniqueTTL {
+				t.Fatalf("周期唯一配置归一化异常: %+v", normalized)
+			}
+		})
+	}
+}
+
 // TestPeriodicConfigsSupportsSecondLevelSchedule 验证周期任务支持秒级 cron 和 every_seconds 固定间隔。
 func TestPeriodicConfigsSupportsSecondLevelSchedule(t *testing.T) {
 	manager, cleanup := newTestManager(t)
@@ -1988,6 +3664,37 @@ func TestPeriodicConfigsSupportsSecondLevelSchedule(t *testing.T) {
 	}
 	if _, ok := got["@every 5s"]; !ok {
 		t.Fatalf("期望支持 every_seconds 转换为 @every 5s，实际为 %+v", got)
+	}
+}
+
+// TestPeriodicWorkflowTriggerRetryZeroKeepsDispatchBudget 验证周期业务 retry=0 时入口仍保留独立编排重试。
+func TestPeriodicWorkflowTriggerRetryZeroKeepsDispatchBudget(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if err := manager.RegisterWorkflow(testWorkflowDefinition("periodic.retry.zero")); err != nil {
+		t.Fatalf("注册周期工作流失败: %v", err)
+	}
+	cfg := manager.CurrentConfig()
+	cfg.Periodic = []config.TaskPeriodicConfig{enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
+		Name: "periodic-retry-zero", Cron: "*/5 * * * *", Workflow: "periodic.retry.zero", Retry: 0,
+	})}
+	manager.UpdateConfig(cfg)
+	configs, err := manager.periodicConfigs()
+	if err != nil || len(configs) != 1 {
+		t.Fatalf("生成周期任务配置失败 configs=%d err=%v", len(configs), err)
+	}
+	opts := append([]asynq.Option{}, configs[0].Opts...)
+	opts = append(opts, asynq.ProcessAt(time.Now().Add(time.Minute)))
+	info, err := manager.client.EnqueueContext(context.Background(), configs[0].Task, opts...)
+	if err != nil {
+		t.Fatalf("投递周期入口任务失败: %v", err)
+	}
+	if info.MaxRetry != workflowTaskRetryBudget(manager.defaultRetry(nil)) || info.MaxRetry <= manager.defaultRetry(nil) {
+		t.Fatalf("周期入口未预留独立编排重试 actual=%d base=%d", info.MaxRetry, manager.defaultRetry(nil))
+	}
+	if info.Retention != taskCompletedRetention {
+		t.Fatalf("周期入口任务 retention=%s，期望=%s", info.Retention, taskCompletedRetention)
 	}
 }
 
@@ -2141,6 +3848,7 @@ func TestListQueuesReturnsSchedulerStatus(t *testing.T) {
 			Enabled:                  true,
 			SyncIntervalSeconds:      30,
 			HeartbeatIntervalSeconds: 12,
+			MaxQueueBacklog:          500,
 		},
 	})
 
@@ -2159,6 +3867,9 @@ func TestListQueuesReturnsSchedulerStatus(t *testing.T) {
 	}
 	if resp.Scheduler.HeartbeatIntervalSeconds != 12 {
 		t.Fatalf("期望心跳间隔为 12 秒，实际为 %d", resp.Scheduler.HeartbeatIntervalSeconds)
+	}
+	if resp.Scheduler.MaxQueueBacklog != 500 {
+		t.Fatalf("期望队列积压上限为 500，实际为 %d", resp.Scheduler.MaxQueueBacklog)
 	}
 }
 
@@ -2573,6 +4284,44 @@ func TestPeriodicConfigInvalidHookThrottlesRepeatedAlert(t *testing.T) {
 	}
 }
 
+// TestPeriodicConfigInvalidHookFailureRetriesImmediately 验证告警发送失败不会占用限频窗口。
+func TestPeriodicConfigInvalidHookFailureRetriesImmediately(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	item := enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
+		Name:     "invalid-periodic-hook-retry",
+		Cron:     "bad cron",
+		Workflow: "missing.workflow",
+	})
+	reason := "invalid periodic config"
+	var calls atomic.Int32
+	var triggerCount atomic.Int32
+	if err := manager.RegisterPeriodicConfigInvalidHook(func(_ context.Context, report PeriodicConfigInvalidReport) error {
+		call := calls.Add(1)
+		if call == 1 {
+			manager.runPeriodicConfigInvalidHooks(0, item, reason, nil)
+			return errors.New("injected periodic alert failure")
+		}
+		triggerCount.Store(int32(report.TriggerCount))
+		return nil
+	}); err != nil {
+		t.Fatalf("注册周期配置异常钩子失败: %v", err)
+	}
+	manager.runPeriodicConfigInvalidHooks(0, item, reason, nil)
+	key := periodicConfigInvalidAlertKey(0, item, reason)
+	manager.mu.Lock()
+	state := manager.periodicConfigAlertedMap[key]
+	manager.mu.Unlock()
+	if !state.LastSentAt.IsZero() || state.SuppressedCount != 1 {
+		t.Fatalf("失败发送应回滚限频并保留期间压制次数 state=%+v", state)
+	}
+	manager.runPeriodicConfigInvalidHooks(0, item, reason, nil)
+	if calls.Load() != 2 || triggerCount.Load() != 2 {
+		t.Fatalf("失败后应立即重试 calls=%d trigger_count=%d", calls.Load(), triggerCount.Load())
+	}
+}
+
 // TestTaskRuntimeAlertHookThrottlesRepeatedAlert 验证任务系统运行异常按同一指纹限频告警。
 func TestTaskRuntimeAlertHookThrottlesRepeatedAlert(t *testing.T) {
 	manager, cleanup := newTestManager(t)
@@ -2628,6 +4377,49 @@ func TestTaskRuntimeAlertHookThrottlesRepeatedAlert(t *testing.T) {
 	}
 	if got.TriggerCount != 2 || got.Reason != "redis timeout again" {
 		t.Fatalf("窗口后运行异常告警不符合预期: %+v", got)
+	}
+}
+
+// TestTaskRuntimeAlertHookFailureRetriesImmediately 验证运行告警发送失败不会占用限频窗口。
+func TestTaskRuntimeAlertHookFailureRetriesImmediately(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	alert := TaskRuntimeAlert{
+		Kind:       taskRuntimeAlertKindPeriodicEnqueueFailed,
+		Component:  "scheduler",
+		Operation:  "enqueue_periodic_task",
+		TaskName:   "周期任务触发:retry-alert",
+		TaskType:   TypeWorkflowTrigger,
+		TaskQueue:  QueueDefault,
+		UniqueKey:  "periodic:retry-alert",
+		Reason:     "redis timeout",
+		OccurredAt: time.Now(),
+	}
+	var calls atomic.Int32
+	var triggerCount atomic.Int32
+	if err := manager.RegisterRuntimeAlertHook(func(ctx context.Context, report TaskRuntimeAlert) error {
+		call := calls.Add(1)
+		if call == 1 {
+			manager.notifyTaskRuntimeAlert(ctx, alert)
+			return errors.New("injected runtime alert failure")
+		}
+		triggerCount.Store(int32(report.TriggerCount))
+		return nil
+	}); err != nil {
+		t.Fatalf("注册任务运行异常钩子失败: %v", err)
+	}
+	manager.notifyTaskRuntimeAlert(context.Background(), alert)
+	key := taskRuntimeAlertKey(alert)
+	manager.mu.Lock()
+	state := manager.runtimeAlertedMap[key]
+	manager.mu.Unlock()
+	if !state.LastSentAt.IsZero() || state.SuppressedCount != 1 {
+		t.Fatalf("失败发送应回滚限频并保留期间压制次数 state=%+v", state)
+	}
+	manager.notifyTaskRuntimeAlert(context.Background(), alert)
+	if calls.Load() != 2 || triggerCount.Load() != 2 {
+		t.Fatalf("失败后应立即重试 calls=%d trigger_count=%d", calls.Load(), triggerCount.Load())
 	}
 }
 
@@ -2721,28 +4513,197 @@ func TestDeleteTaskRemovesScheduledTask(t *testing.T) {
 	}
 }
 
-// TestTaskRetentionDefaultsWhenUnset 验证未配置任务保留时间时仍有安全默认值，避免上线缺字段导致任务系统异常。
-func TestTaskRetentionDefaultsWhenUnset(t *testing.T) {
+// TestTaskCompletedRetentionIsFixed 验证成功任务和工作流统一固定保留两天。
+func TestTaskCompletedRetentionIsFixed(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
 	cfg := manager.CurrentConfig()
-	if cfg.CompletedRetentionSeconds != 0 || cfg.ArchivedRetentionSeconds != 0 {
-		t.Fatalf("测试配置应模拟未配置保留时间，实际 completed=%d archived=%d", cfg.CompletedRetentionSeconds, cfg.ArchivedRetentionSeconds)
+	if cfg.ArchivedRetentionSeconds != 0 {
+		t.Fatalf("测试配置应模拟未配置归档保留时间，实际=%d", cfg.ArchivedRetentionSeconds)
 	}
-	if got, want := manager.completedRetention(), 24*time.Hour; got != want {
-		t.Fatalf("未配置 completed_retention_seconds 时默认值 = %s，期望 %s", got, want)
+	if got := manager.CompletedRetention(); got != taskCompletedRetention {
+		t.Fatalf("成功任务固定保留时间 = %s，期望 %s", got, taskCompletedRetention)
 	}
-	if got, want := manager.workflowRetention(), manager.completedRetention(); got != want {
-		t.Fatalf("工作流保留时间应复用 completed_retention_seconds，实际 %s，期望 %s", got, want)
-	}
-	if got, want := manager.archivedRetention(), time.Duration(taskArchivedRetentionDefaultSeconds)*time.Second; got != want {
+	if got, want := manager.ArchivedRetention(), time.Duration(taskArchivedRetentionDefaultSeconds)*time.Second; got != want {
 		t.Fatalf("未配置 archived_retention_seconds 时默认值 = %s，期望 %s", got, want)
 	}
-	cfg.CompletedRetentionSeconds = 90
-	manager.UpdateConfig(cfg)
-	if got, want := manager.workflowRetention(), 90*time.Second; got != want {
-		t.Fatalf("工作流保留时间未跟随 completed_retention_seconds，实际 %s，期望 %s", got, want)
+}
+
+// TestCompletedScoreRangeUsesFixedRetention 验证 completed 索引查询使用固定两天保留期反推完成时间。
+func TestCompletedScoreRangeUsesFixedRetention(t *testing.T) {
+	start := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	minScore, maxScore, ok := descZSetScoreRange("completed", taskListTimeRange{
+		start:    start,
+		end:      end,
+		hasRange: true,
+	}, taskCompletedRetention)
+	if !ok {
+		t.Fatal("completed 时间窗口应支持 zset score 查询")
+	}
+	wantMin := strconv.FormatInt(start.Add(taskCompletedRetention).Unix(), 10)
+	wantMax := strconv.FormatInt(end.Add(taskCompletedRetention).Unix(), 10)
+	if minScore != wantMin || maxScore != wantMax {
+		t.Fatalf("completed score 窗口=(%s,%s)，期望=(%s,%s)", minScore, maxScore, wantMin, wantMax)
+	}
+}
+
+// TestPeriodicTaskWithScheduledAt 验证计划时间传播及按计划时刻隔离入口去重。
+func TestPeriodicTaskWithScheduledAt(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	original := asynq.NewTaskWithHeaders(TypeWorkflowTrigger, mustJSONBytes(WorkflowTriggerPayload{
+		WorkflowName: "task_report.daily_summary",
+		Source:       WorkflowSourcePeriodic,
+		UniqueKey:    "periodic:task_report.daily_summary",
+	}), map[string]string{headerTaskName: "demo"})
+	scheduledAt := time.Date(2026, 7, 18, 10, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	plain, err := periodicTaskWithScheduledAt(original, scheduledAt, false)
+	if err != nil {
+		t.Fatalf("复制普通周期任务失败: %v", err)
+	}
+	if plain.Headers()[HeaderScheduledAt] != scheduledAt.Format(time.RFC3339) {
+		t.Fatalf("周期任务计划触发时间=%q，期望=%q", plain.Headers()[HeaderScheduledAt], scheduledAt.Format(time.RFC3339))
+	}
+	if original.Headers()[HeaderScheduledAt] != "" {
+		t.Fatalf("原周期任务不应被修改: %+v", original.Headers())
+	}
+	if plain.Type() != original.Type() || string(plain.Payload()) != string(original.Payload()) {
+		t.Fatalf("周期任务副本未保留类型或载荷")
+	}
+	options := []asynq.Option{
+		asynq.Queue(manager.namespacedQueueName(QueueMaintenance)),
+		asynq.Unique(48 * time.Hour),
+	}
+	if _, err := manager.client.EnqueueContext(context.Background(), original, options...); err != nil {
+		t.Fatalf("投递原周期任务失败: %v", err)
+	}
+	if _, err := manager.client.EnqueueContext(context.Background(), plain, options...); !errors.Is(err, asynq.ErrDuplicateTask) {
+		t.Fatalf("动态 header 不应改变 Asynq Unique 结果，实际=%v", err)
+	}
+
+	first, err := periodicTaskWithScheduledAt(original, scheduledAt, true)
+	if err != nil {
+		t.Fatalf("构造首日按计划去重任务失败: %v", err)
+	}
+	var firstPayload WorkflowTriggerPayload
+	if err = json.Unmarshal(first.Payload(), &firstPayload); err != nil || firstPayload.ScheduledAt != scheduledAt.Format(time.RFC3339) {
+		t.Fatalf("首日计划时间未写入 payload: payload=%+v error=%v", firstPayload, err)
+	}
+	if _, err = manager.client.EnqueueContext(context.Background(), first, options...); err != nil {
+		t.Fatalf("投递首日按计划去重任务失败: %v", err)
+	}
+	firstDuplicate, err := periodicTaskWithScheduledAt(original, scheduledAt, true)
+	if err != nil {
+		t.Fatalf("构造首日重复任务失败: %v", err)
+	}
+	if _, err = manager.client.EnqueueContext(context.Background(), firstDuplicate, options...); !errors.Is(err, asynq.ErrDuplicateTask) {
+		t.Fatalf("同一计划时刻必须保持去重，实际=%v", err)
+	}
+	second, err := periodicTaskWithScheduledAt(original, scheduledAt.Add(24*time.Hour), true)
+	if err != nil {
+		t.Fatalf("构造次日按计划去重任务失败: %v", err)
+	}
+	if _, err = manager.client.EnqueueContext(context.Background(), second, options...); err != nil {
+		t.Fatalf("不同计划时刻不应被旧入口去重键拦截: %v", err)
+	}
+}
+
+// TestPeriodicTaskUsesScheduledUnique 验证只有显式声明的工作流会改变周期入口去重摘要。
+func TestPeriodicTaskUsesScheduledUnique(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	definition := testWorkflowDefinition("scheduled-unique-workflow")
+	definition.PeriodicUniqueBySchedule = true
+	if err := manager.RegisterWorkflow(definition); err != nil {
+		t.Fatalf("注册按计划时刻去重工作流失败: %v", err)
+	}
+	scheduler := newPeriodicTaskScheduler(manager)
+	task := asynq.NewTask(TypeWorkflowTrigger, mustJSONBytes(WorkflowTriggerPayload{WorkflowName: definition.Name}))
+	if !periodicTaskUsesScheduledUnique(scheduler, &asynq.PeriodicTaskConfig{Task: task}) {
+		t.Fatal("显式声明的工作流应按计划时刻隔离周期入口去重")
+	}
+	plainDefinition := testWorkflowDefinition("plain-periodic-workflow")
+	if err := manager.RegisterWorkflow(plainDefinition); err != nil {
+		t.Fatalf("注册普通周期工作流失败: %v", err)
+	}
+	plainTask := asynq.NewTask(TypeWorkflowTrigger, mustJSONBytes(WorkflowTriggerPayload{WorkflowName: plainDefinition.Name}))
+	if periodicTaskUsesScheduledUnique(scheduler, &asynq.PeriodicTaskConfig{Task: plainTask}) {
+		t.Fatal("未声明的工作流不应改变现有周期入口去重语义")
+	}
+}
+
+// TestPeriodicScheduledAtUsesCronEntry 验证回调延迟时仍使用 cron 登记的本轮计划时刻。
+func TestPeriodicScheduledAtUsesCronEntry(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	delayedAt := time.Date(2026, 7, 18, 10, 1, 20, 0, loc)
+	want := time.Date(2026, 7, 18, 10, 0, 0, 0, loc)
+	if got := periodicScheduledAt(want, delayedAt); !got.Equal(want) {
+		t.Fatalf("迟到回调计划时间=%s，期望=%s", got, want)
+	}
+	if got, fallback := periodicScheduledAt(time.Time{}, delayedAt), delayedAt.Truncate(time.Second); !got.Equal(fallback) {
+		t.Fatalf("缺失 cron 记录时计划时间=%s，期望=%s", got, fallback)
+	}
+}
+
+// TestWorkflowScheduledAtPersistsAndPropagates 验证周期触发时间可恢复并传递到节点任务。
+func TestWorkflowScheduledAtPersistsAndPropagates(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	def := testWorkflowDefinition("scheduled-at-propagation")
+	if err := manager.RegisterWorkflow(def); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	workflowID := "wf-scheduled-at"
+	scheduledAt := "2026-07-18T10:00:00+08:00"
+	if _, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{
+		WorkflowID:   workflowID,
+		Name:         def.Name,
+		Queue:        QueueMaintenance,
+		Source:       WorkflowSourcePeriodic,
+		PeriodicName: "scheduled-at-periodic",
+		ScheduledAt:  scheduledAt,
+	}); err != nil {
+		t.Fatalf("启动工作流失败: %v", err)
+	}
+	stored, err := manager.workflowSpecByID(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("恢复工作流启动参数失败: %v", err)
+	}
+	if stored.ScheduledAt != scheduledAt {
+		t.Fatalf("恢复的计划触发时间=%q，期望=%q", stored.ScheduledAt, scheduledAt)
+	}
+	info, err := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueMaintenance), workflowNodeTaskID(workflowID, "root", 0))
+	if err != nil {
+		t.Fatalf("读取节点任务失败: %v", err)
+	}
+	if info.Headers[HeaderScheduledAt] != scheduledAt {
+		t.Fatalf("节点任务计划触发时间=%q，期望=%q", info.Headers[HeaderScheduledAt], scheduledAt)
+	}
+	if info.Retention != taskCompletedRetention {
+		t.Fatalf("工作流节点 retention=%s，期望=%s", info.Retention, taskCompletedRetention)
+	}
+}
+
+// TestWorkflowUniqueKeyForSchedule 验证同一计划时刻稳定防重且相邻周期使用不同幂等键。
+func TestWorkflowUniqueKeyForSchedule(t *testing.T) {
+	first, err := workflowUniqueKeyForSchedule("periodic:report", "2026-07-18T10:00:00+08:00")
+	if err != nil {
+		t.Fatalf("生成首个计划幂等键失败: %v", err)
+	}
+	second, err := workflowUniqueKeyForSchedule("periodic:report", "2026-07-19T10:00:00+08:00")
+	if err != nil {
+		t.Fatalf("生成下一周期幂等键失败: %v", err)
+	}
+	if first == second {
+		t.Fatalf("相邻周期幂等键不应相同: %s", first)
+	}
+	if equivalent, err := workflowUniqueKeyForSchedule("periodic:report", "2026-07-18T02:00:00Z"); err != nil || equivalent != first {
+		t.Fatalf("同一时刻幂等键不稳定: got=%q want=%q error=%v", equivalent, first, err)
+	}
+	if _, err := workflowUniqueKeyForSchedule("periodic:report", "invalid"); err == nil {
+		t.Fatal("非法计划时刻应返回错误")
 	}
 }
 
@@ -2850,6 +4811,13 @@ func TestLeaderRunnerAvoidsDuplicateSchedulerAndFailsOver(t *testing.T) {
 // newTestManager 构造测试依赖。
 func newTestManager(t *testing.T) (*Manager, func()) {
 	t.Helper()
+	manager, _, cleanup := newTestManagerWithServer(t)
+	return manager, cleanup
+}
+
+// newTestManagerWithServer 构造可推进 Redis 时钟的测试依赖。
+func newTestManagerWithServer(t *testing.T) (*Manager, *miniredis.Miniredis, func()) {
+	t.Helper()
 	server, client := newTestRedis(t)
 	cfg := config.TaskQueueConfig{
 		Enabled:                 true,
@@ -2875,7 +4843,7 @@ func newTestManager(t *testing.T) (*Manager, func()) {
 		_ = client.Close()
 		server.Close()
 	}
-	return manager, cleanup
+	return manager, server, cleanup
 }
 
 // useRuntimeAppID 表示测试辅助逻辑。

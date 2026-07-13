@@ -76,15 +76,14 @@ func requestParams(r *http.Request) (map[string]any, error) {
 		return params, nil
 	}
 
-	var bodyMap map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	if err := decoder.Decode(&bodyMap); err == nil {
-		for key, value := range bodyMap {
-			params[key] = value
-		}
-	}
+	bodyMap, err := decodeSingleJSONMap(body)
 	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	for key, value := range bodyMap {
+		params[key] = value
+	}
 	return params, nil
 }
 
@@ -97,11 +96,23 @@ func requestJSONMap(r *http.Request) (map[string]any, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return map[string]any{}, nil
 	}
+	return decodeSingleJSONMap(body)
+}
+
+// decodeSingleJSONMap 解码单个 JSON 对象，并拒绝尾随的第二个 JSON 值或非法内容。
+func decodeSingleJSONMap(body []byte) (map[string]any, error) {
 	var bodyMap map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&bodyMap); err != nil {
 		return nil, errors.Tag(err)
+	}
+	if bodyMap == nil {
+		return nil, errors.Errorf("JSON请求体必须是对象")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, errors.Errorf("JSON请求体只能包含一个对象")
 	}
 	return bodyMap, nil
 }

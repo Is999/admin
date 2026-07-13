@@ -20,3 +20,14 @@ func TestBuildObjectKeyWithoutPrefix(t *testing.T) {
 		t.Fatalf("对象 key 不正确: %s", objectKey)
 	}
 }
+
+// TestObjectKeyPrefixMatchesBuildObjectKey 验证公开访问校验使用的前缀与存储写入规则一致。
+func TestObjectKeyPrefixMatchesBuildObjectKey(t *testing.T) {
+	objectPrefix := ObjectKeyPrefix("Tenant//Files", "admin-avatar")
+	if objectPrefix != "tenant/files/admin-avatar" {
+		t.Fatalf("ObjectKeyPrefix() = %q", objectPrefix)
+	}
+	if objectKey := buildObjectKey("Tenant//Files", "admin-avatar", "demo.png"); !strings.HasPrefix(objectKey, objectPrefix+"/") {
+		t.Fatalf("buildObjectKey() = %q, want prefix %q", objectKey, objectPrefix)
+	}
+}

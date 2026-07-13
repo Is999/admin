@@ -15,7 +15,7 @@ type LoginReq struct {
 	Captcha    string `json:"captcha,optional"`    // 图形验证码内容
 	Key        string `json:"key,optional"`        // 图形验证码 key
 	SecureCode string `json:"secureCode,optional"` // 安全验证码，参与登录签名与加密
-	IP         string `json:"ip,optional"`         // 登录 IP，允许由前端或网关注入
+	IP         string `json:"ip,optional"`         // 登录 IP，由 handler 使用可信代理规则覆盖客户端输入
 }
 
 // Validate 校验登录参数。

@@ -186,8 +186,6 @@ func (l *SecurityDebugLogic) Decrypt(req *types.SecurityDebugCipherReq) *types.B
 // buildSigner 根据 AppID 和签名方式初始化签名器或验签器。
 func (l *SecurityDebugLogic) buildSigner(appID string, signatureType string, isVerify bool) (security.Signer, error) {
 	switch signatureType {
-	case security.SignatureTypeMD5:
-		return security.MD5Signer{}, nil
 	case security.SignatureTypeAES:
 		aesKey, _, err := secretkeylogic.NewSecretKeyLogic(l.Ctx, l.Svc).GetAESKey(appID, "", "")
 		if err != nil {

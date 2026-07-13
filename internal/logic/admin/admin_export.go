@@ -49,8 +49,8 @@ const (
 	adminExportMaxConcurrentShards = 4
 	// adminExportProgressMinInterval 表示管理员导出进度最小上报时间间隔。
 	adminExportProgressMinInterval = 500 * time.Millisecond
-	// adminExportProgressMinRows 表示管理员导出进度最小上报行数增量。
-	adminExportProgressMinRows = 400
+	// adminExportRunningMaxProgress 表示运行态百分比上限，完成状态统一写入 100%。
+	adminExportRunningMaxProgress = 99
 	// adminExportTriggerLockTTL 表示管理员导出同条件触发锁 TTL。
 	adminExportTriggerLockTTL = 15 * time.Second
 	// adminExportReuseIndexTTL 表示管理员导出同条件复用索引保留时间。
@@ -200,10 +200,6 @@ func (l *AdminExportLogic) triggerOrReuseUnderLock(req *types.AdminExportReq, fi
 	if reusedResp, err := l.tryReuseExistingJob(fingerprint, operatorID); err != nil || reusedResp != nil {
 		return reusedResp, errors.Tag(err)
 	}
-	total, err := l.countAdmins(req)
-	if err != nil {
-		return nil, errors.Wrap(err, "统计管理员导出总数失败")
-	}
 	jobID := uuid.NewString()
 	now := time.Now()
 	fileName := buildAdminExportFileName(jobID, now)
@@ -213,7 +209,7 @@ func (l *AdminExportLogic) triggerOrReuseUnderLock(req *types.AdminExportReq, fi
 		Status:             types.AdminExportStatusQueued,
 		Progress:           0,
 		Processed:          0,
-		Total:              total,
+		Total:              0,
 		EstimatedSeconds:   0,
 		FileName:           fileName,
 		DownloadReady:      false,
@@ -317,14 +313,30 @@ func (l *AdminExportLogic) RunExportTask(payload *types.AdminExportTaskPayload) 
 	if err != nil {
 		return errors.Wrapf(err, "AdminExportLogic.RunExportTask 查询管理员导出任务[%s]失败", payload.JobID)
 	}
+	if status.Status == types.AdminExportStatusSucceeded {
+		return nil
+	}
+	if strings.TrimSpace(status.ObjectKey) != "" {
+		if err := l.deleteExportObject(status.ObjectKey); err != nil {
+			return errors.Wrapf(err, "AdminExportLogic.RunExportTask 清理管理员导出任务[%s]重试残留对象失败", payload.JobID)
+		}
+		status.ObjectKey = ""
+		status.StorageType = ""
+	}
 
 	now := time.Now()
 	status.Status = types.AdminExportStatusRunning
+	status.Progress = 0
+	status.Processed = 0
+	status.Total = 0
+	status.EstimatedSeconds = 0
+	status.AverageRowsPerSec = 0
+	status.LastProcessedAt = ""
+	status.FinishedAt = ""
+	status.DownloadReady = false
 	status.ErrorMessage = ""
 	status.OperatorID = payload.OperatorID
-	if status.StartedAt == "" {
-		status.StartedAt = excel.FormatDateTime(now)
-	}
+	status.StartedAt = excel.FormatDateTime(now)
 	if status.FileName == "" {
 		status.FileName = buildAdminExportFileName(payload.JobID, now)
 	}
@@ -339,11 +351,27 @@ func (l *AdminExportLogic) RunExportTask(payload *types.AdminExportTaskPayload) 
 		_ = l.markFailed(status, errors.Wrap(err, "创建管理员导出目录失败"))
 		return errors.Wrapf(err, "AdminExportLogic.RunExportTask 创建管理员导出目录失败 jobId=%s", payload.JobID)
 	}
+	status.Total, err = l.countAdmins(&payload.Request)
+	if err != nil {
+		_ = l.markFailed(status, errors.Wrap(err, "统计管理员导出总量失败"))
+		return errors.Wrapf(err, "AdminExportLogic.RunExportTask 统计管理员导出总量失败 jobId=%s", payload.JobID)
+	}
+	if err := l.saveStatus(status); err != nil {
+		return errors.Wrapf(err, "AdminExportLogic.RunExportTask 保存管理员导出总量失败 jobId=%s", payload.JobID)
+	}
 
 	shards, err := l.buildExportShards(&payload.Request, status.Total)
 	if err != nil {
 		_ = l.markFailed(status, errors.Wrap(err, "构造管理员导出分片失败"))
 		return errors.Wrapf(err, "AdminExportLogic.RunExportTask 构造管理员导出分片失败 jobId=%s", payload.JobID)
+	}
+	startedAt, err := excel.ParseDateTime(status.StartedAt)
+	if err != nil {
+		_ = l.markFailed(status, errors.Wrap(err, "解析管理员导出开始时间失败"))
+		return errors.Wrapf(err, "AdminExportLogic.RunExportTask 解析管理员导出开始时间失败 jobId=%s", payload.JobID)
+	}
+	if startedAt.IsZero() {
+		startedAt = now
 	}
 
 	exportOpt := excel.ApplyStreamExportShardedOpts(
@@ -387,15 +415,11 @@ func (l *AdminExportLogic) RunExportTask(payload *types.AdminExportTaskPayload) 
 			return shard.StartID - 1
 		}),
 		excel.WithStreamExportProgress[model.Admin, int, excel.OrderedIDShard](func(progress excel.ExportProgress) error {
-			status.Processed = progress.Processed
-			status.Total = progress.Total
-			status.Progress = progress.Progress
-			status.AverageRowsPerSec = progress.AverageRowsPerSec
-			status.EstimatedSeconds = progress.EstimatedSeconds
-			status.LastProcessedAt = excel.FormatDateTime(progress.LastProcessedAt)
+			applyAdminExportProgress(status, startedAt, progress)
 			return l.saveStatus(status)
 		}),
-		excel.WithStreamExportProgressThrottle[model.Admin, int, excel.OrderedIDShard](adminExportProgressMinInterval, adminExportProgressMinRows),
+		// 进度仅按时间节流，避免高速导出按行数频繁写 Redis。
+		excel.WithStreamExportProgressThrottle[model.Admin, int, excel.OrderedIDShard](adminExportProgressMinInterval, 0),
 	)
 
 	if err := excel.StreamExportSharded(l.Ctx, exportOpt); err != nil {
@@ -413,19 +437,90 @@ func (l *AdminExportLogic) RunExportTask(payload *types.AdminExportTaskPayload) 
 	finishedAt := time.Now()
 	status.Status = types.AdminExportStatusSucceeded
 	status.Progress = 100
-	status.Total = max(status.Total, status.Processed)
+	status.Total = status.Processed
 	status.EstimatedSeconds = 0
 	status.DownloadReady = true
 	status.FinishedAt = excel.FormatDateTime(finishedAt)
 	status.LastProcessedAt = excel.FormatDateTime(finishedAt)
 	status.DownloadURL = buildAdminExportDownloadURL(status.JobID)
-	if status.Total <= 0 {
-		status.AverageRowsPerSec = status.Processed
+	if err := l.scheduleExportCleanup(status); err != nil {
+		cleanupErr := l.deleteExportObject(status.ObjectKey)
+		if cleanupErr == nil {
+			status.ObjectKey = ""
+			status.StorageType = ""
+		}
+		status.DownloadReady = false
+		wrappedErr := errors.Wrap(err, "投递管理员导出文件清理任务失败")
+		_ = l.markFailed(status, firstNonNilError(cleanupErr, wrappedErr))
+		return errors.Tag(wrappedErr)
 	}
 	if err := l.saveStatus(status); err != nil {
 		return errors.Wrapf(err, "AdminExportLogic.RunExportTask 保存管理员导出完成状态失败 jobId=%s", payload.JobID)
 	}
 	return nil
+}
+
+// CleanupExportFile 删除已到保留期限的管理员导出对象。
+func (l *AdminExportLogic) CleanupExportFile(payload *types.AdminExportCleanupTaskPayload) error {
+	if payload == nil || strings.TrimSpace(payload.JobID) == "" || strings.TrimSpace(payload.ObjectKey) == "" {
+		return errors.Errorf("管理员导出文件清理任务参数不完整")
+	}
+	return l.deleteExportObject(payload.ObjectKey)
+}
+
+// scheduleExportCleanup 投递导出完成 24 小时后的文件清理任务。
+func (l *AdminExportLogic) scheduleExportCleanup(status *types.AdminExportStatusResp) error {
+	if status == nil || l == nil || l.Svc == nil || l.Svc.Task == nil {
+		return errors.Errorf("管理员导出文件清理任务系统未初始化")
+	}
+	objectKey := strings.TrimSpace(status.ObjectKey)
+	if objectKey == "" {
+		return errors.Errorf("管理员导出文件清理任务缺少对象 key")
+	}
+	payload, err := json.Marshal(types.AdminExportCleanupTaskPayload{
+		JobID:     status.JobID,
+		ObjectKey: objectKey,
+	})
+	if err != nil {
+		return errors.Wrap(err, "序列化管理员导出文件清理任务失败")
+	}
+	return l.Svc.Task.EnqueueTask(l.Ctx, types.AdminExportCleanupTaskType, payload,
+		svc.WithTaskQueue(taskqueue.QueueMaintenance),
+		svc.WithTaskRetry(5),
+		svc.WithTaskTimeout(10*time.Minute),
+		svc.WithTaskDelay(adminExportStatusTTL),
+	)
+}
+
+// deleteExportObject 删除管理员导出对象，删除失败时保留任务重试机会。
+func (l *AdminExportLogic) deleteExportObject(objectKey string) error {
+	objectKey = strings.TrimSpace(objectKey)
+	if objectKey == "" {
+		return nil
+	}
+	objectStorage, err := l.objectStorage()
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if err := objectStorage.Delete(l.Ctx, objectKey); err != nil {
+		return errors.Wrapf(err, "删除管理员导出对象失败 object_key=%s", objectKey)
+	}
+	return nil
+}
+
+// applyAdminExportProgress 更新管理员导出的全局进度、平均速度和预计剩余时间。
+func applyAdminExportProgress(status *types.AdminExportStatusResp, startedAt time.Time, progress excel.ExportProgress) {
+	status.Processed = progress.Processed
+	status.LastProcessedAt = excel.FormatDateTime(progress.LastProcessedAt)
+	percent, averageRowsPerSec, estimatedSeconds := excel.BuildMetrics(status.Total, status.Processed, startedAt, progress.LastProcessedAt)
+	status.AverageRowsPerSec = averageRowsPerSec
+	if status.Total <= 0 {
+		status.Progress = 0
+		status.EstimatedSeconds = 0
+		return
+	}
+	status.Progress = min(percent, adminExportRunningMaxProgress)
+	status.EstimatedSeconds = estimatedSeconds
 }
 
 // OpenDownloadObject 打开管理员导出结果对象流，支持本地文件和统一存储对象。
@@ -700,7 +795,7 @@ func (l *AdminExportLogic) notifyExportFailed(status *types.AdminExportStatusRes
 	if l == nil || l.Svc == nil || status == nil || err == nil {
 		return
 	}
-	svc.NotifyTaskRuntimeAlert(l.Ctx, l.Svc.Task, svc.TaskRuntimeAlert{
+	svc.NotifyTaskRuntimeAlert(l.Ctx, l.Svc.RuntimeAlerter, svc.TaskRuntimeAlert{
 		Kind:      svc.TaskRuntimeAlertKindAdminExcelExportFailed,
 		Title:     "【P1 Excel 异步导出失败】",
 		Status:    "导出任务已标记失败，文件不可下载",
@@ -934,7 +1029,7 @@ func (l *AdminExportLogic) persistExportObject(status *types.AdminExportStatusRe
 		ContentType:      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 		LocalPath:        status.FilePath,
 		OriginalFileName: status.FileName,
-		StoredFileName:   storage.BuildStoredFileName(status.JobID, status.FileName),
+		StoredFileName:   storage.BuildStoredFileName(buildAdminExportStorageID(status.JobID), status.FileName),
 		Visibility:       storage.VisibilityPrivate,
 	})
 	if err != nil {
@@ -944,6 +1039,14 @@ func (l *AdminExportLogic) persistExportObject(status *types.AdminExportStatusRe
 	status.StorageType = storedObject.StorageType
 	status.ContentType = storedObject.ContentType
 	return nil
+}
+
+// buildAdminExportStorageID 生成单次导出尝试的唯一存储 ID，避免失败重试覆盖仍待清理的旧对象。
+func buildAdminExportStorageID(jobID string) string {
+	return fmt.Sprintf("%s_%s",
+		strings.ReplaceAll(strings.TrimSpace(jobID), "-", ""),
+		strings.ReplaceAll(uuid.NewString(), "-", ""),
+	)
 }
 
 // hasReusableDownloadObject 判断当前导出任务是否仍保有可复用的下载对象。

@@ -9,7 +9,7 @@ import (
 )
 
 // SkeletonStage 表示只承载工作流编排的用户标签骨架阶段。
-// 该阶段不读取具体业务事实表、不写标签结果，只验证节点注册、调度和状态流转。
+// 该阶段不读取具体业务事实表、不写标签结果，只允许 dry_run 验证节点注册、调度和状态流转。
 type SkeletonStage struct {
 	Base // 基础阶段信息
 }
@@ -61,5 +61,16 @@ func (s *SkeletonStage) Run(ctx *runtimectx.Context, plans map[string]any) (Resu
 	if s == nil || s.StageName == "" {
 		return Result{}, errors.Errorf("用户标签骨架阶段名称不能为空")
 	}
+	if err := requireSkeletonDryRun(ctx); err != nil {
+		return Result{}, errors.Tag(err)
+	}
 	return Result{Skipped: true}, nil
+}
+
+// requireSkeletonDryRun 在业务计算阶段未实现前拒绝生产写入，避免空结果覆盖正式标签表。
+func requireSkeletonDryRun(ctx *runtimectx.Context) error {
+	if ctx == nil || !ctx.Options.DryRun {
+		return errors.Errorf("用户标签业务计算阶段尚未实现，仅允许 dry_run 骨架验证")
+	}
+	return nil
 }

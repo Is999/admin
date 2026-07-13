@@ -36,18 +36,20 @@ func newCollector() core.Component {
 			state.ServiceContext.Audit.SetEnqueuer(audit.NewCollectorWriter(manager))
 		}
 		manager.SetAlertHook(func(ctx context.Context, alert collectorx.RuntimeAlert) {
-			svc.NotifyTaskRuntimeAlert(ctx, state.ServiceContext.Task, taskalert.CollectorRuntimeAlert(alert))
+			svc.NotifyTaskRuntimeAlert(ctx, state.ServiceContext.RuntimeAlerter, taskalert.CollectorRuntimeAlert(alert))
 		})
-		// 通用收集器的 Kafka 消费和失败重试循环属于 Worker 职责，API-only 不启动后台消费。
+		// Kafka 消费和失败重试只由 Worker 启动；所有模式都注册停止钩子以释放 Kafka writer。
+		startHook := func(context.Context) error { return nil }
 		if runmode.ShouldStartWorker(state.Mode) {
-			if err := state.AddLifecycleHooks(NameCollector, func(context.Context) error {
+			startHook = func(context.Context) error {
 				manager.Start()
 				return nil
-			}, func(ctx context.Context) error {
-				return errors.Tag(manager.Stop(ctx))
-			}); err != nil {
-				return errors.Tag(err)
 			}
+		}
+		if err := state.AddLifecycleHooks(NameCollector, startHook, func(ctx context.Context) error {
+			return errors.Tag(manager.Stop(ctx))
+		}); err != nil {
+			return errors.Tag(err)
 		}
 		return nil
 	})

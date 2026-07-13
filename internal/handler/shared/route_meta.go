@@ -62,8 +62,6 @@ var (
 	AuthCodes = newRouteMeta(routealias.AuthCodes, "获取当前用户权限码")
 	// AuthProfile 获取当前登录资料。
 	AuthProfile = newRouteMeta(routealias.AuthProfile, "获取当前登录资料")
-	// AuthVerifyAccount 验证账号并生成MFA绑定信息。
-	AuthVerifyAccount = newRouteMeta(routealias.AuthVerifyAccount, "验证账号并生成MFA绑定信息")
 	// DocsSession 创建文档访问会话。
 	DocsSession = newRouteMeta(routealias.DocsIndex, "创建文档访问会话")
 	// InternalInitAdminBootstrap 内网初始化管理员账号。
@@ -154,6 +152,8 @@ var (
 	AdminMessageList = newAuditRouteMeta(routealias.AdminMessageList, model.ActionAdminMessageList, "查询管理员消息收件箱")
 	// AdminMessageSentList 查询管理员已发送消息。
 	AdminMessageSentList = newAuditRouteMeta(routealias.AdminMessageSentList, model.ActionAdminMessageSentList, "查询管理员已发送消息")
+	// AdminMessageReceiverOptions 查询管理员消息可用收件人选项。
+	AdminMessageReceiverOptions = newRouteMeta(routealias.AdminMessageReceiverOptions, "查询管理员消息可用收件人选项")
 	// AdminMessageReceivers 查询管理员消息收件人明细。
 	AdminMessageReceivers = newAuditRouteMeta(routealias.AdminMessageReceivers, model.ActionAdminMessageReceivers, "查询管理员消息收件人明细")
 	// AdminMessageSend 发送管理员消息。

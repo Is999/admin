@@ -13,7 +13,7 @@ type SecurityDebugSignReq struct {
 	AppID         string   `json:"appId"`                  // AppID 对应 secret_key.uuid
 	RequestID     string   `json:"requestId,optional"`     // 请求唯一标识，为空时后端自动生成
 	Timestamp     string   `json:"timestamp,optional"`     // 秒级请求时间戳，为空时后端自动生成
-	SignatureType string   `json:"signatureType,optional"` // 签名方式：M/A/R
+	SignatureType string   `json:"signatureType,optional"` // 签名方式：A/R
 	SignFields    []string `json:"signFields,optional"`    // 参与签名字段，空时默认全字段
 	PayloadText   string   `json:"payloadText"`            // 待签名 JSON 对象文本
 }
@@ -23,7 +23,7 @@ func (r *SecurityDebugSignReq) Validate() error {
 	r.AppID = strings.TrimSpace(r.AppID)
 	r.RequestID = strings.TrimSpace(r.RequestID)
 	r.Timestamp = strings.TrimSpace(r.Timestamp)
-	r.SignatureType = strings.ToUpper(strings.TrimSpace(r.SignatureType))
+	r.SignatureType = security.NormalizeSignatureType(r.SignatureType)
 	r.PayloadText = strings.TrimSpace(r.PayloadText)
 	if r.AppID == "" {
 		return errors.Errorf("AppID不能为空")
@@ -31,15 +31,17 @@ func (r *SecurityDebugSignReq) Validate() error {
 	if r.PayloadText == "" {
 		return errors.Errorf("待签名内容不能为空")
 	}
-	return nil
+	switch r.NormalizedSignatureType() {
+	case security.SignatureTypeAES, security.SignatureTypeRSA:
+		return nil
+	default:
+		return errors.Errorf("签名方式仅支持A或R")
+	}
 }
 
 // NormalizedSignatureType 返回归一化后的签名方式。
 func (r *SecurityDebugSignReq) NormalizedSignatureType() string {
-	if r.SignatureType == "" {
-		return security.SignatureTypeRSA
-	}
-	return r.SignatureType
+	return security.NormalizeSignatureType(r.SignatureType)
 }
 
 // NormalizedSignFields 返回归一化后的签名字段。

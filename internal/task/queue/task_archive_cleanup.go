@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	taskArchivedRetentionDefaultSeconds = 7 * 86400       // 归档失败任务默认保留 7 天
-	taskArchivedCleanupInterval         = 5 * time.Minute // 归档失败任务过期清理间隔
-	taskArchivedCleanupBatchSize        = 500             // 单队列单轮最多清理数量，避免 Redis Lua 长时间阻塞
-	taskArchivedCleanupMaxBatches       = 5               // 单队列单轮最多清理批次数，兼顾历史积压追赶和 Redis 压力
+	taskArchivedCleanupInterval   = 5 * time.Minute // 归档失败任务过期清理间隔
+	taskArchivedCleanupBatchSize  = 500             // 单队列单轮最多清理数量，避免 Redis Lua 长时间阻塞
+	taskArchivedCleanupMaxBatches = 5               // 单队列单轮最多清理批次数，兼顾历史积压追赶和 Redis 压力
 )
 
 // startArchivedCleanerLocked 启动归档失败任务过期清理协程。
@@ -97,7 +96,7 @@ func (m *Manager) archivedCleanupQueueNames() []string {
 	}
 	rawQueueNames, err := m.inspector.Queues()
 	if err != nil || len(rawQueueNames) == 0 {
-		return m.configuredQueueNames()
+		return m.effectiveQueueNames()
 	}
 	return m.visibleQueueNames(rawQueueNames)
 }

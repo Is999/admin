@@ -44,13 +44,14 @@ func New(ctx context.Context, cfg config.RedisConfig, obs config.ObservabilityCo
 	var rdb redis.UniversalClient
 	if !isClusterMode(cfg, addrs) {
 		option := &redis.Options{
-			Addr:            addrs[0],
-			Password:        cfg.Password,
-			DB:              cfg.DB,
-			PoolSize:        poolSize,
-			MinIdleConns:    poolSize / 5, // 保持一定的最小空闲连接，避免突发流量时建连耗时
-			DisableIdentity: true,         // 禁用 CLIENT SETINFO，避免代理 Redis 拒绝该命令
-			Protocol:        2,
+			Addr:                  addrs[0],
+			Password:              cfg.Password,
+			DB:                    cfg.DB,
+			PoolSize:              poolSize,
+			MinIdleConns:          poolSize / 5, // 保持一定的最小空闲连接，避免突发流量时建连耗时
+			DisableIdentity:       true,         // 禁用 CLIENT SETINFO，避免代理 Redis 拒绝该命令
+			ContextTimeoutEnabled: true,         // 让调用方 deadline 约束 Redis 等待，避免限流等链路越过请求预算
+			Protocol:              2,
 			MaintNotificationsConfig: &maintnotifications.Config{
 				Mode: maintnotifications.ModeDisabled,
 			},
@@ -59,12 +60,13 @@ func New(ctx context.Context, cfg config.RedisConfig, obs config.ObservabilityCo
 		rdb = redis.NewClient(option)
 	} else {
 		clusterOpts := &redis.ClusterOptions{
-			Addrs:           addrs,
-			Password:        cfg.Password,
-			PoolSize:        poolSize,
-			MinIdleConns:    poolSize / 5, // 保持一定的最小空闲连接，避免突发流量时建连耗时
-			DisableIdentity: true,         // 禁用 CLIENT SETINFO，避免代理 Redis 拒绝该命令
-			Protocol:        2,
+			Addrs:                 addrs,
+			Password:              cfg.Password,
+			PoolSize:              poolSize,
+			MinIdleConns:          poolSize / 5, // 保持一定的最小空闲连接，避免突发流量时建连耗时
+			DisableIdentity:       true,         // 禁用 CLIENT SETINFO，避免代理 Redis 拒绝该命令
+			ContextTimeoutEnabled: true,         // Cluster 节点命令同样必须遵守调用方 deadline
+			Protocol:              2,
 			MaintNotificationsConfig: &maintnotifications.Config{
 				Mode: maintnotifications.ModeDisabled,
 			},
@@ -131,12 +133,13 @@ func pingConfiguredAddrs(ctx context.Context, cfg config.RedisConfig, addrs []st
 		}
 		// 单地址探测使用独立短连接，避免失败节点污染后续正式客户端实例。
 		option := &redis.Options{
-			Addr:            pingAddr,
-			Password:        cfg.Password,
-			DB:              db,
-			PoolSize:        1,
-			DisableIdentity: true,
-			Protocol:        2,
+			Addr:                  pingAddr,
+			Password:              cfg.Password,
+			DB:                    db,
+			PoolSize:              1,
+			DisableIdentity:       true,
+			ContextTimeoutEnabled: true,
+			Protocol:              2,
 			MaintNotificationsConfig: &maintnotifications.Config{
 				Mode: maintnotifications.ModeDisabled,
 			},

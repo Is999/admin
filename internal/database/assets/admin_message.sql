@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS `admin_message` (
   `link` varchar(500) NOT NULL DEFAULT '' COMMENT '跳转链接(路由或外链)',
   `sender_admin_id` int unsigned NOT NULL DEFAULT '0' COMMENT '发送人管理员ID',
   `sender_admin_name` varchar(20) NOT NULL DEFAULT '' COMMENT '发送人账号快照',
+  `reply_to_id` bigint unsigned NOT NULL DEFAULT '0' COMMENT '回复的原消息ID',
   `handled_status` tinyint unsigned NOT NULL DEFAULT '0' COMMENT '处理状态(0未处理1已处理)',
   `handled_by_admin_id` int unsigned NOT NULL DEFAULT '0' COMMENT '处理人管理员ID',
   `handled_by_admin_name` varchar(20) NOT NULL DEFAULT '' COMMENT '处理人账号快照',

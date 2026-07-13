@@ -10,8 +10,8 @@ import (
 	i18n "admin/common/i18n"
 	"admin/internal/infra/loggerx"
 	"admin/internal/requestctx"
+	"admin/internal/svc"
 
-	"github.com/Is999/go-utils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -19,13 +19,15 @@ import (
 
 // TraceMiddleware 在 HTTP 请求入口创建或继承链路上下文，并把 trace 信息同步进 request meta。
 type TraceMiddleware struct {
-	tracer trace.Tracer // HTTP 入口 span 使用的 tracer 实例
+	tracer trace.Tracer        // HTTP 入口 span 使用的 tracer 实例
+	svc    *svc.ServiceContext // 客户端 IP 可信代理配置来源
 }
 
 // NewTraceMiddleware 创建服务端 span 中间件，统一承接请求入口的 trace 初始化。
-func NewTraceMiddleware() *TraceMiddleware {
+func NewTraceMiddleware(svcCtx *svc.ServiceContext) *TraceMiddleware {
 	return &TraceMiddleware{
 		tracer: otel.Tracer("admin/http"),
+		svc:    svcCtx,
 	}
 }
 
@@ -33,7 +35,7 @@ func NewTraceMiddleware() *TraceMiddleware {
 func (m *TraceMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, _ := requestctx.New(r.Context())
-		requestctx.SetRequest(ctx, r.Method, r.URL.Path, utils.ClientIP(r))
+		requestctx.SetRequest(ctx, r.Method, r.URL.Path, requestClientIP(m.svc, r))
 		requestctx.SetLocale(ctx, i18n.NormalizeLocale(r.Header.Get("Accept-Language")))
 		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
 		ctx = inheritTraceIDFromHeader(ctx, r)

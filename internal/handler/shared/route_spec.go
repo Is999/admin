@@ -31,7 +31,7 @@ type RouteHandler func(*svc.ServiceContext) http.HandlerFunc
 // RouteSpec 是路由注册、访问边界、契约和访问日志策略的单一规格。
 type RouteSpec struct {
 	Module        string                // 路由模块名称，由默认模块聚合时写入
-	Method        string                // HTTP Method
+	Method        string                // HTTP 请求方法
 	Path          string                // go-zero 路由路径
 	Access        RouteAccess           // 入口鉴权类型
 	Meta          RouteMeta             // 业务路由元数据，空值表示该路由不进入业务鉴权链

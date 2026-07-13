@@ -1,16 +1,38 @@
 package database
 
 import (
+	"admin/internal/routealias"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // TestValidateDefaultMigrations 确保默认迁移清单完整、版本递增且资产存在。
 func TestValidateDefaultMigrations(t *testing.T) {
 	if err := ValidateDefaultMigrations(); err != nil {
 		t.Fatalf("ValidateDefaultMigrations() error = %v", err)
+	}
+}
+
+// TestAdminBaselinePasswordUsesDirectBcrypt 验证初始管理员密码可按当前明文入参直接校验。
+func TestAdminBaselinePasswordUsesDirectBcrypt(t *testing.T) {
+	sql := migrationSQLByAsset(t, "admin.sql")
+	match := regexp.MustCompile(`'super999', 'super999', '([^']+)'`).FindStringSubmatch(sql)
+	if len(match) != 2 {
+		t.Fatal("admin.sql missing super999 password hash")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(match[1]), []byte("Temp@1234")); err != nil {
+		t.Fatalf("admin.sql super999 password hash mismatch: %v", err)
+	}
+}
+
+// TestAdminBaselineLastLoginIPUsesIPv6Length 确保未上线的管理员基线可完整保存 IPv6 文本。
+func TestAdminBaselineLastLoginIPUsesIPv6Length(t *testing.T) {
+	if !strings.Contains(migrationSQLByAsset(t, "admin.sql"), "`last_login_ip` varchar(45)") {
+		t.Fatal("admin.sql 的 last_login_ip 必须为 varchar(45)")
 	}
 }
 
@@ -129,6 +151,9 @@ func TestCollectorFailedEventBaselineIndexes(t *testing.T) {
 	sql := migrationSQLByAsset(t, "collector_failed_event.sql")
 	for _, want := range []string{
 		"UNIQUE KEY `uk_biz_event_id` (`biz_type`,`event_id`)",
+		"`claim_token` varchar(64) NOT NULL DEFAULT ''",
+		"`lease_until` datetime(3) NULL DEFAULT NULL",
+		"KEY `idx_state_lease` (`state`,`lease_until`)",
 		"KEY `idx_state_finished` (`state`,`finished_at`)",
 		"KEY `idx_state_updated` (`state`,`updated_at`)",
 		"KEY `idx_state_next` (`state`,`next_run_at`)",
@@ -138,11 +163,27 @@ func TestCollectorFailedEventBaselineIndexes(t *testing.T) {
 			t.Fatalf("collector_failed_event baseline missing overview index %q", want)
 		}
 	}
+	if strings.Contains(sql, "idx_state_started") {
+		t.Fatal("collector_failed_event baseline should use lease_until instead of started_at for lease recovery")
+	}
 	if strings.Contains(sql, "`transport`") {
 		t.Fatal("collector_failed_event baseline should not keep removed transport column")
 	}
 	if strings.Contains(sql, "UNIQUE KEY `uk_event_id`") {
 		t.Fatal("collector_failed_event baseline should not use global event_id unique key")
+	}
+}
+
+// TestAdminLogBaselineUsesCollectorEventID 确保审计日志以 EventID 唯一索引承接 Redis/Kafka 重放。
+func TestAdminLogBaselineUsesCollectorEventID(t *testing.T) {
+	sql := migrationSQLByAsset(t, "admin_log.sql")
+	for _, want := range []string{
+		"`event_id` varchar(64) NOT NULL DEFAULT ''",
+		"UNIQUE KEY `uk_event_id` (`event_id`)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("admin_log baseline missing persistent idempotency DDL %q", want)
+		}
 	}
 }
 
@@ -184,6 +225,9 @@ func TestRuntimeConfigBaselineSeedsDraftRows(t *testing.T) {
 	if got := strings.Count(periodicSQL, "INSERT IGNORE INTO `runtime_task_periodic`"); got != 5 {
 		t.Fatalf("runtime_task_periodic seed count = %d, want 5", got)
 	}
+	if !strings.Contains(periodicSQL, "'user-tag-delta-daily'") || !strings.Contains(periodicSQL, "'[\"dry_run=1\"]'") {
+		t.Fatal("user-tag-delta-daily baseline must remain disabled and dry-run only")
+	}
 	archiveSQL := migrationSQLByAsset(t, "runtime_archive_job.sql")
 	if got := strings.Count(archiveSQL, "INSERT IGNORE INTO `runtime_archive_job`"); got != 1 {
 		t.Fatalf("runtime_archive_job seed count = %d, want 1", got)
@@ -216,13 +260,14 @@ func TestRuntimeConfigBaselineSeedsDraftRows(t *testing.T) {
 	}
 }
 
-// TestDocumentPermissionMigration 确保文档权限增量收口在单一 SQL 资产中。
-func TestDocumentPermissionMigration(t *testing.T) {
-	sql := migrationSQLByAsset(t, "document_permission_seed.sql")
+// TestDocumentPermissionBaseline 确保单篇文档权限收口在权限表基线中。
+func TestDocumentPermissionBaseline(t *testing.T) {
+	sql := migrationSQLByAsset(t, "admin_permission.sql")
 	for _, want := range []string{
 		"INSERT IGNORE INTO `admin_permission`",
 		"'docs.file.文档首页.md'",
 		"'docs.file.角色文档/后端开发/AI开发提示词.md'",
+		"'docs.file.角色文档/后端开发/系统组件功能说明.md'",
 		"'docs.file.接口文档/后台系统/权限管理接口.md'",
 		"'docs.file.api/接口文档/前台系统/系统接口.md'",
 		"'docs.file.api/角色文档/后端开发/AI开发规范.md'",
@@ -233,12 +278,23 @@ func TestDocumentPermissionMigration(t *testing.T) {
 			t.Fatalf("document permission migration missing %q", want)
 		}
 	}
-	if got := strings.Count(sql, "INSERT IGNORE INTO `admin_permission`"); got != 64 {
-		t.Fatalf("document permission seed count = %d, want 64", got)
+	if got := strings.Count(sql, "'docs.file."); got != 65 {
+		t.Fatalf("document permission baseline count = %d, want 65", got)
 	}
 	for _, forbidden := range []string{"admin_role_permission_rel", " SELECT ", " JOIN "} {
 		if strings.Contains(sql, forbidden) {
-			t.Fatalf("document permission migration should only seed permission rows, found %q", forbidden)
+			t.Fatalf("permission baseline should not seed role relations or query other tables, found %q", forbidden)
+		}
+	}
+}
+
+// TestDocumentPermissionBaselineCoversDocsContentPaths 确保每篇受保护文档都有单篇权限数据。
+func TestDocumentPermissionBaselineCoversDocsContentPaths(t *testing.T) {
+	sql := migrationSQLByAsset(t, "admin_permission.sql")
+	for _, docsPath := range routealias.DocsContentPaths() {
+		module := "'docs.file." + docsPath + "'"
+		if !strings.Contains(sql, module) {
+			t.Fatalf("document permission baseline missing module %s", module)
 		}
 	}
 }
@@ -269,32 +325,24 @@ func TestMigrationSeedInsertIDsAscending(t *testing.T) {
 	}
 }
 
-// TestPermissionMigrationAssetsConsolidated 确保权限增量不再散落到多个 SQL 文件。
-func TestPermissionMigrationAssetsConsolidated(t *testing.T) {
+// TestDocumentPermissionsStayInAdminPermissionBaseline 确保文档权限不拆分成独立 SQL 资产。
+func TestDocumentPermissionsStayInAdminPermissionBaseline(t *testing.T) {
 	assets, err := MigrationAssetNames()
 	if err != nil {
 		t.Fatalf("MigrationAssetNames() error = %v", err)
 	}
 	for _, asset := range assets {
-		if strings.HasPrefix(asset, "document_permission") && asset != "document_permission_seed.sql" {
-			t.Fatalf("document permission SQL must stay consolidated in document_permission_seed.sql, found fragmented asset: %s", asset)
+		if strings.Contains(asset, "document_permission") {
+			t.Fatalf("document permission SQL must stay in admin_permission.sql, found standalone asset: %s", asset)
 		}
 	}
-
-	documentPermissionAssets := 0
 	for _, item := range DefaultMigrations() {
-		if strings.HasPrefix(item.Asset, "document_permission") {
-			documentPermissionAssets++
-			if item.Asset != "document_permission_seed.sql" || item.Name != "sync_document_permissions" {
-				t.Fatalf("document permission migration must use consolidated asset: %+v", item)
-			}
+		if strings.Contains(item.Name, "document_permission") {
+			t.Fatalf("document permissions must not use a standalone migration: %+v", item)
 		}
 		if strings.Contains(item.Asset, "drop_scope") {
 			t.Fatalf("runtime config scope DDL should not be a standalone migration asset: %s", item.Asset)
 		}
-	}
-	if documentPermissionAssets != 1 {
-		t.Fatalf("document permission migration asset count = %d, want 1", documentPermissionAssets)
 	}
 }
 

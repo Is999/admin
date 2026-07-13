@@ -27,6 +27,37 @@ func ValidateProduction(c config.Config) error {
 	if c.Redis.TLSInsecureSkipVerify {
 		return errors.Errorf("生产环境 redis.tls_insecure_skip_verify 不能为 true")
 	}
+	if !c.Collector.Enabled {
+		return errors.Errorf("生产环境必须启用 collector，管理员审计日志依赖该链路持久化")
+	}
+	// adminLogTask 是管理员审计日志必须显式配置的 Collector 任务。
+	adminLogTask, ok := c.Collector.Tasks[config.CollectorBizTypeAdminLogAudit]
+	if !ok {
+		return errors.Errorf("生产环境 collector.tasks 必须显式配置 %s", config.CollectorBizTypeAdminLogAudit)
+	}
+	if strings.TrimSpace(adminLogTask.Topic) == "" || strings.TrimSpace(adminLogTask.GroupID) == "" {
+		return errors.Errorf("生产环境 collector.tasks.%s 必须配置 topic 和 group_id", config.CollectorBizTypeAdminLogAudit)
+	}
+	// authSecurityTask 是前台认证风控必须显式配置的 Collector 任务。
+	authSecurityTask, ok := c.Collector.Tasks[config.CollectorBizTypeAuthSecurity]
+	if !ok {
+		return errors.Errorf("生产环境 collector.tasks 必须显式配置 %s", config.CollectorBizTypeAuthSecurity)
+	}
+	if strings.TrimSpace(authSecurityTask.Topic) != config.CollectorTopicAuthSecurity {
+		return errors.Errorf("生产环境 collector.tasks.%s.topic 必须为 %s", config.CollectorBizTypeAuthSecurity, config.CollectorTopicAuthSecurity)
+	}
+	if strings.TrimSpace(authSecurityTask.GroupID) == "" {
+		return errors.Errorf("生产环境 collector.tasks.%s 必须配置 group_id", config.CollectorBizTypeAuthSecurity)
+	}
+	if c.CDC.Enabled {
+		return errors.Errorf("CDC 当前只有本地验证处理器，生产环境不能启用 cdc.enabled")
+	}
+	if c.TestScenarios.AdminLogAudit.LarkEnabled || c.TestScenarios.AdminLogAudit.CollectorEnabled {
+		return errors.Errorf("生产环境不能启用 test_scenarios.admin_log_audit")
+	}
+	if c.Workflows.UserTag.Enabled {
+		return errors.Errorf("用户标签业务计算尚未实现，生产环境不能启用 workflows.user_tag.enabled")
+	}
 	if securitySecretKeyTouched(c.Security.SecretKey) &&
 		strings.TrimSpace(c.Security.SecretKey.GrayVersion) != "" &&
 		strings.TrimSpace(c.Security.SecretKey.GraySalt) == "" {

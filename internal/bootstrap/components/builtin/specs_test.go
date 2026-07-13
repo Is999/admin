@@ -26,3 +26,11 @@ func TestDefaultTaskPluginSpecsIncludeJobMetadata(t *testing.T) {
 		t.Fatal("默认任务插件清单缺少 job_task_metadata")
 	}
 }
+
+// TestRuntimeAlertStartsBeforeDependents 确保运行告警先于依赖它的后台组件注册。
+func TestRuntimeAlertStartsBeforeDependents(t *testing.T) {
+	specs := DefaultSpecs()
+	if len(specs) == 0 || specs[0].Name != NameRuntimeAlert {
+		t.Fatalf("运行告警必须最先注册，实际启动清单为 %+v", specs)
+	}
+}

@@ -7,32 +7,44 @@ import (
 	"admin/internal/types"
 )
 
-// TestBuildAdminUpdatesIgnoresStatusAndMFAFields 验证编辑管理员基础资料不会再混入状态和 MFA 专用字段。
-func TestBuildAdminUpdatesIgnoresStatusAndMFAFields(t *testing.T) {
-	realName := "新姓名"
+// TestBuildAdminUpdatesUsesEditableProfileFields 验证编辑管理员时只构建真实存在的基础资料字段。
+func TestBuildAdminUpdatesUsesEditableProfileFields(t *testing.T) {
+	realName := " 新姓名 "
+	email := " new@example.com "
+	phone := " 13800000000 "
+	avatar := " /avatars/new.png "
+	description := " 新备注 "
 	req := &types.UpdateAdminReq{
-		RealName:     &realName,
-		Status:       new(0),
-		MfaStatus:    new(1),
-		MfaSecureKey: new("JBSWY3DPEHPK3PXP"),
+		RealName:    &realName,
+		Email:       &email,
+		Phone:       &phone,
+		Avatar:      &avatar,
+		Description: &description,
 	}
 	old := &model.Admin{
-		RealName:     "原姓名",
-		Status:       1,
-		MfaStatus:    0,
-		MfaSecureKey: "RCABDVITFNQJJ4VJ",
+		RealName:    "原姓名",
+		Email:       "old@example.com",
+		Phone:       "13900000000",
+		Avatar:      "/avatars/old.png",
+		Description: "原备注",
 	}
 	updates := buildAdminUpdates(req, old)
-	if updates["real_name"] != realName {
-		t.Fatalf("buildAdminUpdates() real_name = %v, want %q", updates["real_name"], realName)
+	want := map[string]string{
+		"real_name":   "新姓名",
+		"email":       "new@example.com",
+		"phone":       "13800000000",
+		"avatar":      "/avatars/new.png",
+		"description": "新备注",
 	}
-	if _, ok := updates["status"]; ok {
-		t.Fatalf("buildAdminUpdates() should ignore status updates")
+	for field, value := range want {
+		if updates[field] != value {
+			t.Fatalf("buildAdminUpdates() %s = %v, want %q", field, updates[field], value)
+		}
 	}
-	if _, ok := updates["mfa_status"]; ok {
-		t.Fatalf("buildAdminUpdates() should ignore mfa_status updates")
+	if _, ok := updates["updated_at"]; !ok {
+		t.Fatal("buildAdminUpdates() should set updated_at when profile changes")
 	}
-	if _, ok := updates["mfa_secure_key"]; ok {
-		t.Fatalf("buildAdminUpdates() should ignore mfa_secure_key updates")
+	if len(updates) != len(want)+1 {
+		t.Fatalf("buildAdminUpdates() = %#v, want only editable profile fields and updated_at", updates)
 	}
 }

@@ -28,6 +28,8 @@ const (
 	HeaderTaskSource = "x-app-task-source"
 	// HeaderPeriodicName 是周期任务原始名称头。
 	HeaderPeriodicName = "x-app-periodic-name"
+	// HeaderScheduledAt 是周期任务本轮计划触发时间头。
+	HeaderScheduledAt = "x-app-scheduled-at"
 	// HeaderWorkflowID 是工作流实例 ID 头。
 	HeaderWorkflowID = "x-app-workflow-id"
 	// HeaderWorkflowName 是工作流名称头。

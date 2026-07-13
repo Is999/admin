@@ -33,6 +33,11 @@ func (g *GormLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
 	return &cp
 }
 
+// ParamsFilter 保留占位 SQL 并移除绑定参数，防止慢 SQL 或错误日志插值泄露密码与敏感资料。
+func (g *GormLogger) ParamsFilter(_ context.Context, sql string, _ ...interface{}) (string, []interface{}) {
+	return sql, nil
+}
+
 // Info 输出普通 SQL 信息级日志。
 func (g *GormLogger) Info(ctx context.Context, format string, args ...interface{}) {
 	if g.level < gormlogger.Info {

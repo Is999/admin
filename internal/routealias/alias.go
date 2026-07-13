@@ -16,8 +16,6 @@ const (
 	AuthCodes Alias = "auth.codes"
 	// AuthProfile 表示获取当前登录资料路由别名。
 	AuthProfile Alias = "auth.profile"
-	// AuthVerifyAccount 表示登录预校验路由别名。
-	AuthVerifyAccount Alias = "auth.verify_account"
 	// DocsIndex 表示后台接口文档入口页面权限路由别名。
 	DocsIndex Alias = "docs.index"
 	// DocsRoleOps 表示运维角色文档目录路由别名。
@@ -127,6 +125,8 @@ const (
 	AdminMessageList Alias = "message.list"
 	// AdminMessageSentList 表示管理员已发送消息路由别名。
 	AdminMessageSentList Alias = "message.sent_list"
+	// AdminMessageReceiverOptions 表示管理员消息可用收件人选项路由别名。
+	AdminMessageReceiverOptions Alias = "message.receiver_options"
 	// AdminMessageReceivers 表示管理员消息收件人明细路由别名。
 	AdminMessageReceivers Alias = "message.receivers"
 	// AdminMessageUnreadCount 表示管理员未读消息数量路由别名。

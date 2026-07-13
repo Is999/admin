@@ -10,14 +10,30 @@ import (
 	"time"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/model"
 	"admin/internal/svc"
 	"admin/internal/types"
 
 	"github.com/alicebob/miniredis/v2"
+	miniredisserver "github.com/alicebob/miniredis/v2/server"
 	"github.com/redis/go-redis/v9"
 )
+
+// runProfileStandaloneRedis 模拟真实单机 Redis 的拓扑探测响应。
+func runProfileStandaloneRedis(t *testing.T) *miniredis.Miniredis {
+	t.Helper()
+	server := miniredis.RunT(t)
+	server.Server().SetPreHook(func(peer *miniredisserver.Peer, command string, args ...string) bool {
+		if !strings.EqualFold(command, "cluster") || len(args) != 1 || !strings.EqualFold(args[0], "info") {
+			return false
+		}
+		peer.WriteError("ERR This instance has cluster support disabled")
+		return true
+	})
+	return server
+}
 
 // newTestProfileSecurityLogic 构造测试依赖。
 func newTestProfileSecurityLogic() *securitylogic.SecurityLogic {
@@ -44,9 +60,10 @@ func seedBoolSecurityConfig(t *testing.T, client *redis.Client, uuid string, ena
 	if enabled {
 		value = "true"
 	}
-	_ = svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{})
+	previous := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-a"})
 	t.Cleanup(func() {
-		_ = svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+		runtimecfg.Restore(previous)
 	})
 	cacheKey := keys.TableCachePrefix() + fmt.Sprintf(keys.SysConfigUUID, uuid)
 	if err := client.HSet(context.Background(), cacheKey, map[string]any{
@@ -59,7 +76,11 @@ func seedBoolSecurityConfig(t *testing.T, client *redis.Client, uuid string, ena
 
 // TestBuildProfileInfoReturnsMFAURLWhenDisabled 验证未启用 MFA 但已有秘钥时，个人中心仍返回二维码地址供继续绑定。
 func TestBuildProfileInfoReturnsMFAURLWhenDisabled(t *testing.T) {
+	server := runProfileStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
+	securityLogic.Svc.Rds = client
+	seedBoolSecurityConfig(t, client, securitylogic.ConfigAdminMFACheckEnable, false)
 	oldSecret := "RCABDVITFNQJJ4VJ"
 	cipherText, err := securityLogic.EncryptAdminMFASecret(oldSecret)
 	if err != nil {
@@ -84,10 +105,11 @@ func TestBuildProfileInfoReturnsMFAURLWhenDisabled(t *testing.T) {
 
 // TestBuildProfileInfoSkipsLoginMFAWhenNeedResetPassword 验证必须改密时不会在登录后先触发 MFA 校验。
 func TestBuildProfileInfoSkipsLoginMFAWhenNeedResetPassword(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
+	seedBoolSecurityConfig(t, client, securitylogic.ConfigAdminMFACheckEnable, false)
 	cipherText, err := securityLogic.EncryptAdminMFASecret("RCABDVITFNQJJ4VJ")
 	if err != nil {
 		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
@@ -112,7 +134,7 @@ func TestBuildProfileInfoSkipsLoginMFAWhenNeedResetPassword(t *testing.T) {
 
 // TestBuildProfileInfoRequiresBindWhenForceMFAEnabled 验证系统强制启用 MFA 时，未启用账号登录会被要求先绑定并校验。
 func TestBuildProfileInfoRequiresBindWhenForceMFAEnabled(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
@@ -150,10 +172,11 @@ func TestBuildProfileInfoRequiresBindWhenForceMFAEnabled(t *testing.T) {
 
 // TestBuildProfileInfoRequiresBindWhenEnabledMFASecretMissing 验证账号已启用但秘钥不可用时，登录资料会进入绑定流程。
 func TestBuildProfileInfoRequiresBindWhenEnabledMFASecretMissing(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
+	seedBoolSecurityConfig(t, client, securitylogic.ConfigAdminMFACheckEnable, false)
 
 	info, err := securityLogic.BuildProfileInfo(&model.Admin{
 		ID:           10,
@@ -183,7 +206,7 @@ func TestBuildProfileInfoRequiresBindWhenEnabledMFASecretMissing(t *testing.T) {
 
 // TestMarkLoginMFACompletedAfterEnable 验证启用 MFA 后补写登录 MFA 完成标记时，后续个人资料查询不会立刻被自己拦截。
 func TestMarkLoginMFACompletedAfterEnable(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
 	logicObj := securitylogic.NewSecurityLogic(context.Background(), svcCtx)
@@ -207,7 +230,7 @@ func TestMarkLoginMFACompletedAfterEnable(t *testing.T) {
 
 // TestSyncLoginMFAAfterPasswordUpdateForForcedReset 验证首次登录改密完成后会补写登录 MFA 完成标记。
 func TestSyncLoginMFAAfterPasswordUpdateForForcedReset(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
@@ -227,7 +250,7 @@ func TestSyncLoginMFAAfterPasswordUpdateForForcedReset(t *testing.T) {
 
 // TestSyncLoginMFAAfterPasswordUpdateKeepsExistingFlag 验证普通改自己密码不会清空当前会话已完成的登录 MFA 标记。
 func TestSyncLoginMFAAfterPasswordUpdateKeepsExistingFlag(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
@@ -255,7 +278,7 @@ func TestSyncLoginMFAAfterPasswordUpdateKeepsExistingFlag(t *testing.T) {
 
 // TestSyncCurrentAdminNeedResetPassword 验证个人中心改密成功后，会立即把当前登录态缓存里的 needResetPassword 同步为 0。
 func TestSyncCurrentAdminNeedResetPassword(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
@@ -284,7 +307,7 @@ func TestSyncCurrentAdminNeedResetPassword(t *testing.T) {
 
 // TestSyncLoginMFAAfterDisableKeepsCurrentSessionWhenForceEnabled 验证强制 MFA 下当前会话保持有效。
 func TestSyncLoginMFAAfterDisableKeepsCurrentSessionWhenForceEnabled(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
@@ -304,7 +327,7 @@ func TestSyncLoginMFAAfterDisableKeepsCurrentSessionWhenForceEnabled(t *testing.
 
 // TestSyncLoginMFAAfterDisableKeepsCurrentSessionWhenForceDisabled 验证非强制 MFA 下当前会话保持有效。
 func TestSyncLoginMFAAfterDisableKeepsCurrentSessionWhenForceDisabled(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
@@ -327,7 +350,7 @@ func TestSyncLoginMFAAfterDisableKeepsCurrentSessionWhenForceDisabled(t *testing
 
 // TestSyncLoginMFAAfterEnableKeepsCurrentSession 验证启用 MFA 后补写当前会话标记。
 func TestSyncLoginMFAAfterEnableKeepsCurrentSession(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
@@ -404,7 +427,7 @@ func TestResolveEnableMFASecretUsesCurrentSecret(t *testing.T) {
 
 // TestCheckAdminMFARequiresWhenForceMFAEnabledAndDisabled 验证系统强制启用 MFA 时，未启用账号访问会被登录态 MFA 拦截。
 func TestCheckAdminMFARequiresWhenForceMFAEnabledAndDisabled(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runProfileStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	securityLogic := newTestProfileSecurityLogic()
 	securityLogic.Svc.Rds = client
@@ -415,10 +438,20 @@ func TestCheckAdminMFARequiresWhenForceMFAEnabledAndDisabled(t *testing.T) {
 		Name:      "admin999",
 		MfaStatus: 0,
 	}
-	if !securityLogic.NeedLoginMFA(admin) {
+	// needLoginMFA 表示当前账号是否必须完成登录 MFA。
+	needLoginMFA, err := securityLogic.NeedLoginMFA(admin)
+	if err != nil {
+		t.Fatalf("NeedLoginMFA() error = %v", err)
+	}
+	if !needLoginMFA {
 		t.Fatalf("NeedLoginMFA() = false, want true")
 	}
-	if !securityLogic.NeedBindMFAOnLogin(admin) {
+	// needBindMFA 表示当前账号是否需要先绑定 MFA。
+	needBindMFA, err := securityLogic.NeedBindMFAOnLogin(admin)
+	if err != nil {
+		t.Fatalf("NeedBindMFAOnLogin() error = %v", err)
+	}
+	if !needBindMFA {
 		t.Fatalf("NeedBindMFAOnLogin() = false, want true")
 	}
 }
@@ -432,10 +465,80 @@ func TestNeedBindMFAOnLoginRequiresEnabledAccountSecret(t *testing.T) {
 		MfaSecureKey: "broken-secret",
 		MfaStatus:    1,
 	}
-	if !securityLogic.NeedLoginMFA(admin) {
+	// needLoginMFA 表示秘钥损坏账号是否仍需登录 MFA。
+	needLoginMFA, err := securityLogic.NeedLoginMFA(admin)
+	if err != nil {
+		t.Fatalf("NeedLoginMFA() error = %v", err)
+	}
+	if !needLoginMFA {
 		t.Fatalf("NeedLoginMFA() = false, want true")
 	}
-	if !securityLogic.NeedBindMFAOnLogin(admin) {
+	// needBindMFA 表示秘钥损坏账号是否进入重新绑定流程。
+	needBindMFA, err := securityLogic.NeedBindMFAOnLogin(admin)
+	if err != nil {
+		t.Fatalf("NeedBindMFAOnLogin() error = %v", err)
+	}
+	if !needBindMFA {
 		t.Fatalf("NeedBindMFAOnLogin() = false, want true")
+	}
+}
+
+// TestSyncCurrentAdminSessionFieldsPreservesToken 验证个人资料同步只更新公开字段，不轮换或删除当前 token。
+func TestSyncCurrentAdminSessionFieldsPreservesToken(t *testing.T) {
+	server := runProfileStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+	cfg := config.Config{AppID: "site-a", JwtExpiresIn: 3600}
+	previous := runtimecfg.Get()
+	runtimecfg.Set(cfg)
+	t.Cleanup(func() { runtimecfg.Restore(previous) })
+	svcCtx := svc.NewServiceContext(cfg, svc.Dependencies{Rds: client})
+	cacheLogic := cachelogic.NewCacheLogic(context.Background(), svcCtx)
+	if err := cacheLogic.SetAdminInfo(7, &types.AdminInfo{
+		ID:          7,
+		UserName:    "admin",
+		RealName:    "旧姓名",
+		Email:       "old@example.com",
+		Phone:       "13000000000",
+		Avatar:      "old-avatar",
+		Description: "旧说明",
+		Token:       "current-token",
+	}); err != nil {
+		t.Fatalf("SetAdminInfo() error = %v", err)
+	}
+	logicObj := &ProfileLogic{BaseLogic: cacheLogic.BaseLogic}
+
+	logicObj.syncCurrentAdminSessionFields(7, map[string]any{
+		"avatar":      "new-avatar",
+		"description": "新说明",
+		"email":       "new@example.com",
+		"phone":       "13800000000",
+		"realName":    "新姓名",
+	})
+	info, err := cacheLogic.GetAdminInfo(7)
+	if err != nil {
+		t.Fatalf("GetAdminInfo() error = %v", err)
+	}
+	if info.Token != "current-token" || info.RealName != "新姓名" || info.Email != "new@example.com" ||
+		info.Phone != "13800000000" || info.Avatar != "new-avatar" || info.Description != "新说明" {
+		t.Fatalf("个人资料同步后会话字段异常: %+v", info)
+	}
+}
+
+// TestSyncCurrentAdminSessionFieldsDoesNotRecreateMissingSession 验证已撤销会话不会被个人资料更新重新创建。
+func TestSyncCurrentAdminSessionFieldsDoesNotRecreateMissingSession(t *testing.T) {
+	server := runProfileStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+	cfg := config.Config{AppID: "site-a", JwtExpiresIn: 3600}
+	previous := runtimecfg.Get()
+	runtimecfg.Set(cfg)
+	t.Cleanup(func() { runtimecfg.Restore(previous) })
+	svcCtx := svc.NewServiceContext(cfg, svc.Dependencies{Rds: client})
+	logicObj := &ProfileLogic{BaseLogic: cachelogic.NewCacheLogic(context.Background(), svcCtx).BaseLogic}
+
+	logicObj.syncCurrentAdminSessionFields(7, map[string]any{"avatar": "new-avatar"})
+	if server.Exists(keys.AdminInfoRedisKey(7)) {
+		t.Fatal("个人资料同步不应复活已撤销会话")
 	}
 }

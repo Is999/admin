@@ -34,6 +34,13 @@ func PluginSpecs() []taskruntime.PluginSpec {
 			Build:       ExcelExportPlugin,
 		},
 		{
+			Name:        FileUploadCleanupPluginName,
+			File:        "internal/jobs/file_cleanup.go",
+			Method:      "jobs.FileUploadCleanupPlugin",
+			Description: "注册上传对象延迟清理 handler",
+			Build:       FileUploadCleanupPlugin,
+		},
+		{
 			Name:        taskreporttask.PluginName,
 			File:        "internal/jobs/taskreport/task/plugin.go",
 			Method:      "jobs.TaskReportPlugin / taskreporttask.Setup",

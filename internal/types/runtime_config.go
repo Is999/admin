@@ -283,6 +283,7 @@ type RuntimeConfigPublishResp struct {
 	ReleaseID       uint64 `json:"releaseId"`       // 新发布 ID
 	VersionNo       uint64 `json:"versionNo"`       // 新版本号
 	Checksum        string `json:"checksum"`        // 快照 SHA256
+	Applied         bool   `json:"applied"`         // 当前实例是否已完成运行态应用
 	RestartRequired bool   `json:"restartRequired"` // 是否需要重启才能完全生效
 	RestartReason   string `json:"restartReason"`   // 重启原因
 }

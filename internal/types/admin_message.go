@@ -45,6 +45,7 @@ const (
 
 // AdminMessageQueryReq 表示管理员消息收件箱分页查询请求参数。
 type AdminMessageQueryReq struct {
+	ID         int64  `json:"id,optional" form:"id,optional"`                 // 精确消息 ID，供详情跳转使用
 	Type       string `json:"type,optional" form:"type,optional"`             // 消息类型筛选
 	Level      *int   `json:"level,optional" form:"level,optional"`           // 消息等级筛选（可选）
 	ReadStatus *int   `json:"readStatus,optional" form:"readStatus,optional"` // 已读状态筛选：0未读 1已读
@@ -56,6 +57,9 @@ type AdminMessageQueryReq struct {
 
 // Validate 校验并归一化查询参数。
 func (r *AdminMessageQueryReq) Validate() error {
+	if r.ID < 0 {
+		return errors.Errorf("id 不合法")
+	}
 	r.Type = strings.TrimSpace(r.Type)
 	r.Keyword = strings.TrimSpace(r.Keyword)
 	r.StartTime = strings.TrimSpace(r.StartTime)
@@ -106,6 +110,10 @@ type AdminMessageItem struct {
 	Link               string `json:"link"`               // 跳转链接
 	SenderAdminID      int    `json:"senderAdminId"`      // 发送人管理员ID
 	SenderAdminName    string `json:"senderAdminName"`    // 发送人账号
+	ReplyToID          int64  `json:"replyToId"`          // 回复的原消息ID
+	ReplyToTitle       string `json:"replyToTitle"`       // 原消息标题
+	ReplyToSenderName  string `json:"replyToSenderName"`  // 原消息发送人账号
+	ReplyToCreatedAt   string `json:"replyToCreatedAt"`   // 原消息创建时间
 	HandledStatus      int    `json:"handledStatus"`      // 处理状态：0未处理 1已处理
 	HandledByAdminName string `json:"handledByAdminName"` // 处理人账号
 	HandledAt          string `json:"handledAt"`          // 处理时间
@@ -116,6 +124,7 @@ type AdminMessageItem struct {
 
 // AdminMessageSentQueryReq 表示管理员已发送消息分页查询请求参数。
 type AdminMessageSentQueryReq struct {
+	ID         int64  `json:"id,optional" form:"id,optional"`               // 精确消息 ID，供详情跳转使用
 	Type       string `json:"type,optional" form:"type,optional"`           // 消息类型筛选
 	Level      *int   `json:"level,optional" form:"level,optional"`         // 消息等级筛选（可选）
 	Keyword    string `json:"keyword,optional" form:"keyword,optional"`     // 关键字（标题/内容模糊匹配）
@@ -126,6 +135,9 @@ type AdminMessageSentQueryReq struct {
 
 // Validate 校验并归一化已发送查询参数。
 func (r *AdminMessageSentQueryReq) Validate() error {
+	if r.ID < 0 {
+		return errors.Errorf("id 不合法")
+	}
 	r.Type = strings.TrimSpace(r.Type)
 	r.Keyword = strings.TrimSpace(r.Keyword)
 	r.StartTime = strings.TrimSpace(r.StartTime)
@@ -163,6 +175,10 @@ type AdminMessageSentItem struct {
 	Link                string `json:"link"`                // 跳转链接
 	SenderAdminID       int    `json:"senderAdminId"`       // 发送人管理员ID
 	SenderAdminName     string `json:"senderAdminName"`     // 发送人账号
+	ReplyToID           int64  `json:"replyToId"`           // 回复的原消息ID
+	ReplyToTitle        string `json:"replyToTitle"`        // 原消息标题
+	ReplyToSenderName   string `json:"replyToSenderName"`   // 原消息发送人账号
+	ReplyToCreatedAt    string `json:"replyToCreatedAt"`    // 原消息创建时间
 	ReceiverTotal       int64  `json:"receiverTotal"`       // 收件人总数
 	ReceiverReadTotal   int64  `json:"receiverReadTotal"`   // 已读收件人数
 	ReceiverUnreadTotal int64  `json:"receiverUnreadTotal"` // 未读收件人数
@@ -278,6 +294,23 @@ func (r *AdminMessageDeleteReq) Validate() error {
 	return nil
 }
 
+// AdminMessageReceiverOptionQueryReq 表示消息收件人选项分页请求。
+type AdminMessageReceiverOptionQueryReq struct {
+	GetPageReq // 分页参数
+}
+
+// Validate 校验并归一化消息收件人选项分页参数。
+func (r *AdminMessageReceiverOptionQueryReq) Validate() error {
+	return r.GetPageReq.Validate()
+}
+
+// AdminMessageReceiverOptionItem 表示发送消息时可选择的启用管理员。
+type AdminMessageReceiverOptionItem struct {
+	ID       int    `json:"id"`       // 管理员ID
+	Username string `json:"username"` // 登录账号
+	RealName string `json:"realName"` // 真实姓名
+}
+
 // AdminMessageSendReq 表示发送消息请求参数。
 type AdminMessageSendReq struct {
 	Type        string `json:"type"`                 // 消息类型
@@ -287,6 +320,7 @@ type AdminMessageSendReq struct {
 	Data        string `json:"data,optional"`        // 扩展数据JSON
 	Link        string `json:"link,optional"`        // 跳转链接
 	ReceiverIDs []int  `json:"receiverIDs,optional"` // 收件人管理员ID列表；为空表示广播给全部启用管理员
+	ReplyToID   int64  `json:"replyToId,optional"`   // 回复的原消息ID；非回复消息为0
 }
 
 // AdminMessageSendResp 表示发送消息结果。
@@ -301,6 +335,9 @@ func (r *AdminMessageSendReq) Validate() error {
 	r.Content = strings.TrimSpace(r.Content)
 	r.Data = strings.TrimSpace(r.Data)
 	r.Link = strings.TrimSpace(r.Link)
+	if r.ReplyToID < 0 {
+		return errors.Errorf("replyToId 不合法")
+	}
 	if r.Type == "" {
 		return errors.Errorf("type 不能为空")
 	}

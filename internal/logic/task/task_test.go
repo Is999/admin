@@ -24,6 +24,7 @@ type testConfigReloader struct {
 type taskOverviewFakeQueue struct {
 	tasksByState map[string][]types.TaskItem // tasksByState 表示测试字段。
 	listCalls    []types.ListTaskItemsReq    // listCalls 表示测试字段。
+	emptyQueues  bool                        // emptyQueues 表示测试模拟当前没有可见队列。
 }
 
 // IsEnabled 表示测试辅助逻辑。
@@ -119,6 +120,9 @@ func (f *taskOverviewFakeQueue) DeleteTask(context.Context, *types.OperateTaskRe
 
 // ListQueues 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) ListQueues(context.Context) (*types.TaskQueueListResp, error) {
+	if f.emptyQueues {
+		return &types.TaskQueueListResp{Queues: []types.TaskQueueItem{}}, nil
+	}
 	pending := f.stateCount(taskStatePending)
 	active := f.stateCount(taskStateActive)
 	scheduled := f.stateCount(taskStateScheduled)
@@ -139,6 +143,65 @@ func (f *taskOverviewFakeQueue) ListQueues(context.Context) (*types.TaskQueueLis
 			Aggregating: aggregating,
 		}},
 	}, nil
+}
+
+// TestListTasksOverviewReturnsEmptyWhenNoQueues 验证没有可见队列时总览直接返回空数据。
+func TestListTasksOverviewReturnsEmptyWhenNoQueues(t *testing.T) {
+	fakeQueue := &taskOverviewFakeQueue{emptyQueues: true}
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	svcCtx.Task = fakeQueue
+
+	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?page=1&pageSize=20", nil), svcCtx)
+	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{Page: 1, PageSize: 20})
+	if resp == nil || !resp.IsSuccess() {
+		t.Fatalf("期望无队列时任务总览查询成功，实际: %+v", resp)
+	}
+	data, ok := resp.Data.(*types.TaskListOverviewResp)
+	if !ok {
+		t.Fatalf("响应类型不符合预期: %#v", resp.Data)
+	}
+	if data.Total != 0 || len(data.Tasks) != 0 || len(data.Queues) != 0 {
+		t.Fatalf("期望无队列时返回空数据，实际 total=%d tasks=%d queues=%d", data.Total, len(data.Tasks), len(data.Queues))
+	}
+	if len(fakeQueue.listCalls) != 0 {
+		t.Fatalf("无队列时不应查询任务，实际调用次数=%d", len(fakeQueue.listCalls))
+	}
+}
+
+// TestListTasksOverviewRejectsUnknownQueue 验证显式指定不存在的队列时不会误报空列表成功。
+func TestListTasksOverviewRejectsUnknownQueue(t *testing.T) {
+	fakeQueue := &taskOverviewFakeQueue{}
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	svcCtx.Task = fakeQueue
+
+	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?queue=missing", nil), svcCtx)
+	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{Queue: "missing", Page: 1, PageSize: 20})
+	if resp == nil || resp.IsSuccess() {
+		t.Fatalf("不存在队列应返回失败，实际: %+v", resp)
+	}
+	if len(fakeQueue.listCalls) != 0 {
+		t.Fatalf("不存在队列不应查询任务，实际调用次数=%d", len(fakeQueue.listCalls))
+	}
+}
+
+// TestListTasksOverviewUsesNativePageForSingleState 验证单队列单状态不会扫描所有前置页。
+func TestListTasksOverviewUsesNativePageForSingleState(t *testing.T) {
+	fakeQueue := &taskOverviewFakeQueue{
+		tasksByState: map[string][]types.TaskItem{
+			taskStateCompleted: buildFakeTaskItems(taskStateCompleted, 250),
+		},
+	}
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	svcCtx.Task = fakeQueue
+
+	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?state=completed&page=2&pageSize=20", nil), svcCtx)
+	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{State: taskStateCompleted, Page: 2, PageSize: 20})
+	if resp == nil || !resp.IsSuccess() {
+		t.Fatalf("单状态查询应成功，实际: %+v", resp)
+	}
+	if len(fakeQueue.listCalls) != 1 || fakeQueue.listCalls[0].Page != 2 || fakeQueue.listCalls[0].PageSize != 20 {
+		t.Fatalf("单状态应直接查询目标页，实际调用=%+v", fakeQueue.listCalls)
+	}
 }
 
 // PauseQueue 表示测试辅助逻辑。

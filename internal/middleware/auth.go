@@ -9,13 +9,10 @@ import (
 	i18n "admin/common/i18n"
 	"admin/helper"
 	"admin/internal/infra/loggerx"
-	cachelogic "admin/internal/logic/cache"
 	securitylogic "admin/internal/logic/security"
 	"admin/internal/requestctx"
 	"admin/internal/routealias"
 	"admin/internal/svc"
-
-	"github.com/Is999/go-utils"
 )
 
 // RouteAlias 是路由在权限/审计体系中的稳定标识，避免直接依赖 URL。
@@ -53,17 +50,17 @@ func (m *AuthMiddleware) PublicHandle(next http.HandlerFunc, alias RouteAlias) h
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 公开路由必须在进入最外层加密/签名中间件前写入 route alias，否则登录等接口的响应策略无法命中。
-		handler(w, bindPublicRequestMeta(r, alias))
+		handler(w, bindPublicRequestMeta(r, alias, m.svc))
 	}
 }
 
 // bindPublicRequestMeta 为公开路由预先写入请求元数据，避免最外层加密中间件读取不到 route alias。
-func bindPublicRequestMeta(r *http.Request, alias RouteAlias) *http.Request {
+func bindPublicRequestMeta(r *http.Request, alias RouteAlias, svcCtx *svc.ServiceContext) *http.Request {
 	if r == nil {
 		return r
 	}
 	ctx, _ := requestctx.New(r.Context())
-	requestctx.SetRequest(ctx, r.Method, r.URL.Path, utils.ClientIP(r))
+	requestctx.SetRequest(ctx, r.Method, r.URL.Path, requestClientIP(svcCtx, r))
 	if alias != "" && alias != Ignore {
 		requestctx.SetRoute(ctx, string(alias))
 	}
@@ -75,7 +72,8 @@ func bindPublicRequestMeta(r *http.Request, alias RouteAlias) *http.Request {
 func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.HandlerFunc {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		ctx, _ := requestctx.New(r.Context())
-		requestctx.SetRequest(ctx, r.Method, r.URL.Path, utils.ClientIP(r))
+		clientIP := requestClientIP(m.svc, r)
+		requestctx.SetRequest(ctx, r.Method, r.URL.Path, clientIP)
 		if alias != "" && alias != Ignore {
 			requestctx.SetRoute(ctx, string(alias))
 		}
@@ -93,7 +91,7 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 				Fail(messageKey)
 		}
 
-		identity, err := verifyAdminTokenFromRequest(ctx, m.svc, r, true)
+		identity, err := verifyAdminTokenFromRequestForRoute(ctx, m.svc, r, true, alias)
 		switch {
 		case errors.Is(err, errMissingBearerToken):
 			failUnauthorized(i18n.MsgKeyUnauthorizedText)
@@ -106,7 +104,7 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 			return
 		}
 
-		ip := utils.ClientIP(r)
+		ip := clientIP
 		if err = securitylogic.NewSecurityLogic(ctx, m.svc).CheckAdminAccess(identity.UserID, string(alias), ip, identity.LoginIP); err != nil {
 			switch {
 			case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
@@ -153,9 +151,6 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 		requestctx.SetAccessToken(ctx, identity.Token)
 		requestctx.SetUser(ctx, identity.UserID, identity.UserName, ip)
 		ctx = loggerx.BindContext(ctx)
-
-		// 活跃会话滑动续期，减少管理员持续操作期间的 Redis 回源抖动。
-		_ = cachelogic.NewCacheLogic(ctx, m.svc).TouchAdminInfo(identity.UserID)
 
 		next(w, r.WithContext(ctx))
 	}

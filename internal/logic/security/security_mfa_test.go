@@ -478,6 +478,24 @@ func TestCheckAdminMFARequiresBindWhenEnabledSecretMissing(t *testing.T) {
 	}
 }
 
+// TestCheckAdminMFAFailsClosedWithoutRedis 验证已绑定账号不能在 Redis 缺失时绕过登录 MFA。
+func TestCheckAdminMFAFailsClosedWithoutRedis(t *testing.T) {
+	logicObj := newTestSecurityLogic()
+	secret, err := logicObj.EncryptAdminMFASecret("JBSWY3DPEHPK3PXP")
+	if err != nil {
+		t.Fatalf("EncryptAdminMFASecret() error = %v", err)
+	}
+	err = logicObj.checkAdminMFA(&model.Admin{
+		ID:           20,
+		Name:         "admin-without-redis",
+		MfaStatus:    1,
+		MfaSecureKey: secret,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Redis 未初始化") {
+		t.Fatalf("checkAdminMFA() error = %v, want Redis fail-closed error", err)
+	}
+}
+
 // TestNeedMFATwoStepSkipsForcedPasswordChangeWhenNeedResetPassword 验证必须改密阶段修改密码时不再强制要求 MFA 二次票据。
 func TestNeedMFATwoStepSkipsForcedPasswordChangeWhenNeedResetPassword(t *testing.T) {
 	logicObj := newTestSecurityLogic()
@@ -487,7 +505,11 @@ func TestNeedMFATwoStepSkipsForcedPasswordChangeWhenNeedResetPassword(t *testing
 		MfaStatus:         1,
 		NeedResetPassword: 1,
 	}
-	if logicObj.NeedMFATwoStep(admin, MFAScenarioChangePassword) {
+	need, err := logicObj.NeedMFATwoStep(admin, MFAScenarioChangePassword)
+	if err != nil {
+		t.Fatalf("NeedMFATwoStep() error = %v", err)
+	}
+	if need {
 		t.Fatalf("NeedMFATwoStep() = true, want false when need_reset_password=1")
 	}
 }
@@ -498,23 +520,34 @@ func TestNeedOperateMFATwoStepDependsOnForceConfig(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	logicObj := newTestSecurityLogic()
 	logicObj.Svc.Rds = client
-	if logicObj.NeedOperateMFATwoStep(MFAScenarioEditUser) {
+	seedBoolSecurityConfig(t, client, ConfigAdminMFACheckEnable, false)
+	need, err := logicObj.NeedOperateMFATwoStep(MFAScenarioEditUser)
+	if err != nil {
+		t.Fatalf("NeedOperateMFATwoStep() error = %v", err)
+	}
+	if need {
 		t.Fatalf("NeedOperateMFATwoStep() = true, want false when force config disabled")
 	}
 	seedBoolSecurityConfig(t, client, ConfigAdminMFACheckEnable, true)
-	if !logicObj.NeedOperateMFATwoStep(MFAScenarioEditUser) {
-		t.Fatalf("NeedOperateMFATwoStep() = false, want true when force config enabled")
+	// testCases 覆盖强制开关启用后的后台操作和非后台操作场景。
+	testCases := []struct {
+		name     string // 测试场景名称
+		scenario int    // MFA 业务场景
+		want     bool   // 是否需要二次校验
+	}{
+		{name: "编辑管理员", scenario: MFAScenarioEditUser, want: true},
+		{name: "重置密码", scenario: MFAScenarioResetUserPassword, want: true},
+		{name: "重置首次状态", scenario: MFAScenarioResetUserInitialState, want: true},
+		{name: "删除管理员", scenario: MFAScenarioDeleteUser, want: true},
+		{name: "登录场景", scenario: MFAScenarioLogin, want: false},
 	}
-	if !logicObj.NeedOperateMFATwoStep(MFAScenarioResetUserPassword) {
-		t.Fatalf("NeedOperateMFATwoStep(reset password) = false, want true")
-	}
-	if !logicObj.NeedOperateMFATwoStep(MFAScenarioResetUserInitialState) {
-		t.Fatalf("NeedOperateMFATwoStep(reset initial state) = false, want true")
-	}
-	if !logicObj.NeedOperateMFATwoStep(MFAScenarioDeleteUser) {
-		t.Fatalf("NeedOperateMFATwoStep(delete user) = false, want true")
-	}
-	if logicObj.NeedOperateMFATwoStep(MFAScenarioLogin) {
-		t.Fatalf("NeedOperateMFATwoStep(login) = true, want false")
+	for _, testCase := range testCases {
+		need, callErr := logicObj.NeedOperateMFATwoStep(testCase.scenario)
+		if callErr != nil {
+			t.Fatalf("NeedOperateMFATwoStep(%s) error = %v", testCase.name, callErr)
+		}
+		if need != testCase.want {
+			t.Fatalf("NeedOperateMFATwoStep(%s) = %v, want %v", testCase.name, need, testCase.want)
+		}
 	}
 }

@@ -99,6 +99,27 @@ func TestSerialize(t *testing.T) {
 			},
 		},
 		{
+			name: "MFA票据验证码和安全码脱敏",
+			input: map[string]any{
+				"mfaSecureKey": "mfa-seed",
+				"secure":       "654321",
+				"secureCode":   "123456",
+				"captcha":      "AB23",
+				"twoStepKey":   "ticket-key",
+				"twoStepValue": "ticket-value",
+			},
+			maxBytes: 1000,
+			contains: []string{
+				`"mfaSecureKey":"***"`,
+				`"secure":"***"`,
+				`"secureCode":"***"`,
+				`"captcha":"***"`,
+				`"twoStepKey":"***"`,
+				`"twoStepValue":"***"`,
+			},
+			excludes: []string{"mfa-seed", "654321", "123456", "AB23", "ticket-key", "ticket-value"},
+		},
+		{
 			name:     "超长截断",
 			input:    map[string]string{"long_field": strings.Repeat("A", 100)},
 			maxBytes: 50,

@@ -31,6 +31,11 @@ type BizResult struct {
 	Data        any    `json:"-"` // 响应数据
 }
 
+// CacheSyncResp 表示数据库操作已提交但缓存仍待同步。
+type CacheSyncResp struct {
+	SyncPending bool `json:"syncPending"` // 是否需要操作员重新刷新对应缓存
+}
+
 // NewBizResult 创建业务响应基础对象，后续可通过链式方法补充 message/data/error。
 func NewBizResult(code int) *BizResult {
 	return &BizResult{Code: code}
@@ -206,7 +211,7 @@ type ListResp[T any] struct {
 
 // DropdownItem 表示下拉框选项。
 type DropdownItem struct {
-	ID    any    `json:"id,omitempty"`   // ID
+	ID    any    `json:"id,omitempty"`   // 选项标识
 	Label string `json:"label"`          // 名称
 	Value any    `json:"value"`          // 选项值
 	Meta  any    `json:"meta,omitempty"` // 附加元数据

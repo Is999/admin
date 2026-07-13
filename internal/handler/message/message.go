@@ -64,6 +64,14 @@ func ListAdminMessageSentHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	})(sCtx)
 }
 
+// ListAdminMessageReceiverOptionsHandler 查询发送消息时可选的启用管理员。
+func ListAdminMessageReceiverOptionsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.RespHandler[types.AdminMessageReceiverOptionQueryReq](func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminMessageReceiverOptionQueryReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := messagelogic.NewAdminMessageLogic(r, svcCtx)
+		return logicObj, logicObj.ListReceiverOptions(req)
+	})(sCtx)
+}
+
 // ListAdminMessageReceiversHandler 查询指定消息的收件人已读明细（仅发送人可见）。
 func ListAdminMessageReceiversHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionHandler[types.AdminMessageIDPathReq](shared.AdminMessageReceivers, func(r *http.Request, svcCtx *svc.ServiceContext, req *types.AdminMessageIDPathReq) (shared.LogicObj, *types.BizResult) {

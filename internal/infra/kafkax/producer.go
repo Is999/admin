@@ -15,6 +15,7 @@ import (
 // Producer 封装 Kafka 写入器，集中处理用户标签变更消息。
 type Producer struct {
 	writer       *kafka.Writer // 底层 Kafka writer
+	brokers      []string      // Kafka broker 地址，用于 readiness 连通性探测
 	topicUserTag string        // 用户标签变更主题
 	batchSize    int           // 单批最大消息数
 }
@@ -55,9 +56,39 @@ func NewProducer(cfg config.KafkaConfig) (*Producer, error) {
 			BatchSize:    batchSize,
 			WriteTimeout: timeout,
 		},
+		brokers:      append([]string(nil), brokers...),
 		topicUserTag: topic,
 		batchSize:    batchSize,
 	}, nil
+}
+
+// Ping 通过 Kafka 元数据协议检查用户标签 Topic 是否可用。
+func (p *Producer) Ping(ctx context.Context) error {
+	if !p.Enabled() {
+		return errors.New("Kafka生产者未初始化")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var lastErr error
+	dialer := &kafka.Dialer{Timeout: time.Second}
+	for _, broker := range p.brokers {
+		partitions, err := dialer.LookupPartitions(ctx, "tcp", broker, p.topicUserTag)
+		if err == nil && len(partitions) > 0 {
+			return nil
+		}
+		if err == nil {
+			err = errors.Errorf("Kafka Topic不存在或无分区 topic=%s", p.topicUserTag)
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if lastErr == nil {
+		return errors.New("Kafka broker未配置")
+	}
+	return errors.Wrap(lastErr, "Kafka broker或Topic不可用")
 }
 
 // Enabled 返回 Kafka 生产者是否可用。
@@ -104,12 +135,24 @@ func (p *Producer) WriteKeyedJSON(ctx context.Context, items []JSONMessage) erro
 	return p.writer.WriteMessages(ctx, messages...)
 }
 
-// Close 关闭底层 Kafka writer。
-func (p *Producer) Close() error {
+// Close 在应用停止期限内关闭底层 Kafka writer。
+func (p *Producer) Close(ctx context.Context) error {
 	if !p.Enabled() {
 		return nil
 	}
-	return p.writer.Close()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- p.writer.Close()
+	}()
+	select {
+	case err := <-done:
+		return errors.Tag(err)
+	case <-ctx.Done():
+		return errors.Wrap(ctx.Err(), "关闭 Kafka writer 超时")
+	}
 }
 
 // normalizeBrokers 归一化 broker 地址列表，过滤空值并保留原始顺序。

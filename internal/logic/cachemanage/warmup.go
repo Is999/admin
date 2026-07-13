@@ -1,9 +1,6 @@
 package cachemanage
 
 import (
-	corelogic "admin/internal/logic"
-	cachelogic "admin/internal/logic/cache"
-	"admin/internal/svc"
 	"fmt"
 	"strings"
 	"time"
@@ -11,7 +8,10 @@ import (
 	"admin/common/codes"
 	i18n "admin/common/i18n"
 	keys "admin/common/rediskeys"
+	corelogic "admin/internal/logic"
+	cachelogic "admin/internal/logic/cache"
 	"admin/internal/model"
+	"admin/internal/svc"
 	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
@@ -66,32 +66,27 @@ func (l *SystemCacheLogic) WarmupTemplate(req *types.CacheWarmupReq) *types.BizR
 			"SystemCacheLogic.WarmupTemplate 初始化表缓存管理器失败").ToBizResult()
 	}
 
-	successCount := 0
-	failedCount := 0
-	failedKeys := make([]string, 0)
+	physicalKeys := make([]string, 0, len(instanceKeys))
 	for _, key := range instanceKeys {
 		trimmed := strings.TrimSpace(key)
 		if trimmed == "" {
 			continue
 		}
-		// table-cache 新版本把刷新视为写操作，这里显式转换成带项目命名空间的真实 Redis key，避免刷新未命名空间。
-		physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, trimmed)
-		if refreshErr := manager.RefreshByKey(l.Ctx, physicalKey); refreshErr != nil {
-			failedCount += 1
-			if len(failedKeys) < cacheWarmupFailedKeySampleLimit {
-				failedKeys = append(failedKeys, physicalKey)
-			}
-			continue
-		}
-		successCount += 1
+		physicalKeys = append(physicalKeys, cachelogic.TableCachePhysicalKey(l.BaseLogic, trimmed))
+	}
+	// 批量接口通过汇总结果保留部分成功语义，失败明细由页面直接展示。
+	_, summary, _ := manager.RefreshByKeysWithSummary(l.Ctx, physicalKeys)
+	failedKeys := summary.FailedKeys
+	if len(failedKeys) > cacheWarmupFailedKeySampleLimit {
+		failedKeys = failedKeys[:cacheWarmupFailedKeySampleLimit]
 	}
 
 	latency := time.Since(start).Milliseconds()
 	logCacheInfo(l.Ctx, "cache.warmup.template.done",
 		logx.Field("template_key", req.TemplateKey),
-		logx.Field("total", len(instanceKeys)),
-		logx.Field("success_count", successCount),
-		logx.Field("failed_count", failedCount),
+		logx.Field("total", summary.Total),
+		logx.Field("success_count", summary.Success),
+		logx.Field("failed_count", summary.Failed),
 		logx.Field("latency_ms", latency),
 	)
 
@@ -99,9 +94,9 @@ func (l *SystemCacheLogic) WarmupTemplate(req *types.CacheWarmupReq) *types.BizR
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess).
 		WithData(types.CacheWarmupResp{
 			TemplateKey: req.TemplateKey,
-			Total:       len(instanceKeys),
-			Success:     successCount,
-			Failed:      failedCount,
+			Total:       summary.Total,
+			Success:     summary.Success,
+			Failed:      summary.Failed,
 			FailedKeys:  failedKeys,
 			LatencyMS:   latency,
 		})
@@ -228,21 +223,15 @@ func (l *SystemCacheLogic) warmupTemplateTargets() []warmupTemplateTarget {
 			},
 		},
 		{
-			templateKey: cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RoutePermissionIDsPattern),
+			templateKey: cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminPermissionIDsPattern),
 			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
-				aliases, err := l.listEnabledRouteAliases()
-				if err != nil {
-					return nil, errors.Tag(err)
-				}
-				keysList := make([]string, 0, len(aliases))
-				for _, alias := range aliases {
-					alias = strings.TrimSpace(alias)
-					if alias == "" {
-						continue
-					}
-					keysList = append(keysList, cachelogic.TableCachePhysicalKey(l.BaseLogic, fmt.Sprintf(keys.RoutePermissionIDs, alias)))
-				}
-				return keysList, nil
+				return l.buildTableAdminKeys(keys.AdminPermissionIDs)
+			},
+		},
+		{
+			templateKey: cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.AdminPermissionUUIDsPattern),
+			buildKeys: func(l *SystemCacheLogic) ([]string, error) {
+				return l.buildTableAdminKeys(keys.AdminPermissionUUIDs)
 			},
 		},
 	}
@@ -323,37 +312,4 @@ func (l *SystemCacheLogic) listEnabledRoleIDs() ([]int, error) {
 		return nil, errors.Tag(err)
 	}
 	return ids, nil
-}
-
-// listEnabledRouteAliases 枚举启用权限点中的 module（路由别名）集合，供 RoutePermissionIDsPattern 模板预热使用。
-func (l *SystemCacheLogic) listEnabledRouteAliases() ([]string, error) {
-	readDB, err := cachelogic.TableCacheReadDB(l.BaseLogic, svc.DatabaseMain, "main")
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	var modules []string
-	if err := readDB.
-		Model(&model.AdminPermission{}).
-		Select("module").
-		Where("status = 1").
-		Where("module <> ''").
-		Order("id ASC").
-		Limit(cacheTemplateEnumerationLimit).
-		Pluck("module", &modules).Error; err != nil {
-		return nil, errors.Tag(err)
-	}
-	seen := make(map[string]struct{}, len(modules))
-	result := make([]string, 0, len(modules))
-	for _, module := range modules {
-		module = strings.TrimSpace(module)
-		if module == "" {
-			continue
-		}
-		if _, ok := seen[module]; ok {
-			continue
-		}
-		seen[module] = struct{}{}
-		result = append(result, module)
-	}
-	return result, nil
 }

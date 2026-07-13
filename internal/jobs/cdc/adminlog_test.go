@@ -15,6 +15,7 @@ import (
 	"admin/internal/svc"
 )
 
+// TestAdminLogRowFromCreateEvent 验证新增事件从 after 解码并清理文本字段。
 func TestAdminLogRowFromCreateEvent(t *testing.T) {
 	event := cdcx.Event{
 		Operation: cdcx.OperationCreate,
@@ -29,6 +30,7 @@ func TestAdminLogRowFromCreateEvent(t *testing.T) {
 	}
 }
 
+// TestAdminLogRowFromDeleteEventUsesBefore 验证删除事件从 before 解码日志行。
 func TestAdminLogRowFromDeleteEventUsesBefore(t *testing.T) {
 	event := cdcx.Event{
 		Operation: cdcx.OperationDelete,
@@ -43,6 +45,7 @@ func TestAdminLogRowFromDeleteEventUsesBefore(t *testing.T) {
 	}
 }
 
+// TestCDCBoolUnmarshal 验证布尔值兼容 Debezium 常见数字和字符串表示。
 func TestCDCBoolUnmarshal(t *testing.T) {
 	cases := map[string]bool{
 		`true`:  true,
@@ -63,6 +66,7 @@ func TestCDCBoolUnmarshal(t *testing.T) {
 	}
 }
 
+// TestAdminLogLarkText 验证飞书审计文本包含关键事件和来源信息。
 func TestAdminLogLarkText(t *testing.T) {
 	event := cdcx.Event{
 		Topic:     "dnmp-admin.admin.admin_log",
@@ -90,6 +94,7 @@ func TestAdminLogLarkText(t *testing.T) {
 	}
 }
 
+// TestAdminLogCollectorEvent 验证审计日志转换出的 Collector 事件契约。
 func TestAdminLogCollectorEvent(t *testing.T) {
 	event := cdcx.Event{
 		Topic:     "dnmp-admin.admin.admin_log",
@@ -118,6 +123,7 @@ func TestAdminLogCollectorEvent(t *testing.T) {
 	}
 }
 
+// TestAdminLogCollectorEventIDStableAndBounded 验证事件 ID 稳定、区分位点且不超过字段长度。
 func TestAdminLogCollectorEventIDStableAndBounded(t *testing.T) {
 	event := cdcx.Event{Topic: "dnmp-admin.admin.admin_log.with.extra.long.topic", Partition: 12, Offset: 9223372036854775807}
 	got := adminLogCollectorEventID(event)
@@ -133,6 +139,7 @@ func TestAdminLogCollectorEventIDStableAndBounded(t *testing.T) {
 	}
 }
 
+// TestAdminLogBatchProcessor 验证批处理逐条记录成功和载荷解析失败结果。
 func TestAdminLogBatchProcessor(t *testing.T) {
 	payload, _ := json.Marshal(adminLogCollectorPayload{ID: 11, Action: "login", Route: "/api/login", TraceID: "trace-1"})
 	results, err := (&AdminLogBatchProcessor{}).ProcessBatch(context.Background(), []collectorx.Event{
@@ -147,6 +154,7 @@ func TestAdminLogBatchProcessor(t *testing.T) {
 	}
 }
 
+// TestAdminLogBatchProcessorWritesOutputFile 验证批次摘要与事件明细写入观察文件。
 func TestAdminLogBatchProcessorWritesOutputFile(t *testing.T) {
 	outputFile := filepath.Join(t.TempDir(), "cdc_admin_log_audit.jsonl")
 	payload, _ := json.Marshal(adminLogCollectorPayload{
@@ -178,6 +186,7 @@ func TestAdminLogBatchProcessorWritesOutputFile(t *testing.T) {
 	}
 }
 
+// TestAdminLogBatchProcessorOutputKeepsInterval 验证连续批次会记录上一批处理时间。
 func TestAdminLogBatchProcessorOutputKeepsInterval(t *testing.T) {
 	outputFile := filepath.Join(t.TempDir(), "cdc_admin_log_audit.jsonl")
 	payload, _ := json.Marshal(adminLogCollectorPayload{ID: 11, Action: "login"})
@@ -198,6 +207,7 @@ func TestAdminLogBatchProcessorOutputKeepsInterval(t *testing.T) {
 	}
 }
 
+// TestAdminLogBatchProcessorRecordsSummaryWithoutOutputFile 验证无输出文件时仍维护批次摘要和间隔。
 func TestAdminLogBatchProcessorRecordsSummaryWithoutOutputFile(t *testing.T) {
 	processor := &AdminLogBatchProcessor{}
 	summary, err := processor.recordOutput([][]byte{[]byte(`{"type":"event"}` + "\n")})
@@ -216,6 +226,7 @@ func TestAdminLogBatchProcessorRecordsSummaryWithoutOutputFile(t *testing.T) {
 	}
 }
 
+// TestAdminLogProcessorNoopWhenTestDisabled 验证审计验证未启用时忽略事件载荷。
 func TestAdminLogProcessorNoopWhenTestDisabled(t *testing.T) {
 	err := (AdminLogProcessor{}).ProcessCDC(context.Background(), cdcx.Event{
 		Operation: cdcx.OperationCreate,
@@ -226,6 +237,7 @@ func TestAdminLogProcessorNoopWhenTestDisabled(t *testing.T) {
 	}
 }
 
+// TestAdminLogProcessorSkipsNonCreateOperation 验证非新增操作不会进入审计验证链路。
 func TestAdminLogProcessorSkipsNonCreateOperation(t *testing.T) {
 	err := (AdminLogProcessor{cfg: config.AdminLogAuditTestScenario{LarkEnabled: true}}).ProcessCDC(context.Background(), cdcx.Event{
 		Operation: cdcx.OperationRead,
@@ -236,6 +248,7 @@ func TestAdminLogProcessorSkipsNonCreateOperation(t *testing.T) {
 	}
 }
 
+// TestAdminLogProcessorEnqueuesCollectorBeforeLark 验证 Collector 入队失败会阻止后续飞书通知。
 func TestAdminLogProcessorEnqueuesCollectorBeforeLark(t *testing.T) {
 	notifier := &fakeAdminLogNotifier{}
 	collector := &fakeCollectorEnqueuer{err: errors.New("collector failed")}
@@ -262,6 +275,7 @@ func TestAdminLogProcessorEnqueuesCollectorBeforeLark(t *testing.T) {
 	}
 }
 
+// TestAdminLogProcessorSendsLarkAfterCollectorSuccess 验证 Collector 成功后才发送飞书通知。
 func TestAdminLogProcessorSendsLarkAfterCollectorSuccess(t *testing.T) {
 	notifier := &fakeAdminLogNotifier{}
 	collector := &fakeCollectorEnqueuer{}
@@ -285,6 +299,7 @@ func TestAdminLogProcessorSendsLarkAfterCollectorSuccess(t *testing.T) {
 	}
 }
 
+// TestAdminLogProcessorCollectorIgnoresLarkFilters 验证 Collector 不受飞书动作和路由过滤条件限制。
 func TestAdminLogProcessorCollectorIgnoresLarkFilters(t *testing.T) {
 	notifier := &fakeAdminLogNotifier{}
 	collector := &fakeCollectorEnqueuer{}
@@ -316,6 +331,7 @@ func TestAdminLogProcessorCollectorIgnoresLarkFilters(t *testing.T) {
 	}
 }
 
+// TestAdminLogProcessorCollectorRespectsTracePrefix 验证 Collector 仅接收匹配追踪前缀的事件。
 func TestAdminLogProcessorCollectorRespectsTracePrefix(t *testing.T) {
 	collector := &fakeCollectorEnqueuer{}
 	processor := AdminLogProcessor{
@@ -337,6 +353,7 @@ func TestAdminLogProcessorCollectorRespectsTracePrefix(t *testing.T) {
 	}
 }
 
+// TestAdminLogAuditLarkMatchedByTraceIDPrefix 验证追踪 ID 前缀过滤及未配置时的默认放行。
 func TestAdminLogAuditLarkMatchedByTraceIDPrefix(t *testing.T) {
 	cfg := config.AdminLogAuditTestScenario{TraceIDPrefix: "codex-cdc-"}
 	if !adminLogAuditLarkMatched(cfg, adminLogRow{TraceID: "codex-cdc-demo"}) {
@@ -350,6 +367,7 @@ func TestAdminLogAuditLarkMatchedByTraceIDPrefix(t *testing.T) {
 	}
 }
 
+// TestAdminLogAuditLarkMatchedByActionAndRoute 验证动作和路由均命中时才匹配飞书审计。
 func TestAdminLogAuditLarkMatchedByActionAndRoute(t *testing.T) {
 	cfg := config.AdminLogAuditTestScenario{
 		Actions: []string{"管理员登录"},
@@ -363,6 +381,7 @@ func TestAdminLogAuditLarkMatchedByActionAndRoute(t *testing.T) {
 	}
 }
 
+// TestAdminLogAuditLarkMatchedIgnoresBlankFilters 验证空白过滤项按未配置处理。
 func TestAdminLogAuditLarkMatchedIgnoresBlankFilters(t *testing.T) {
 	cfg := config.AdminLogAuditTestScenario{
 		Actions: []string{" "},
@@ -373,6 +392,7 @@ func TestAdminLogAuditLarkMatchedIgnoresBlankFilters(t *testing.T) {
 	}
 }
 
+// TestAdminLogAuditEnabled 验证任一输出通道启用即可开启审计验证。
 func TestAdminLogAuditEnabled(t *testing.T) {
 	if adminLogAuditEnabled(config.AdminLogAuditTestScenario{}) {
 		t.Fatal("未配置验证输出时不应启用 admin_log 验证")
@@ -385,6 +405,7 @@ func TestAdminLogAuditEnabled(t *testing.T) {
 	}
 }
 
+// TestRegisterProcessorsRejectsMissingLarkConfig 验证缺少飞书依赖时拒绝注册对应处理器。
 func TestRegisterProcessorsRejectsMissingLarkConfig(t *testing.T) {
 	consumer, err := cdcx.New(config.CDCConfig{})
 	if err != nil {
@@ -398,6 +419,7 @@ func TestRegisterProcessorsRejectsMissingLarkConfig(t *testing.T) {
 	}
 }
 
+// TestRegisterProcessorsRejectsDisabledCollector 验证 Collector 未启用时拒绝注册验证处理器。
 func TestRegisterProcessorsRejectsDisabledCollector(t *testing.T) {
 	consumer, err := cdcx.New(config.CDCConfig{})
 	if err != nil {
@@ -412,21 +434,25 @@ func TestRegisterProcessorsRejectsDisabledCollector(t *testing.T) {
 	}
 }
 
+// fakeAdminLogNotifier 记录测试期间发送的飞书文本并返回预设错误。
 type fakeAdminLogNotifier struct {
 	texts []string // 已发送文本
 	err   error    // 固定返回错误
 }
 
+// SendText 保存待断言的飞书文本并返回预设结果。
 func (n *fakeAdminLogNotifier) SendText(_ context.Context, text string) error {
 	n.texts = append(n.texts, text)
 	return n.err
 }
 
+// fakeCollectorEnqueuer 记录测试期间入队的 Collector 事件并返回预设错误。
 type fakeCollectorEnqueuer struct {
 	events []collectorx.Event // 已入队事件
 	err    error              // 固定返回错误
 }
 
+// Enqueue 保存待断言的事件并模拟 Collector 入队结果。
 func (c *fakeCollectorEnqueuer) Enqueue(_ context.Context, event collectorx.Event) (string, error) {
 	c.events = append(c.events, event)
 	if c.err != nil {

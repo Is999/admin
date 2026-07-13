@@ -476,6 +476,9 @@ func (l *SystemCacheLogic) cacheItems() []types.CacheItem {
 		AutoRebuild:  true,
 		RefreshScope: "single",
 	})
+	for i := range items {
+		items[i].WarmupSupported = l.matchWarmupTemplateTarget(items[i].Key) != nil
+	}
 	return items
 }
 

@@ -25,6 +25,19 @@ func validAdminProductionBootstrapConfig() config.Config {
 	cfg.AppID = "1"
 	cfg.AppKey = "prod-app-key-0123456789abcdef"
 	cfg.JwtSecret = "prod-jwt-secret-0123456789abcdef"
+	cfg.Collector.Enabled = true
+	// Collector 生产测试任务覆盖 Admin 内置的审计和认证风控链路。
+	cfg.Collector.Tasks = map[string]config.CollectorTaskConfig{
+		config.CollectorBizTypeAdminLogAudit: {
+			Topic:   "admin_collector_admin_log_events",
+			GroupID: "admin_collector_admin_log",
+		},
+		config.CollectorBizTypeAuthSecurity: {
+			Topic:   config.CollectorTopicAuthSecurity,
+			GroupID: "admin_collector_auth_security",
+		},
+	}
+	cfg.FileStorage.VirusScanner.Name = config.VirusScannerClamAV
 	return cfg
 }
 

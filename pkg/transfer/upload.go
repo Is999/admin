@@ -30,6 +30,12 @@ const (
 	DefaultUploadSessionTTL = 24 * time.Hour
 	// uploadSessionLockTTL 表示单个上传会话写操作锁的过期时间。
 	uploadSessionLockTTL = 30 * time.Second
+	// uploadTempCleanupInterval 表示过期上传临时文件的机会清理间隔。
+	uploadTempCleanupInterval = time.Hour
+	// uploadTempCleanupLimit 表示单轮最多删除的过期上传临时文件数量。
+	uploadTempCleanupLimit = 100
+	// uploadTempDirLayout 表示上传临时文件按日期分目录的格式。
+	uploadTempDirLayout = "20060102"
 )
 
 // uploadHashBufferPool 复用上传分片写入、跨设备复制和文件哈希计算缓冲，降低大文件链路的堆分配。
@@ -96,6 +102,8 @@ type LocalUploadManager struct {
 	fingerprintKeyFormat string                // 上传指纹复用索引 Redis key 模板
 	objectIndexKeyFormat string                // 对象 key 反查上传会话 Redis key 模板
 	ttl                  time.Duration         // 上传会话统一过期时间
+	cleanupMu            sync.Mutex            // 串行化临时文件机会清理
+	lastCleanup          time.Time             // 最近一次成功清理时间
 }
 
 // NewLocalUploadManager 创建本地断点续传上传管理器。
@@ -129,6 +137,9 @@ func (m *LocalUploadManager) Init(ctx context.Context, req InitUploadReq) (*Uplo
 	if req.ChunkSize <= 0 {
 		return nil, errors.Errorf("分片大小必须大于 0")
 	}
+	if err := m.cleanupExpiredTempFiles(ctx, time.Now()); err != nil {
+		return nil, errors.Tag(err)
+	}
 	fingerprint := buildUploadFingerprint(req.OperatorID, strings.TrimSpace(req.BizType), fileName, req.FileSize, strings.TrimSpace(req.FileHash))
 	if fingerprint != "" {
 		// 同一管理员重复上传同一文件时优先复用现有会话，避免跨管理员泄露 uploadId 与上传状态。
@@ -146,7 +157,7 @@ func (m *LocalUploadManager) Init(ctx context.Context, req InitUploadReq) (*Uplo
 	// 目录路径只使用清洗后的业务段，避免工具包被复用时因 bizType 注入路径穿越。
 	safeBizType := sanitizeUploadSegment(req.BizType)
 	storageDir := filepath.Join(m.rootDir, "completed", safeBizType)
-	tempDir := filepath.Join(m.rootDir, "uploading", safeBizType)
+	tempDir := filepath.Join(m.rootDir, "uploading", safeBizType, now.Format(uploadTempDirLayout))
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
 		return nil, errors.Wrap(err, "创建上传结果目录失败")
 	}
@@ -204,6 +215,39 @@ func (m *LocalUploadManager) GetSession(ctx context.Context, uploadID string) (*
 	return m.loadSession(ctx, uploadID)
 }
 
+// HasSession 判断上传会话是否仍在有效期内，供持久化对象清理任务避免提前删除。
+func (m *LocalUploadManager) HasSession(ctx context.Context, uploadID string) (bool, error) {
+	if err := m.validate(); err != nil {
+		return false, errors.Tag(err)
+	}
+	uploadID = strings.TrimSpace(uploadID)
+	if uploadID == "" {
+		return false, nil
+	}
+	exists, err := m.client.Exists(ctx, m.sessionKey(uploadID)).Result()
+	if err != nil {
+		return false, errors.Wrap(err, "检查上传会话失败")
+	}
+	return exists > 0, nil
+}
+
+// DeleteCompletedFile 删除服务端中转上传遗留的 completed 文件，对文件不存在保持幂等。
+func (m *LocalUploadManager) DeleteCompletedFile(bizType string, objectKey string) error {
+	if err := m.validate(); err != nil {
+		return errors.Tag(err)
+	}
+	bizType = strings.TrimSpace(bizType)
+	fileName := strings.TrimSpace(filepath.Base(filepath.FromSlash(strings.TrimSpace(objectKey))))
+	if bizType == "" || fileName == "" || fileName == "." {
+		return errors.Errorf("上传完成文件定位参数不能为空")
+	}
+	filePath := filepath.Join(m.rootDir, "completed", sanitizeUploadSegment(bizType), fileName)
+	if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Wrap(err, "删除上传完成文件失败")
+	}
+	return nil
+}
+
 // PersistSession 保存或覆盖上传会话，供直传等扩展场景复用统一状态存储。
 func (m *LocalUploadManager) PersistSession(ctx context.Context, session *UploadSession) error {
 	return m.saveSession(ctx, session)
@@ -225,7 +269,15 @@ func (m *LocalUploadManager) FindSessionByObjectKey(ctx context.Context, objectK
 		}
 		return nil, errors.Wrap(err, "读取对象反查索引失败")
 	}
-	return m.loadSession(ctx, uploadID)
+	session, err := m.loadSession(ctx, uploadID)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	// 反查索引可能由一次未提交完成的写入留下，必须以主会话快照中的对象 key 为准。
+	if strings.TrimSpace(session.ObjectKey) != objectKey {
+		return nil, errors.Errorf("上传对象反查索引已失效")
+	}
+	return session, nil
 }
 
 // UploadChunk 写入一个分片。
@@ -408,15 +460,18 @@ func writeFixedChunk(ctx context.Context, file *os.File, offset int64, expectedS
 	return writtenTotal, nil
 }
 
-// Complete 校验所有分片已上传并完成会话。
-func (m *LocalUploadManager) Complete(ctx context.Context, uploadID string) (*UploadSession, error) {
+// Complete 校验所有分片，并在文件安全校验通过后完成会话。
+func (m *LocalUploadManager) Complete(ctx context.Context, uploadID string, validateFile func(context.Context, *UploadSession, string) error) (*UploadSession, error) {
+	if validateFile == nil {
+		return nil, errors.Errorf("上传完成前校验不能为空")
+	}
 	return m.withUploadLock(ctx, uploadID, func(lockCtx context.Context) (*UploadSession, error) {
-		return m.completeLocked(lockCtx, uploadID)
+		return m.completeLocked(lockCtx, uploadID, validateFile)
 	})
 }
 
 // completeLocked 在会话锁内校验所有分片并完成上传。
-func (m *LocalUploadManager) completeLocked(ctx context.Context, uploadID string) (*UploadSession, error) {
+func (m *LocalUploadManager) completeLocked(ctx context.Context, uploadID string, validateFile func(context.Context, *UploadSession, string) error) (*UploadSession, error) {
 	session, err := m.loadSession(ctx, uploadID)
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -446,9 +501,15 @@ func (m *LocalUploadManager) completeLocked(ctx context.Context, uploadID string
 		if err := verifyUploadedFileHash(session.StoragePath, session.FileHash); err != nil {
 			return nil, errors.Tag(err)
 		}
+		if err := validateFile(ctx, session, session.StoragePath); err != nil {
+			return nil, errors.Tag(err)
+		}
 		return m.markSessionCompleted(ctx, session, chunks)
 	}
 	if sameDevice, ok := pathsOnSameDevice(session.TempPath, filepath.Dir(session.StoragePath)); ok && !sameDevice {
+		if err := validateFile(ctx, session, session.TempPath); err != nil {
+			return nil, errors.Tag(err)
+		}
 		// 已知上传临时目录和完成目录跨设备时，复制过程中同步计算摘要，避免先校验再复制造成大文件双读。
 		if err := copyUploadedFileAcrossDevices(session.TempPath, session.StoragePath, session.FileHash); err != nil {
 			return nil, errors.Wrap(err, "跨设备完成上传文件失败")
@@ -458,10 +519,16 @@ func (m *LocalUploadManager) completeLocked(ctx context.Context, uploadID string
 	if err := verifyUploadedFileHash(session.TempPath, session.FileHash); err != nil {
 		return nil, errors.Tag(err)
 	}
+	if err := validateFile(ctx, session, session.TempPath); err != nil {
+		return nil, errors.Tag(err)
+	}
 	if err := os.Rename(session.TempPath, session.StoragePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) && fileExists(session.StoragePath) {
 			if hashErr := verifyUploadedFileHash(session.StoragePath, session.FileHash); hashErr != nil {
 				return nil, errors.Tag(hashErr)
+			}
+			if validateErr := validateFile(ctx, session, session.StoragePath); validateErr != nil {
+				return nil, errors.Tag(validateErr)
 			}
 			return m.markSessionCompleted(ctx, session, chunks)
 		}
@@ -571,6 +638,75 @@ func (m *LocalUploadManager) validate() error {
 	return nil
 }
 
+// cleanupExpiredTempFiles 小批量删除超过会话 TTL 的中断上传文件。
+// 新上传按日期分目录，遍历时可跳过仍在有效期内的整日目录，避免扫描活跃文件。
+func (m *LocalUploadManager) cleanupExpiredTempFiles(ctx context.Context, now time.Time) error {
+	m.cleanupMu.Lock()
+	defer m.cleanupMu.Unlock()
+	if !m.lastCleanup.IsZero() && now.Sub(m.lastCleanup) < uploadTempCleanupInterval {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	uploadRoot := filepath.Join(m.rootDir, "uploading")
+	cutoff := now.Add(-m.ttl)
+	removed := 0
+	err := filepath.WalkDir(uploadRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Tag(err)
+		}
+		if entry.IsDir() {
+			relativePath, err := filepath.Rel(uploadRoot, path)
+			if err != nil {
+				return errors.Tag(err)
+			}
+			parts := strings.Split(relativePath, string(os.PathSeparator))
+			if len(parts) == 2 {
+				date, err := time.ParseInLocation(uploadTempDirLayout, parts[1], now.Location())
+				if err == nil && date.After(cutoff) {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if removed >= uploadTempCleanupLimit {
+			return filepath.SkipAll
+		}
+		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".part") {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return errors.Wrap(err, "读取上传临时文件状态失败")
+		}
+		if info.ModTime().After(cutoff) {
+			return nil
+		}
+		uploadID := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		exists, err := m.client.Exists(ctx, m.sessionKey(uploadID)).Result()
+		if err != nil {
+			return errors.Wrap(err, "检查上传临时文件会话失败")
+		}
+		if exists > 0 {
+			return nil
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.Wrap(err, "删除过期上传临时文件失败")
+		}
+		removed++
+		return nil
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Wrap(err, "清理过期上传临时文件失败")
+	}
+	m.lastCleanup = now
+	return nil
+}
+
 // loadSession 从 Redis 读取上传会话，并恢复内部派生字段。
 func (m *LocalUploadManager) loadSession(ctx context.Context, uploadID string) (*UploadSession, error) {
 	if err := m.validate(); err != nil {
@@ -598,7 +734,7 @@ func (m *LocalUploadManager) loadSession(ctx context.Context, uploadID string) (
 	return &session, nil
 }
 
-// saveSession 把上传会话快照写入 Redis，并维护对象反查索引。
+// saveSession 把上传会话快照写入 Redis；对象索引和分片 TTL 成功后才提交主快照。
 func (m *LocalUploadManager) saveSession(ctx context.Context, session *UploadSession) error {
 	if session == nil {
 		return errors.Errorf("上传会话不能为空")
@@ -612,16 +748,19 @@ func (m *LocalUploadManager) saveSession(ctx context.Context, session *UploadSes
 	if err != nil {
 		return errors.Wrap(err, "序列化上传会话失败")
 	}
-	if err := m.client.Set(ctx, m.sessionKey(session.UploadID), body, m.ttl).Err(); err != nil {
-		return errors.Wrap(err, "保存上传会话失败")
-	}
 	if strings.TrimSpace(session.ObjectKey) != "" {
-		// 对象 key 一旦生成，就同步维护反查索引，便于导入等场景按 URL 回查上传归属。
+		// 跨槽 key 无法使用单条 Lua 原子提交，先写可校验的辅助索引，最后写主会话快照作为提交点。
 		if err := m.client.Set(ctx, m.objectIndexKey(session.ObjectKey), session.UploadID, m.ttl).Err(); err != nil {
 			return errors.Wrap(err, "保存上传对象反查索引失败")
 		}
 	}
-	return errors.Tag(m.client.Expire(ctx, m.chunksKey(session.UploadID), m.ttl).Err())
+	if err := m.client.Expire(ctx, m.chunksKey(session.UploadID), m.ttl).Err(); err != nil {
+		return errors.Wrap(err, "刷新上传分片状态有效期失败")
+	}
+	if err := m.client.Set(ctx, m.sessionKey(session.UploadID), body, m.ttl).Err(); err != nil {
+		return errors.Wrap(err, "保存上传会话失败")
+	}
+	return nil
 }
 
 // uploadedChunks 读取并排序已上传分片下标。
@@ -717,6 +856,9 @@ func (m *LocalUploadManager) restoreSessionDerivedFields(session *UploadSession)
 		strings.EqualFold(strings.TrimSpace(session.UploadMode), storage.UploadModeServer) &&
 		strings.TrimSpace(session.UploadID) != "" {
 		tempDir := filepath.Join(m.rootDir, "uploading", sanitizeUploadSegment(session.BizType))
+		if createdAt, err := time.Parse(time.DateTime, session.CreatedAt); err == nil {
+			tempDir = filepath.Join(tempDir, createdAt.Format(uploadTempDirLayout))
+		}
 		session.TempPath = filepath.Join(tempDir, session.UploadID+".part")
 	}
 }

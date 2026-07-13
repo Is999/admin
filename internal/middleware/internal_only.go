@@ -9,23 +9,24 @@ import (
 	i18n "admin/common/i18n"
 	"admin/helper"
 	"admin/internal/requestctx"
-
-	"github.com/Is999/go-utils"
+	"admin/internal/svc"
 )
 
 // InternalOnlyMiddleware 仅允许内网或回环地址访问，适用于服务间内网调用入口。
-type InternalOnlyMiddleware struct{}
+type InternalOnlyMiddleware struct {
+	svc *svc.ServiceContext // 内网来源解析使用的可信代理配置
+}
 
 // NewInternalOnlyMiddleware 创建内网访问限制中间件。
-func NewInternalOnlyMiddleware() *InternalOnlyMiddleware {
-	return &InternalOnlyMiddleware{}
+func NewInternalOnlyMiddleware(svcCtx *svc.ServiceContext) *InternalOnlyMiddleware {
+	return &InternalOnlyMiddleware{svc: svcCtx}
 }
 
 // Handle 校验请求来源 IP 是否来自内网；内网请求免 JWT，公网请求直接拒绝。
 func (m *InternalOnlyMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, _ := requestctx.New(r.Context())
-		clientIP := utils.ClientIP(r)
+		clientIP := requestClientIP(m.svc, r)
 		requestctx.SetRequest(ctx, r.Method, r.URL.Path, clientIP)
 		if alias != "" && alias != Ignore {
 			requestctx.SetRoute(ctx, string(alias))

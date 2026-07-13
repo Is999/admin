@@ -43,6 +43,8 @@ const (
 	apiDocsMaxResponseBytes = 4 << 20
 	// apiRuntimeMaxResponseBytes 限制 API 运维接口 JSON 响应，配置快照允许超过 1MiB。
 	apiRuntimeMaxResponseBytes = 8 << 20
+	// apiRuntimeMaxErrorResponseBytes 限制下游非成功响应读取量，错误链不回显原始响应体。
+	apiRuntimeMaxErrorResponseBytes = 4 << 10
 )
 
 // Logic 负责调用必须落在 API 进程内的运行态能力。
@@ -90,9 +92,10 @@ type apiResponse[T any] struct {
 
 // userRuntimeSyncPayload 表示发给 API 的用户运行态同步载荷。
 type userRuntimeSyncPayload struct {
-	Profile  bool   `json:"profile"`  // 是否失效资料缓存
-	Sessions bool   `json:"sessions"` // 是否失效登录态
-	Reason   string `json:"reason"`   // 同步原因
+	Profile     bool   `json:"profile"`     // 是否失效资料缓存
+	Sessions    bool   `json:"sessions"`    // 是否失效登录态
+	AuthVersion uint64 `json:"authVersion"` // admin 已提交到用户表的新认证版本
+	Reason      string `json:"reason"`      // 同步原因
 }
 
 // apiUserRuntimeSyncResp 表示 API 内网用户运行态同步响应。
@@ -100,6 +103,7 @@ type apiUserRuntimeSyncResp struct {
 	UserID                  int64  `json:"userId,string"`           // 用户雪花 ID，API 固定以字符串返回，避免前端精度丢失
 	ProfileCacheInvalidated bool   `json:"profileCacheInvalidated"` // 是否已处理用户资料缓存
 	SessionsInvalidated     bool   `json:"sessionsInvalidated"`     // 是否已处理登录态
+	AuthVersion             uint64 `json:"authVersion"`             // API 已用于登录态失效的认证版本
 	Message                 string `json:"message"`                 // 同步结果说明
 }
 
@@ -233,24 +237,37 @@ func (c *Client) RunConfigReload(ctx context.Context) (*types.TaskConfigReloadSt
 }
 
 // SyncUserRuntime 同步前台用户在 API 进程内的资料缓存或登录态。
-func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool, sessions bool, reason string) (*types.UserRuntimeSyncResp, error) {
+func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool, sessions bool, authVersion uint64, reason string) (*types.UserRuntimeSyncResp, error) {
 	if userID <= 0 {
 		return nil, errors.New("用户 ID 不能为空")
 	}
 	if !profile && !sessions {
 		profile = true
 	}
+	if sessions && authVersion == 0 {
+		return nil, errors.New("失效登录态时认证版本不能为空")
+	}
 	path := "/internal/users/" + strconv.FormatInt(userID, 10) + "/runtime-sync"
 	data, err := requestAPI[apiUserRuntimeSyncResp](ctx, c, http.MethodPost, path, userRuntimeSyncPayload{
-		Profile:  profile,
-		Sessions: sessions,
-		Reason:   strings.TrimSpace(reason),
+		Profile:     profile,
+		Sessions:    sessions,
+		AuthVersion: authVersion,
+		Reason:      strings.TrimSpace(reason),
 	})
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	if data.UserID != userID {
 		return nil, errors.Errorf("API 内网同步响应用户 ID不一致 expected=%d actual=%d", userID, data.UserID)
+	}
+	if sessions && data.AuthVersion != authVersion {
+		return nil, errors.Errorf("API 内网同步响应认证版本不一致 expected=%d actual=%d", authVersion, data.AuthVersion)
+	}
+	if profile && !data.ProfileCacheInvalidated {
+		return nil, errors.New("API 内网同步响应未确认资料缓存已处理")
+	}
+	if sessions && !data.SessionsInvalidated {
+		return nil, errors.New("API 内网同步响应未确认登录态已处理")
 	}
 	message := data.Message
 	if message == "" {
@@ -262,6 +279,7 @@ func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool
 		UserID:                  data.UserID,
 		ProfileCacheInvalidated: data.ProfileCacheInvalidated,
 		SessionsInvalidated:     data.SessionsInvalidated,
+		AuthVersion:             data.AuthVersion,
 		Message:                 message,
 	}, nil
 }
@@ -321,22 +339,30 @@ func requestAPI[T any](ctx context.Context, c *Client, method string, path strin
 		return nil, errors.Wrap(err, "请求 API 内网接口失败")
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, apiRuntimeMaxResponseBytes+1))
+	responseLimit := apiRuntimeMaxResponseBytes
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		responseLimit = apiRuntimeMaxErrorResponseBytes
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(responseLimit)+1))
 	if err != nil {
 		return nil, errors.Wrap(err, "读取 API 内网响应失败")
 	}
-	if len(body) > apiRuntimeMaxResponseBytes {
-		return nil, errors.Errorf("API 内网响应超过大小限制 max_bytes=%d", apiRuntimeMaxResponseBytes)
+	if len(body) > responseLimit {
+		return nil, errors.Errorf("API 内网响应超过大小限制 max_bytes=%d", responseLimit)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, errors.Errorf("API 内网接口 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		var failed apiResponse[json.RawMessage]
+		if json.Unmarshal(body, &failed) == nil && (failed.Code != 0 || failed.TraceID != "") {
+			return nil, errors.Errorf("API 内网接口 HTTP %d code=%d traceId=%s", resp.StatusCode, failed.Code, strings.TrimSpace(failed.TraceID))
+		}
+		return nil, errors.Errorf("API 内网接口 HTTP %d", resp.StatusCode)
 	}
 	var decoded apiResponse[T]
 	if err = json.Unmarshal(body, &decoded); err != nil {
 		return nil, errors.Wrap(err, "解析 API 内网响应失败")
 	}
 	if !decoded.Status {
-		return nil, errors.Errorf("API 内网接口返回失败 code=%d message=%s traceId=%s", decoded.Code, decoded.Message, decoded.TraceID)
+		return nil, errors.Errorf("API 内网接口返回失败 code=%d traceId=%s", decoded.Code, decoded.TraceID)
 	}
 	return &decoded.Data, nil
 }

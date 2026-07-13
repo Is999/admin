@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	keys "admin/common/rediskeys"
@@ -14,8 +15,23 @@ import (
 	"github.com/Is999/go-utils/errors"
 	tablecache "github.com/Is999/table-cache"
 	"github.com/alicebob/miniredis/v2"
+	miniredisserver "github.com/alicebob/miniredis/v2/server"
 	"github.com/redis/go-redis/v9"
 )
+
+// runCacheStandaloneRedis 模拟真实单机 Redis 的拓扑探测响应。
+func runCacheStandaloneRedis(t *testing.T) *miniredis.Miniredis {
+	t.Helper()
+	server := miniredis.RunT(t)
+	server.Server().SetPreHook(func(peer *miniredisserver.Peer, command string, args ...string) bool {
+		if !strings.EqualFold(command, "cluster") || len(args) != 1 || !strings.EqualFold(args[0], "info") {
+			return false
+		}
+		peer.WriteError("ERR This instance has cluster support disabled")
+		return true
+	})
+	return server
+}
 
 // deleteCommandCaptureHook 捕获测试中的 DEL 命令参数数量，验证 Redis Cluster 下不会发出跨 slot 多 key DEL。
 type deleteCommandCaptureHook struct {
@@ -142,7 +158,8 @@ func (h deleteCommandCaptureHook) ProcessPipelineHook(next redis.ProcessPipeline
 
 // TestInvalidateAdminRelationCachePreserveSession 验证个人中心自助更新时不会删除当前登录态缓存。
 func TestInvalidateAdminRelationCachePreserveSession(t *testing.T) {
-	server := miniredis.RunT(t)
+	useRuntimeAppID(t, "site-a")
+	server := runCacheStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
 
@@ -163,7 +180,9 @@ func TestInvalidateAdminRelationCachePreserveSession(t *testing.T) {
 		t.Fatalf("seed permission key error = %v", err)
 	}
 
-	InvalidateAdminRelationCachePreserveSession(base, 7)
+	if err := InvalidateAdminRelationCachePreserveSession(base, 7); err != nil {
+		t.Fatalf("InvalidateAdminRelationCachePreserveSession() error = %v", err)
+	}
 
 	if _, err := cacheLogic.GetAdminInfo(7); err != nil {
 		t.Fatalf("GetAdminInfo() error = %v, want session kept", err)
@@ -176,9 +195,17 @@ func TestInvalidateAdminRelationCachePreserveSession(t *testing.T) {
 	}
 }
 
+// TestInvalidateAdminRelationCacheFailsWithoutRedis 验证单管理员高敏变更不会把缓存失效失败伪报成功。
+func TestInvalidateAdminRelationCacheFailsWithoutRedis(t *testing.T) {
+	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
+	if err := InvalidateAdminRelationCache(base, 7); err == nil {
+		t.Fatal("InvalidateAdminRelationCache() error = nil, want Redis unavailable failure")
+	}
+}
+
 // TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins 验证只清理受影响管理员。
 func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runCacheStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
 	ctx := context.Background()
@@ -219,7 +246,7 @@ func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(
 
 // TestInvalidateRolePermissionCacheByRoleIDsDeletesOnlyTargetRoles 验证角色权限缓存按角色 ID 精确删除。
 func TestInvalidateRolePermissionCacheByRoleIDsDeletesOnlyTargetRoles(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runCacheStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
 	ctx := context.Background()
@@ -244,7 +271,7 @@ func TestInvalidateRolePermissionCacheByRoleIDsDeletesOnlyTargetRoles(t *testing
 
 // TestDeleteRedisKeysExactBatchesUsesSingleKeyDeleteCommands 验证精确删除缓存时不会发出跨 slot 多 key DEL。
 func TestDeleteRedisKeysExactBatchesUsesSingleKeyDeleteCommands(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runCacheStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	var directArgCounts []int
 	var pipelineArgCounts []int

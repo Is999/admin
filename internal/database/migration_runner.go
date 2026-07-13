@@ -31,7 +31,6 @@ type MigrationRunOptions struct {
 	DryRun           bool // 是否只输出计划，不执行 SQL
 	AllowBootstrap   bool // 是否允许执行 bootstrap-only 基线迁移
 	AllowDestructive bool // 是否允许执行 destructive 迁移
-	StrictChecksum   bool // 是否严格拒绝已登记迁移 checksum 漂移
 }
 
 // MigrationRunItem 表示单个迁移在本轮计划中的状态。
@@ -40,7 +39,7 @@ type MigrationRunItem struct {
 	Name     string // 迁移名称
 	Asset    string // 迁移资产
 	Checksum string // 当前 SQL checksum
-	Status   string // applied/pending/executed/blocked
+	Status   string // 迁移状态：applied/pending/executed/blocked
 	Reason   string // 状态原因，blocked 时必填
 }
 
@@ -74,10 +73,7 @@ func RunMigrations(ctx context.Context, store MigrationStore, migrations []Migra
 		item := newMigrationRunItem(migration)
 		if appliedItem, ok := applied[migration.Version]; ok {
 			if !sameChecksum(appliedItem.Checksum, migration.Checksum) {
-				if options.StrictChecksum {
-					return results, errors.Errorf("数据库迁移 checksum 不一致 version=%s name=%s applied=%s current=%s", migration.Version, migration.Name, appliedItem.Checksum, migration.Checksum)
-				}
-				item.Reason = "checksum drift ignored for unreleased migration"
+				return results, errors.Errorf("数据库迁移 checksum 不一致 version=%s name=%s applied=%s current=%s", migration.Version, migration.Name, appliedItem.Checksum, migration.Checksum)
 			}
 			item.Status = MigrationStatusApplied
 			results = append(results, item)

@@ -16,7 +16,7 @@ const (
 // RouteContract 是 HTTP 路由对外暴露的稳定契约。
 type RouteContract struct {
 	Module        string      // 路由模块名称
-	Method        string      // HTTP Method
+	Method        string      // HTTP 请求方法
 	Path          string      // go-zero 路由路径
 	Access        RouteAccess // 入口鉴权类型
 	Alias         string      // 权限/审计/trace 统一路由别名；空表示不进入业务鉴权链

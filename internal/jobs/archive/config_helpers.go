@@ -205,10 +205,10 @@ func (s *Service) notifyArchiveJobConfigInvalid(index int, item config.ArchiveJo
 		logx.Field("table_name", strings.TrimSpace(item.TableName)),
 		logx.Field("failure_reason", strings.TrimSpace(err.Error())),
 	)
-	if s == nil || s.svcCtx == nil || s.svcCtx.Task == nil {
+	if s == nil || s.svcCtx == nil || s.svcCtx.RuntimeAlerter == nil {
 		return
 	}
-	svc.NotifyTaskRuntimeAlert(context.Background(), s.svcCtx.Task, svc.TaskRuntimeAlert{
+	svc.NotifyTaskRuntimeAlert(context.Background(), s.svcCtx.RuntimeAlerter, svc.TaskRuntimeAlert{
 		Kind:         archiveRuntimeAlertKindConfigInvalid,
 		Title:        "【P1 归档任务配置异常】",
 		Status:       "已跳过该归档任务，其它归档任务继续运行",

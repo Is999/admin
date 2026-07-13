@@ -11,9 +11,9 @@ import (
 
 // TestLoadConfigLoadsSample 确保默认装配入口能够正确读取项目样例配置。
 func TestLoadConfigLoadsSample(t *testing.T) {
-	cfg, err := Load("../../etc/config.sample.yaml")
+	cfg, err := loadBaseConfig("../../../etc/config.sample.yaml")
 	if err != nil {
-		t.Skipf("样例配置包含环境变量占位，当前测试环境未注入，跳过: %v", err)
+		t.Fatalf("读取样例配置失败: %v", err)
 	}
 	if cfg.Name == "" {
 		t.Fatal("期望成功读取配置名称")
@@ -25,9 +25,9 @@ func TestLoadConfigLoadsSample(t *testing.T) {
 
 // TestLoadConfigLoadsHotReload 确保配置解析入口可正确读取热加载配置段。
 func TestLoadConfigLoadsHotReload(t *testing.T) {
-	cfg, err := Load("../../etc/config.sample.yaml")
+	cfg, err := loadBaseConfig("../../../etc/config.sample.yaml")
 	if err != nil {
-		t.Skipf("样例配置包含环境变量占位，当前测试环境未注入，跳过: %v", err)
+		t.Fatalf("读取样例配置失败: %v", err)
 	}
 	if !cfg.HotReload.Enabled {
 		t.Fatal("期望样例配置中启用热加载")
@@ -37,24 +37,11 @@ func TestLoadConfigLoadsHotReload(t *testing.T) {
 	}
 }
 
-// TestLoadConfigIgnoresRemovedWorkflowRetention 确保历史工作流保留字段不影响新配置加载。
-func TestLoadConfigIgnoresRemovedWorkflowRetention(t *testing.T) {
-	dir := t.TempDir()
-	mainFile := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(mainFile, []byte(minimalConfigYAML(`
-task:
-  completed_retention_seconds: 90
-  workflow_retention_seconds: 120
-`)), 0o644); err != nil {
-		t.Fatalf("写入主配置失败: %v", err)
-	}
-
-	cfg, err := Load(mainFile)
-	if err != nil {
-		t.Fatalf("历史 workflow_retention_seconds 不应导致配置加载失败: %v", err)
-	}
-	if cfg.Task.CompletedRetentionSeconds != 90 {
-		t.Fatalf("期望保留 completed_retention_seconds=90，实际为 %d", cfg.Task.CompletedRetentionSeconds)
+// TestLoadConfigRejectsProductionPlaceholders 确保生产样例保留占位密钥时不能被直接启动。
+func TestLoadConfigRejectsProductionPlaceholders(t *testing.T) {
+	_, err := Load("../../../etc/config.sample.yaml")
+	if err == nil || !strings.Contains(err.Error(), "不能使用占位值") {
+		t.Fatalf("期望生产占位密钥被拒绝，实际错误为 %v", err)
 	}
 }
 

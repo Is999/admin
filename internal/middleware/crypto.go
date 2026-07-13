@@ -42,6 +42,11 @@ func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		policy := security.PolicyByRoute(requestRouteAlias(r))
 		// requestCipher 表示本次请求实际声明的字段级解密配置。
 		requestCipher := strings.TrimSpace(r.Header.Get("X-Cipher"))
+		// 无请求密文且路由未声明响应加密时直接透传，下载等流式响应不得被整包缓冲。
+		if requestCipher == "" && len(policy.ResponseCipher) == 0 {
+			next(w, r)
+			return
+		}
 		// cryptoType 表示当前请求声明的加密算法，默认回落为 AES。
 		cryptoType := strings.ToUpper(strings.TrimSpace(r.Header.Get("X-Crypto")))
 		if cryptoType == "" {
@@ -77,8 +82,8 @@ func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 				m.fail(w, r, codes.AuthFailed, err)
 				return
 			}
-			r.Header.Del("X-Cipher")
-			r.Header.Del("X-Crypto")
+			next(w, r)
+			return
 		}
 		if requestCipher != "" {
 			requestCipherParams, err = decodeAndValidateCipherParams(requestCipher, policy.RequestCipher, "请求")
@@ -101,6 +106,9 @@ func (m *CryptoMiddleware) Handle(next http.HandlerFunc) http.HandlerFunc {
 		// recorder 先拦截业务响应，待需要签名或加密时再统一改写后刷出。
 		recorder := newBodyRecorder()
 		next(recorder, r)
+		if flushSecurityFailureResponse(w, recorder) {
+			return
+		}
 
 		// responseCipher 表示当前响应需要按哪些字段执行加密。
 		responseCipher := strings.TrimSpace(recorder.Header().Get("X-Cipher"))
@@ -460,8 +468,9 @@ func (m *CryptoMiddleware) requestAppID(r *http.Request) (string, error) {
 
 // fail 写出加密中间件失败响应，响应文案直接由业务码解析，错误详情只进入日志链路。
 func (m *CryptoMiddleware) fail(w http.ResponseWriter, r *http.Request, code int, err error) {
+	clearSecurityResponseHeaders(w.Header())
 	helper.NewJSONResp(r.Context(), w).
-		SetHTTPStatus(http.StatusOK).
+		SetHTTPStatus(codes.HTTPStatus(code)).
 		SetCode(code).
 		SetError(err).
 		Fail("")

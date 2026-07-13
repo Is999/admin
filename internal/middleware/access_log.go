@@ -148,23 +148,31 @@ func shouldSkipAccessLog(meta *requestctx.Meta) bool {
 
 // statusRecorder 是对 http.ResponseWriter 的轻量包装，用于采集真实响应状态与字节数。
 type statusRecorder struct {
-	http.ResponseWriter     // 原始响应写入器
-	status              int // 实际写出的 HTTP 状态码
-	bytes               int // 实际写出的响应字节数
+	http.ResponseWriter      // 原始响应写入器
+	status              int  // 实际写出的 HTTP 状态码
+	bytes               int  // 实际写出的响应字节数
+	wroteHeader         bool // 是否已经写出首个响应状态
 }
 
 // WriteHeader 记录状态码后再透传到底层响应写入器。
 func (w *statusRecorder) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
 }
 
 // Write 记录响应体大小，并在未显式写状态码时补默认 200。
 func (w *statusRecorder) Write(data []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
+	w.WriteHeader(http.StatusOK)
 	n, err := w.ResponseWriter.Write(data)
 	w.bytes += n
 	return n, errors.Tag(err)
+}
+
+// Unwrap 返回底层响应写入器，供 http.ResponseController 按需透传扩展能力。
+func (w *statusRecorder) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }

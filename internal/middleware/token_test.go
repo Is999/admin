@@ -10,6 +10,7 @@ import (
 	"admin/common/runtimecfg"
 	"admin/internal/config"
 	cachelogic "admin/internal/logic/cache"
+	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
 
@@ -51,6 +52,25 @@ func TestVerifyAdminTokenRequiresCachedSession(t *testing.T) {
 	}
 }
 
+// TestVerifyAdminTokenRejectsMissingCachedSession 验证 Redis 会话缺失时不会仅凭 JWT 自动恢复登录态。
+func TestVerifyAdminTokenRejectsMissingCachedSession(t *testing.T) {
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-a"})
+	t.Cleanup(func() {
+		runtimecfg.Restore(prev)
+	})
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+
+	secret := "test-secret"
+	token := testAdminToken(t, secret, 1, "admin", time.Now().Add(time.Hour))
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a", JwtSecret: secret}, svc.Dependencies{Rds: client})
+	if _, err := verifyAdminToken(context.Background(), svcCtx, token, true); !errors.Is(err, errInvalidToken) {
+		t.Fatalf("缺失 Redis 会话时应拒绝 JWT，实际错误为 %v", err)
+	}
+}
+
 // TestVerifyAdminTokenRejectsExpiredToken 校验过期 token 会返回可识别的过期错误。
 func TestVerifyAdminTokenRejectsExpiredToken(t *testing.T) {
 	token := testAdminToken(t, "test-secret", 1, "admin", time.Now().Add(-time.Minute))
@@ -59,6 +79,93 @@ func TestVerifyAdminTokenRejectsExpiredToken(t *testing.T) {
 	_, err := verifyAdminToken(context.Background(), svcCtx, token, false)
 	if !errors.Is(err, errTokenExpired) {
 		t.Fatalf("期望返回 errTokenExpired，实际为 %v", err)
+	}
+}
+
+// TestVerifyAdminTokenDoesNotDeleteCurrentSessionForExpiredOldToken 验证旧 JWT 过期时不会误删同账号已刷新出的新会话。
+func TestVerifyAdminTokenDoesNotDeleteCurrentSessionForExpiredOldToken(t *testing.T) {
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-a"})
+	t.Cleanup(func() { runtimecfg.Restore(prev) })
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+
+	const secret = "test-secret"
+	expiredToken := testAdminToken(t, secret, 1, "admin", time.Now().Add(-time.Minute))
+	currentToken := testAdminToken(t, secret, 1, "admin", time.Now().Add(time.Hour))
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a", JwtSecret: secret}, svc.Dependencies{Rds: client})
+	cacheLogic := cachelogic.NewCacheLogic(context.Background(), svcCtx)
+	if err := cacheLogic.SetAdminInfo(1, &types.AdminInfo{ID: 1, UserName: "admin", Token: currentToken}); err != nil {
+		t.Fatalf("写入当前管理员会话失败: %v", err)
+	}
+
+	if _, err := verifyAdminToken(context.Background(), svcCtx, expiredToken, true); !errors.Is(err, errTokenExpired) {
+		t.Fatalf("过期旧 token 应返回 errTokenExpired，实际为 %v", err)
+	}
+	if cachedToken, err := cacheLogic.GetAdminToken(1); err != nil || cachedToken != currentToken {
+		t.Fatalf("校验过期旧 token 后当前会话 token = %q error = %v", cachedToken, err)
+	}
+}
+
+// TestRefreshTokenGraceIsLimitedToSessionFinalizationRoutes 验证上一枚 token 只允许刷新和退出，普通路由仍拒绝。
+func TestRefreshTokenGraceIsLimitedToSessionFinalizationRoutes(t *testing.T) {
+	prev := runtimecfg.Get()
+	runtimecfg.Set(config.Config{AppID: "site-a"})
+	t.Cleanup(func() { runtimecfg.Restore(prev) })
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+
+	const secret = "test-secret"
+	oldToken := testAdminToken(t, secret, 1, "admin", time.Now().Add(time.Hour))
+	newToken := testAdminToken(t, secret, 1, "admin", time.Now().Add(2*time.Hour))
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a", JwtSecret: secret, JwtExpiresIn: 3600}, svc.Dependencies{Rds: client})
+	cacheLogic := cachelogic.NewCacheLogic(context.Background(), svcCtx)
+	if err := cacheLogic.SetAdminInfo(1, &types.AdminInfo{ID: 1, UserName: "admin", Token: oldToken}); err != nil {
+		t.Fatalf("写入管理员会话失败: %v", err)
+	}
+	if activeToken, err := cacheLogic.RotateAdminToken(1, oldToken, newToken); err != nil || activeToken != newToken {
+		t.Fatalf("轮换管理员 token 失败，activeToken = %q error = %v", activeToken, err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+oldToken)
+
+	if _, err := verifyAdminTokenFromRequestForRoute(context.Background(), svcCtx, req, true, routealias.AuthProfile); !errors.Is(err, errInvalidToken) {
+		t.Fatalf("普通鉴权路由应拒绝上一枚 token，实际错误为 %v", err)
+	}
+	identity, err := verifyAdminTokenFromRequestForRoute(context.Background(), svcCtx, req, true, routealias.AuthRefresh)
+	if err != nil {
+		t.Fatalf("auth.refresh 应允许宽限期内上一枚 token，实际错误为 %v", err)
+	}
+	if identity == nil || identity.Token != oldToken || identity.UserID != 1 {
+		t.Fatalf("刷新路由解析身份异常: %+v", identity)
+	}
+	identity, err = verifyAdminTokenFromRequestForRoute(context.Background(), svcCtx, req, true, routealias.AuthLogout)
+	if err != nil {
+		t.Fatalf("auth.logout 应允许宽限期内上一枚刷新 token，实际错误为 %v", err)
+	}
+	if identity == nil || identity.Token != oldToken || identity.UserID != 1 {
+		t.Fatalf("退出路由解析身份异常: %+v", identity)
+	}
+}
+
+// TestVerifyAdminTokenRejectsOtherHMACAlgorithms 校验服务端只接受约定的 HS256 算法。
+func TestVerifyAdminTokenRejectsOtherHMACAlgorithms(t *testing.T) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS384, jwt.MapClaims{
+		"sub":      1,
+		"username": "admin",
+		"exp":      time.Now().Add(time.Hour).Unix(),
+		"iat":      time.Now().Unix(),
+	})
+	signed, err := token.SignedString([]byte("test-secret"))
+	if err != nil {
+		t.Fatalf("签发 HS384 token 失败: %v", err)
+	}
+	svcCtx := &svc.ServiceContext{}
+	svcCtx.UpdateConfig(config.Config{JwtSecret: "test-secret"})
+	if _, err = verifyAdminToken(context.Background(), svcCtx, signed, false); !errors.Is(err, errInvalidToken) {
+		t.Fatalf("期望拒绝 HS384 token，实际为 %v", err)
 	}
 }
 

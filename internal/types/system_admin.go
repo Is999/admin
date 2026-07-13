@@ -61,9 +61,6 @@ type UpdateAdminReq struct {
 	RealName      *string `json:"realName,optional"`                                              // 真实姓名
 	Email         *string `json:"email,optional"`                                                 // 邮箱
 	Phone         *string `json:"phone,optional"`                                                 // 电话
-	MfaSecureKey  *string `json:"mfaSecureKey,optional"`                                          // TOTP MFA 密钥
-	MfaStatus     *int    `json:"mfaStatus,optional"`                                             // MFA 状态：0 未启用，1 已启用
-	Status        *int    `json:"status,optional"`                                                // 账号状态：1 正常，0 禁用
 	Avatar        *string `json:"avatar,optional"`                                                // 头像地址
 	Description   *string `json:"description,optional"`                                           // 备注说明
 	Password      *string `json:"password,optional"`                                              // 新密码，非空时重置
@@ -77,12 +74,6 @@ type UpdateAdminReq struct {
 func (r *UpdateAdminReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("管理员ID不能为空")
-	}
-	if r.Status != nil && (*r.Status != 0 && *r.Status != 1) {
-		return errors.Errorf("账号状态不合法")
-	}
-	if r.MfaStatus != nil && (*r.MfaStatus != 0 && *r.MfaStatus != 1) {
-		return errors.Errorf("MFA状态不合法")
 	}
 	if r.Password != nil {
 		if err := validateAdminPasswordOptional(*r.Password, "密码"); err != nil {
@@ -243,4 +234,5 @@ type InitAdminBootstrapResp struct {
 	MfaStatus         int    `json:"mfaStatus"`         // MFA 状态：0 未启用，1 已启用
 	Status            int    `json:"status"`            // 账号状态：1 正常，0 禁用
 	Operation         string `json:"operation"`         // 本次操作类型：当前固定为 reset，表示重置既有超级管理员账号
+	SyncPending       bool   `json:"syncPending"`       // 是否仍需手动刷新管理员安全缓存
 }

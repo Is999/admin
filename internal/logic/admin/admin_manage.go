@@ -3,6 +3,7 @@ package admin
 import (
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
+	filelogic "admin/internal/logic/file"
 	rbaclogic "admin/internal/logic/rbac"
 	securitylogic "admin/internal/logic/security"
 	"net/http"
@@ -133,6 +134,15 @@ func (l *AdminManageLogic) Update(req *types.UpdateAdminReq) *types.BizResult {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminManageLogic.Update 查询管理员ID[%d]失败", req.ID).ToBizResult()
 	}
+	fileTransferLogic := filelogic.NewFileTransferLogicWithContext(l.Ctx, l.Svc)
+	if req.Avatar != nil {
+		avatar, avatarErr := fileTransferLogic.ValidateAdminAvatar(*req.Avatar)
+		if avatarErr != nil {
+			return types.ParamErrorResult(avatarErr).
+				WithError(errors.Wrapf(avatarErr, "AdminManageLogic.Update 管理员ID[%d]头像校验失败", req.ID))
+		}
+		req.Avatar = &avatar
+	}
 
 	updates := buildAdminUpdates(req, admin)
 	roleIDs := types.UniquePositiveInts(req.RoleIDs)
@@ -148,12 +158,13 @@ func (l *AdminManageLogic) Update(req *types.UpdateAdminReq) *types.BizResult {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminManageLogic.Update 校验管理员ID[%d]角色范围失败", req.ID).ToBizResult()
 	}
-	if ctxAdmin := l.GetCtxAdmin(); ctxAdmin != nil && req.ID == ctxAdmin.ID && req.Status != nil && *req.Status != admin.Status {
-		return types.NewBizResult(codes.Fail).
-			SetI18nMessage(i18n.MsgKeyFail).
-			WithError(errors.Errorf("AdminManageLogic.Update 不允许修改当前登录管理员ID[%d]状态", req.ID))
-	}
 	shouldUpdateRoles := req.IsUpdateRoles || len(roleIDs) > 0
+	if req.Avatar != nil {
+		if err := fileTransferLogic.ScheduleReplacedAdminAvatarCleanup(admin.Avatar, *req.Avatar); err != nil {
+			return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+				"AdminManageLogic.Update 管理员ID[%d]旧头像清理任务投递失败", req.ID).ToBizResult()
+		}
+	}
 
 	// 基础信息、密码和角色关系必须在同一事务内提交，避免页面看到半更新状态。
 	if err = l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
@@ -163,7 +174,7 @@ func (l *AdminManageLogic) Update(req *types.UpdateAdminReq) *types.BizResult {
 			}
 		}
 		if req.Password != nil && strings.TrimSpace(*req.Password) != "" {
-			password, err := bcrypt.GenerateFromPassword([]byte(admin.PasswordWithSalt(strings.TrimSpace(*req.Password))), bcrypt.DefaultCost)
+			password, err := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(*req.Password)), bcrypt.DefaultCost)
 			if err != nil {
 				return errors.Wrap(err, "生成管理员密码哈希失败")
 			}
@@ -184,9 +195,11 @@ func (l *AdminManageLogic) Update(req *types.UpdateAdminReq) *types.BizResult {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminManageLogic.Update 更新管理员ID[%d]失败", req.ID).ToBizResult()
 	}
-
 	// 管理员资料、角色或权限变化后统一清理登录态与权限聚合缓存，保证下次读取回源最新数据。
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
+	if err := cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminManageLogic.Update 管理员ID[%d]缓存失效失败", req.ID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -208,7 +221,20 @@ func (l *AdminManageLogic) Delete(req *types.IDPathReq) *types.BizResult {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminManageLogic.Delete 校验管理员ID[%d]角色范围失败", req.ID).ToBizResult()
 	}
-
+	admin, err := l.GetAdminByID(req.ID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return types.NotFound(i18n.MsgKeyUserNotFound, err,
+				"AdminManageLogic.Delete 管理员ID[%d]不存在", req.ID).ToBizResult()
+		}
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminManageLogic.Delete 查询管理员ID[%d]失败", req.ID).ToBizResult()
+	}
+	if err := filelogic.NewFileTransferLogicWithContext(l.Ctx, l.Svc).
+		ScheduleReplacedAdminAvatarCleanup(admin.Avatar, ""); err != nil {
+		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+			"AdminManageLogic.Delete 管理员ID[%d]头像清理任务投递失败", req.ID).ToBizResult()
+	}
 	// 删除管理员时同步删除角色关系，避免关系表留下无主数据。
 	if err := l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("user_id = ?", req.ID).Delete(&model.AdminRoleRel{}).Error; err != nil {
@@ -230,8 +256,10 @@ func (l *AdminManageLogic) Delete(req *types.IDPathReq) *types.BizResult {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminManageLogic.Delete 删除管理员ID[%d]失败", req.ID).ToBizResult()
 	}
-
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
+	if err := cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.DeleteSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminManageLogic.Delete 管理员ID[%d]缓存失效失败", req.ID)
+	}
 	return types.NewBizResult(codes.DeleteSuccess).
 		SetI18nMessage(i18n.MsgKeyDeleteSuccess)
 }
@@ -271,7 +299,10 @@ func (l *AdminManageLogic) UpdateStatus(req *types.AdminStatusReq) *types.BizRes
 			"AdminManageLogic.UpdateStatus 管理员ID[%d]不存在", req.ID).ToBizResult()
 	}
 
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
+	if err := cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminManageLogic.UpdateStatus 管理员ID[%d]缓存失效失败", req.ID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyStatusChangeOK)
 }
@@ -294,7 +325,7 @@ func (l *AdminManageLogic) ResetPassword(req *types.ResetAdminPasswordReq) *type
 			"AdminManageLogic.ResetPassword 校验管理员ID[%d]角色范围失败", req.ID).ToBizResult()
 	}
 
-	admin, err := l.GetAdminByID(req.ID)
+	_, err := l.GetAdminByID(req.ID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return types.NotFound(i18n.MsgKeyUserNotFound, err,
@@ -304,7 +335,7 @@ func (l *AdminManageLogic) ResetPassword(req *types.ResetAdminPasswordReq) *type
 			"AdminManageLogic.ResetPassword 查询管理员ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	password, err := bcrypt.GenerateFromPassword([]byte(admin.PasswordWithSalt(strings.TrimSpace(req.Password))), bcrypt.DefaultCost)
+	password, err := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(req.Password)), bcrypt.DefaultCost)
 	if err != nil {
 		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 			"AdminManageLogic.ResetPassword 生成管理员ID[%d]密码哈希失败", req.ID).ToBizResult()
@@ -321,7 +352,10 @@ func (l *AdminManageLogic) ResetPassword(req *types.ResetAdminPasswordReq) *type
 			"AdminManageLogic.ResetPassword 更新管理员ID[%d]密码失败", req.ID).ToBizResult()
 	}
 
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
+	if err := cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminManageLogic.ResetPassword 管理员ID[%d]缓存失效失败", req.ID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -344,7 +378,7 @@ func (l *AdminManageLogic) ResetInitialState(req *types.ResetAdminInitialStateRe
 			"AdminManageLogic.ResetInitialState 校验管理员ID[%d]角色范围失败", req.ID).ToBizResult()
 	}
 
-	admin, err := l.GetAdminByID(req.ID)
+	_, err := l.GetAdminByID(req.ID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return types.NotFound(i18n.MsgKeyUserNotFound, err,
@@ -354,7 +388,7 @@ func (l *AdminManageLogic) ResetInitialState(req *types.ResetAdminInitialStateRe
 			"AdminManageLogic.ResetInitialState 查询管理员ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	password, err := bcrypt.GenerateFromPassword([]byte(admin.PasswordWithSalt(strings.TrimSpace(req.Password))), bcrypt.DefaultCost)
+	password, err := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(req.Password)), bcrypt.DefaultCost)
 	if err != nil {
 		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
 			"AdminManageLogic.ResetInitialState 生成管理员ID[%d]临时密码哈希失败", req.ID).ToBizResult()
@@ -376,10 +410,23 @@ func (l *AdminManageLogic) ResetInitialState(req *types.ResetAdminInitialStateRe
 			"AdminManageLogic.ResetInitialState 重置管理员ID[%d]首次登录状态失败", req.ID).ToBizResult()
 	}
 
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
-	_ = securitylogic.NewSecurityLogic(l.Ctx, l.Svc).ClearLoginMFACompleted(req.ID)
-	if err := securitylogic.NewSecurityLogic(l.Ctx, l.Svc).ClearAdminMFATwoStepTickets(req.ID); err != nil {
+	cacheErr := cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
+	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
+	if err := securityLogic.ClearLoginMFACompleted(req.ID); err != nil {
+		corelogic.LogWrappedError(l.Logger, err, "AdminManageLogic.ResetInitialState 清理管理员ID[%d]登录MFA标记失败", req.ID)
+		if cacheErr == nil {
+			cacheErr = err
+		}
+	}
+	if err := securityLogic.ClearAdminMFATwoStepTickets(req.ID); err != nil {
 		corelogic.LogWrappedError(l.Logger, err, "AdminManageLogic.ResetInitialState 清理管理员ID[%d]MFA二次票据失败", req.ID)
+		if cacheErr == nil {
+			cacheErr = err
+		}
+	}
+	if cacheErr != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, cacheErr,
+			"AdminManageLogic.ResetInitialState 管理员ID[%d]缓存失效失败", req.ID)
 	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
@@ -428,7 +475,10 @@ func (l *AdminManageLogic) ReplaceRoles(req *types.AdminRoleAssignReq) *types.Bi
 			"AdminManageLogic.ReplaceRoles 替换管理员ID[%d]角色失败", req.ID).ToBizResult()
 	}
 
-	cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID)
+	if err := cachelogic.InvalidateAdminRelationCache(l.BaseLogic, req.ID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminManageLogic.ReplaceRoles 管理员ID[%d]缓存失效失败", req.ID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }

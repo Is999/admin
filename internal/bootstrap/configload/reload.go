@@ -33,6 +33,25 @@ func hotReloadRestartSpecs() []hotReloadRestartSpec {
 		}, preserveBefore(func(effective *config.Config, before config.Config) {
 			effective.AppID = before.AppID
 		})),
+		trimmedStringRestartSpec("app_key", func(cfg config.Config) string {
+			return cfg.AppKey
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.AppKey = before.AppKey
+		})),
+		valueRestartSpec("trusted_proxies", func(cfg config.Config) any {
+			return cfg.TrustedProxies
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.TrustedProxies = before.TrustedProxies
+		})),
+		valueRestartSpec("jwt", func(cfg config.Config) any {
+			return struct {
+				Secret    string // JWT 签名密钥
+				ExpiresIn int64  // JWT 有效期秒数
+			}{Secret: cfg.JwtSecret, ExpiresIn: cfg.JwtExpiresIn}
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.JwtSecret = before.JwtSecret
+			effective.JwtExpiresIn = before.JwtExpiresIn
+		})),
 		valueRestartSpec("snowflake", func(cfg config.Config) any {
 			return cfg.Snowflake
 		}, preserveBefore(func(effective *config.Config, before config.Config) {
@@ -73,6 +92,21 @@ func hotReloadRestartSpecs() []hotReloadRestartSpec {
 		}, preserveBefore(func(effective *config.Config, before config.Config) {
 			effective.Redis = before.Redis
 		})),
+		valueRestartSpec("alert.lark", func(cfg config.Config) any {
+			return cfg.Alert.Lark
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.Alert.Lark = before.Alert.Lark
+		})),
+		valueRestartSpec("file_storage", func(cfg config.Config) any {
+			return cfg.FileStorage
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.FileStorage = before.FileStorage
+		})),
+		valueRestartSpec("ip_region", func(cfg config.Config) any {
+			return cfg.IPRegion
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.IPRegion = before.IPRegion
+		})),
 		newHotReloadRestartSpec("task.runtime", func(before, after config.Config) bool {
 			return !reflect.DeepEqual(taskRuntimeConfigForRestartCheck(before.Task), taskRuntimeConfigForRestartCheck(after.Task))
 		}, preserveTaskRuntimeConfig),
@@ -83,6 +117,16 @@ func hotReloadRestartSpecs() []hotReloadRestartSpec {
 			return cfg.Kafka
 		}, preserveBefore(func(effective *config.Config, before config.Config) {
 			effective.Kafka = before.Kafka
+		})),
+		valueRestartSpec("collector", func(cfg config.Config) any {
+			return cfg.Collector
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.Collector = before.Collector
+		})),
+		valueRestartSpec("cdc", func(cfg config.Config) any {
+			return cfg.CDC
+		}, preserveBefore(func(effective *config.Config, before config.Config) {
+			effective.CDC = before.CDC
 		})),
 		valueRestartSpec("observability", func(cfg config.Config) any {
 			return cfg.Observability

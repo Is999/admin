@@ -125,7 +125,10 @@ func (l *SysConfigLogic) Create(req *types.SaveSysConfigReq) *types.BizResult {
 			"SysConfigLogic.Create 创建系统配置[%s]失败", req.UUID).ToBizResult()
 	}
 
-	_ = l.RenewByUUID(req.UUID)
+	if err := l.RenewByUUID(req.UUID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.AddSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"SysConfigLogic.Create 配置UUID[%s]缓存同步失败", req.UUID)
+	}
 	return types.NewBizResult(codes.AddSuccess).
 		SetI18nMessage(i18n.MsgKeyAddSuccess)
 }
@@ -210,8 +213,20 @@ func (l *SysConfigLogic) Update(req *types.SaveSysConfigReq) *types.BizResult {
 			"SysConfigLogic.Update 更新系统配置ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	_ = l.RdsDelKeys(cachelogic.TableCachePhysicalKeys(l.BaseLogic, fmt.Sprintf(keys.SysConfigUUID, old.UUID))...)
-	_ = l.RenewByUUID(req.UUID)
+	// cacheErr 保留首个缓存同步错误，旧 key 清理与新 key 刷新仍都尝试执行。
+	var cacheErr error
+	if old.UUID != req.UUID {
+		cacheErr = l.RdsDelKeys(cachelogic.TableCachePhysicalKeys(l.BaseLogic, fmt.Sprintf(keys.SysConfigUUID, old.UUID))...)
+	}
+	if err := l.RenewByUUID(req.UUID); err != nil {
+		if cacheErr == nil {
+			cacheErr = err
+		}
+	}
+	if cacheErr != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, cacheErr,
+			"SysConfigLogic.Update 配置ID[%d]缓存同步失败", req.ID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }

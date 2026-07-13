@@ -23,12 +23,6 @@ var fileUploadPolicyRegistry = struct {
 			AllowDirectUpload:  true,                                               // S3 场景允许前端直传
 			ExpectedMIMEPrefix: "image/",                                           // 完成后校验文件内容 MIME
 		},
-		FileTransferBizSecretKeyMaterial: {
-			MaxSize:           2 * 1024 * 1024,                                          // 秘钥材料最大 2MB
-			AllowedExts:       []string{".pem", ".key", ".pub", ".crt", ".cer", ".txt"}, // 秘钥材料允许文本和证书扩展名
-			Visibility:        storage.VisibilityPrivate,                                // 秘钥材料必须走受控下载
-			AllowDirectUpload: true,                                                     // S3 场景允许前端直传
-		},
 		FileTransferBizSysConfigExcelImport: {
 			MaxSize:           20 * 1024 * 1024,          // 系统配置导入文件最大 20MB
 			AllowedExts:       []string{".xlsx"},         // 系统配置导入仅允许 xlsx

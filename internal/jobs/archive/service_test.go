@@ -3,9 +3,12 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"admin/internal/config"
 	"admin/internal/model"
@@ -21,11 +24,238 @@ func newArchiveDryRunDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local",
 		SkipInitializeWithVersion: true,
-	}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	}), &gorm.Config{DryRun: true, DisableAutomaticPing: true, SkipDefaultTransaction: true})
 	if err != nil {
 		t.Fatalf("gorm.Open() error = %v", err)
 	}
 	return db
+}
+
+// TestRenewSegmentDeleteLeaseUsesOwnerGuard 验证删除续租只允许当前 deleting worker 更新租约。
+func TestRenewSegmentDeleteLeaseUsesOwnerGuard(t *testing.T) {
+	db := newArchiveDryRunDB(t)
+	var sqlText string
+	if err := db.Callback().Update().After("gorm:update").Register("test:capture_archive_delete_lease", func(tx *gorm.DB) {
+		sqlText = tx.Statement.SQL.String()
+		tx.RowsAffected = 1
+	}); err != nil {
+		t.Fatalf("注册 GORM 测试回调失败: %v", err)
+	}
+	service := NewService(svc.NewServiceContext(config.Config{
+		Archive: config.ArchiveConfig{LeaseTTLSeconds: 30},
+	}, svc.Dependencies{}))
+	segment := &Segment{ID: 7, AttemptCount: 3}
+	if err := service.renewSegmentDeleteLease(context.Background(), db, segment, "worker-a"); err != nil {
+		t.Fatalf("删除续租失败: %v", err)
+	}
+	for _, want := range []string{"lease_expires_at", "status = ?", "worker_id = ?", "attempt_count = ?", "lease_expires_at > ?"} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("删除续租 SQL 缺少 %q: %s", want, sqlText)
+		}
+	}
+}
+
+// TestRenewSegmentDeleteLeaseRejectsStaleAttempt 验证 GORM CAS 只允许当前领取轮次续租。
+func TestRenewSegmentDeleteLeaseRejectsStaleAttempt(t *testing.T) {
+	db := newArchiveDryRunDB(t)
+	var currentAttempt atomic.Int64
+	currentAttempt.Store(202)
+	if err := db.Callback().Update().After("gorm:update").Register("test:archive_delete_fence", func(tx *gorm.DB) {
+		tx.RowsAffected = 0
+		for _, value := range tx.Statement.Vars {
+			var attempt int64
+			switch typed := value.(type) {
+			case int:
+				attempt = int64(typed)
+			case int64:
+				attempt = typed
+			case uint:
+				attempt = int64(typed)
+			case uint64:
+				attempt = int64(typed)
+			default:
+				continue
+			}
+			if attempt == currentAttempt.Load() {
+				tx.RowsAffected = 1
+				return
+			}
+		}
+	}); err != nil {
+		t.Fatalf("注册 GORM fencing 回调失败: %v", err)
+	}
+	service := NewService(svc.NewServiceContext(config.Config{
+		Archive: config.ArchiveConfig{LeaseTTLSeconds: 30},
+	}, svc.Dependencies{}))
+	if err := service.renewSegmentDeleteLease(context.Background(), db, &Segment{ID: 7, AttemptCount: 101}, "same-worker"); err == nil {
+		t.Fatal("旧领取轮次续租应被 fencing 拒绝")
+	}
+	if err := service.renewSegmentDeleteLease(context.Background(), db, &Segment{ID: 7, AttemptCount: 202}, "same-worker"); err != nil {
+		t.Fatalf("当前领取轮次续租失败: %v", err)
+	}
+}
+
+// TestDeleteSegmentFinalStateRejectsStaleAttempt 验证删除终态写入也受领取轮次和有效租约 fencing 保护。
+func TestDeleteSegmentFinalStateRejectsStaleAttempt(t *testing.T) {
+	tests := []struct {
+		name   string                                   // 测试场景名称
+		update func(*Service, *gorm.DB, *Segment) error // 待验证的删除终态更新
+	}{
+		{
+			name: "删除完成",
+			update: func(service *Service, db *gorm.DB, segment *Segment) error {
+				return service.markSegmentDeleted(context.Background(), db, segment, "same-worker")
+			},
+		},
+		{
+			name: "部分完成",
+			update: func(service *Service, db *gorm.DB, segment *Segment) error {
+				return service.markSegmentDeletePartial(context.Background(), db, segment, "same-worker")
+			},
+		},
+		{
+			name: "删除失败",
+			update: func(service *Service, db *gorm.DB, segment *Segment) error {
+				return service.markSegmentDeleteFailed(context.Background(), db, segment, "same-worker", archiveLeaseTestError{})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := newArchiveDryRunDB(t)
+			if err := db.Callback().Update().After("gorm:update").Register("test:archive_delete_final_fence", func(tx *gorm.DB) {
+				tx.RowsAffected = 0
+				for _, value := range tx.Statement.Vars {
+					if attempt, ok := value.(int); ok && attempt == 202 {
+						tx.RowsAffected = 1
+						return
+					}
+				}
+			}); err != nil {
+				t.Fatalf("注册 GORM 终态 fencing 回调失败: %v", err)
+			}
+			service := NewService(svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+			if err := test.update(service, db, &Segment{ID: 7, AttemptCount: 101}); err == nil {
+				t.Fatal("旧领取轮次的终态写入应被 fencing 拒绝")
+			}
+			if err := test.update(service, db, &Segment{ID: 7, AttemptCount: 202}); err != nil {
+				t.Fatalf("当前领取轮次的终态写入失败: %v", err)
+			}
+		})
+	}
+}
+
+// TestLeaseHeartbeatRenewsAcrossLongBatch 验证单批处理跨过完整租约周期时仍会持续续租。
+func TestLeaseHeartbeatRenewsAcrossLongBatch(t *testing.T) {
+	renewed := make(chan struct{}, 8)
+	heartbeat := startLeaseHeartbeat(context.Background(), 5*time.Millisecond, func(context.Context) error {
+		renewed <- struct{}{}
+		return nil
+	})
+	for count := 0; count < 4; count++ {
+		select {
+		case <-renewed:
+		case <-time.After(time.Second):
+			t.Fatal("长批次执行期间未按期续租")
+		}
+	}
+	if err := heartbeat.Close(); err != nil {
+		t.Fatalf("停止删除租约心跳失败: %v", err)
+	}
+	if err := heartbeat.Context().Err(); err == nil {
+		t.Fatal("关闭租约心跳后应释放处理上下文")
+	}
+}
+
+// TestLeaseHeartbeatCancelsBatchOnRenewFailure 验证续租失败会立即取消当前删除批次。
+func TestLeaseHeartbeatCancelsBatchOnRenewFailure(t *testing.T) {
+	heartbeat := startLeaseHeartbeat(context.Background(), 5*time.Millisecond, func(context.Context) error {
+		return archiveLeaseTestError{}
+	})
+	select {
+	case <-heartbeat.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("续租失败后删除批次未被取消")
+	}
+	if err := heartbeat.Close(); err == nil || !strings.Contains(err.Error(), archiveLeaseTestError{}.Error()) {
+		t.Fatalf("续租失败未返回明确错误: %v", err)
+	}
+}
+
+// TestDeleteLeaseFenceStopsOldWorkerAfterTakeover 验证相同 worker_id 的旧领取轮次也不能越过 fencing。
+func TestDeleteLeaseFenceStopsOldWorkerAfterTakeover(t *testing.T) {
+	var currentAttempt atomic.Int64
+	currentAttempt.Store(1)
+	oldRenewed := make(chan struct{}, 1)
+	old := startLeaseHeartbeat(context.Background(), 5*time.Millisecond, func(context.Context) error {
+		if currentAttempt.Load() != 1 {
+			return archiveLeaseTestError{}
+		}
+		select {
+		case oldRenewed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	select {
+	case <-oldRenewed:
+	case <-time.After(time.Second):
+		t.Fatal("旧 worker 首次续租未执行")
+	}
+
+	// 新领取轮次递增 attempt_count，模拟租约过期后由第二个 worker 接管。
+	currentAttempt.Store(2)
+	select {
+	case <-old.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("旧领取轮次在 fencing 变化后仍继续运行")
+	}
+	if err := old.Close(); err == nil {
+		t.Fatal("旧领取轮次应返回租约失效错误")
+	}
+
+	newRenewed := make(chan struct{}, 1)
+	current := startLeaseHeartbeat(context.Background(), 5*time.Millisecond, func(context.Context) error {
+		if currentAttempt.Load() != 2 {
+			return archiveLeaseTestError{}
+		}
+		select {
+		case newRenewed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	select {
+	case <-newRenewed:
+	case <-time.After(time.Second):
+		t.Fatal("新领取轮次未能正常续租")
+	}
+	if err := current.Close(); err != nil {
+		t.Fatalf("新领取轮次停止失败: %v", err)
+	}
+}
+
+// archiveLeaseTestError 是删除租约测试使用的固定 fencing 错误。
+type archiveLeaseTestError struct{}
+
+// Error 返回固定测试错误文本。
+func (archiveLeaseTestError) Error() string {
+	return "delete lease lost"
+}
+
+// TestTruncateArchiveErrorKeepsUTF8AndCharacterLimit 验证多字节和非法错误文本可安全写入 utf8mb4 varchar(500)。
+func TestTruncateArchiveErrorKeepsUTF8AndCharacterLimit(t *testing.T) {
+	message := strings.Repeat("归档失败", 130) + string([]byte{0xff})
+	got := truncateArchiveError(errors.New(message))
+	if !utf8.ValidString(got) {
+		t.Fatalf("归档错误摘要不是有效 UTF-8: %q", got)
+	}
+	if count := utf8.RuneCountInString(got); count != archiveErrorMessageMaxRunes {
+		t.Fatalf("归档错误摘要字符数 = %d，期望 %d", count, archiveErrorMessageMaxRunes)
+	}
+	if got := truncateArchiveError(nil); got != "" {
+		t.Fatalf("nil 错误摘要 = %q，期望空字符串", got)
+	}
 }
 
 // TestBuildHistoryTableNameByMonth 验证按月拆表时历史表命名稳定可预测。

@@ -67,6 +67,7 @@ type User struct {
 	PhoneKeyVersion string    `gorm:"column:phone_key_version;type:varchar(32);not null;default:'';comment:手机号加密密钥版本" json:"-"`                                                        // 手机号加密密钥版本
 	Avatar          string    `gorm:"column:avatar;type:varchar(255);not null;default:'';comment:头像" json:"avatar"`                                                                    // 头像
 	Status          int       `gorm:"column:status;type:tinyint;not null;default:1;index:idx_user_status_id,priority:1;comment:状态：1 正常，0 禁用" json:"status"`                            // 状态：1 正常，0 禁用
+	AuthVersion     uint64    `gorm:"column:auth_version;type:bigint unsigned;not null;default:1;comment:认证版本，敏感变更时单调递增" json:"-"`                                                     // 认证版本，用于撤销该版本之前的全部登录态
 	LastLoginAt     time.Time `gorm:"column:last_login_at;type:datetime;comment:最后登录时间" json:"last_login_at"`                                                                          // 最后登录时间
 	LastLoginIP     string    `gorm:"column:last_login_ip;type:varchar(45);not null;default:'';comment:最后登录 IP" json:"last_login_ip"`                                                  // 最后登录 IP
 	CreatedAt       time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:创建时间" json:"created_at"`                                               // 创建时间
@@ -254,22 +255,6 @@ func CreateUserWithIdentities(db *gorm.DB, user *User, routeShardCount int, priv
 	})
 }
 
-// UpdateUser 按主键更新业务用户可变字段。
-func UpdateUser(db *gorm.DB, id int64, updates map[string]any) error {
-	if id <= 0 || len(updates) == 0 {
-		return nil
-	}
-	updates = safeUserUpdates(updates, false)
-	if len(updates) == 0 {
-		return nil
-	}
-	tableName, err := userTableNameByID(db, id)
-	if err != nil {
-		return errors.Tag(err)
-	}
-	return errors.Tag(cleanUserDB(db).Model(&User{}).Table(tableName).Where("id = ?", id).Updates(updates).Error)
-}
-
 // UpdateUserProfileWithIdentities 更新用户资料并同步邮箱、手机号登录身份。
 func UpdateUserProfileWithIdentities(db *gorm.DB, id int64, updates map[string]any, privacySecret string) error {
 	if id <= 0 || len(updates) == 0 {
@@ -280,7 +265,7 @@ func UpdateUserProfileWithIdentities(db *gorm.DB, id int64, updates map[string]a
 	if err != nil {
 		return errors.Tag(err)
 	}
-	updates = safeUserUpdates(updates, false)
+	updates = safeUserUpdates(updates)
 	if len(updates) == 0 {
 		return nil
 	}
@@ -296,7 +281,7 @@ func UpdateUserProfileWithIdentities(db *gorm.DB, id int64, updates map[string]a
 		return errors.Tag(err)
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := cleanUserDB(tx).Model(&User{}).Table(tableName).Where("id = ?", id).Updates(updates).Error; err != nil {
+		if err := userDBSession(tx).Model(&User{}).Table(tableName).Where("id = ?", id).Updates(updates).Error; err != nil {
 			return errors.Tag(err)
 		}
 		if !profileIdentityChanged(updates) {
@@ -313,19 +298,65 @@ func UpdateUserProfileWithIdentities(db *gorm.DB, id int64, updates map[string]a
 	})
 }
 
-// UpdateUserPasswordHash 更新业务用户密码哈希。
-func UpdateUserPasswordHash(db *gorm.DB, id int64, passwordHash string, updatedAt time.Time) error {
-	if id <= 0 || strings.TrimSpace(passwordHash) == "" {
-		return nil
+// UpdateUserStatusAndAuthVersion 原子修改用户状态并递增认证版本，返回提交后的新版本。
+func UpdateUserStatusAndAuthVersion(db *gorm.DB, id int64, status int, updatedAt time.Time) (uint64, error) {
+	return updateUserAuthVersion(db, id, map[string]any{
+		"status":     status,
+		"updated_at": updatedAt,
+	})
+}
+
+// UpdateUserPasswordAndAuthVersion 原子修改密码哈希并递增认证版本，返回提交后的新版本。
+func UpdateUserPasswordAndAuthVersion(db *gorm.DB, id int64, passwordHash string, updatedAt time.Time) (uint64, error) {
+	if strings.TrimSpace(passwordHash) == "" {
+		return 0, errors.New("用户密码哈希不能为空")
+	}
+	return updateUserAuthVersion(db, id, map[string]any{
+		"password_hash": passwordHash,
+		"updated_at":    updatedAt,
+	})
+}
+
+// BumpUserAuthVersion 原子递增认证版本，供人工失效全部会话时建立数据库撤销栅栏。
+func BumpUserAuthVersion(db *gorm.DB, id int64, updatedAt time.Time) (uint64, error) {
+	return updateUserAuthVersion(db, id, map[string]any{"updated_at": updatedAt})
+}
+
+// updateUserAuthVersion 在用户物理表内提交敏感字段与认证版本，Redis 同步只能发生在该事务之后。
+func updateUserAuthVersion(db *gorm.DB, id int64, updates map[string]any) (uint64, error) {
+	if id <= 0 {
+		return 0, errors.New("用户 ID 不能为空")
 	}
 	tableName, err := userTableNameByID(db, id)
 	if err != nil {
-		return errors.Tag(err)
+		return 0, errors.Tag(err)
 	}
-	return errors.Tag(cleanUserDB(db).Model(&User{}).Table(tableName).Where("id = ?", id).Updates(map[string]any{
-		"password_hash": passwordHash,
-		"updated_at":    updatedAt,
-	}).Error)
+	updates["auth_version"] = gorm.Expr("auth_version + ?", 1)
+	var authVersion uint64
+	err = db.Transaction(func(tx *gorm.DB) error {
+		result := userDBSession(tx).Model(&User{}).Table(tableName).Where("id = ?", id).Updates(updates)
+		if result.Error != nil {
+			return errors.Tag(result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return errors.Errorf("用户认证版本更新未命中 user_id=%d table=%s", id, tableName)
+		}
+		var row struct {
+			AuthVersion uint64 `gorm:"column:auth_version"` // 当前事务内的新认证版本
+		}
+		if err := userDBSession(tx).Table(tableName).Select("auth_version").Where("id = ?", id).Take(&row).Error; err != nil {
+			return errors.Tag(err)
+		}
+		if row.AuthVersion == 0 {
+			return errors.Errorf("用户认证版本无效 user_id=%d table=%s", id, tableName)
+		}
+		authVersion = row.AuthVersion
+		return nil
+	})
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	return authVersion, nil
 }
 
 // FindUserIdentity 根据身份类型、提供方和身份值查询索引；未命中时返回 nil。
@@ -342,7 +373,7 @@ func FindUserIdentity(db *gorm.DB, identityType string, provider string, identit
 		return nil, errors.Tag(err)
 	}
 	var row UserIdentity
-	query, err := userIdentityLookupQuery(cleanUserDB(db).Table(tableName), identityType, provider, identityValue, privacySecret)
+	query, err := userIdentityLookupQuery(userDBSession(db).Table(tableName), identityType, provider, identityValue, privacySecret)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -370,7 +401,7 @@ func FindUserIdentityByUserIDAndType(db *gorm.DB, userID int64, identityType str
 		return nil, errors.Tag(err)
 	}
 	var row UserIdentity
-	query := cleanUserDB(db).Table(tableName).Where("user_id = ?", userID)
+	query := userDBSession(db).Table(tableName).Where("user_id = ?", userID)
 	if identityType == UserIdentityTypeOAuth {
 		query = query.Where("provider = ?", provider)
 	}
@@ -403,6 +434,57 @@ func FindUserByIdentityRow(db *gorm.DB, identity *UserIdentity) (*User, error) {
 	return row, nil
 }
 
+// FindUsersByIdentityRows 按物理表批量读取身份索引对应的用户，避免列表和导出逐行查询。
+func FindUsersByIdentityRows(db *gorm.DB, identities []UserIdentity) (map[int64]User, error) {
+	idsByTable, err := userIdentityIDsByTable(identities)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	users := make(map[int64]User, len(identities)) // users 按全局唯一用户 ID 保存批量查询结果
+	for tableName, ids := range idsByTable {
+		rows := make([]User, 0, len(ids))
+		if err := userDBSession(db).Table(tableName).Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return nil, errors.Wrapf(err, "User.FindByIdentityRows 批量查询用户表[%s]失败", tableName)
+		}
+		for index := range rows {
+			row := rows[index]
+			if _, exists := users[row.ID]; exists {
+				return nil, errors.Errorf("用户 ID[%d]同时存在于多个物理表", row.ID)
+			}
+			users[row.ID] = row
+		}
+	}
+	for index := range identities {
+		if _, ok := users[identities[index].UserID]; !ok {
+			tableName, _ := identities[index].UserTableName()
+			return nil, errors.Errorf("用户身份索引存在但主表记录缺失 user_id=%d table=%s", identities[index].UserID, tableName)
+		}
+	}
+	return users, nil
+}
+
+// userIdentityIDsByTable 把身份索引按物理用户表聚合，并去除同表重复 ID。
+func userIdentityIDsByTable(identities []UserIdentity) (map[string][]int64, error) {
+	idsByTable := make(map[string][]int64)
+	seenByTable := make(map[string]map[int64]struct{}) // seenByTable 防止重复身份行放大 IN 参数
+	for index := range identities {
+		identity := &identities[index]
+		tableName, err := identity.UserTableName()
+		if err != nil {
+			return nil, errors.Wrapf(err, "User.FindByIdentityRows 解析用户 ID[%d]物理表失败", identity.UserID)
+		}
+		if seenByTable[tableName] == nil {
+			seenByTable[tableName] = make(map[int64]struct{})
+		}
+		if _, exists := seenByTable[tableName][identity.UserID]; exists {
+			continue
+		}
+		seenByTable[tableName][identity.UserID] = struct{}{}
+		idsByTable[tableName] = append(idsByTable[tableName], identity.UserID)
+	}
+	return idsByTable, nil
+}
+
 // HasSplitUserIdentities 判断账号身份表中是否已有用户表拆分路由记录。
 func HasSplitUserIdentities(db *gorm.DB) (bool, error) {
 	var marker int
@@ -415,7 +497,7 @@ func HasSplitUserIdentities(db *gorm.DB) (bool, error) {
 
 // splitUserIdentityQuery 构造已拆分用户路由探测查询，必须保持走 user_route_shard_count 索引前缀并只取一行。
 func splitUserIdentityQuery(db *gorm.DB) *gorm.DB {
-	return cleanUserDB(db).Table(TableNameUserIdentityUsername).
+	return userDBSession(db).Table(TableNameUserIdentityUsername).
 		Select("1").
 		Where("user_route_shard_count > ?", UserRouteShardCountDefault).
 		Limit(1)
@@ -448,7 +530,7 @@ func createUserIdentity(db *gorm.DB, identity *UserIdentity) error {
 	if err != nil {
 		return errors.Tag(err)
 	}
-	query := cleanUserDB(db).Table(tableName)
+	query := userDBSession(db).Table(tableName)
 	switch identity.IdentityType {
 	case UserIdentityTypeUsername:
 		query = query.Select("identity_value", "user_id", "user_shard_no", "user_route_shard_count")
@@ -478,13 +560,13 @@ func updateUserIdentity(db *gorm.DB, tableName string, id uint64, next *UserIden
 	case UserIdentityTypeUsername, UserIdentityTypeOAuth:
 		updates["identity_value"] = next.IdentityValue
 	}
-	return errors.Tag(cleanUserDB(db).Table(tableName).Where("id = ?", id).Updates(updates).Error)
+	return errors.Tag(userDBSession(db).Table(tableName).Where("id = ?", id).Updates(updates).Error)
 }
 
 // findUserByIDInTable 在指定物理用户表中按 ID 查询用户，未命中返回 nil。
 func findUserByIDInTable(db *gorm.DB, tableName string, id int64) (*User, error) {
 	var row User
-	if err := cleanUserDB(db).Table(tableName).Where("id = ?", id).First(&row).Error; err != nil {
+	if err := userDBSession(db).Table(tableName).Where("id = ?", id).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -567,7 +649,7 @@ func syncUserContactIdentity(db *gorm.DB, user *User, routeShardCount int, ident
 		if err != nil {
 			return errors.Tag(err)
 		}
-		return errors.Tag(cleanUserDB(db).Table(tableName).Where("id = ?", exists.ID).Delete(&UserIdentity{}).Error)
+		return errors.Tag(userDBSession(db).Table(tableName).Where("id = ?", exists.ID).Delete(&UserIdentity{}).Error)
 	}
 	next, err := newUserIdentity(user, routeShardCount, identityType, provider, "", identityHash)
 	if err != nil {
@@ -585,7 +667,7 @@ func syncUserContactIdentity(db *gorm.DB, user *User, routeShardCount int, ident
 		return errors.Tag(err)
 	}
 	if existsTableName != nextTableName {
-		if err := cleanUserDB(db).Table(existsTableName).Where("id = ?", exists.ID).Delete(&UserIdentity{}).Error; err != nil {
+		if err := userDBSession(db).Table(existsTableName).Where("id = ?", exists.ID).Delete(&UserIdentity{}).Error; err != nil {
 			return errors.Tag(err)
 		}
 		return errors.Tag(createUserIdentity(db, next))
@@ -712,27 +794,23 @@ func validateUserShardNo(user *User) error {
 	return nil
 }
 
-// safeUserUpdates 过滤用户通用更新字段，避免改动主键、分片、账号和密码哈希。
-func safeUserUpdates(updates map[string]any, allowPassword bool) map[string]any {
+// safeUserUpdates 过滤资料更新字段，敏感状态只能由认证版本专用入口修改。
+func safeUserUpdates(updates map[string]any) map[string]any {
 	filtered := make(map[string]any, len(updates))
 	for key, value := range updates {
 		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "", "id", "shard_no", "username", "email", "phone", "created_at":
+		case "", "id", "shard_no", "username", "email", "phone", "password_hash", "auth_version", "status", "created_at":
 			continue
 		case "email_ciphertext", "email_hash", "email_masked", "email_key_version",
 			"phone_ciphertext", "phone_hash", "phone_masked", "phone_key_version":
 			value = strings.TrimSpace(fmt.Sprint(value))
-		case "password_hash":
-			if !allowPassword {
-				continue
-			}
 		}
 		filtered[key] = value
 	}
 	return filtered
 }
 
-// cleanUserDB 返回不继承上层查询条件的 GORM 会话，避免动态表查询被外层 Model 污染。
-func cleanUserDB(db *gorm.DB) *gorm.DB {
-	return db.Session(&gorm.Session{NewDB: true})
+// userDBSession 复制调用方提供的干净 base/tx 会话，并保留 dbresolver 读写路由与事务上下文。
+func userDBSession(db *gorm.DB) *gorm.DB {
+	return db.Session(&gorm.Session{})
 }

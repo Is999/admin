@@ -1,84 +1,73 @@
 package security
 
 import (
-	"admin/internal/routealias"
-	"reflect"
 	"testing"
 )
 
-// TestPolicyByRouteForBuildSecretVerifyAccount 验证登录预校验接口的响应签名与加密字段路径和真实结构保持一致。
-func TestPolicyByRouteForBuildSecretVerifyAccount(t *testing.T) {
-	policy := PolicyByRoute(string(routealias.AuthVerifyAccount))
-
-	if len(policy.ResponseSign) != 1 || policy.ResponseSign[0] != "token" {
-		t.Fatalf("PolicyByRoute() response sign = %#v, want [token]", policy.ResponseSign)
-	}
-	if len(policy.ResponseCipher) != 3 ||
-		policy.ResponseCipher[0] != "token" ||
-		policy.ResponseCipher[1] != "user.phone" ||
-		policy.ResponseCipher[2] != "user.buildMFAURL" {
-		t.Fatalf("PolicyByRoute() response cipher = %#v, want [token user.phone user.buildMFAURL]", policy.ResponseCipher)
+// TestBuildSignString 校验签名字符串字段排序、空值跳过和 key 拼接规则。
+func TestBuildSignString(t *testing.T) {
+	got := BuildSignString(map[string]any{
+		"b": "2",
+		"a": "1",
+		"c": "",
+	}, []string{"b", "c", "a"}, "req", "1700000000", "app")
+	want := "v2|app=3:app|trace=3:req|timestamp=10:1700000000|field=1:a1:1|field=1:b1:2"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 
-// TestPolicyByRouteForUserMine 验证个人中心资料接口对手机号与 MFA 绑定地址启用响应字段级加密。
-func TestPolicyByRouteForUserMine(t *testing.T) {
-	policy := PolicyByRoute(string(routealias.ProfileMine))
-
-	if len(policy.ResponseCipher) != 2 ||
-		policy.ResponseCipher[0] != "phone" ||
-		policy.ResponseCipher[1] != "buildMFAURL" {
-		t.Fatalf("PolicyByRoute(profile.mine) response cipher = %#v, want [phone buildMFAURL]", policy.ResponseCipher)
+// TestBuildSignStringSeparatesDelimiterValues 验证长度前缀协议不会因字段值包含旧分隔符而碰撞。
+func TestBuildSignStringSeparatesDelimiterValues(t *testing.T) {
+	left := BuildSignString(map[string]any{"a": "1&b=2", "b": "3"}, []string{"a", "b"}, "trace", "1700000000", "app")
+	right := BuildSignString(map[string]any{"a": "1", "b": "2&b=3"}, []string{"a", "b"}, "trace", "1700000000", "app")
+	if left == right {
+		t.Fatalf("不同字段值生成了相同签名串: %q", left)
 	}
 }
 
-// TestPolicyByRouteForLoginAfterInfo 验证登录后初始化接口对 token 启用响应加密与签名保护。
-func TestPolicyByRouteForLoginAfterInfo(t *testing.T) {
-	policy := PolicyByRoute(string(routealias.AuthProfile))
-
-	if len(policy.ResponseCipher) != 1 || policy.ResponseCipher[0] != "token" {
-		t.Fatalf("PolicyByRoute(auth.profile) response cipher = %#v, want [token]", policy.ResponseCipher)
-	}
-	if len(policy.ResponseSign) != 1 || policy.ResponseSign[0] != "token" {
-		t.Fatalf("PolicyByRoute(auth.profile) response sign = %#v, want [token]", policy.ResponseSign)
-	}
-}
-
-// TestPolicyByRouteForSecretKeyChecks 验证秘钥预检和自检接口的安全策略完整生效。
-func TestPolicyByRouteForSecretKeyChecks(t *testing.T) {
-	wantResponseSign := []string{"uuid", "title", "keyVersion", "mode", "status", "allPassed", "canSave", "canEnable", "runtimeChecked", "cacheRefreshed", "checkedAt", "durationMs"}
-
-	validatePolicy := PolicyByRoute(string(routealias.SecretKeyValidate))
-	if !reflect.DeepEqual(validatePolicy.ResponseSign, wantResponseSign) {
-		t.Fatalf("PolicyByRoute(secretKey.validate) response sign = %#v, want %#v", validatePolicy.ResponseSign, wantResponseSign)
-	}
-
-	selfCheckPolicy := PolicyByRoute(string(routealias.SecretKeySelfCheck))
-	if len(selfCheckPolicy.RequestSign) != 3 ||
-		selfCheckPolicy.RequestSign[0] != "keyVersion" ||
-		selfCheckPolicy.RequestSign[1] != "twoStepKey" ||
-		selfCheckPolicy.RequestSign[2] != "twoStepValue" {
-		t.Fatalf("PolicyByRoute(secretKey.self_check) request sign = %#v, want [keyVersion twoStepKey twoStepValue]", selfCheckPolicy.RequestSign)
-	}
-	if !reflect.DeepEqual(selfCheckPolicy.ResponseSign, wantResponseSign) {
-		t.Fatalf("PolicyByRoute(secretKey.self_check) response sign = %#v, want %#v", selfCheckPolicy.ResponseSign, wantResponseSign)
+// TestBuildSignStringStableObjectOrder 校验对象值内部 key 顺序不会影响最终签名串。
+func TestBuildSignStringStableObjectOrder(t *testing.T) {
+	left := BuildSignString(map[string]any{
+		"payload": map[string]any{
+			"z": "last",
+			"a": "first",
+			"nested": map[string]any{
+				"b": 2,
+				"a": 1,
+			},
+		},
+	}, []string{"payload"}, "req", "1700000000", "app")
+	right := BuildSignString(map[string]any{
+		"payload": map[string]any{
+			"a": "first",
+			"nested": map[string]any{
+				"a": 1,
+				"b": 2,
+			},
+			"z": "last",
+		},
+	}, []string{"payload"}, "req", "1700000000", "app")
+	if left != right {
+		t.Fatalf("expected stable sign text, left=%q right=%q", left, right)
 	}
 }
 
-// TestPolicyByRouteForAdminRoleUpdate 验证管理员角色分配接口不把角色数组放入轻量签名字段。
-func TestPolicyByRouteForAdminRoleUpdate(t *testing.T) {
-	policy := PolicyByRoute(string(routealias.AdminRoleUpdate))
-	wantRequestSign := []string{"twoStepKey", "twoStepValue"}
-
-	if !reflect.DeepEqual(policy.RequestSign, wantRequestSign) {
-		t.Fatalf("PolicyByRoute(admin.role.update) request sign = %#v, want %#v", policy.RequestSign, wantRequestSign)
+// TestBuildSignStringResolvesNestedFieldPaths 校验登录响应的嵌套敏感明文真实参与回签。
+func TestBuildSignStringResolvesNestedFieldPaths(t *testing.T) {
+	data := map[string]any{
+		"token": "token-value",
+		"user": map[string]any{
+			"phone":       "138****0000",
+			"buildMFAURL": "otpauth://demo",
+		},
 	}
-}
-
-// TestPolicyByRouteForUnknownAliasIsEmpty 验证未知路由别名不会触发隐式全字段签名。
-func TestPolicyByRouteForUnknownAliasIsEmpty(t *testing.T) {
-	policy := PolicyByRoute("unknown.route")
-	if len(policy.RequestSign) != 0 || len(policy.ResponseSign) != 0 || len(policy.RequestCipher) != 0 || len(policy.ResponseCipher) != 0 {
-		t.Fatalf("PolicyByRoute(unknown.route) = %#v, want empty policy", policy)
+	got := BuildSignString(data, []string{"token", "user.phone", "user.buildMFAURL"}, "trace", "1700000000", "app")
+	want := "v2|app=3:app|trace=5:trace|timestamp=10:1700000000" +
+		"|field=5:token11:token-value" +
+		"|field=16:user.buildMFAURL14:otpauth://demo" +
+		"|field=10:user.phone11:138****0000"
+	if got != want {
+		t.Fatalf("BuildSignString() = %q, want %q", got, want)
 	}
 }

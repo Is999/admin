@@ -7,10 +7,8 @@ import (
 	"time"
 
 	keys "admin/common/rediskeys"
-	"admin/helper"
 	corelogic "admin/internal/logic"
 	"admin/internal/model"
-	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
 
@@ -163,17 +161,6 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 			Loader:     loadPermissionUUIDTableCache(base),
 		},
 		{
-			Index:            "route_permission_ids",
-			Title:            "路由权限候选ID",
-			Key:              CacheTemplatePrefix(keys.RoutePermissionIDsPattern),
-			KeyTitle:         keys.RoutePermissionIDsPattern,
-			Type:             tablecache.TypeSet,
-			Remark:           "路由别名候选权限ID集合缓存",
-			TTL:              time.Hour,
-			AllowEmptyMarker: true,
-			Loader:           loadRoutePermissionIDsTableCache(base),
-		},
-		{
 			Index:            "config_uuid",
 			Title:            "系统常量配置",
 			Key:              CacheTemplatePrefix(keys.SysConfigUUIDPattern),
@@ -236,32 +223,6 @@ func tableCacheTargets(base *corelogic.BaseLogic) []tablecache.Target {
 			TTL:      time.Hour,
 			Loader:   loadSecretKeyRSATableCache(base),
 		},
-	}
-}
-
-// loadRoutePermissionIDsTableCache 加载单个路由别名候选权限 ID 集合缓存。
-func loadRoutePermissionIDsTableCache(base *corelogic.BaseLogic) tablecache.Loader {
-	return func(ctx context.Context, params tablecache.LoadParams) ([]tablecache.Entry, error) {
-		routeAlias, err := tableCacheFirstStringPart(params, "路由别名")
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		permissionIDs, err := loadRoutePermissionIDsForCache(base, routeAlias)
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		if len(permissionIDs) == 0 {
-			return nil, nil
-		}
-		values := make([]any, 0, len(permissionIDs))
-		for _, permissionID := range permissionIDs {
-			values = append(values, permissionID)
-		}
-		return []tablecache.Entry{{
-			Key:   params.Key,
-			Type:  tablecache.TypeSet,
-			Value: values,
-		}}, nil
 	}
 }
 
@@ -452,22 +413,10 @@ func loadAdminPermissionIDsTableCache(base *corelogic.BaseLogic) tablecache.Load
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
-		roleIDs, err := loadEnabledRoleIDsByUserForCache(base, adminID)
+		permissionIDs, err := loadAdminPermissionIDsForCache(base, adminID)
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
-		if len(roleIDs) == 0 {
-			return nil, nil
-		}
-		permissionIDs := make([]int, 0)
-		for _, roleID := range roleIDs {
-			currentPermissionIDs, currentErr := loadRolePermissionIDsForCache(base, roleID)
-			if currentErr != nil {
-				return nil, errors.Wrapf(currentErr, "加载角色权限缓存失败 role_id=%d", roleID)
-			}
-			permissionIDs = append(permissionIDs, currentPermissionIDs...)
-		}
-		permissionIDs = types.UniquePositiveInts(permissionIDs)
 		if len(permissionIDs) == 0 {
 			return nil, nil
 		}
@@ -576,35 +525,6 @@ func loadAllPermissionsForCache(base *corelogic.BaseLogic) ([]model.AdminPermiss
 	return permissions, nil
 }
 
-// loadRoutePermissionIDsForCache 读取路由别名对应的启用权限 ID。
-func loadRoutePermissionIDsForCache(base *corelogic.BaseLogic, routeAlias string) ([]int, error) {
-	routeAlias = strings.TrimSpace(routeAlias)
-	if routeAlias == "" {
-		return []int{}, nil
-	}
-	aliases := routealias.DocsCandidateAliases(routealias.Alias(routeAlias))
-	modules := make([]string, 0, len(aliases))
-	for _, alias := range aliases {
-		module := strings.TrimSpace(string(alias))
-		if module == "" {
-			continue
-		}
-		modules = append(modules, module)
-	}
-	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	var permissionIDs []int
-	if err := readDB.Model(&model.AdminPermission{}).
-		Where("status = 1 AND module IN ?", helper.UniqueNonEmptyStrings(modules)).
-		Order("id ASC").
-		Pluck("id", &permissionIDs).Error; err != nil {
-		return nil, errors.Tag(err)
-	}
-	return types.UniquePositiveInts(permissionIDs), nil
-}
-
 // loadEnabledRoleIDsByUserForCache 读取管理员绑定的启用角色 ID。
 func loadEnabledRoleIDsByUserForCache(base *corelogic.BaseLogic, adminID int) ([]int, error) {
 	if adminID <= 0 {
@@ -654,6 +574,11 @@ func loadAdminPermissionIDsForCache(base *corelogic.BaseLogic, adminID int) ([]i
 	if len(roleIDs) == 0 {
 		return []int{}, nil
 	}
+	for _, roleID := range roleIDs {
+		if roleID == corelogic.AdminSuperRoleID {
+			return loadAllEnabledPermissionIDsForCache(base)
+		}
+	}
 	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -665,6 +590,22 @@ func loadAdminPermissionIDsForCache(base *corelogic.BaseLogic, adminID int) ([]i
 		Order("rel.permission_id ASC").
 		Distinct("rel.permission_id").
 		Pluck("rel.permission_id", &permissionIDs).Error; err != nil {
+		return nil, errors.Tag(err)
+	}
+	return types.UniquePositiveInts(permissionIDs), nil
+}
+
+// loadAllEnabledPermissionIDsForCache 读取全部启用权限 ID，保持超级管理员权限集合语义完整。
+func loadAllEnabledPermissionIDsForCache(base *corelogic.BaseLogic) ([]int, error) {
+	readDB, err := TableCacheReadDB(base, svc.DatabaseMain, "main")
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	var permissionIDs []int
+	if err := readDB.Model(&model.AdminPermission{}).
+		Where("status = 1").
+		Order("id ASC").
+		Pluck("id", &permissionIDs).Error; err != nil {
 		return nil, errors.Tag(err)
 	}
 	return types.UniquePositiveInts(permissionIDs), nil

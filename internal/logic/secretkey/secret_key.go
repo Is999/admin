@@ -205,17 +205,43 @@ func (l *SecretKeyLogic) getSecretKeyRoute(appID string) (*SecretKeyRouteConfig,
 	if appID == "" {
 		return nil, errors.Errorf("AppID不能为空")
 	}
-	if l.shouldUseConfigSecretKey(appID) {
-		return l.getConfigSecretKeyRoute(appID)
+	var route *SecretKeyRouteConfig
+	var err error
+	switch {
+	case l.shouldUseConfigSecretKey(appID):
+		route, err = l.getConfigSecretKeyRoute(appID)
+	case l.Redis() == nil:
+		route, err = l.renewSecretKeyRouteCache(appID)
+	default:
+		route, err = l.getSecretKeyRouteCache(appID)
+		if err == redis.Nil {
+			route, err = l.renewSecretKeyRouteCache(appID)
+		}
 	}
-	if l.Redis() == nil {
-		return l.renewSecretKeyRouteCache(appID)
+	if err != nil {
+		return nil, errors.Tag(err)
 	}
-	route, err := l.getSecretKeyRouteCache(appID)
-	if err == redis.Nil {
-		return l.renewSecretKeyRouteCache(appID)
+	if err := validateSecretKeyRouteConfig(route); err != nil {
+		return nil, errors.Tag(err)
 	}
-	return route, errors.Tag(err)
+	return route, nil
+}
+
+// validateSecretKeyRouteConfig 在运行时边界拒绝损坏或不完整的安全开关组合。
+func validateSecretKeyRouteConfig(route *SecretKeyRouteConfig) error {
+	if route == nil {
+		return errors.Errorf("秘钥路由配置为空")
+	}
+	if route.Status != 0 && route.Status != 1 {
+		return errors.Errorf("应用状态不合法")
+	}
+	if route.SignStatus != 0 && route.SignStatus != 1 {
+		return errors.Errorf("签名验签状态不合法")
+	}
+	if route.CryptoStatus != 0 && route.CryptoStatus != 1 {
+		return errors.Errorf("加密解密状态不合法")
+	}
+	return nil
 }
 
 // getSecretKeyRouteCache 读取选路缓存。
@@ -231,11 +257,10 @@ func (l *SecretKeyLogic) getSecretKeyRouteCache(appID string) (*SecretKeyRouteCo
 	if corelogic.CacheIsEmptyMarker(data["value"]) {
 		return nil, corelogic.ErrCacheEmptyMarker
 	}
-	status := 0
-	_, _ = fmt.Sscanf(data["status"], "%d", &status)
+	status, statusExists := parseSecretKeyStatusField(data, "status")
 	signStatus, signStatusExists := parseSecretKeyStatusField(data, secretKeyCacheFieldSignStatus)
 	cryptoStatus, cryptoStatusExists := parseSecretKeyStatusField(data, secretKeyCacheFieldCryptoStatus)
-	if !signStatusExists || !cryptoStatusExists {
+	if !statusExists || !signStatusExists || !cryptoStatusExists {
 		return nil, redis.Nil
 	}
 	grayPercent := 0
@@ -260,6 +285,9 @@ func parseSecretKeyStatusField(data map[string]string, field string) (int, bool)
 	}
 	status := 0
 	if _, err := fmt.Sscanf(value, "%d", &status); err != nil {
+		return 0, false
+	}
+	if status != 0 && status != 1 {
 		return 0, false
 	}
 	return status, true
@@ -413,9 +441,6 @@ func (l *SecretKeyLogic) RenewSecretKeyCache(appID string) error {
 	if l.shouldUseConfigSecretKey(appID) {
 		return l.validateConfigSecretKey(appID)
 	}
-	if _, err := l.renewSecretKeyRouteCache(appID); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return errors.Tag(err)
-	}
 	writeDB, err := l.configWriteDB()
 	if err != nil {
 		return errors.Tag(err)
@@ -435,6 +460,10 @@ func (l *SecretKeyLogic) RenewSecretKeyCache(appID string) error {
 		if _, err := l.renewSecretKeyVersionCache(appID, version.KeyVersion); err != nil {
 			return errors.Tag(err)
 		}
+	}
+	// 版本材料全部就绪后再切换路由，避免新路由短暂命中尚未刷新的材料。
+	if _, err := l.renewSecretKeyRouteCache(appID); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return errors.Tag(err)
 	}
 	return nil
 }

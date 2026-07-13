@@ -5,12 +5,20 @@ PACKAGE := dist/$(APP)-$(VERSION).tar.gz
 LDFLAGS ?= -s -w -X main.buildVersion=$(VERSION)
 DOCKER_COMPOSE ?= docker compose
 INTEGRATION_MYSQL_DSN ?= root:password@tcp(127.0.0.1:3310)/admin?charset=utf8mb4&parseTime=true&loc=Local
+INTEGRATION_REDIS_ADDRS ?= 127.0.0.1:6390
+INTEGRATION_REDIS_CLUSTER_ADDRS ?= 127.0.0.1:6391,127.0.0.1:6392,127.0.0.1:6393
+INTEGRATION_REDIS_CLUSTER_ADDR_MAP ?= redis-cluster-1:7001=127.0.0.1:6391,redis-cluster-2:7002=127.0.0.1:6392,redis-cluster-3:7003=127.0.0.1:6393
+INTEGRATION_REDIS_USERNAME ?=
+INTEGRATION_REDIS_PASSWORD ?=
+INTEGRATION_WAIT_TIMEOUT ?= 120
 SECRET_SCAN_PATHS := $(wildcard etc/*.sample.yaml) deploy .gitlab-ci.yml Makefile README.md docs/site docs/prometheus docs/grafana
 PROMTOOL_IMAGE ?= prom/prometheus:v2.55.1
 PROMETHEUS_RULES := $(wildcard docs/prometheus/*.yml)
 PROMETHEUS_RULES_IN_CONTAINER := $(patsubst docs/prometheus/%,/rules/%,$(PROMETHEUS_RULES))
+GOVULNCHECK_VERSION ?= v1.6.0
+GO_TOOLCHAIN ?= go1.26.5
 
-.PHONY: fmt fmt-check test build build-tools package check ci diff-check update-route-security-manifest secret-scan promtool-check govulncheck security-scan integration-env-up integration-env-down integration-test migrate-status migrate-dry-run migrate-up migrate-bootstrap clean
+.PHONY: fmt fmt-check test test-race vet build build-tools package check ci diff-check update-route-security-manifest secret-scan promtool-check govulncheck security-scan integration-env-up integration-env-down integration-test migrate-status migrate-dry-run migrate-up migrate-bootstrap clean
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
@@ -20,6 +28,12 @@ fmt-check:
 
 test:
 	go test ./...
+
+test-race:
+	go test -race -count=1 ./...
+
+vet:
+	go vet ./...
 
 build:
 	mkdir -p bin
@@ -40,7 +54,7 @@ promtool-check:
 	@if command -v promtool >/dev/null 2>&1; then promtool check rules $(PROMETHEUS_RULES); elif command -v docker >/dev/null 2>&1; then docker run --rm --entrypoint promtool -v "$$(pwd)/docs/prometheus:/rules:ro" $(PROMTOOL_IMAGE) check rules $(PROMETHEUS_RULES_IN_CONTAINER); else echo "promtool and docker not found, skip"; fi
 
 govulncheck:
-	@if command -v govulncheck >/dev/null 2>&1; then govulncheck ./...; else echo "govulncheck not found, skip"; fi
+	GOTOOLCHAIN=$(GO_TOOLCHAIN) go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 security-scan: secret-scan govulncheck
 
@@ -50,18 +64,28 @@ diff-check:
 update-route-security-manifest:
 	UPDATE_ROUTE_SECURITY_MANIFEST=1 go test -run TestDefaultRouteSecurityManifestMatchesSnapshots ./internal/handler
 
-check: fmt-check test build build-tools secret-scan promtool-check diff-check
+check: fmt-check test vet build build-tools secret-scan promtool-check govulncheck diff-check
 
-ci: check
+ci: check test-race
 
 integration-env-up:
-	$(DOCKER_COMPOSE) -f deploy/integration/docker-compose.yml up -d
+	$(DOCKER_COMPOSE) -f deploy/integration/docker-compose.yml up -d --wait --wait-timeout $(INTEGRATION_WAIT_TIMEOUT)
+	$(DOCKER_COMPOSE) -f deploy/integration/docker-compose.yml run --rm --no-deps redis-cluster-init
 
 integration-env-down:
 	$(DOCKER_COMPOSE) -f deploy/integration/docker-compose.yml down -v
 
 integration-test: integration-env-up
+	@INTEGRATION_REDIS_ADDRS='$(INTEGRATION_REDIS_ADDRS)' \
+		INTEGRATION_REDIS_CLUSTER_ADDRS='$(INTEGRATION_REDIS_CLUSTER_ADDRS)' \
+		INTEGRATION_REDIS_CLUSTER_ADDR_MAP='$(INTEGRATION_REDIS_CLUSTER_ADDR_MAP)' \
+		INTEGRATION_REDIS_USERNAME='$(INTEGRATION_REDIS_USERNAME)' \
+		INTEGRATION_REDIS_PASSWORD='$(INTEGRATION_REDIS_PASSWORD)' \
+		go test -count=1 -tags=integration ./internal/infra/redislimit ./internal/task/queue
 	INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' go test -count=1 -tags=integration ./internal/database
+	INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' go test -count=1 -tags=integration ./internal/audit
+	INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' go test -count=1 -tags=integration ./internal/infra/collectorx
+	INTEGRATION_MYSQL_DSN='$(INTEGRATION_MYSQL_DSN)' go test -count=1 -tags=integration ./internal/jobs/archive
 
 MIGRATE_CONFIG ?= ./etc/config.yaml
 

@@ -11,7 +11,6 @@ import (
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
 	"admin/internal/model"
-	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
 
@@ -67,82 +66,6 @@ func diffPermissionIDs(currentPermissionIDs []int, nextPermissionIDs []int) ([]i
 		removedPermissionIDs = append(removedPermissionIDs, permissionID)
 	}
 	return addedPermissionIDs, removedPermissionIDs
-}
-
-// documentEntryAlias 返回文档子权限对应的入口权限，避免角色只拥有子文档却看不到入口菜单。
-func documentEntryAlias(alias routealias.Alias) routealias.Alias {
-	if docsPath, ok := routealias.DocsFilePathFromAlias(alias); ok {
-		return documentEntryAlias(routealias.DocsParentAliasForPath(docsPath))
-	}
-	switch alias {
-	case routealias.DocsIndex,
-		routealias.DocsAPIServiceIndex:
-		return alias
-	case routealias.DocsRoleOps,
-		routealias.DocsRoleBackend,
-		routealias.DocsRoleFrontend,
-		routealias.DocsFeatureTask,
-		routealias.DocsFeatureUserTag,
-		routealias.DocsAPIIndex,
-		routealias.DocsAPIAdmin,
-		routealias.DocsAPITask,
-		routealias.DocsUserTag:
-		return routealias.DocsIndex
-	case routealias.DocsAPIServiceFront:
-		return routealias.DocsAPIServiceIndex
-	default:
-		return ""
-	}
-}
-
-// expandDocumentEntryPermissionIDs 给已勾选的文档子权限补齐同文档入口权限。
-func expandDocumentEntryPermissionIDs(permissionIDs []int, idAlias map[int]routealias.Alias, aliasID map[routealias.Alias]int) []int {
-	result := types.UniquePositiveInts(permissionIDs)
-	seen := make(map[int]struct{}, len(result))
-	for _, permissionID := range result {
-		seen[permissionID] = struct{}{}
-	}
-	for _, permissionID := range result {
-		entryAlias := documentEntryAlias(idAlias[permissionID])
-		if entryAlias == "" {
-			continue
-		}
-		entryID := aliasID[entryAlias]
-		if entryID <= 0 {
-			continue
-		}
-		if _, ok := seen[entryID]; ok {
-			continue
-		}
-		seen[entryID] = struct{}{}
-		result = append(result, entryID)
-	}
-	return types.UniquePositiveInts(result)
-}
-
-// retainCompleteDocumentPermissionIDs 移除缺少入口权限的文档子权限，避免保存半截文档授权。
-func retainCompleteDocumentPermissionIDs(permissionIDs []int, idAlias map[int]routealias.Alias, aliasID map[routealias.Alias]int) []int {
-	permissionIDs = types.UniquePositiveInts(permissionIDs)
-	permissionSet := make(map[int]struct{}, len(permissionIDs))
-	for _, permissionID := range permissionIDs {
-		permissionSet[permissionID] = struct{}{}
-	}
-
-	result := make([]int, 0, len(permissionIDs))
-	for _, permissionID := range permissionIDs {
-		entryAlias := documentEntryAlias(idAlias[permissionID])
-		if entryAlias != "" {
-			entryID := aliasID[entryAlias]
-			if entryID <= 0 {
-				continue
-			}
-			if _, ok := permissionSet[entryID]; !ok {
-				continue
-			}
-		}
-		result = append(result, permissionID)
-	}
-	return types.UniquePositiveInts(result)
 }
 
 // permissionPathIDs 解析权限祖先 ID 串。
@@ -347,15 +270,12 @@ func (l *AdminRoleLogic) roleStatusMapWithCache(roleIDs []int) (map[int]int, err
 	if len(roleIDs) == 0 {
 		return result, nil
 	}
-	if l.Redis() == nil {
-		return l.roleStatusMap(roleIDs)
+	fields := make([]string, 0, len(roleIDs))
+	for _, roleID := range roleIDs {
+		fields = append(fields, strconv.Itoa(roleID))
 	}
-	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
+	cache, err := cachelogic.StringHashFieldsWithCache(l.BaseLogic, keys.RoleStatus, fields)
 	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	var cache map[string]string
-	if _, err = manager.LoadThrough(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.RoleStatus), &cache, nil); err != nil {
 		return nil, errors.Tag(err)
 	}
 	for _, roleID := range roleIDs {
@@ -372,38 +292,19 @@ func (l *AdminRoleLogic) roleStatusMapWithCache(roleIDs []int) (map[int]int, err
 	return result, nil
 }
 
-// roleStatusMap 直接从数据库读取角色状态，作为缓存 miss 后的最终兜底。
-func (l *AdminRoleLogic) roleStatusMap(roleIDs []int) (map[int]int, error) {
-	roleIDs = types.UniquePositiveInts(roleIDs)
-	result := make(map[int]int, len(roleIDs))
-	if len(roleIDs) == 0 {
-		return result, nil
-	}
-	type row struct {
-		ID     int // 角色 ID
-		Status int // 角色状态
-	}
-	rows := make([]row, 0, len(roleIDs))
-	err := l.Svc.ReadDB(svc.DatabaseMain).Model(&model.AdminRole{}).
-		Select("id, status").
-		Where("id IN ? AND is_delete = 0", roleIDs).
-		Scan(&rows).Error
+// RolePermissionIDsWithCache 查询单个角色当前启用的路由权限 ID。
+func (l *AdminRoleLogic) RolePermissionIDsWithCache(roleID int) ([]int, error) {
+	permissionIDs, err := l.rolePermissionRelationIDsWithCache(roleID)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	for _, row := range rows {
-		result[row.ID] = row.Status
-	}
-	return result, nil
+	return (&AdminPermissionLogic{BaseLogic: l.BaseLogic}).EnabledPermissionIDsWithCache(permissionIDs)
 }
 
-// RolePermissionIDsWithCache 优先读取单角色权限集合缓存，未命中时自动回源并重建。
-func (l *AdminRoleLogic) RolePermissionIDsWithCache(roleID int) ([]int, error) {
+// rolePermissionRelationIDsWithCache 优先读取单个角色的原始路由权限关系缓存。
+func (l *AdminRoleLogic) rolePermissionRelationIDsWithCache(roleID int) ([]int, error) {
 	if roleID <= 0 {
 		return nil, nil
-	}
-	if l.Redis() == nil {
-		return l.rolePermissionIDs(roleID)
 	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
@@ -421,22 +322,175 @@ func (l *AdminRoleLogic) RolePermissionIDsWithCache(roleID int) ([]int, error) {
 	return cachelogic.ParsePositiveIntStrings(values, "角色权限缓存")
 }
 
-// rolePidsTx 在事务内计算角色族谱。
+// loadRoleHierarchyTx 在事务内读取未删除角色的轻量层级快照。
+func (l *AdminRoleLogic) loadRoleHierarchyTx(tx *gorm.DB) ([]model.AdminRole, error) {
+	var roles []model.AdminRole
+	if err := freshTxStatement(tx).Model(&model.AdminRole{}).
+		Select("id, pid, pids, status").
+		Where("is_delete = 0").
+		Order("id ASC").
+		Find(&roles).Error; err != nil {
+		return nil, errors.Wrap(err, "AdminRoleLogic.loadRoleHierarchyTx 查询角色层级失败")
+	}
+	return roles, nil
+}
+
+// disabledRolePathID 按真实 pid 链返回目标角色路径上首个禁用节点。
+func disabledRolePathID(roles []model.AdminRole, roleID int) (int, error) {
+	roleByID := make(map[int]model.AdminRole, len(roles))
+	for _, role := range roles {
+		roleByID[role.ID] = role
+	}
+	visited := make(map[int]struct{}, len(roles))
+	for currentID := roleID; currentID > 0; {
+		if _, ok := visited[currentID]; ok {
+			return 0, errors.Errorf("角色父级链存在循环 ID[%d]", currentID)
+		}
+		visited[currentID] = struct{}{}
+		role, ok := roleByID[currentID]
+		if !ok {
+			return 0, errors.Errorf("角色 ID[%d]不存在", currentID)
+		}
+		if role.Status != 1 {
+			return role.ID, nil
+		}
+		currentID = role.Pid
+	}
+	return 0, nil
+}
+
+// disabledRolePathID 从主库返回目标角色路径上首个禁用节点。
+func (l *AdminRoleLogic) disabledRolePathID(roleID int) (int, error) {
+	if roleID <= 0 {
+		return 0, nil
+	}
+	roles, err := l.loadRoleHierarchyTx(l.Svc.WriteDB(svc.DatabaseMain))
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	return disabledRolePathID(roles, roleID)
+}
+
+// rolePidsFromHierarchy 根据真实 pid 链生成角色族谱，并拒绝自引用或循环父级。
+func rolePidsFromHierarchy(roles []model.AdminRole, pid int, selfID int) (string, error) {
+	if pid <= 0 {
+		return "", nil
+	}
+	roleByID := make(map[int]model.AdminRole, len(roles))
+	for _, role := range roles {
+		roleByID[role.ID] = role
+	}
+	ancestorIDs := make([]int, 0)
+	visited := make(map[int]struct{}, len(roles))
+	for currentID := pid; currentID > 0; {
+		if currentID == selfID {
+			return "", errors.Errorf("父级角色不能是角色 ID[%d]自身或其子级", selfID)
+		}
+		if _, ok := visited[currentID]; ok {
+			return "", errors.Errorf("角色父级链存在循环 ID[%d]", currentID)
+		}
+		visited[currentID] = struct{}{}
+		role, ok := roleByID[currentID]
+		if !ok {
+			return "", errors.Errorf("父级角色 ID[%d]不存在", currentID)
+		}
+		ancestorIDs = append(ancestorIDs, currentID)
+		currentID = role.Pid
+	}
+	for left, right := 0, len(ancestorIDs)-1; left < right; left, right = left+1, right-1 {
+		ancestorIDs[left], ancestorIDs[right] = ancestorIDs[right], ancestorIDs[left]
+	}
+	parts := make([]string, 0, len(ancestorIDs))
+	for _, roleID := range ancestorIDs {
+		parts = append(parts, strconv.Itoa(roleID))
+	}
+	return strings.Join(parts, ","), nil
+}
+
+// descendantRolePids 根据 pid 邻接关系重建指定角色全部子孙的族谱。
+func descendantRolePids(roles []model.AdminRole, rootID int) (map[int]string, error) {
+	roleByID := make(map[int]model.AdminRole, len(roles))
+	childrenByPID := make(map[int][]int, len(roles))
+	for _, role := range roles {
+		roleByID[role.ID] = role
+		childrenByPID[role.Pid] = append(childrenByPID[role.Pid], role.ID)
+	}
+	root, ok := roleByID[rootID]
+	if !ok {
+		return nil, errors.Errorf("角色 ID[%d]不存在", rootID)
+	}
+	result := make(map[int]string)
+	visited := map[int]struct{}{rootID: {}}
+	var walk func(parentID int, parentPids string) error
+	walk = func(parentID int, parentPids string) error {
+		for _, childID := range childrenByPID[parentID] {
+			if _, ok := visited[childID]; ok {
+				return errors.Errorf("角色子树存在循环 ID[%d]", childID)
+			}
+			visited[childID] = struct{}{}
+			childPids := corelogic.BuildTreePids(parentID, parentPids)
+			result[childID] = childPids
+			if err := walk(childID, childPids); err != nil {
+				return errors.Tag(err)
+			}
+		}
+		return nil
+	}
+	if err := walk(root.ID, root.Pids); err != nil {
+		return nil, errors.Tag(err)
+	}
+	return result, nil
+}
+
+// rolePidsTx 在事务内按真实 pid 链计算角色族谱。
 func (l *AdminRoleLogic) rolePidsTx(tx *gorm.DB, pid int, selfID int) (string, error) {
 	if pid <= 0 {
 		return "", nil
 	}
-	if pid == selfID {
-		return "", errors.Errorf("AdminRoleLogic.rolePidsTx 父级角色不能是自己 pid=%d selfID=%d", pid, selfID)
+	roles, err := l.loadRoleHierarchyTx(tx)
+	if err != nil {
+		return "", errors.Tag(err)
 	}
-	var parent model.AdminRole
-	if err := tx.Where("id = ? AND is_delete = 0", pid).First(&parent).Error; err != nil {
-		return "", errors.Wrapf(err, "AdminRoleLogic.rolePidsTx 查询父级角色 ID[%d]失败", pid)
+	pids, err := rolePidsFromHierarchy(roles, pid, selfID)
+	if err != nil {
+		return "", errors.Wrapf(err, "AdminRoleLogic.rolePidsTx 计算父级角色 ID[%d]族谱失败", pid)
 	}
-	if corelogic.ContainsTreeID(parent.Pids, selfID) {
-		return "", errors.Errorf("AdminRoleLogic.rolePidsTx 不能把角色移动到自己的子级下面 pid=%d selfID=%d", pid, selfID)
+	return pids, nil
+}
+
+// syncRoleDescendantPidsTx 在角色换父级后同步更新全部子孙族谱。
+func (l *AdminRoleLogic) syncRoleDescendantPidsTx(tx *gorm.DB, roleID int, affectedRoleSet map[int]struct{}) error {
+	roles, err := l.loadRoleHierarchyTx(tx)
+	if err != nil {
+		return errors.Tag(err)
 	}
-	return corelogic.BuildTreePids(parent.ID, parent.Pids), nil
+	nextPids, err := descendantRolePids(roles, roleID)
+	if err != nil {
+		return errors.Wrapf(err, "AdminRoleLogic.syncRoleDescendantPidsTx 重建角色 ID[%d]子树族谱失败", roleID)
+	}
+	currentPids := make(map[int]string, len(roles))
+	roleIDs := make([]int, 0, len(nextPids))
+	for _, role := range roles {
+		currentPids[role.ID] = role.Pids
+		if _, ok := nextPids[role.ID]; ok {
+			roleIDs = append(roleIDs, role.ID)
+		}
+	}
+	sort.Ints(roleIDs)
+	updatedAt := time.Now()
+	for _, descendantRoleID := range roleIDs {
+		pids := nextPids[descendantRoleID]
+		if currentPids[descendantRoleID] == pids {
+			continue
+		}
+		if err := freshTxStatement(tx).Model(&model.AdminRole{}).
+			Where("id = ? AND is_delete = 0", descendantRoleID).
+			Updates(map[string]any{"pids": pids, "updated_at": updatedAt}).Error; err != nil {
+			return errors.Wrapf(err, "AdminRoleLogic.syncRoleDescendantPidsTx 更新角色 ID[%d]族谱失败", descendantRoleID)
+		}
+		affectedRoleSet[descendantRoleID] = struct{}{}
+	}
+	return nil
 }
 
 // ensureRoleTitleUniqueTx 校验角色名称唯一。
@@ -465,40 +519,6 @@ func (l *AdminRoleLogic) ensureRoleExistsTx(tx *gorm.DB, roleID int) error {
 		return gorm.ErrRecordNotFound
 	}
 	return nil
-}
-
-// enabledDocumentPermissionMaps 读取启用的文档权限别名和 ID 映射，供角色保存时补齐入口权限。
-func (l *AdminRoleLogic) enabledDocumentPermissionMaps(db *gorm.DB) (map[int]routealias.Alias, map[routealias.Alias]int, error) {
-	aliases := routealias.DocsAliases()
-	modules := make([]string, 0, len(aliases))
-	for _, alias := range aliases {
-		modules = append(modules, string(alias))
-	}
-	type permissionRow struct {
-		ID     int    `gorm:"column:id"`     // 权限 ID
-		Module string `gorm:"column:module"` // 权限模块别名
-	}
-	rows := make([]permissionRow, 0, len(modules))
-	if err := freshTxStatement(db).Table(model.TableNameAdminPermission).
-		Select("id, module").
-		Where("module IN ?", modules).
-		Where("status = ?", 1).
-		Order("id ASC").
-		Scan(&rows).Error; err != nil {
-		return nil, nil, errors.Wrap(err, "AdminRoleLogic.enabledDocumentPermissionMaps 查询文档权限失败")
-	}
-
-	idAlias := make(map[int]routealias.Alias, len(rows))
-	aliasID := make(map[routealias.Alias]int, len(rows))
-	for _, row := range rows {
-		alias := routealias.Alias(strings.TrimSpace(row.Module))
-		if row.ID <= 0 || alias == "" {
-			continue
-		}
-		idAlias[row.ID] = alias
-		aliasID[alias] = row.ID
-	}
-	return idAlias, aliasID, nil
 }
 
 // permissionPathRows 查询启用权限的祖先路径。
@@ -536,22 +556,13 @@ func (l *AdminRoleLogic) retainCompletePermissionPathIDs(db *gorm.DB, permission
 	return retainCompletePermissionPathIDsFromRows(permissionIDs, rows), nil
 }
 
-// normalizeAssignablePermissionIDs 补齐菜单祖先和文档入口权限，再按父角色边界裁剪半截授权。
+// normalizeAssignablePermissionIDs 补齐菜单祖先，再按父角色边界裁剪半截授权。
 func (l *AdminRoleLogic) normalizeAssignablePermissionIDs(db *gorm.DB, permissionIDs []int, allowedPermissionIDs []int) ([]int, error) {
 	permissionIDs = types.UniquePositiveInts(permissionIDs)
 	if len(permissionIDs) == 0 {
 		return []int{}, nil
 	}
 	var err error
-	permissionIDs, err = l.expandPermissionAncestorIDs(db, permissionIDs)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	idAlias, aliasID, err := l.enabledDocumentPermissionMaps(db)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	permissionIDs = expandDocumentEntryPermissionIDs(permissionIDs, idAlias, aliasID)
 	permissionIDs, err = l.expandPermissionAncestorIDs(db, permissionIDs)
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -565,8 +576,7 @@ func (l *AdminRoleLogic) normalizeAssignablePermissionIDs(db *gorm.DB, permissio
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	permissionIDs = retainCompleteDocumentPermissionIDs(permissionIDs, idAlias, aliasID)
-	return l.retainCompletePermissionPathIDs(db, permissionIDs)
+	return permissionIDs, nil
 }
 
 // replaceRolePermissionsTx 在事务内覆盖角色权限关系。
@@ -645,40 +655,46 @@ func subtractSortedInts(left []int, right []int) []int {
 	return result
 }
 
-// refreshRoleRelatedCache 清理角色相关缓存，确保下一次读取能重建最新数据。
-func (l *AdminRoleLogic) refreshRoleRelatedCache(roleIDs ...int) {
+// refreshRoleRelatedCache 清理角色定义及其关联展示缓存。
+func (l *AdminRoleLogic) refreshRoleRelatedCache(roleIDs ...int) error {
 	roleIDs = types.UniquePositiveInts(roleIDs)
 	adminIDs, err := l.adminIDsByRoleIDs(roleIDs)
 	if err != nil {
-		corelogic.LogWrappedError(l, err, "AdminRoleLogic.refreshRoleRelatedCache 查询受影响管理员失败 roleIDs=%v", roleIDs)
+		return errors.Wrapf(err, "查询受影响管理员失败 roleIDs=%v", roleIDs)
 	}
-	l.refreshRoleRelatedCacheByScope(roleIDs, adminIDs)
+	return l.refreshRoleRelatedCacheByScope(roleIDs, adminIDs)
 }
 
-// refreshRoleRelatedCacheByScope 按角色与管理员影响范围精确清理缓存。
-// 管理员角色/权限缓存必须按 adminID 精确删除，禁止前缀扫描。
-func (l *AdminRoleLogic) refreshRoleRelatedCacheByScope(roleIDs []int, adminIDs []int) {
-	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
-	if err != nil {
-		corelogic.LogWrappedError(l, err, "AdminRoleLogic.refreshRoleRelatedCacheByScope 初始化表缓存管理器失败")
-		manager = nil
-	}
+// refreshRoleRelatedCacheByScope 按角色与管理员影响范围精确清理角色定义缓存。
+func (l *AdminRoleLogic) refreshRoleRelatedCacheByScope(roleIDs []int, adminIDs []int) error {
 	roleCacheKeys := []string{keys.RoleTree, keys.RoleStatus}
 	for _, roleID := range types.UniquePositiveInts(roleIDs) {
-		roleCacheKeys = append(roleCacheKeys, fmt.Sprintf(keys.RolePermission, roleID))
+		roleCacheKeys = append(roleCacheKeys,
+			fmt.Sprintf(keys.RolePermission, roleID),
+			fmt.Sprintf(keys.RoleDocPermission, roleID),
+		)
 	}
-	if manager != nil {
-		for _, cacheKey := range roleCacheKeys {
-			physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey)
-			if err := manager.DeleteByKey(l.Ctx, physicalKey); err != nil && !cachelogic.IsTableCacheTargetNotFound(err) {
-				corelogic.LogWrappedError(l, err, "AdminRoleLogic.refreshRoleRelatedCacheByScope 清理角色缓存key[%s]失败", cacheKey)
-			}
-		}
+	roleCacheErr := cachelogic.DeleteTableCacheKeysExact(
+		l.BaseLogic,
+		"AdminRoleLogic.refreshRoleRelatedCacheByScope 删除角色缓存",
+		cachelogic.TableCachePhysicalKeys(l.BaseLogic, roleCacheKeys...),
+	)
+	adminDetailErr := cachelogic.InvalidateAdminRoleDetailCacheByAdminIDs(l.BaseLogic, adminIDs...)
+	return errors.Join(roleCacheErr, adminDetailErr)
+}
+
+// refreshRolePermissionCache 精确清理角色路由和文档权限关系缓存。
+func (l *AdminRoleLogic) refreshRolePermissionCache(roleIDs ...int) error {
+	cacheKeys := make([]string, 0, len(roleIDs)*2)
+	for _, roleID := range types.UniquePositiveInts(roleIDs) {
+		cacheKeys = append(cacheKeys,
+			fmt.Sprintf(keys.RolePermission, roleID),
+			fmt.Sprintf(keys.RoleDocPermission, roleID),
+		)
 	}
-	if l.Redis() != nil {
-		if err := l.RdsDelKeys(cachelogic.TableCachePhysicalKeys(l.BaseLogic, roleCacheKeys...)...); err != nil {
-			corelogic.LogWrappedError(l, err, "AdminRoleLogic.refreshRoleRelatedCacheByScope 兜底删除角色缓存失败 roleIDs=%v", roleIDs)
-		}
-	}
-	cachelogic.InvalidateAdminRoleAndPermissionCacheByAdminIDs(l.BaseLogic, adminIDs...)
+	return cachelogic.DeleteTableCacheKeysExact(
+		l.BaseLogic,
+		"AdminRoleLogic.refreshRolePermissionCache 删除角色权限关系缓存",
+		cachelogic.TableCachePhysicalKeys(l.BaseLogic, cacheKeys...),
+	)
 }

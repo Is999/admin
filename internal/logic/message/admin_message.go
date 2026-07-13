@@ -19,6 +19,13 @@ type AdminMessageLogic struct {
 	*corelogic.BaseLogic // 复用上下文、数据库和日志能力
 }
 
+var (
+	// errAdminMessageReceiverInvalid 表示收件人不存在、被禁用或包含当前账号。
+	errAdminMessageReceiverInvalid = errors.New("收件人无效或包含当前账号")
+	// errAdminMessageReplyInvalid 表示回复关系与当前收件人不匹配。
+	errAdminMessageReplyInvalid = errors.New("回复消息关联无效")
+)
+
 // NewAdminMessageLogic 创建管理员消息业务对象。
 func NewAdminMessageLogic(r *http.Request, svcCtx *svc.ServiceContext) *AdminMessageLogic {
 	return &AdminMessageLogic{
@@ -54,6 +61,7 @@ func (l *AdminMessageLogic) ListInbox(req *types.AdminMessageQueryReq) *types.Bi
 		req.Keyword,
 		startTime,
 		endTime,
+		req.ID,
 	)
 	if err != nil {
 		return &types.BizResult{
@@ -194,7 +202,109 @@ func (l *AdminMessageLogic) Delete(req *types.AdminMessageDeleteReq) *types.BizR
 	}
 }
 
-// Send 发送消息到指定管理员收件箱；未指定收件人时自动广播到全部启用管理员。
+// ListReceiverOptions 分页查询发送消息时可选择的启用管理员。
+func (l *AdminMessageLogic) ListReceiverOptions(req *types.AdminMessageReceiverOptionQueryReq) *types.BizResult {
+	if req == nil {
+		return types.NewBizResult(codes.ParamError).WithError(types.Nil).SetI18nMessage(i18n.MsgKeyParamError)
+	}
+	if err := req.Validate(); err != nil {
+		return types.ParamErrorResult(err)
+	}
+	ctxAdmin := l.GetCtxAdmin()
+	if ctxAdmin.ID == 0 {
+		return types.NewBizResult(codes.Unauthorized).WithError(types.Nil).SetI18nMessage(i18n.MsgKeyNeedLogin)
+	}
+
+	rows, total, err := model.ListAdminMessageReceiverOptions(l.Svc.ReadDB(svc.DatabaseMain), req.Page, req.PageSize, ctxAdmin.ID)
+	if err != nil {
+		return &types.BizResult{
+			Code:       codes.DBError,
+			MessageKey: i18n.MsgKeyQueryFail,
+			Error:      errors.Wrap(err, "查询管理员消息收件人选项失败"),
+		}
+	}
+	items := make([]types.AdminMessageReceiverOptionItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, types.AdminMessageReceiverOptionItem{
+			ID:       row.ID,
+			Username: row.Username,
+			RealName: row.RealName,
+		})
+	}
+	return types.NewBizResult(codes.Success).
+		SetI18nMessage(i18n.MsgKeyQuerySuccess).
+		WithData(types.ListResp[types.AdminMessageReceiverOptionItem]{List: items, Total: total})
+}
+
+// normalizeAdminMessageReceiverIDs 校验、去重收件人，并拒绝给当前账号发送消息。
+func normalizeAdminMessageReceiverIDs(receiverIDs []int, senderAdminID int) ([]int, error) {
+	items := make([]int, 0, len(receiverIDs))
+	seen := make(map[int]struct{}, len(receiverIDs))
+	for _, receiverID := range receiverIDs {
+		if receiverID <= 0 || receiverID == senderAdminID {
+			return nil, errors.Tag(errAdminMessageReceiverInvalid)
+		}
+		if _, ok := seen[receiverID]; ok {
+			continue
+		}
+		seen[receiverID] = struct{}{}
+		items = append(items, receiverID)
+	}
+	return items, nil
+}
+
+// resolveAdminMessageReceiverIDs 解析广播、定向发送和回复场景的最终启用收件人。
+func resolveAdminMessageReceiverIDs(db *gorm.DB, req *types.AdminMessageSendReq, senderAdminID int) ([]int, error) {
+	receiverIDs, err := normalizeAdminMessageReceiverIDs(req.ReceiverIDs, senderAdminID)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if req.ReplyToID > 0 {
+		if len(receiverIDs) != 1 {
+			return nil, errors.Tag(errAdminMessageReplyInvalid)
+		}
+		target, queryErr := model.FindAdminMessageReplyTarget(db, req.ReplyToID, senderAdminID)
+		if queryErr != nil {
+			if errors.Is(queryErr, gorm.ErrRecordNotFound) {
+				return nil, errors.Tag(errAdminMessageReplyInvalid)
+			}
+			return nil, errors.Wrap(queryErr, "查询回复原消息失败")
+		}
+		if target.SenderAdminID == senderAdminID || receiverIDs[0] != target.SenderAdminID {
+			return nil, errors.Tag(errAdminMessageReplyInvalid)
+		}
+	}
+
+	if len(receiverIDs) == 0 {
+		if err := db.Session(&gorm.Session{NewDB: true}).
+			Model(&model.Admin{}).
+			Where("status = ?", 1).
+			Where("id <> ?", senderAdminID).
+			Order("id ASC").
+			Pluck("id", &receiverIDs).Error; err != nil {
+			return nil, errors.Wrap(err, "查询启用管理员列表失败")
+		}
+		if len(receiverIDs) == 0 {
+			return nil, errors.Tag(errAdminMessageReceiverInvalid)
+		}
+		return receiverIDs, nil
+	}
+
+	var enabledTotal int64
+	if err := db.Session(&gorm.Session{NewDB: true}).
+		Model(&model.Admin{}).
+		Where("status = ?", 1).
+		Where("id IN ?", receiverIDs).
+		Count(&enabledTotal).Error; err != nil {
+		return nil, errors.Wrap(err, "校验启用管理员失败")
+	}
+	if enabledTotal != int64(len(receiverIDs)) {
+		return nil, errors.Tag(errAdminMessageReceiverInvalid)
+	}
+	return receiverIDs, nil
+}
+
+// Send 发送消息到指定管理员收件箱；广播和定向发送均排除当前管理员。
 func (l *AdminMessageLogic) Send(req *types.AdminMessageSendReq) *types.BizResult {
 	if req == nil {
 		return types.NewBizResult(codes.ParamError).WithError(types.Nil).SetI18nMessage(i18n.MsgKeyParamError)
@@ -207,18 +317,17 @@ func (l *AdminMessageLogic) Send(req *types.AdminMessageSendReq) *types.BizResul
 		return types.NewBizResult(codes.Unauthorized).WithError(types.Nil).SetI18nMessage(i18n.MsgKeyNeedLogin)
 	}
 
-	receiverIDs := req.ReceiverIDs
-	if len(receiverIDs) == 0 {
-		if err := l.Svc.ReadDB(svc.DatabaseMain).Model(&model.Admin{}).Where("status = 1").Pluck("id", &receiverIDs).Error; err != nil {
-			return &types.BizResult{
-				Code:       codes.DBError,
-				MessageKey: i18n.MsgKeyQueryFail,
-				Error:      errors.Wrap(err, "查询启用管理员列表失败"),
-			}
+	writeDB := l.Svc.WriteDB(svc.DatabaseMain)
+	receiverIDs, err := resolveAdminMessageReceiverIDs(writeDB, req, ctxAdmin.ID)
+	if err != nil {
+		if errors.Is(err, errAdminMessageReceiverInvalid) || errors.Is(err, errAdminMessageReplyInvalid) {
+			return types.ParamErrorResult(err)
 		}
-	}
-	if len(receiverIDs) == 0 {
-		return types.NewBizResult(codes.Fail).WithError(types.Nil).SetI18nMessage(i18n.MsgKeyAddFail)
+		return &types.BizResult{
+			Code:       codes.DBError,
+			MessageKey: i18n.MsgKeyQueryFail,
+			Error:      errors.Wrap(err, "解析管理员消息收件人失败"),
+		}
 	}
 
 	now := time.Now()
@@ -231,10 +340,11 @@ func (l *AdminMessageLogic) Send(req *types.AdminMessageSendReq) *types.BizResul
 		Link:            req.Link,
 		SenderAdminID:   ctxAdmin.ID,
 		SenderAdminName: ctxAdmin.Name,
+		ReplyToID:       req.ReplyToID,
 		CreatedAt:       now,
 	}
 
-	if err := l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
+	if err := writeDB.Transaction(func(tx *gorm.DB) error {
 		return model.CreateAdminMessageWithReceivers(tx, msg, receiverIDs)
 	}); err != nil {
 		return &types.BizResult{
@@ -277,6 +387,7 @@ func (l *AdminMessageLogic) ListSent(req *types.AdminMessageSentQueryReq) *types
 		req.Keyword,
 		startTime,
 		endTime,
+		req.ID,
 	)
 	if err != nil {
 		return &types.BizResult{

@@ -7,7 +7,7 @@
 - `types`：核心负载、模式、节点常量和标签事件类型。
 - `options`：运行参数解析，明确拒绝 `filterHash` 作为标签计算来源。
 - `runtimectx`：统一 `workflow_id / mode / node / shard / batch` 日志字段和错误链路包装。
-- `route`：统一 `uid%N`、运行期 UID 和标签结果分片口径。
+- `route`：统一 CRC32 固定逻辑桶、运行期 UID 和标签结果分片口径。
 - `queryplan`：批次级查询计划和默认拒绝无条件全表扫描的保护。
 - `repository`：结果表、运行期表、工作流租约和事件 outbox 的通用访问层。
 - `stage`：`prepare / collect_scope / evaluate_tags / resolve_changes / persist_results / finalize / dispatch_hooks` 骨架阶段。

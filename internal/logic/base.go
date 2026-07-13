@@ -270,7 +270,8 @@ func (l *BaseLogic) RdsSetJSONValue(key string, value any, expireSec int) error 
 	return errors.Tag(l.Svc.Rds.Set(l.Ctx, key, data, time.Duration(expireSec)*time.Second).Err())
 }
 
-// RdsDelKeys 批量删除当前 app_id 命名空间下的 Redis 键。
+// RdsDelKeys 通过独立 DEL 命令批量删除当前 app_id 命名空间下的 Redis 键。
+// 普通 pipeline 会按节点分发不同 slot，兼容 Redis Cluster 且减少串行往返。
 func (l *BaseLogic) RdsDelKeys(keys ...string) error {
 	if len(keys) == 0 {
 		return nil
@@ -278,21 +279,26 @@ func (l *BaseLogic) RdsDelKeys(keys ...string) error {
 	if l == nil || l.Svc == nil || l.Svc.Rds == nil {
 		return errors.New("Redis 未初始化")
 	}
-	deleted := false
+	normalized := make([]string, 0, len(keys))
 	for _, key := range keys {
 		key = l.AppRedisKey(key)
 		if key == "" {
 			continue
 		}
-		deleted = true
-		if err := l.Svc.Rds.Del(l.Ctx, key).Err(); err != nil {
-			return errors.Tag(err)
-		}
+		normalized = append(normalized, key)
 	}
-	if !deleted {
+	if len(normalized) == 0 {
 		return errors.New("Redis key 为空")
 	}
-	return nil
+	if len(normalized) == 1 {
+		return errors.Tag(l.Svc.Rds.Del(l.Ctx, normalized[0]).Err())
+	}
+	pipe := l.Svc.Rds.Pipeline()
+	for _, key := range normalized {
+		pipe.Del(l.Ctx, key)
+	}
+	_, err := pipe.Exec(l.Ctx)
+	return errors.Tag(err)
 }
 
 // RdsReloadKey 先删除指定 Redis 键，再执行回调重建缓存内容。
@@ -319,7 +325,7 @@ func (l *BaseLogic) ReloadCacheAsync(operation, key string) {
 			operation = "BaseLogic.ReloadCacheAsync"
 		}
 		logWrappedError(l, err, "%s enqueue cache reload failed, key=%s", operation, key)
-		svc.NotifyTaskRuntimeAlert(l.Ctx, l.Svc.Task, svc.TaskRuntimeAlert{
+		svc.NotifyTaskRuntimeAlert(l.Ctx, l.Svc.RuntimeAlerter, svc.TaskRuntimeAlert{
 			Kind:      svc.TaskRuntimeAlertKindCacheRefreshEnqueueFailed,
 			Title:     "【P1 缓存异步刷新投递失败】",
 			Status:    "本次缓存刷新请求未进入任务队列，不会自动执行",

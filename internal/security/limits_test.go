@@ -22,7 +22,7 @@ func TestValidateSecurityFieldCountRejectsTooManyFields(t *testing.T) {
 // TestValidateSecurityScalarValueRejectsComplexValue 验证对应场景符合预期。
 func TestValidateSecurityScalarValueRejectsComplexValue(t *testing.T) {
 	value := map[string]any{"name": "demo"}
-	if err := ValidateSecurityScalarValue("请求签名", "profile", value); err == nil {
+	if err := ValidateSecurityScalarValue("请求加密", "profile", value); err == nil {
 		t.Fatal("ValidateSecurityScalarValue() should reject complex value")
 	}
 }
@@ -45,7 +45,7 @@ func TestValidateSecurityJSONValueRejectsOversizeValue(t *testing.T) {
 
 // TestValidateSecurityLimitErrorsUseSentinel 验证对应场景符合预期。
 func TestValidateSecurityLimitErrorsUseSentinel(t *testing.T) {
-	err := ValidateSecurityScalarValue("响应签名", "profile", map[string]any{"name": "demo"})
+	err := ValidateSecurityScalarValue("响应加密", "profile", map[string]any{"name": "demo"})
 	if !errors.Is(err, ErrSecurityPayloadTooLarge) {
 		t.Fatalf("ValidateSecurityScalarValue() error = %v, want ErrSecurityPayloadTooLarge", err)
 	}

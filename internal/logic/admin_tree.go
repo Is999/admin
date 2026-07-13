@@ -6,7 +6,7 @@ import (
 )
 
 // BuildAdminRoleTree 把平铺角色列表转换成后台通用角色树。
-func BuildAdminRoleTree(roles []model.AdminRole, permissionMap map[int][]int) []types.AdminRoleItem {
+func BuildAdminRoleTree(roles []model.AdminRole) []types.AdminRoleItem {
 	children := make(map[int][]model.AdminRole, len(roles))
 	for _, role := range roles {
 		children[role.Pid] = append(children[role.Pid], role)
@@ -16,7 +16,7 @@ func BuildAdminRoleTree(roles []model.AdminRole, permissionMap map[int][]int) []
 		nodes := children[pid]
 		result := make([]types.AdminRoleItem, 0, len(nodes))
 		for _, role := range nodes {
-			result = append(result, AdminRoleModelToItem(role, permissionMap[role.ID], walk(role.ID)))
+			result = append(result, AdminRoleModelToItem(role, walk(role.ID)))
 		}
 		return result
 	}
@@ -24,7 +24,7 @@ func BuildAdminRoleTree(roles []model.AdminRole, permissionMap map[int][]int) []
 }
 
 // AdminRoleModelToItem 把角色模型转换成后台通用角色响应节点。
-func AdminRoleModelToItem(role model.AdminRole, permissionIDs []int, children []types.AdminRoleItem) types.AdminRoleItem {
+func AdminRoleModelToItem(role model.AdminRole, children []types.AdminRoleItem) types.AdminRoleItem {
 	disabled := role.Status != 1 || role.IsDelete != 0
 	return types.AdminRoleItem{
 		ID:              role.ID,
@@ -37,7 +37,6 @@ func AdminRoleModelToItem(role model.AdminRole, permissionIDs []int, children []
 		Disabled:        disabled,
 		DisableCheckbox: disabled,
 		Selectable:      !disabled,
-		Permissions:     permissionIDs,
 		Children:        children,
 		CreatedAt:       FormatDateTime(role.CreatedAt),
 		UpdatedAt:       FormatDateTime(role.UpdatedAt),

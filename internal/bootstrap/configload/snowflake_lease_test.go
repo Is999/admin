@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"admin/common/idgen"
 	keys "admin/common/rediskeys"
@@ -193,6 +194,21 @@ func TestConfigureSnowflakeWorkerRejectsMissingRedisClient(t *testing.T) {
 	cleanupSnowflakeWorker(t)
 	if _, err := ConfigureSnowflakeWorker(context.Background(), redisSnowflakeConfig(snowflakeTestScope), nil); err == nil {
 		t.Fatal("expected nil redis client to be rejected")
+	}
+}
+
+// TestSnowflakeLeaseCloseHonorsContextDeadline 确保续约协程阻塞时租约关闭不会突破应用停止期限。
+func TestSnowflakeLeaseCloseHonorsContextDeadline(t *testing.T) {
+	lease := &snowflakeRedisLease{
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
+		closeDone: make(chan struct{}),
+		onRelease: func(string, int64) {},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := lease.Close(ctx); err == nil {
+		t.Fatal("Close() expected context deadline error")
 	}
 }
 

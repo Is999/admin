@@ -17,10 +17,9 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
-// docsAccessSet 保存当前账号可访问的文档权限别名集合。
+// docsAccessSet 保存当前账号可访问的精确文档资源集合。
 type docsAccessSet struct {
-	all     bool                          // 是否允许查看全部文档
-	aliases map[routealias.Alias]struct{} // 可查看的文档权限别名集合
+	resources map[routealias.DocResource]struct{} // 可查看的文档资源集合
 }
 
 // docsNavItem 表示 docsify Markdown 导航中的一行及其子级。
@@ -40,7 +39,7 @@ func serveDocsNavigation(w http.ResponseWriter, r *http.Request, svcCtx *svc.Ser
 	}
 	access, err := docsAccessForRequest(r, svcCtx)
 	if err != nil {
-		http.Error(w, "文档权限不可用", http.StatusInternalServerError)
+		http.Error(w, "文档权限不可用", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
@@ -61,46 +60,33 @@ func readDocsSiteAsset(assetPath string) ([]byte, error) {
 // docsAccessForRequest 根据当前请求账号计算可见文档权限；无登录身份时返回空权限集合。
 func docsAccessForRequest(r *http.Request, svcCtx *svc.ServiceContext) (docsAccessSet, error) {
 	if svcCtx == nil {
-		return docsAccessSet{all: true}, nil
+		return docsAccessSet{}, errors.Errorf("文档权限服务上下文未初始化")
 	}
 	meta := requestctx.FromContext(r.Context())
 	if meta == nil || meta.UserID <= 0 {
-		return docsAccessSet{aliases: map[routealias.Alias]struct{}{}}, nil
+		return docsAccessSet{resources: map[routealias.DocResource]struct{}{}}, nil
 	}
 
-	access := docsAccessSet{aliases: map[routealias.Alias]struct{}{}}
 	security := securitylogic.NewSecurityLogic(r.Context(), svcCtx)
-	for _, alias := range routealias.DocsAliases() {
-		allowed, err := security.CheckRoutePermission(meta.UserID, string(alias))
-		if err != nil {
-			return docsAccessSet{}, errors.Wrapf(err, "查询文档权限失败 alias=%s", alias)
-		}
-		if !allowed {
-			continue
-		}
-		access.aliases[alias] = struct{}{}
+	resources, err := security.AllowedDocResources(meta.UserID)
+	if err != nil {
+		return docsAccessSet{}, errors.Wrap(err, "查询文档权限失败")
+	}
+	access := docsAccessSet{resources: make(map[routealias.DocResource]struct{}, len(resources))}
+	for _, resource := range resources {
+		access.resources[resource] = struct{}{}
 	}
 	return access, nil
 }
 
-// allows 判断当前账号是否允许查看指定文档别名。
-func (s docsAccessSet) allows(alias routealias.Alias) bool {
-	if s.all {
-		return true
-	}
-	for _, candidate := range routealias.DocsCandidateAliases(alias) {
-		if _, ok := s.aliases[candidate]; ok {
-			return true
-		}
-	}
-	return false
+// allows 判断当前账号是否允许查看指定文档资源。
+func (s docsAccessSet) allows(resource routealias.DocResource) bool {
+	_, ok := s.resources[resource]
+	return ok
 }
 
 // filterDocsNavigation 按权限过滤 Markdown 导航树，避免侧边栏和搜索暴露未授权文档。
 func filterDocsNavigation(content []byte, docsBase string, access docsAccessSet) []byte {
-	if access.all {
-		return content
-	}
 	nodes := parseDocsNavigation(content)
 	var builder strings.Builder
 	for _, node := range nodes {
@@ -153,7 +139,8 @@ func markDocsNavAllowed(item *docsNavItem, docsBase string, access docsAccessSet
 	ownAllowed := false
 	if href, ok := docsNavHref(item.line); ok {
 		if assetPath, isDoc := docsAssetPathFromHref(href); isDoc {
-			ownAllowed = access.allows(routealias.DocsAliasForAssetPath(docsBase, assetPath))
+			resource, exists := routealias.DocsResourceForAssetPath(docsBase, assetPath)
+			ownAllowed = exists && access.allows(resource)
 		} else {
 			ownAllowed = true
 		}

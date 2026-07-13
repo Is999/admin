@@ -41,10 +41,10 @@ func Setup(ctx context.Context, cfg config.ObservabilityConfig) (func(context.Co
 		return nil, errors.Wrap(err, "构建 OTEL 资源失败")
 	}
 
-	// 未显式配置采样率时默认全采样；trace_enabled=false 时退化为本地零采样模式。
+	// 未显式配置采样率时由配置默认值填充为 1；显式 0 必须保持零采样语义。
 	sampleRatio := cfg.SampleRatio
-	if sampleRatio <= 0 || sampleRatio > 1 {
-		sampleRatio = 1
+	if sampleRatio < 0 || sampleRatio > 1 {
+		return nil, errors.Errorf("observability.sample_ratio 必须在 0-1 之间")
 	}
 	if !cfg.TraceEnabled {
 		sampleRatio = 0
@@ -56,7 +56,7 @@ func Setup(ctx context.Context, cfg config.ObservabilityConfig) (func(context.Co
 	}
 
 	// 配置了 OTLP endpoint 才启用 exporter，上报失败会在启动阶段直接暴露。
-	if cfg.OTLPEndpoint != "" {
+	if cfg.TraceEnabled && cfg.OTLPEndpoint != "" {
 		protocol := normalizeOTLPProtocol(cfg.OTLPProtocol)
 		switch protocol {
 		case "grpc":
@@ -111,7 +111,7 @@ func normalizeOTLPProtocol(protocol string) string {
 	switch protocol {
 	case "", "grpc", "grpc/protobuf":
 		return "grpc"
-	case "http", "http/protobuf", "http-protobuf", "http/json":
+	case "http", "http/protobuf", "http-protobuf":
 		return "http"
 	default:
 		return protocol

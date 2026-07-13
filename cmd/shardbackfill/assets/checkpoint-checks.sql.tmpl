@@ -1,0 +1,14 @@
+-- 代码资产：读取 shardbackfill checkpoint 全部 CHECK 约束。
+-- SQL 方言：MySQL 8.0 information_schema。
+-- 调用方：cmd/shardbackfill.validateCheckpointSchema。
+-- 参数来源：无动态参数，固定检查运维进度表。
+-- 安全边界：只读单表约束元数据，不扫描任务数据。
+SELECT `tc`.`CONSTRAINT_NAME`, `cc`.`CHECK_CLAUSE`, `tc`.`ENFORCED`
+FROM `information_schema`.`TABLE_CONSTRAINTS` AS `tc`
+JOIN `information_schema`.`CHECK_CONSTRAINTS` AS `cc`
+  ON `cc`.`CONSTRAINT_SCHEMA` = `tc`.`CONSTRAINT_SCHEMA`
+ AND `cc`.`CONSTRAINT_NAME` = `tc`.`CONSTRAINT_NAME`
+WHERE `tc`.`CONSTRAINT_SCHEMA` = DATABASE()
+  AND `tc`.`TABLE_NAME` = 'shard_backfill_checkpoint'
+  AND `tc`.`CONSTRAINT_TYPE` = 'CHECK'
+ORDER BY `tc`.`CONSTRAINT_NAME`

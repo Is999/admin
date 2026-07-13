@@ -3,9 +3,12 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"admin/internal/config"
 	"admin/internal/model"
@@ -21,11 +24,238 @@ func newArchiveDryRunDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local",
 		SkipInitializeWithVersion: true,
-	}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	}), &gorm.Config{DryRun: true, DisableAutomaticPing: true, SkipDefaultTransaction: true})
 	if err != nil {
 		t.Fatalf("gorm.Open() error = %v", err)
 	}
 	return db
+}
+
+// TestRenewSegmentDeleteLeaseUsesOwnerGuard 验证删除续租只允许当前 deleting worker 更新租约。
+func TestRenewSegmentDeleteLeaseUsesOwnerGuard(t *testing.T) {
+	db := newArchiveDryRunDB(t)
+	var sqlText string
+	if err := db.Callback().Update().After("gorm:update").Register("test:capture_archive_delete_lease", func(tx *gorm.DB) {
+		sqlText = tx.Statement.SQL.String()
+		tx.RowsAffected = 1
+	}); err != nil {
+		t.Fatalf("注册 GORM 测试回调失败: %v", err)
+	}
+	service := NewService(svc.NewServiceContext(config.Config{
+		Archive: config.ArchiveConfig{LeaseTTLSeconds: 30},
+	}, svc.Dependencies{}))
+	segment := &Segment{ID: 7, AttemptCount: 3}
+	if err := service.renewSegmentDeleteLease(context.Background(), db, segment, "worker-a"); err != nil {
+		t.Fatalf("删除续租失败: %v", err)
+	}
+	for _, want := range []string{"lease_expires_at", "status = ?", "worker_id = ?", "attempt_count = ?", "lease_expires_at > ?"} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("删除续租 SQL 缺少 %q: %s", want, sqlText)
+		}
+	}
+}
+
+// TestRenewSegmentDeleteLeaseRejectsStaleAttempt 验证 GORM CAS 只允许当前领取轮次续租。
+func TestRenewSegmentDeleteLeaseRejectsStaleAttempt(t *testing.T) {
+	db := newArchiveDryRunDB(t)
+	var currentAttempt atomic.Int64
+	currentAttempt.Store(202)
+	if err := db.Callback().Update().After("gorm:update").Register("test:archive_delete_fence", func(tx *gorm.DB) {
+		tx.RowsAffected = 0
+		for _, value := range tx.Statement.Vars {
+			var attempt int64
+			switch typed := value.(type) {
+			case int:
+				attempt = int64(typed)
+			case int64:
+				attempt = typed
+			case uint:
+				attempt = int64(typed)
+			case uint64:
+				attempt = int64(typed)
+			default:
+				continue
+			}
+			if attempt == currentAttempt.Load() {
+				tx.RowsAffected = 1
+				return
+			}
+		}
+	}); err != nil {
+		t.Fatalf("注册 GORM fencing 回调失败: %v", err)
+	}
+	service := NewService(svc.NewServiceContext(config.Config{
+		Archive: config.ArchiveConfig{LeaseTTLSeconds: 30},
+	}, svc.Dependencies{}))
+	if err := service.renewSegmentDeleteLease(context.Background(), db, &Segment{ID: 7, AttemptCount: 101}, "same-worker"); err == nil {
+		t.Fatal("旧领取轮次续租应被 fencing 拒绝")
+	}
+	if err := service.renewSegmentDeleteLease(context.Background(), db, &Segment{ID: 7, AttemptCount: 202}, "same-worker"); err != nil {
+		t.Fatalf("当前领取轮次续租失败: %v", err)
+	}
+}
+
+// TestDeleteSegmentFinalStateRejectsStaleAttempt 验证删除终态写入也受领取轮次和有效租约 fencing 保护。
+func TestDeleteSegmentFinalStateRejectsStaleAttempt(t *testing.T) {
+	tests := []struct {
+		name   string                                   // 测试场景名称
+		update func(*Service, *gorm.DB, *Segment) error // 待验证的删除终态更新
+	}{
+		{
+			name: "删除完成",
+			update: func(service *Service, db *gorm.DB, segment *Segment) error {
+				return service.markSegmentDeleted(context.Background(), db, segment, "same-worker")
+			},
+		},
+		{
+			name: "部分完成",
+			update: func(service *Service, db *gorm.DB, segment *Segment) error {
+				return service.markSegmentDeletePartial(context.Background(), db, segment, "same-worker")
+			},
+		},
+		{
+			name: "删除失败",
+			update: func(service *Service, db *gorm.DB, segment *Segment) error {
+				return service.markSegmentDeleteFailed(context.Background(), db, segment, "same-worker", archiveLeaseTestError{})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := newArchiveDryRunDB(t)
+			if err := db.Callback().Update().After("gorm:update").Register("test:archive_delete_final_fence", func(tx *gorm.DB) {
+				tx.RowsAffected = 0
+				for _, value := range tx.Statement.Vars {
+					if attempt, ok := value.(int); ok && attempt == 202 {
+						tx.RowsAffected = 1
+						return
+					}
+				}
+			}); err != nil {
+				t.Fatalf("注册 GORM 终态 fencing 回调失败: %v", err)
+			}
+			service := NewService(svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+			if err := test.update(service, db, &Segment{ID: 7, AttemptCount: 101}); err == nil {
+				t.Fatal("旧领取轮次的终态写入应被 fencing 拒绝")
+			}
+			if err := test.update(service, db, &Segment{ID: 7, AttemptCount: 202}); err != nil {
+				t.Fatalf("当前领取轮次的终态写入失败: %v", err)
+			}
+		})
+	}
+}
+
+// TestLeaseHeartbeatRenewsAcrossLongBatch 验证单批处理跨过完整租约周期时仍会持续续租。
+func TestLeaseHeartbeatRenewsAcrossLongBatch(t *testing.T) {
+	renewed := make(chan struct{}, 8)
+	heartbeat := startLeaseHeartbeat(context.Background(), 5*time.Millisecond, func(context.Context) error {
+		renewed <- struct{}{}
+		return nil
+	})
+	for count := 0; count < 4; count++ {
+		select {
+		case <-renewed:
+		case <-time.After(time.Second):
+			t.Fatal("长批次执行期间未按期续租")
+		}
+	}
+	if err := heartbeat.Close(); err != nil {
+		t.Fatalf("停止删除租约心跳失败: %v", err)
+	}
+	if err := heartbeat.Context().Err(); err == nil {
+		t.Fatal("关闭租约心跳后应释放处理上下文")
+	}
+}
+
+// TestLeaseHeartbeatCancelsBatchOnRenewFailure 验证续租失败会立即取消当前删除批次。
+func TestLeaseHeartbeatCancelsBatchOnRenewFailure(t *testing.T) {
+	heartbeat := startLeaseHeartbeat(context.Background(), 5*time.Millisecond, func(context.Context) error {
+		return archiveLeaseTestError{}
+	})
+	select {
+	case <-heartbeat.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("续租失败后删除批次未被取消")
+	}
+	if err := heartbeat.Close(); err == nil || !strings.Contains(err.Error(), archiveLeaseTestError{}.Error()) {
+		t.Fatalf("续租失败未返回明确错误: %v", err)
+	}
+}
+
+// TestDeleteLeaseFenceStopsOldWorkerAfterTakeover 验证相同 worker_id 的旧领取轮次也不能越过 fencing。
+func TestDeleteLeaseFenceStopsOldWorkerAfterTakeover(t *testing.T) {
+	var currentAttempt atomic.Int64
+	currentAttempt.Store(1)
+	oldRenewed := make(chan struct{}, 1)
+	old := startLeaseHeartbeat(context.Background(), 5*time.Millisecond, func(context.Context) error {
+		if currentAttempt.Load() != 1 {
+			return archiveLeaseTestError{}
+		}
+		select {
+		case oldRenewed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	select {
+	case <-oldRenewed:
+	case <-time.After(time.Second):
+		t.Fatal("旧 worker 首次续租未执行")
+	}
+
+	// 新领取轮次递增 attempt_count，模拟租约过期后由第二个 worker 接管。
+	currentAttempt.Store(2)
+	select {
+	case <-old.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("旧领取轮次在 fencing 变化后仍继续运行")
+	}
+	if err := old.Close(); err == nil {
+		t.Fatal("旧领取轮次应返回租约失效错误")
+	}
+
+	newRenewed := make(chan struct{}, 1)
+	current := startLeaseHeartbeat(context.Background(), 5*time.Millisecond, func(context.Context) error {
+		if currentAttempt.Load() != 2 {
+			return archiveLeaseTestError{}
+		}
+		select {
+		case newRenewed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	select {
+	case <-newRenewed:
+	case <-time.After(time.Second):
+		t.Fatal("新领取轮次未能正常续租")
+	}
+	if err := current.Close(); err != nil {
+		t.Fatalf("新领取轮次停止失败: %v", err)
+	}
+}
+
+// archiveLeaseTestError 是删除租约测试使用的固定 fencing 错误。
+type archiveLeaseTestError struct{}
+
+// Error 返回固定测试错误文本。
+func (archiveLeaseTestError) Error() string {
+	return "delete lease lost"
+}
+
+// TestTruncateArchiveErrorKeepsUTF8AndCharacterLimit 验证多字节和非法错误文本可安全写入 utf8mb4 varchar(500)。
+func TestTruncateArchiveErrorKeepsUTF8AndCharacterLimit(t *testing.T) {
+	message := strings.Repeat("归档失败", 130) + string([]byte{0xff})
+	got := truncateArchiveError(errors.New(message))
+	if !utf8.ValidString(got) {
+		t.Fatalf("归档错误摘要不是有效 UTF-8: %q", got)
+	}
+	if count := utf8.RuneCountInString(got); count != archiveErrorMessageMaxRunes {
+		t.Fatalf("归档错误摘要字符数 = %d，期望 %d", count, archiveErrorMessageMaxRunes)
+	}
+	if got := truncateArchiveError(nil); got != "" {
+		t.Fatalf("nil 错误摘要 = %q，期望空字符串", got)
+	}
 }
 
 // TestBuildHistoryTableNameByMonth 验证按月拆表时历史表命名稳定可预测。
@@ -1394,5 +1624,125 @@ func TestAdminLogQueryJobUsesConfiguredJob(t *testing.T) {
 	}
 	if job.TableName != model.TableNameAdminLog {
 		t.Fatalf("adminLogQueryJob().TableName = %s, want %s", job.TableName, model.TableNameAdminLog)
+	}
+}
+
+// TestEstimateArchiveSegmentProgress 验证复制阶段只按持久化时间 checkpoint 估算区间进度。
+func TestEstimateArchiveSegmentProgress(t *testing.T) {
+	start := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.Local)
+	item := ProgressSegment{
+		RangeStart:       start,
+		RangeEnd:         start.Add(24 * time.Hour),
+		Status:           statusRunning,
+		LastArchivedTime: sql.NullTime{Time: start.Add(12 * time.Hour), Valid: true},
+	}
+	progress := estimateArchiveSegmentProgress(item)
+	if progress == nil || *progress != 50 {
+		t.Fatalf("estimateArchiveSegmentProgress() = %v, want 50", progress)
+	}
+	item.LastArchivedTime = sql.NullTime{Time: item.RangeEnd.Add(time.Hour), Valid: true}
+	progress = estimateArchiveSegmentProgress(item)
+	if progress == nil || *progress != 99.9 {
+		t.Fatalf("estimateArchiveSegmentProgress() = %v, want 99.9", progress)
+	}
+	item.Status = statusDeleting
+	if progress = estimateArchiveSegmentProgress(item); progress != nil {
+		t.Fatalf("删除阶段不应复用归档 checkpoint 估算进度，实际=%v", *progress)
+	}
+}
+
+// TestArchiveProgressLagUsesStableBaseline 验证整体滞后优先使用水位，无水位时回退最早现存区间。
+func TestArchiveProgressLagUsesStableBaseline(t *testing.T) {
+	start := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.Local)
+	eligible := sql.NullTime{Time: start.Add(48 * time.Hour), Valid: true}
+	lag := archiveProgressLag(eligible, sql.NullTime{Time: start.Add(24 * time.Hour), Valid: true}, sql.NullTime{})
+	if !lag.Valid || lag.Int64 != int64((24*time.Hour)/time.Second) {
+		t.Fatalf("archiveProgressLag() = %+v, want 86400 seconds", lag)
+	}
+	lag = archiveProgressLag(eligible, sql.NullTime{}, sql.NullTime{Time: start, Valid: true})
+	if !lag.Valid || lag.Int64 != int64((48*time.Hour)/time.Second) {
+		t.Fatalf("archiveProgressLag() fallback = %+v, want 172800 seconds", lag)
+	}
+	if lag = archiveProgressLag(eligible, sql.NullTime{}, sql.NullTime{}); lag.Valid {
+		t.Fatalf("没有可靠基线时不应返回滞后秒数，实际=%+v", lag)
+	}
+}
+
+// TestArchiveProgressPhaseCoversRuntimeStates 验证执行阶段优先反映运行中、失败和追平状态。
+func TestArchiveProgressPhaseCoversRuntimeStates(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name     string   // 测试场景
+		progress Progress // 归档进度输入
+		want     string   // 期望阶段
+	}{
+		{name: "未启用", progress: Progress{}, want: ProgressPhaseInactive},
+		{name: "正在归档", progress: Progress{RuntimeEnabled: true, FetchedAt: now, CurrentSegment: &ProgressSegment{Status: statusRunning, LeaseExpiresAt: sql.NullTime{Time: now.Add(time.Minute), Valid: true}}}, want: ProgressPhaseRunning},
+		{name: "租约过期", progress: Progress{RuntimeEnabled: true, FetchedAt: now, CurrentSegment: &ProgressSegment{Status: statusRunning, LeaseExpiresAt: sql.NullTime{Time: now.Add(-time.Minute), Valid: true}}}, want: ProgressPhaseLeaseExpired},
+		{name: "失败待重试", progress: Progress{RuntimeEnabled: true, Counts: ProgressCounts{Failed: 1}}, want: ProgressPhaseFailed},
+		{name: "等待删除", progress: Progress{RuntimeEnabled: true, Counts: ProgressCounts{Done: 1}, EligibleUntil: sql.NullTime{Time: now, Valid: true}, WatermarkTime: sql.NullTime{Time: now, Valid: true}}, want: ProgressPhaseWaitingDelete},
+		{name: "禁用删除且已经追平", progress: Progress{RuntimeEnabled: true, deleteDisabled: true, Counts: ProgressCounts{Done: 1}, EligibleUntil: sql.NullTime{Time: now, Valid: true}, WatermarkTime: sql.NullTime{Time: now, Valid: true}}, want: ProgressPhaseCaughtUp},
+		{name: "已经追平", progress: Progress{RuntimeEnabled: true, EligibleUntil: sql.NullTime{Time: now, Valid: true}, WatermarkTime: sql.NullTime{Time: now, Valid: true}}, want: ProgressPhaseCaughtUp},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := archiveProgressPhase(tt.progress); got != tt.want {
+				t.Fatalf("archiveProgressPhase() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildProgressCountsQueryUsesGroupedIndexScan 验证进度计数只读取覆盖索引中的任务和状态字段。
+func TestBuildProgressCountsQueryUsesGroupedIndexScan(t *testing.T) {
+	db := newArchiveDryRunDB(t)
+	var rows []progressCountRow
+	tx := buildProgressCountsQuery(context.Background(), db, "admin_log").Find(&rows)
+	if tx.Error != nil {
+		t.Fatalf("buildProgressCountsQuery Find() error = %v", tx.Error)
+	}
+	sqlText := tx.Statement.SQL.String()
+	for _, want := range []string{
+		"COUNT(*) AS total",
+		"WHERE job_name = ?",
+		"GROUP BY `status`",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("进度汇总 SQL 缺少 %q: %s", want, sqlText)
+		}
+	}
+	for _, blocked := range []string{"range_start", "range_end"} {
+		if strings.Contains(sqlText, blocked) {
+			t.Fatalf("进度计数 SQL 不应读取区间字段 %q: %s", blocked, sqlText)
+		}
+	}
+}
+
+// TestBuildExistingTablesQueryChecksMultipleTables 验证进度接口一次检查两张控制表。
+func TestBuildExistingTablesQueryChecksMultipleTables(t *testing.T) {
+	db := newArchiveDryRunDB(t)
+	var rows []tableNameRow
+	tx := buildExistingTablesQuery(context.Background(), db, []string{tableNameWatermark, tableNameSegment}).Find(&rows)
+	if tx.Error != nil {
+		t.Fatalf("buildExistingTablesQuery Find() error = %v", tx.Error)
+	}
+	sqlText := tx.Statement.SQL.String()
+	for _, want := range []string{"information_schema", "TABLE_SCHEMA = DATABASE()", "TABLE_NAME IN"} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("控制表探测 SQL 缺少 %q: %s", want, sqlText)
+		}
+	}
+	if len(tx.Statement.Vars) != 2 {
+		t.Fatalf("控制表探测参数数量=%d，期望 2: %#v", len(tx.Statement.Vars), tx.Statement.Vars)
+	}
+}
+
+// TestExistingTablesPreservesQueryError 验证控制表探测失败不会被误报为表不存在。
+func TestExistingTablesPreservesQueryError(t *testing.T) {
+	db := newArchiveDryRunDB(t)
+	wantErr := errors.New("information_schema unavailable")
+	db.AddError(wantErr)
+	if _, err := existingTables(context.Background(), db, []string{tableNameWatermark}); !errors.Is(err, wantErr) {
+		t.Fatalf("existingTables() error = %v, want %v", err, wantErr)
 	}
 }

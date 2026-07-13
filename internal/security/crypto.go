@@ -6,14 +6,13 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"strings"
 
 	utils "github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"
 )
 
 const (
-	// SignatureTypeMD5 表示 MD5 签名方式，对应 laravel-admin 的 X-Signature=M。
-	SignatureTypeMD5 = "M"
 	// SignatureTypeAES 表示 AES 签名方式，对应 laravel-admin 的 X-Signature=A。
 	SignatureTypeAES = "A"
 	// SignatureTypeRSA 表示 RSA 签名方式，对应 laravel-admin 的 X-Signature=R。
@@ -25,6 +24,18 @@ const (
 	CryptoTypeRSA = "R"
 )
 
+// NormalizeSignatureType 统一签名算法短码和完整名称，空值默认使用 RSA。
+func NormalizeSignatureType(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "", "R", "RSA":
+		return SignatureTypeRSA
+	case "A", "AES":
+		return SignatureTypeAES
+	default:
+		return strings.ToUpper(strings.TrimSpace(value))
+	}
+}
+
 // Signer 定义签名与验签能力，供签名中间件按请求头动态选择实现。
 type Signer interface {
 	Sign(data string) (string, error)       // Sign 对待签名字符串生成签名值
@@ -35,23 +46,6 @@ type Signer interface {
 type Cryptor interface {
 	Encrypt(data string) (string, error) // Encrypt 加密明文字符串
 	Decrypt(data string) (string, error) // Decrypt 解密密文字符串
-}
-
-// MD5Signer 实现 laravel-admin 的简单 MD5 签名。
-type MD5Signer struct{}
-
-// Sign 对待签名字符串做 MD5 摘要。
-func (MD5Signer) Sign(data string) (string, error) {
-	return utils.MD5(data), nil
-}
-
-// Verify 使用常量时间比较校验 MD5 签名。
-func (s MD5Signer) Verify(data, sign string) (bool, error) {
-	expected, err := s.Sign(data)
-	if err != nil {
-		return false, errors.Tag(err)
-	}
-	return expected == sign, nil
 }
 
 // AESCipher 实现 AES-256-CBC 加解密与签名能力。

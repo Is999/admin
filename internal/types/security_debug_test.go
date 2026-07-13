@@ -26,6 +26,31 @@ func TestSecurityDebugSignReqValidateTrimsSignMeta(t *testing.T) {
 	}
 }
 
+// TestSecurityDebugSignReqValidateSignatureTypes 验证安全调试只接受 AES 和 RSA 签名方式。
+func TestSecurityDebugSignReqValidateSignatureTypes(t *testing.T) {
+	for _, signatureType := range []string{"", " a ", "r"} {
+		req := &SecurityDebugSignReq{
+			AppID:         "demo-app",
+			SignatureType: signatureType,
+			PayloadText:   `{}`,
+		}
+		if err := req.Validate(); err != nil {
+			t.Fatalf("Validate() signatureType=%q error = %v", signatureType, err)
+		}
+	}
+
+	for _, signatureType := range []string{"M", "MD5", "unknown"} {
+		req := &SecurityDebugSignReq{
+			AppID:         "demo-app",
+			SignatureType: signatureType,
+			PayloadText:   `{}`,
+		}
+		if err := req.Validate(); err == nil {
+			t.Fatalf("Validate() signatureType=%q expected rejection", signatureType)
+		}
+	}
+}
+
 // TestSecurityDebugCipherReqValidateNormalizesFields 验证加解密字段会去空、去重并归一化。
 func TestSecurityDebugCipherReqValidateNormalizesFields(t *testing.T) {
 	req := &SecurityDebugCipherReq{

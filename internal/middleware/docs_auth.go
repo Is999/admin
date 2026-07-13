@@ -9,12 +9,12 @@ import (
 	i18n "admin/common/i18n"
 	"admin/helper"
 	"admin/internal/infra/loggerx"
+	cachelogic "admin/internal/logic/cache"
 	securitylogic "admin/internal/logic/security"
 	"admin/internal/requestctx"
 	"admin/internal/routealias"
 	"admin/internal/svc"
 
-	"github.com/Is999/go-utils"
 	"github.com/zeromicro/go-zero/rest"
 )
 
@@ -23,13 +23,18 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			ctx, _ := requestctx.New(r.Context())
-			requestctx.SetRequest(ctx, r.Method, r.URL.Path, utils.ClientIP(r))
-			docsAlias := docsRouteAliasForPath(r.URL.Path)
+			clientIP := requestClientIP(svcCtx, r)
+			requestctx.SetRequest(ctx, r.Method, r.URL.Path, clientIP)
+			docsAlias := routealias.DocsEntryAliasForPath(r.URL.Path)
 			requestctx.SetRoute(ctx, string(docsAlias))
 			r = r.WithContext(ctx)
 
 			identity, err := verifyAdminTokenFromDocsRequest(ctx, svcCtx, r, true)
 			if err != nil {
+				if errors.Is(err, cachelogic.ErrRedisUnavailable) || errors.Is(err, cachelogic.ErrSecurityCacheSyncPending) {
+					failAuthDependency(ctx, w, err)
+					return
+				}
 				message := i18n.MsgKeyTokenInvalid
 				if errors.Is(err, errMissingBearerToken) {
 					message = i18n.MsgKeyUnauthorizedText
@@ -44,61 +49,40 @@ func DocsJwtMiddleware(svcCtx *svc.ServiceContext) rest.Middleware {
 				return
 			}
 
-			ip := utils.ClientIP(r)
-			if err = securitylogic.NewSecurityLogic(ctx, svcCtx).CheckAdminAccess(identity.UserID, string(docsAlias), ip, identity.LoginIP); err != nil {
-				switch {
-				case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
+			ip := clientIP
+			security := securitylogic.NewSecurityLogic(ctx, svcCtx)
+			if err = security.CheckAdminAccess(identity.Session, string(docsAlias), ip, identity.LoginIP); err != nil {
+				failAdminAccess(ctx, w, err)
+				return
+			}
+			if routealias.DocsPathNeedsResourcePermission(r.URL.Path) {
+				resource, ok := routealias.DocsResourceForPath(r.URL.Path)
+				if !ok {
 					helper.NewJSONResp(ctx, w).
 						SetHTTPStatus(http.StatusForbidden).
 						SetCode(codes.Forbidden).
 						Fail(i18n.MsgKeyForbidden)
-				case errors.Is(err, securitylogic.ErrAdminDisabled):
-					helper.NewJSONResp(ctx, w).
-						SetHTTPStatus(http.StatusUnauthorized).
-						SetCode(codes.Unauthorized).
-						Fail(i18n.MsgKeyUserDisabled)
-				case errors.Is(err, securitylogic.ErrAdminIPChanged):
-					helper.NewJSONResp(ctx, w).
-						SetHTTPStatus(http.StatusUnauthorized).
-						SetCode(codes.Unauthorized).
-						SetError(err).
-						Fail(i18n.MsgKeyAdminLoginIPChanged)
-				case errors.Is(err, securitylogic.ErrAdminIPNotAllowed):
-					helper.NewJSONResp(ctx, w).
-						SetHTTPStatus(http.StatusUnauthorized).
-						SetCode(codes.Unauthorized).
-						SetError(err).
-						Fail(i18n.MsgKeyAdminIPNotAllowed)
-				case errors.Is(err, securitylogic.ErrAdminMFABindRequired):
-					helper.NewJSONResp(ctx, w).
-						SetHTTPStatus(http.StatusOK).
-						SetCode(codes.CheckMFABind).
-						SetError(err).
-						Fail(i18n.MsgKeyCheckMFABind)
-				case errors.Is(err, securitylogic.ErrAdminMFARequired):
-					helper.NewJSONResp(ctx, w).
-						SetHTTPStatus(http.StatusOK).
-						SetCode(codes.CheckMFACode).
-						SetError(err).
-						Fail(i18n.MsgKeyCheckMFA)
-				default:
-					helper.NewJSONResp(ctx, w).
-						SetHTTPStatus(http.StatusUnauthorized).
-						SetCode(codes.Unauthorized).
-						Fail(i18n.MsgKeyTokenInvalid)
+					return
 				}
-				return
+				allowed, permissionErr := security.CheckDocPermission(identity.UserID, resource)
+				if permissionErr != nil {
+					failAuthDependency(ctx, w, permissionErr)
+					return
+				}
+				if !allowed {
+					helper.NewJSONResp(ctx, w).
+						SetHTTPStatus(http.StatusForbidden).
+						SetCode(codes.Forbidden).
+						Fail(i18n.MsgKeyForbidden)
+					return
+				}
 			}
 
 			requestctx.SetAccessToken(ctx, identity.Token)
-			requestctx.SetUser(ctx, identity.UserID, identity.UserName, utils.ClientIP(r))
+			requestctx.SetUser(ctx, identity.UserID, identity.UserName, clientIP)
+			ctx = cachelogic.WithAdminSession(ctx, identity.Session)
 			r = r.WithContext(loggerx.BindContext(ctx))
 			next(w, r)
 		}
 	}
-}
-
-// docsRouteAliasForPath 按文档站请求路径返回目录级权限别名；未命中具体目录时使用入口权限。
-func docsRouteAliasForPath(requestPath string) routealias.Alias {
-	return routealias.DocsAliasForPath(requestPath)
 }

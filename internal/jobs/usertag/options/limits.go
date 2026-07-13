@@ -2,13 +2,14 @@ package options
 
 import (
 	"admin/internal/jobs/usertag/types"
+	tasklimits "admin/internal/task/limits"
 
 	"github.com/Is999/go-utils/errors"
 )
 
 const (
 	// MaxShardTotal 限制单个用户标签工作流可拆出的最大节点分片数，避免误触发造成任务风暴。
-	MaxShardTotal = 128
+	MaxShardTotal = tasklimits.MaxShardTotal
 	// MaxPhysicalShardTotal 限制运行期和结果物理分片数量，当前 shard_no 固定为 0-1023。
 	MaxPhysicalShardTotal = 1024
 	// MaxBatchSize 限制单批 SQL 游标、IN 查询和 outbox claim 大小。

@@ -71,7 +71,7 @@ func EventOutboxRetryScanWorkflowDefinition(defaults Defaults) *taskqueue.Workfl
 func workflowDefinition(name, description, mode string, defaults Defaults) *taskqueue.WorkflowDefinition {
 	finalizeMaxRetry := 0
 	if mode == types.ModeFull {
-		// full finalize 会执行 MySQL RENAME TABLE 非幂等切表，禁止被工作流全局重试覆盖。
+		// full finalize 涉及结果版本提交，禁止被工作流全局重试覆盖。
 		finalizeMaxRetry = -1
 	}
 	return &taskqueue.WorkflowDefinition{

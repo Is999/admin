@@ -109,8 +109,20 @@ func TestTaskQueueRedisKey(t *testing.T) {
 // TestTaskRuntimeAndWorkflowKeys 验证任务运行快照和工作流 key 的完整规则。
 func TestTaskRuntimeAndWorkflowKeys(t *testing.T) {
 	useAppID(t, "215")
-	if got := keys.TaskRuntimeKey("task-1"); got != "app:215:task:runtime:task-1" {
+	if got := keys.TaskRuntimeKey("maintenance", "task-1"); got != "app:215:task:runtime:11:maintenance:6:task-1" {
 		t.Fatalf("keys.TaskRuntimeKey() = %q", got)
+	}
+	if got := keys.TaskRuntimeKey(" maintenance ", " task-1 "); got != "app:215:task:runtime:11:maintenance:6:task-1" {
+		t.Fatalf("keys.TaskRuntimeKey(trim) = %q", got)
+	}
+	if got := keys.TaskRuntimeKey("", "task-1"); got != "" {
+		t.Fatalf("空队列不应生成运行快照 key: %q", got)
+	}
+	if got := keys.TaskRuntimeKey("maintenance", ""); got != "" {
+		t.Fatalf("空任务 ID 不应生成运行快照 key: %q", got)
+	}
+	if keys.TaskRuntimeKey("a:b", "c") == keys.TaskRuntimeKey("a", "b:c") {
+		t.Fatal("含冒号的队列名和任务 ID 不应生成相同运行快照 key")
 	}
 	if got := keys.TaskWorkflowPrefix(); got != "app:215:task:workflow" {
 		t.Fatalf("keys.TaskWorkflowPrefix() = %q", got)
@@ -123,21 +135,6 @@ func TestTaskRuntimeAndWorkflowKeys(t *testing.T) {
 	}
 	if got := keys.TaskWorkflowNodeKey("wf-1", "root"); got != "app:215:task:workflow:wf-1:node:root" {
 		t.Fatalf("keys.TaskWorkflowNodeKey() = %q", got)
-	}
-	if got := keys.TaskWorkflowNodeScheduledKey("wf-1", "root"); got != "app:215:task:workflow:wf-1:node:root:scheduled" {
-		t.Fatalf("keys.TaskWorkflowNodeScheduledKey() = %q", got)
-	}
-	if got := keys.TaskWorkflowNodeFinalizedKey("wf-1", "root"); got != "app:215:task:workflow:wf-1:node:root:finalized" {
-		t.Fatalf("keys.TaskWorkflowNodeFinalizedKey() = %q", got)
-	}
-	if got := keys.TaskWorkflowNodeInstanceKey("wf-1", "root", 3); got != "app:215:task:workflow:wf-1:node:root:instance:3" {
-		t.Fatalf("keys.TaskWorkflowNodeInstanceKey() = %q", got)
-	}
-	if got := keys.TaskWorkflowCompletedKey("wf-1"); got != "app:215:task:workflow:wf-1:completed" {
-		t.Fatalf("keys.TaskWorkflowCompletedKey() = %q", got)
-	}
-	if got := keys.TaskWorkflowFailedKey("wf-1"); got != "app:215:task:workflow:wf-1:failed" {
-		t.Fatalf("keys.TaskWorkflowFailedKey() = %q", got)
 	}
 	if got := keys.TaskWorkflowUniqueKey("user_tag.delta.refresh", "daily"); got != "app:215:task:workflow:unique:user_tag.delta.refresh:daily" {
 		t.Fatalf("keys.TaskWorkflowUniqueKey() = %q", got)
@@ -175,6 +172,18 @@ func TestTaskSchedulerLeaderRedisKey(t *testing.T) {
 func TestTaskAsynqKeys(t *testing.T) {
 	useAppID(t, "215")
 	queue := keys.TaskQueueName("maintenance")
+	if got := keys.TaskAsynqPendingKey(queue); got != "asynq:{app:215:maintenance}:pending" {
+		t.Fatalf("keys.TaskAsynqPendingKey() = %q", got)
+	}
+	if got := keys.TaskAsynqActiveKey(queue); got != "asynq:{app:215:maintenance}:active" {
+		t.Fatalf("keys.TaskAsynqActiveKey() = %q", got)
+	}
+	if got := keys.TaskAsynqPendingKey(""); got != "asynq:{}:pending" {
+		t.Fatalf("keys.TaskAsynqPendingKey(empty) = %q", got)
+	}
+	if got := keys.TaskAsynqActiveKey(""); got != "asynq:{}:active" {
+		t.Fatalf("keys.TaskAsynqActiveKey(empty) = %q", got)
+	}
 	if got := keys.TaskAsynqScheduledKey(queue); got != "asynq:{app:215:maintenance}:scheduled" {
 		t.Fatalf("keys.TaskAsynqScheduledKey() = %q", got)
 	}

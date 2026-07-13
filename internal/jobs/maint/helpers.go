@@ -63,8 +63,8 @@ func EnsureIndexPrefix(ctx context.Context, db *gorm.DB, check IndexPrefixCheck)
 	if table == "" || leadColumn == "" {
 		return errors.Errorf("%s 索引校验配置缺失 table=%s lead_column=%s", subject, table, leadColumn)
 	}
-	cacheKey := dbCacheKey(db, "index:"+table+":"+strings.ToLower(leadColumn))
-	if val, ok := indexPrefixCache.Load(cacheKey); ok && val.(bool) {
+	cacheID := dbCacheKey(db, "index:"+table+":"+strings.ToLower(leadColumn))
+	if val, ok := indexPrefixCache.Load(cacheID); ok && val.(bool) {
 		return nil
 	}
 	indexes, err := db.WithContext(ctx).Migrator().GetIndexes(table)
@@ -73,7 +73,7 @@ func EnsureIndexPrefix(ctx context.Context, db *gorm.DB, check IndexPrefixCheck)
 	}
 	for _, index := range indexes {
 		if IndexHasPrefix(index.Columns(), leadColumn) {
-			indexPrefixCache.Store(cacheKey, true)
+			indexPrefixCache.Store(cacheID, true)
 			return nil
 		}
 	}

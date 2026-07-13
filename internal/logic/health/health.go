@@ -1,16 +1,19 @@
 package health
 
 import (
-	corelogic "admin/internal/logic"
 	"context"
 	"database/sql"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	codes "admin/common/codes"
+	"admin/common/idgen"
+	"admin/internal/bootstrap/runmode"
 	"admin/internal/config"
+	corelogic "admin/internal/logic"
 	"admin/internal/svc"
 	"admin/internal/types"
 
@@ -34,6 +37,9 @@ type HealthLogic struct {
 	*corelogic.BaseLogic // BaseLogic 提供统一上下文、日志和 ServiceContext 访问能力。
 }
 
+// dependencyCheck 表示一个互不依赖的 readiness 探测。
+type dependencyCheck func() (types.HealthDependencyStatus, error)
+
 // NewHealthLogic 创建健康检查 logic。
 func NewHealthLogic(ctx context.Context, svcCtx *svc.ServiceContext) *HealthLogic {
 	return &HealthLogic{BaseLogic: corelogic.NewBaseLogicWithContext(ctx, svcCtx)}
@@ -51,35 +57,49 @@ func (l *HealthLogic) Liveness() *types.HealthStatusResp {
 
 // Readiness 检查核心依赖是否可用，适合 Kubernetes readinessProbe 和发布流量切换。
 func (l *HealthLogic) Readiness(ctx context.Context) (*types.HealthStatusResp, error) {
-	cfg := l.currentConfig()
-	statuses := make([]types.HealthDependencyStatus, 0, 9)
-	var firstErr error
-
-	appendStatus := func(status types.HealthDependencyStatus, err error) {
-		statuses = append(statuses, status)
-		if err != nil && firstErr == nil {
-			firstErr = errors.Tag(err)
-		}
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	cfg := l.currentConfig()
+	checks := make([]dependencyCheck, 0, 10)
 
 	if l.service() == nil {
-		appendStatus(dependencyError("service_context", codes.DependencyUnavailable, errors.New("ServiceContext未初始化")))
+		checks = append(checks, func() (types.HealthDependencyStatus, error) {
+			return dependencyError("service_context", codes.DependencyUnavailable, errors.New("ServiceContext未初始化"))
+		})
 	} else {
-		appendStatus(l.checkGormDB(ctx, "mysql", l.service().SiteDBs.MainDB, codes.MySQLUnavailable))
+		checks = append(checks, func() (types.HealthDependencyStatus, error) {
+			return l.checkGormDB(ctx, "mysql", l.service().SiteDBs.MainDB, codes.MySQLUnavailable)
+		})
 		names := make([]string, 0, len(l.service().SiteDBs.NamedDBs))
 		for name := range l.service().SiteDBs.NamedDBs {
 			names = append(names, string(name))
 		}
 		sort.Strings(names)
 		for _, name := range names {
+			name := name
 			db := l.service().SiteDBs.NamedDBs[svc.DBName(name)]
-			appendStatus(l.checkGormDB(ctx, "mysql_"+string(name), db, codes.MySQLUnavailable))
+			checks = append(checks, func() (types.HealthDependencyStatus, error) {
+				return l.checkGormDB(ctx, "mysql_"+name, db, codes.MySQLUnavailable)
+			})
 		}
 	}
-	appendStatus(l.checkRedis(ctx))
-	appendStatus(l.checkKafka(cfg.Kafka.Enabled))
-	appendStatus(l.checkTaskQueue(cfg.Task.Enabled))
-	appendStatus(l.checkCollector(cfg.Collector.Enabled))
+	checks = append(checks,
+		func() (types.HealthDependencyStatus, error) { return l.checkRedis(ctx) },
+		func() (types.HealthDependencyStatus, error) { return l.checkSnowflake(ctx) },
+		func() (types.HealthDependencyStatus, error) { return l.checkKafka(ctx, cfg.Kafka.Enabled) },
+		func() (types.HealthDependencyStatus, error) { return l.checkVirusScanner(ctx) },
+		func() (types.HealthDependencyStatus, error) {
+			return l.checkTaskQueue(ctx, cfg.Task.Enabled, runmode.Has(cfg.RunMode, runmode.Worker), runmode.Has(cfg.RunMode, runmode.Scheduler))
+		},
+		func() (types.HealthDependencyStatus, error) {
+			return l.checkCollector(ctx, cfg.Collector.Enabled, runmode.ShouldStartWorker(cfg.RunMode))
+		},
+		func() (types.HealthDependencyStatus, error) {
+			return l.checkCDC(ctx, cfg.CDC.Enabled, runmode.ShouldStartWorker(cfg.RunMode))
+		},
+	)
+	statuses, firstErr := runDependencyChecks(checks)
 
 	resp := &types.HealthStatusResp{
 		Status:       healthStatusOK,
@@ -93,6 +113,51 @@ func (l *HealthLogic) Readiness(ctx context.Context) (*types.HealthStatusResp, e
 		return resp, firstErr
 	}
 	return resp, nil
+}
+
+// checkVirusScanner 检查上传病毒扫描服务是否可用。
+func (l *HealthLogic) checkVirusScanner(ctx context.Context) (types.HealthDependencyStatus, error) {
+	if l.service() == nil {
+		return dependencyError("virus_scanner", codes.DependencyUnavailable, errors.New("ServiceContext未初始化"))
+	}
+	scanner, err := l.service().VirusScanner()
+	if err != nil {
+		return dependencyError("virus_scanner", codes.DependencyUnavailable, errors.Tag(err))
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+	if err = scanner.Ready(checkCtx); err != nil {
+		return dependencyError("virus_scanner", codes.DependencyUnavailable, errors.Tag(err))
+	}
+	return dependencyOK("virus_scanner"), nil
+}
+
+// runDependencyChecks 并行探测独立依赖，并按注册顺序返回状态。
+func runDependencyChecks(checks []dependencyCheck) ([]types.HealthDependencyStatus, error) {
+	type result struct {
+		status types.HealthDependencyStatus // 当前依赖的健康状态
+		err    error                        // 当前依赖的探测错误
+	}
+	results := make([]result, len(checks))
+	var wg sync.WaitGroup
+	wg.Add(len(checks))
+	for index, check := range checks {
+		go func() {
+			defer wg.Done()
+			results[index].status, results[index].err = check()
+		}()
+	}
+	wg.Wait()
+
+	statuses := make([]types.HealthDependencyStatus, len(results))
+	var firstErr error
+	for index, item := range results {
+		statuses[index] = item.status
+		if item.err != nil && firstErr == nil {
+			firstErr = errors.Tag(item.err)
+		}
+	}
+	return statuses, firstErr
 }
 
 // currentConfig 读取当前运行配置，空 ServiceContext 时返回零值配置。
@@ -148,37 +213,91 @@ func (l *HealthLogic) checkRedis(ctx context.Context) (types.HealthDependencySta
 	return dependencyOK("redis"), nil
 }
 
-// checkKafka 检查 Kafka 生产者是否按配置就绪。
-func (l *HealthLogic) checkKafka(enabled bool) (types.HealthDependencyStatus, error) {
+// checkSnowflake 检查雪花 ID 运行资源是否可用。
+func (l *HealthLogic) checkSnowflake(ctx context.Context) (types.HealthDependencyStatus, error) {
+	if l.service() == nil {
+		return dependencyError("snowflake", codes.DependencyUnavailable, errors.New("ServiceContext未初始化"))
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+	if l.service().SnowflakeLease != nil {
+		if err := l.service().SnowflakeLease.Ready(checkCtx); err != nil {
+			return dependencyError("snowflake", codes.DependencyUnavailable, errors.Tag(err))
+		}
+		return dependencyOK("snowflake"), nil
+	}
+	if _, ok := idgen.CurrentWorkerID(); !ok {
+		return dependencyError("snowflake", codes.DependencyUnavailable, errors.New("雪花 worker_id 未初始化"))
+	}
+	return dependencyOK("snowflake"), nil
+}
+
+// checkKafka 检查 Kafka broker 是否按配置就绪。
+func (l *HealthLogic) checkKafka(ctx context.Context, enabled bool) (types.HealthDependencyStatus, error) {
 	if !enabled {
 		return dependencySkipped("kafka", "Kafka未启用"), nil
 	}
 	if l.service() == nil || l.service().Kafka == nil || !l.service().Kafka.Enabled() {
 		return dependencyError("kafka", codes.KafkaUnavailable, errors.New("Kafka生产者未初始化"))
 	}
+	checkCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+	if err := l.service().Kafka.Ping(checkCtx); err != nil {
+		return dependencyError("kafka", codes.KafkaUnavailable, errors.Tag(err))
+	}
 	return dependencyOK("kafka"), nil
 }
 
 // checkTaskQueue 检查任务队列组件是否按配置就绪。
-func (l *HealthLogic) checkTaskQueue(enabled bool) (types.HealthDependencyStatus, error) {
+func (l *HealthLogic) checkTaskQueue(ctx context.Context, enabled bool, requireWorker bool, requireScheduler bool) (types.HealthDependencyStatus, error) {
 	if !enabled {
 		return dependencySkipped("task_queue", "任务队列未启用"), nil
 	}
 	if l.service() == nil || l.service().Task == nil || !l.service().Task.IsEnabled() {
 		return dependencyError("task_queue", codes.TaskQueueUnavailable, errors.New("任务队列未初始化或未启用"))
 	}
+	readiness, ok := l.service().Task.(svc.TaskQueueReadiness)
+	if !ok {
+		return dependencyError("task_queue", codes.TaskQueueUnavailable, errors.New("任务队列未实现就绪探测"))
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+	if err := readiness.Ready(checkCtx, requireWorker, requireScheduler); err != nil {
+		return dependencyError("task_queue", codes.TaskQueueUnavailable, errors.Tag(err))
+	}
 	return dependencyOK("task_queue"), nil
 }
 
-// checkCollector 检查 Collector 组件是否按配置就绪。
-func (l *HealthLogic) checkCollector(enabled bool) (types.HealthDependencyStatus, error) {
+// checkCollector 检查 Collector Kafka 链路和后台 Worker 是否就绪。
+func (l *HealthLogic) checkCollector(ctx context.Context, enabled bool, requireWorker bool) (types.HealthDependencyStatus, error) {
 	if !enabled {
 		return dependencySkipped("collector", "Collector未启用"), nil
 	}
 	if l.service() == nil || l.service().Collector == nil {
 		return dependencyError("collector", codes.CollectorUnavailable, errors.New("Collector未初始化"))
 	}
+	checkCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+	if err := l.service().Collector.Ready(checkCtx, requireWorker); err != nil {
+		return dependencyError("collector", codes.CollectorUnavailable, errors.Tag(err))
+	}
 	return dependencyOK("collector"), nil
+}
+
+// checkCDC 检查 CDC Kafka Topic 和当前部署模式要求的消费循环是否就绪。
+func (l *HealthLogic) checkCDC(ctx context.Context, enabled bool, requireWorker bool) (types.HealthDependencyStatus, error) {
+	if !enabled {
+		return dependencySkipped("cdc", "CDC未启用"), nil
+	}
+	if l.service() == nil || l.service().CDC == nil {
+		return dependencyError("cdc", codes.DependencyUnavailable, errors.New("CDC未初始化"))
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+	if err := l.service().CDC.Ready(checkCtx, requireWorker); err != nil {
+		return dependencyError("cdc", codes.DependencyUnavailable, errors.Tag(err))
+	}
+	return dependencyOK("cdc"), nil
 }
 
 // checkSQLDB 使用 database/sql 连接池执行 PING 探测。

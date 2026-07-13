@@ -6,27 +6,60 @@ import (
 	cachelogic "admin/internal/logic/cache"
 	rbaclogic "admin/internal/logic/rbac"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"admin/common/codes"
 	keys "admin/common/rediskeys"
 	"admin/internal/config"
 	"admin/internal/model"
+	"admin/internal/requestctx"
 	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/alicebob/miniredis/v2"
+	miniredisserver "github.com/alicebob/miniredis/v2/server"
 	"github.com/redis/go-redis/v9"
 )
+
+// TestEnabledRoleIDsReusesRequestResult 验证同一请求复用已解析角色，不再访问 Redis 或数据库。
+func TestEnabledRoleIDsReusesRequestResult(t *testing.T) {
+	ctx, _ := requestctx.New(context.Background())
+	requestctx.SetEnabledRoleIDs(ctx, []int{2, 3})
+	logicObj := NewSecurityLogic(ctx, svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+	roleIDs, err := logicObj.EnabledRoleIDs(7)
+	if err != nil {
+		t.Fatalf("EnabledRoleIDs() error = %v", err)
+	}
+	if fmt.Sprint(roleIDs) != "[2 3]" {
+		t.Fatalf("EnabledRoleIDs() = %v, want [2 3]", roleIDs)
+	}
+}
+
+// runSecurityStandaloneRedis 模拟真实单机 Redis 的拓扑探测响应。
+func runSecurityStandaloneRedis(t *testing.T) *miniredis.Miniredis {
+	t.Helper()
+	server := miniredis.RunT(t)
+	server.Server().SetPreHook(func(peer *miniredisserver.Peer, command string, args ...string) bool {
+		if !strings.EqualFold(command, "cluster") || len(args) != 1 || !strings.EqualFold(args[0], "info") {
+			return false
+		}
+		peer.WriteError("ERR This instance has cluster support disabled")
+		return true
+	})
+	return server
+}
 
 // TestPermissionSQLContainsAllFrontendCodes 验证初始化 SQL 已覆盖前端当前维护的全部权限码。
 func TestPermissionSQLContainsAllFrontendCodes(t *testing.T) {
@@ -143,9 +176,7 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 		"runtime.config.import",
 		"security.debug.index",
 	}
-	for _, alias := range routealias.DocsAliases() {
-		requiredModules = append(requiredModules, string(alias))
-	}
+	requiredModules = append(requiredModules, string(routealias.DocsIndex), string(routealias.DocsAPIServiceIndex))
 	var missing []string
 	for _, module := range requiredModules {
 		if _, ok := sqlModuleSet[module]; !ok {
@@ -154,52 +185,6 @@ func TestPermissionSQLContainsRequiredCurrentModules(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Fatalf("database permission SQL missing required modules: %v", missing)
-	}
-}
-
-// TestRoutePermissionModulesForDocsFile 验证单篇文档鉴权只使用自身文件权限。
-func TestRoutePermissionModulesForDocsFile(t *testing.T) {
-	got := routePermissionModules("docs.file.api/接口文档/前台系统/系统接口.md")
-	want := []string{
-		"docs.file.api/接口文档/前台系统/系统接口.md",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("routePermissionModules() len = %d, want %d, got=%v", len(got), len(want), got)
-	}
-	for index := range want {
-		if got[index] != want[index] {
-			t.Fatalf("routePermissionModules()[%d] = %q, want %q", index, got[index], want[index])
-		}
-	}
-}
-
-// TestDocsFileRoutePermissionIDsIgnoreOldCandidateCache 验证旧候选缓存中的父目录权限不会继续放行单篇文档。
-func TestDocsFileRoutePermissionIDsIgnoreOldCandidateCache(t *testing.T) {
-	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
-	logicObj := NewSecurityLogic(context.Background(), svcCtx)
-	ctx := context.Background()
-
-	routeAlias := "docs.file.api/接口文档/前台系统/认证接口.md"
-	routeCacheKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.RoutePermissionIDs, routeAlias))
-	if err := client.SAdd(ctx, routeCacheKey, "165").Err(); err != nil {
-		t.Fatalf("SAdd(old route cache) error = %v", err)
-	}
-	permissionModuleKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.PermissionModule)
-	if err := client.HSet(ctx, permissionModuleKey,
-		"165", string(routealias.DocsAPIServiceFront),
-		"223", routeAlias,
-	).Err(); err != nil {
-		t.Fatalf("HSet(permission_module) error = %v", err)
-	}
-
-	got, err := logicObj.routePermissionIDs(routeAlias)
-	if err != nil {
-		t.Fatalf("routePermissionIDs(%s) error = %v", routeAlias, err)
-	}
-	if len(got) != 1 || got[0] != 223 {
-		t.Fatalf("routePermissionIDs(%s) = %v, want [223]", routeAlias, got)
 	}
 }
 
@@ -215,6 +200,11 @@ func TestMFAResultByErrorRecognizesWrappedErrors(t *testing.T) {
 			name: "后台敏感操作MFA二次票据过期",
 			got:  OperateMFABizResult(errors.Tag(ErrAdminMFATwoStepExpired), "test"),
 			want: codes.CheckMFAAgain,
+		},
+		{
+			name: "后台敏感操作Redis不可用",
+			got:  OperateMFABizResult(cachelogic.WrapRedisUnavailable(nil, "test"), "test"),
+			want: codes.RedisUnavailable,
 		},
 	}
 	for _, item := range cases {
@@ -300,6 +290,229 @@ func TestCheckRoutePermissionAllowsMiddlewareIgnoreWithoutPermissionStore(t *tes
 	}
 	if !allowed {
 		t.Fatalf("CheckRoutePermission(%s) allowed = false, want true", routePermissionBypassAlias)
+	}
+}
+
+// TestPermissionReadsFailWithoutRedis 验证 Redis 未初始化时权限读取直接失败，不绕过缓存查询数据库。
+func TestPermissionReadsFailWithoutRedis(t *testing.T) {
+	logicObj := NewSecurityLogic(context.Background(), svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+	resource := routealias.DocResource{Site: routealias.DocSiteAPI, Path: "接口文档/前台系统/系统接口.md"}
+	checks := []struct {
+		name string       // 测试链路名称
+		run  func() error // 待执行的权限读取
+	}{
+		{name: "路由权限", run: func() error {
+			_, err := logicObj.CheckRoutePermission(7, "admin.list")
+			return err
+		}},
+		{name: "文档权限", run: func() error {
+			_, err := logicObj.CheckDocPermission(7, resource)
+			return err
+		}},
+		{name: "可见文档", run: func() error {
+			_, err := logicObj.AllowedDocResources(7)
+			return err
+		}},
+		{name: "权限码", run: func() error {
+			_, err := logicObj.UserPermissionUUIDsWithCache(7)
+			return err
+		}},
+	}
+	for _, check := range checks {
+		if err := check.run(); !errors.Is(err, cachelogic.ErrRedisUnavailable) {
+			t.Fatalf("%s error=%v, want ErrRedisUnavailable", check.name, err)
+		}
+	}
+}
+
+// TestCheckPermissionsUseNormalizedCaches 验证路由与文档鉴权命中规范化 Redis 缓存时不依赖数据库。
+func TestCheckPermissionsUseNormalizedCaches(t *testing.T) {
+	server := runSecurityStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
+	logicObj := NewSecurityLogic(context.Background(), svcCtx)
+	base := logicObj.BaseLogic
+	ctx := context.Background()
+	adminID := 7
+	roleID := 3
+	routePermissionID := 9
+	docPermissionID := 10
+	docResource := routealias.DocResource{Site: routealias.DocSiteAPI, Path: "接口文档/前台系统/系统接口.md"}
+
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, adminID)), roleID).Err(); err != nil {
+		t.Fatalf("写入管理员角色关系缓存失败: %v", err)
+	}
+	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.RoleStatus), strconv.Itoa(roleID), "1").Err(); err != nil {
+		t.Fatalf("写入角色状态缓存失败: %v", err)
+	}
+	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.RoutePermissionIDs), "admin.list", "8,"+strconv.Itoa(routePermissionID)).Err(); err != nil {
+		t.Fatalf("写入路由权限索引失败: %v", err)
+	}
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, roleID)), routePermissionID).Err(); err != nil {
+		t.Fatalf("写入角色路由权限关系失败: %v", err)
+	}
+	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.DocResourcePermissionID), docResource.Key(), docPermissionID).Err(); err != nil {
+		t.Fatalf("写入文档资源索引失败: %v", err)
+	}
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RoleDocPermission, roleID)), docPermissionID).Err(); err != nil {
+		t.Fatalf("写入角色文档权限关系失败: %v", err)
+	}
+	docPermissionsJSON, err := json.Marshal([]model.AdminDocPermission{{
+		ID: docPermissionID, Site: docResource.Site, Path: docResource.Path, Status: 1,
+	}})
+	if err != nil {
+		t.Fatalf("编码文档权限缓存失败: %v", err)
+	}
+	if err := client.Set(ctx, cachelogic.TableCachePhysicalKey(base, keys.DocPermissionList), docPermissionsJSON, 0).Err(); err != nil {
+		t.Fatalf("写入文档权限列表缓存失败: %v", err)
+	}
+
+	allowed, err := logicObj.CheckRoutePermission(adminID, "admin.list")
+	if err != nil || !allowed {
+		t.Fatalf("CheckRoutePermission(admin.list) allowed=%v error=%v", allowed, err)
+	}
+	allowed, err = logicObj.CheckRoutePermission(adminID, "admin.delete")
+	if err != nil || allowed {
+		t.Fatalf("CheckRoutePermission(admin.delete) allowed=%v error=%v", allowed, err)
+	}
+	allowed, err = logicObj.CheckDocPermission(adminID, docResource)
+	if err != nil || !allowed {
+		t.Fatalf("CheckDocPermission(allowed) allowed=%v error=%v", allowed, err)
+	}
+	allowed, err = logicObj.CheckDocPermission(adminID, routealias.DocResource{
+		Site: routealias.DocSiteAPI,
+		Path: "接口文档/前台系统/用户接口.md",
+	})
+	if err != nil || allowed {
+		t.Fatalf("CheckDocPermission(denied) allowed=%v error=%v", allowed, err)
+	}
+	resources, err := logicObj.AllowedDocResources(adminID)
+	if err != nil {
+		t.Fatalf("AllowedDocResources() error=%v", err)
+	}
+	if len(resources) != 1 || resources[0] != docResource {
+		t.Fatalf("AllowedDocResources() resources=%v, want [%v]", resources, docResource)
+	}
+}
+
+// TestAdminForAccessUsesVerifiedSession 验证账号安全前置校验直接复用中间件已读取的会话。
+func TestAdminForAccessUsesVerifiedSession(t *testing.T) {
+	lastLoginTime := time.Date(2026, 7, 23, 15, 30, 0, 0, time.Local)
+	session := &types.AdminSession{
+		ID:                7,
+		UserName:          "admin007",
+		Status:            1,
+		MfaStatus:         1,
+		NeedResetPassword: 0,
+		LastLoginTime:     lastLoginTime.Format(time.DateTime),
+		Token:             "token",
+	}
+
+	admin, err := adminForAccess(session)
+	if err != nil {
+		t.Fatalf("adminForAccess() error=%v", err)
+	}
+	if admin.ID != 7 || admin.Name != "admin007" || admin.Status != 1 || admin.MfaStatus != 1 {
+		t.Fatalf("adminForAccess() admin=%+v", admin)
+	}
+	if !admin.LastLoginTime.Equal(lastLoginTime) || admin.MfaSecureKey != adminAccessMFASecretUnknown {
+		t.Fatalf("adminForAccess() session state=%+v", admin)
+	}
+}
+
+// TestCheckPermissionsRejectDisabledRole 验证管理员关系和权限关系仍存在时，禁用角色会统一阻断路由与文档权限。
+func TestCheckPermissionsRejectDisabledRole(t *testing.T) {
+	server := runSecurityStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
+	logicObj := NewSecurityLogic(context.Background(), svcCtx)
+	base := logicObj.BaseLogic
+	ctx := context.Background()
+	adminID := 7
+	roleID := 3
+	routePermissionID := 9
+	docPermissionID := 10
+	resource := routealias.DocResource{Site: routealias.DocSiteAPI, Path: "接口文档/前台系统/系统接口.md"}
+
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, adminID)), roleID).Err(); err != nil {
+		t.Fatalf("写入管理员角色关系缓存失败: %v", err)
+	}
+	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.RoleStatus), strconv.Itoa(roleID), "0").Err(); err != nil {
+		t.Fatalf("写入角色禁用状态失败: %v", err)
+	}
+	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.RoutePermissionIDs), "admin.list", routePermissionID).Err(); err != nil {
+		t.Fatalf("写入路由权限索引失败: %v", err)
+	}
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, roleID)), routePermissionID).Err(); err != nil {
+		t.Fatalf("写入角色路由权限关系失败: %v", err)
+	}
+	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.DocResourcePermissionID), resource.Key(), docPermissionID).Err(); err != nil {
+		t.Fatalf("写入文档资源索引失败: %v", err)
+	}
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RoleDocPermission, roleID)), docPermissionID).Err(); err != nil {
+		t.Fatalf("写入角色文档权限关系失败: %v", err)
+	}
+	docPermissionsJSON, err := json.Marshal([]model.AdminDocPermission{{
+		ID: docPermissionID, Site: resource.Site, Path: resource.Path, Status: 1,
+	}})
+	if err != nil {
+		t.Fatalf("编码文档权限缓存失败: %v", err)
+	}
+	if err := client.Set(ctx, cachelogic.TableCachePhysicalKey(base, keys.DocPermissionList), docPermissionsJSON, 0).Err(); err != nil {
+		t.Fatalf("写入文档权限列表缓存失败: %v", err)
+	}
+
+	if allowed, err := logicObj.CheckRoutePermission(adminID, "admin.list"); err != nil || allowed {
+		t.Fatalf("CheckRoutePermission(disabled role) allowed=%v error=%v", allowed, err)
+	}
+	if allowed, err := logicObj.CheckDocPermission(adminID, resource); err != nil || allowed {
+		t.Fatalf("CheckDocPermission(disabled role) allowed=%v error=%v", allowed, err)
+	}
+	if resources, err := logicObj.AllowedDocResources(adminID); err != nil || len(resources) != 0 {
+		t.Fatalf("AllowedDocResources(disabled role) resources=%v error=%v", resources, err)
+	}
+}
+
+// TestCheckPermissionsUseEnabledSuperRole 验证启用超级角色跳过普通权限匹配。
+func TestCheckPermissionsUseEnabledSuperRole(t *testing.T) {
+	server := runSecurityStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
+	logicObj := NewSecurityLogic(context.Background(), svcCtx)
+	base := logicObj.BaseLogic
+	ctx := context.Background()
+	adminID := 7
+	resource := routealias.DocResource{Site: routealias.DocSiteAPI, Path: "不存在于权限表但格式合法.md"}
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, adminID)), corelogic.AdminSuperRoleID).Err(); err != nil {
+		t.Fatalf("写入超级管理员角色关系失败: %v", err)
+	}
+	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.RoleStatus), strconv.Itoa(corelogic.AdminSuperRoleID), "1").Err(); err != nil {
+		t.Fatalf("写入超级管理员角色状态失败: %v", err)
+	}
+	docPermissionsJSON, err := json.Marshal([]model.AdminDocPermission{{
+		ID: 10, Site: routealias.DocSiteAPI, Path: "接口文档/前台系统/系统接口.md", Status: 1,
+	}})
+	if err != nil {
+		t.Fatalf("编码文档权限缓存失败: %v", err)
+	}
+	if err := client.Set(ctx, cachelogic.TableCachePhysicalKey(base, keys.DocPermissionList), docPermissionsJSON, 0).Err(); err != nil {
+		t.Fatalf("写入文档权限列表缓存失败: %v", err)
+	}
+
+	allowed, err := logicObj.CheckRoutePermission(adminID, "permission.not_registered")
+	if err != nil || !allowed {
+		t.Fatalf("CheckRoutePermission(super) allowed=%v error=%v", allowed, err)
+	}
+	allowed, err = logicObj.CheckDocPermission(adminID, resource)
+	if err != nil || !allowed {
+		t.Fatalf("CheckDocPermission(super) allowed=%v error=%v", allowed, err)
+	}
+	resources, err := logicObj.AllowedDocResources(adminID)
+	if err != nil {
+		t.Fatalf("AllowedDocResources(super) error=%v", err)
+	}
+	if len(resources) != 1 || resources[0].Path != "接口文档/前台系统/系统接口.md" {
+		t.Fatalf("AllowedDocResources(super) resources=%v, want all enabled docs", resources)
 	}
 }
 
@@ -462,87 +675,57 @@ func TestShouldBypassLoginMFACheck(t *testing.T) {
 	}
 }
 
-// TestRoutePermissionIDsUsesCachedSet 验证路由权限候选缓存命中时可直接解析权限 ID 集合。
-func TestRoutePermissionIDsUsesCachedSet(t *testing.T) {
-	server := miniredis.RunT(t)
+// TestCheckAdminLoginIPRejectsEmptyEnabledWhitelist 验证白名单启用但未配置 IP 时会拒绝登录。
+func TestCheckAdminLoginIPRejectsEmptyEnabledWhitelist(t *testing.T) {
+	server := runSecurityStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
-	logicObj := NewSecurityLogic(context.Background(), svcCtx)
-	cacheKey := fmt.Sprintf(keys.RoutePermissionIDs, "admin.list")
-	physicalCacheKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, cacheKey)
-	if err := client.SAdd(context.Background(), physicalCacheKey, "2", "5").Err(); err != nil {
-		t.Fatalf("SAdd(%s) error = %v", cacheKey, err)
-	}
-	got, err := logicObj.routePermissionIDs("admin.list")
-	if err != nil {
-		t.Fatalf("routePermissionIDs(admin.list) error = %v", err)
-	}
-	if len(got) != 2 || got[0] != 2 || got[1] != 5 {
-		t.Fatalf("routePermissionIDs(admin.list) = %v, want [2 5]", got)
-	}
-	aliasIndexKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RoutePermissionAliasIndex)
-	if ok, err := client.SIsMember(context.Background(), aliasIndexKey, "admin.list").Result(); err != nil || !ok {
-		t.Fatalf("routePermissionIDs(admin.list) did not track route permission alias index")
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
+	seedBoolSecurityConfig(t, client, ConfigAdminIPWhitelistEnabled, true)
+	seedStringSliceSecurityConfig(t, client, ConfigAdminIPWhitelist, "[]")
+	logicObj := NewSecurityLogic(context.Background(), svc.NewServiceContext(
+		config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client},
+	))
+
+	if err := logicObj.CheckAdminLoginIP("127.0.0.1"); !errors.Is(err, ErrAdminIPNotAllowed) {
+		t.Fatalf("CheckAdminLoginIP error = %v, want %v", err, ErrAdminIPNotAllowed)
 	}
 }
 
-// TestRoutePermissionIDsRebuildsFromPermissionCaches 验证路由候选权限缓存缺失时可基于当前 module 缓存自动重建。
-func TestRoutePermissionIDsRebuildsFromPermissionCaches(t *testing.T) {
-	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
-	logicObj := NewSecurityLogic(context.Background(), svcCtx)
-	ctx := context.Background()
-
-	permissionModuleKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.PermissionModule)
-	if err := client.HSet(ctx, permissionModuleKey, "2", "admin.list").Err(); err != nil {
-		t.Fatalf("HSet(permission_module) error = %v", err)
-	}
-
-	got, err := logicObj.routePermissionIDs("admin.list")
-	if err != nil {
-		t.Fatalf("routePermissionIDs(admin.list) error = %v", err)
-	}
-	if len(got) != 1 || got[0] != 2 {
-		t.Fatalf("routePermissionIDs(admin.list) = %v, want [2]", got)
-	}
-	routeCacheKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.RoutePermissionIDs, "admin.list"))
-	if !server.Exists(routeCacheKey) {
-		t.Fatalf("routePermissionIDs(admin.list) did not rebuild route_permission_ids cache")
+// TestForceLoginMFAEnabledFailsWhenConfigUnavailable 验证强制 MFA 配置不可用时不会静默放行。
+func TestForceLoginMFAEnabledFailsWhenConfigUnavailable(t *testing.T) {
+	if _, err := newTestSecurityLogic().ForceLoginMFAEnabled(); err == nil {
+		t.Fatal("ForceLoginMFAEnabled error = nil, want config error")
 	}
 }
 
-// TestRefreshPermissionRelatedCacheDeletesRoutePermissionCache 验证权限缓存刷新会按索引精确清理路由候选缓存。
-func TestRefreshPermissionRelatedCacheDeletesRoutePermissionCache(t *testing.T) {
-	server := miniredis.RunT(t)
+// TestRefreshPermissionRelatedCacheDeletesCoreAndAffectedRoleCaches 验证权限缓存刷新会清理共享索引和受影响角色关系缓存。
+func TestRefreshPermissionRelatedCacheDeletesCoreAndAffectedRoleCaches(t *testing.T) {
+	server := runSecurityStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svcCtx)
 	logicObj := &rbaclogic.AdminPermissionLogic{BaseLogic: base}
 	ctx := context.Background()
+	affectedRoleKey := cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 7))
+	unaffectedRoleKey := cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 8))
 
 	keysToPrepare := []string{
 		cachelogic.TableCachePhysicalKey(base, keys.PermissionTree),
-		cachelogic.TableCachePhysicalKey(base, keys.PermissionModule),
+		cachelogic.TableCachePhysicalKey(base, keys.RoutePermissionIDs),
 		cachelogic.TableCachePhysicalKey(base, keys.PermissionUUID),
-		cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RoutePermissionIDs, "admin.list")),
-		cachelogic.TableCachePhysicalKey(base, keys.RoutePermissionAliasIndex),
+		affectedRoleKey,
 	}
 	for _, key := range keysToPrepare {
-		if key == cachelogic.TableCachePhysicalKey(base, keys.PermissionModule) || key == cachelogic.TableCachePhysicalKey(base, keys.PermissionUUID) {
+		if key == cachelogic.TableCachePhysicalKey(base, keys.RoutePermissionIDs) || key == cachelogic.TableCachePhysicalKey(base, keys.PermissionUUID) {
 			if err := client.HSet(ctx, key, "1", "value").Err(); err != nil {
 				t.Fatalf("HSet(%s) error = %v", key, err)
 			}
 			continue
 		}
-		if key == cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RoutePermissionIDs, "admin.list")) {
-			if err := client.SAdd(ctx, key, "1").Err(); err != nil {
-				t.Fatalf("SAdd(%s) error = %v", key, err)
-			}
-			continue
-		}
-		if key == cachelogic.TableCachePhysicalKey(base, keys.RoutePermissionAliasIndex) {
-			if err := client.SAdd(ctx, key, "admin.list").Err(); err != nil {
+		if key == affectedRoleKey {
+			if err := client.SAdd(ctx, key, "100001").Err(); err != nil {
 				t.Fatalf("SAdd(%s) error = %v", key, err)
 			}
 			continue
@@ -551,13 +734,21 @@ func TestRefreshPermissionRelatedCacheDeletesRoutePermissionCache(t *testing.T) 
 			t.Fatalf("Set(%s) error = %v", key, err)
 		}
 	}
+	if err := client.SAdd(ctx, unaffectedRoleKey, "100002").Err(); err != nil {
+		t.Fatalf("SAdd(%s) error = %v", unaffectedRoleKey, err)
+	}
 
-	logicObj.RefreshPermissionRelatedCache()
+	if err := logicObj.RefreshPermissionRelatedCache(7); err != nil {
+		t.Fatalf("RefreshPermissionRelatedCache() error = %v", err)
+	}
 
 	for _, key := range keysToPrepare {
 		if server.Exists(key) {
 			t.Fatalf("refreshPermissionRelatedCache() key %s still exists", key)
 		}
+	}
+	if !server.Exists(unaffectedRoleKey) {
+		t.Fatalf("refreshPermissionRelatedCache() unrelated role key %s should be kept", unaffectedRoleKey)
 	}
 }
 
@@ -588,9 +779,9 @@ func TestBusinessLogicDoesNotUseRedisScanOrPrefixDelete(t *testing.T) {
 	}
 }
 
-// TestInvalidateAdminRelationCacheDeletesPermissionUUIDs 验证管理员关系缓存失效会同步删除最终权限码缓存。
-func TestInvalidateAdminRelationCacheDeletesPermissionUUIDs(t *testing.T) {
-	server := miniredis.RunT(t)
+// TestInvalidateDeletedAdminCacheDeletesSessionAndRoleCaches 验证删除管理员会清理登录态和角色缓存。
+func TestInvalidateDeletedAdminCacheDeletesSessionAndRoleCaches(t *testing.T) {
+	server := runSecurityStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svcCtx)
@@ -598,14 +789,11 @@ func TestInvalidateAdminRelationCacheDeletesPermissionUUIDs(t *testing.T) {
 	adminID := 7
 
 	stringKeys := []string{
-		keys.AdminInfoRedisKey(adminID),
-		cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminProfile, adminID)),
+		keys.AdminSessionRedisKey(adminID),
 	}
 	setKeys := []string{
 		cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, adminID)),
 		cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, adminID)),
-		cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, adminID)),
-		cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, adminID)),
 	}
 	for _, key := range stringKeys {
 		if err := client.Set(ctx, key, "value", 0).Err(); err != nil {
@@ -618,25 +806,33 @@ func TestInvalidateAdminRelationCacheDeletesPermissionUUIDs(t *testing.T) {
 		}
 	}
 
-	cachelogic.InvalidateAdminRelationCache(base, adminID)
+	if err := cachelogic.InvalidateDeletedAdminCache(base, adminID); err != nil {
+		t.Fatalf("cachelogic.InvalidateDeletedAdminCache() error = %v", err)
+	}
 
 	for _, key := range append(stringKeys, setKeys...) {
 		if server.Exists(key) {
-			t.Fatalf("cachelogic.InvalidateAdminRelationCache() key %s still exists", key)
+			t.Fatalf("cachelogic.InvalidateDeletedAdminCache() key %s still exists", key)
 		}
 	}
 }
 
-// TestGetUserPermissionCodesRebuildsPermissionUUIDCache 验证权限码查询会从权限 UUID 缓存重建最终权限码缓存。
-func TestGetUserPermissionCodesRebuildsPermissionUUIDCache(t *testing.T) {
-	server := miniredis.RunT(t)
+// TestGetUserPermissionCodesUsesNormalizedCaches 验证权限码查询通过角色关系与共享 UUID 索引完成。
+func TestGetUserPermissionCodesUsesNormalizedCaches(t *testing.T) {
+	server := runSecurityStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
 	ctx := context.Background()
 
 	base := corelogic.NewBaseLogicWithContext(ctx, svcCtx)
-	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, 7)), "2").Err(); err != nil {
-		t.Fatalf("SAdd(admin_permission_ids:7) error = %v", err)
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 7)), "3").Err(); err != nil {
+		t.Fatalf("SAdd(admin_role_ids:7) error = %v", err)
+	}
+	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.RoleStatus), "3", "1").Err(); err != nil {
+		t.Fatalf("HSet(role_status) error = %v", err)
+	}
+	if err := client.SAdd(ctx, cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 3)), "2").Err(); err != nil {
+		t.Fatalf("SAdd(role_permission:3) error = %v", err)
 	}
 	if err := client.HSet(ctx, cachelogic.TableCachePhysicalKey(base, keys.PermissionUUID), "2", "100002").Err(); err != nil {
 		t.Fatalf("HSet(permission_uuid) error = %v", err)
@@ -648,9 +844,6 @@ func TestGetUserPermissionCodesRebuildsPermissionUUIDCache(t *testing.T) {
 	}
 	if len(values) != 1 || values[0] != "100002" {
 		t.Fatalf("GetUserPermissionCodes(7) values = %v, want [100002]", values)
-	}
-	if !server.Exists(cachelogic.TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 7))) {
-		t.Fatalf("GetUserPermissionCodes(7) did not rebuild admin_permission_uuids cache")
 	}
 }
 

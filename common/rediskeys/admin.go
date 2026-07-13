@@ -6,19 +6,24 @@ import (
 	"strings"
 )
 
-// AdminInfoRedisKey 返回管理员登录态缓存 Redis key。
-func AdminInfoRedisKey(adminID int) string {
-	return WithPrefix(fmt.Sprintf(AdminInfo, adminID))
+// AdminSessionRedisKey 返回管理员会话缓存 Redis key。
+func AdminSessionRedisKey(adminID int) string {
+	return WithPrefix(fmt.Sprintf(AdminSession, adminID))
 }
 
-// AdminInfoPatternRedisKey 返回管理员登录态缓存展示模板 Redis key。
-func AdminInfoPatternRedisKey() string {
-	return prefixedPattern(AdminInfoPattern)
+// AdminSessionPatternRedisKey 返回管理员会话缓存展示模板 Redis key。
+func AdminSessionPatternRedisKey() string {
+	return prefixedPattern(AdminSessionPattern)
 }
 
-// AdminLogoutTokenRedisKey 返回管理员显式登出标记 Redis key。
-func AdminLogoutTokenRedisKey(adminID int) string {
-	return WithPrefix(fmt.Sprintf(AdminLogoutToken, adminID))
+// SecurityCacheSyncBarrierRedisKey 返回安全缓存失效补偿阻断键。
+func SecurityCacheSyncBarrierRedisKey() string {
+	return WithPrefix(SecurityCacheSyncBarrier)
+}
+
+// SecurityCacheSyncLockRedisKey 返回安全缓存失效补偿 worker 锁键。
+func SecurityCacheSyncLockRedisKey() string {
+	return WithPrefix(SecurityCacheSyncLock)
 }
 
 // LoginCheckMFAFlagRedisKey 返回管理员登录 MFA 完成标记 Redis key。
@@ -26,54 +31,35 @@ func LoginCheckMFAFlagRedisKey(adminID int) string {
 	return WithPrefix(fmt.Sprintf(LoginCheckMFAFlag, adminID))
 }
 
-// AdminMFATwoStepTicketRedisKey 返回管理员 MFA 二次票据 Redis key。
-func AdminMFATwoStepTicketRedisKey(adminID int, ticketKey string) string {
-	return WithPrefix(fmt.Sprintf(AdminMFATwoStepTicket, adminID, strings.TrimSpace(ticketKey)))
+// AdminMFATwoStepRedisKey 返回管理员 MFA 二次票据 Hash Redis key。
+func AdminMFATwoStepRedisKey(adminID int) string {
+	return WithPrefix(fmt.Sprintf(AdminMFATwoStep, adminID))
 }
 
-// AdminMFATwoStepIndexRedisKey 返回管理员 MFA 二次票据索引 Redis key。
-func AdminMFATwoStepIndexRedisKey(adminID int) string {
-	return WithPrefix(fmt.Sprintf(AdminMFATwoStepIndex, adminID))
+// AdminSessionLogicalKey 返回去掉 app_id 命名空间后的管理员会话业务段。
+func AdminSessionLogicalKey(adminID int) string {
+	return fmt.Sprintf(AdminSession, adminID)
 }
 
-// AdminInfoLogicalKey 返回去掉 app_id 命名空间后的管理员登录态业务段。
-func AdminInfoLogicalKey(adminID int) string {
-	return fmt.Sprintf(AdminInfo, adminID)
+// AdminSessionLogicalPattern 返回去掉 app_id 命名空间后的管理员会话展示模板。
+func AdminSessionLogicalPattern() string {
+	return AdminSessionPattern
 }
 
-// AdminLogoutTokenLogicalKey 返回去掉 app_id 命名空间后的管理员登出标记业务段。
-func AdminLogoutTokenLogicalKey(adminID int) string {
-	return fmt.Sprintf(AdminLogoutToken, adminID)
+// IsAdminSessionRedisKey 判断 key 是否为管理员会话缓存，支持完整 Redis key 和业务段。
+func IsAdminSessionRedisKey(key string) bool {
+	return strings.HasPrefix(TrimPrefix(key), KeyTemplatePrefix(AdminSession))
 }
 
-// AdminInfoLogicalPattern 返回去掉 app_id 命名空间后的管理员登录态展示模板。
-func AdminInfoLogicalPattern() string {
-	return AdminInfoPattern
-}
-
-// IsAdminInfoRedisKey 判断 key 是否为管理员登录态缓存，支持完整 Redis key 和业务段。
-func IsAdminInfoRedisKey(key string) bool {
-	return strings.HasPrefix(TrimPrefix(key), KeyTemplatePrefix(AdminInfo))
-}
-
-// AdminInfoIDFromRedisKey 解析管理员登录态缓存 key 中的管理员 ID。
-func AdminInfoIDFromRedisKey(key string) (int, bool) {
-	prefix := KeyTemplatePrefix(AdminInfo)
+// AdminSessionIDFromRedisKey 解析管理员会话缓存 key 中的管理员 ID。
+func AdminSessionIDFromRedisKey(key string) (int, bool) {
+	prefix := KeyTemplatePrefix(AdminSession)
 	adminIDText := strings.TrimPrefix(TrimPrefix(key), prefix)
 	if adminIDText == "" {
 		return 0, false
 	}
 	adminID, err := strconv.Atoi(adminIDText)
 	return adminID, err == nil && adminID > 0
-}
-
-// AdminMFATwoStepTicketBelongsToAdmin 判断二次票据 key 是否归属指定管理员。
-func AdminMFATwoStepTicketBelongsToAdmin(key string, adminID int) bool {
-	if adminID <= 0 {
-		return false
-	}
-	prefix := KeyTemplatePrefix(fmt.Sprintf(AdminMFATwoStepTicket, adminID, ""))
-	return strings.HasPrefix(TrimPrefix(key), prefix)
 }
 
 // prefixedPattern 把展示模板转换为当前应用完整 Redis key 模板。

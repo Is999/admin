@@ -13,13 +13,13 @@ func TestAdminRedisKeyTemplatesStayLogical(t *testing.T) {
 		got  string // got 表示实际结果。
 		want string // want 表示期望结果。
 	}{
-		{name: "admin info", got: keys.AdminInfo, want: "admin:info:%d"},
-		{name: "admin info pattern", got: keys.AdminInfoPattern, want: "admin:info:{adminID}"},
-		{name: "logout token", got: keys.AdminLogoutToken, want: "admin:logout_token:%d"},
+		{name: "admin session", got: keys.AdminSession, want: "admin:session:%d"},
+		{name: "admin session pattern", got: keys.AdminSessionPattern, want: "admin:session:{adminID}"},
+		{name: "security cache barrier", got: keys.SecurityCacheSyncBarrier, want: "security:cache_sync:barrier"},
+		{name: "security cache lock", got: keys.SecurityCacheSyncLock, want: "security:cache_sync:lock"},
 		{name: "login mfa flag", got: keys.LoginCheckMFAFlag, want: "login_check_mfa_flag:%d"},
-		{name: "mfa ticket", got: keys.AdminMFATwoStepTicket, want: "admin:mfa:two_step:%d:%s"},
-		{name: "mfa ticket pattern", got: keys.AdminMFATwoStepTicketPattern, want: "admin:mfa:two_step:{adminID}:{ticketKey}"},
-		{name: "mfa index", got: keys.AdminMFATwoStepIndex, want: "admin:mfa:two_step:index:%d"},
+		{name: "mfa two step", got: keys.AdminMFATwoStep, want: "admin:mfa:two_step:%d"},
+		{name: "mfa two step pattern", got: keys.AdminMFATwoStepPattern, want: "admin:mfa:two_step:{adminID}"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -41,12 +41,12 @@ func TestAdminRedisKeysUseAppScope(t *testing.T) {
 		got  string // got 表示实际结果。
 		want string // want 表示期望结果。
 	}{
-		{name: "admin info", got: keys.AdminInfoRedisKey(7), want: "app:site-a:admin:info:7"},
-		{name: "admin info pattern", got: keys.AdminInfoPatternRedisKey(), want: "app:site-a:admin:info:{adminID}"},
-		{name: "logout token", got: keys.AdminLogoutTokenRedisKey(7), want: "app:site-a:admin:logout_token:7"},
+		{name: "admin session", got: keys.AdminSessionRedisKey(7), want: "app:site-a:admin:session:7"},
+		{name: "admin session pattern", got: keys.AdminSessionPatternRedisKey(), want: "app:site-a:admin:session:{adminID}"},
+		{name: "security cache barrier", got: keys.SecurityCacheSyncBarrierRedisKey(), want: "app:site-a:security:cache_sync:barrier"},
+		{name: "security cache lock", got: keys.SecurityCacheSyncLockRedisKey(), want: "app:site-a:security:cache_sync:lock"},
 		{name: "login mfa flag", got: keys.LoginCheckMFAFlagRedisKey(7), want: "app:site-a:login_check_mfa_flag:7"},
-		{name: "mfa ticket", got: keys.AdminMFATwoStepTicketRedisKey(7, " ticket-1 "), want: "app:site-a:admin:mfa:two_step:7:ticket-1"},
-		{name: "mfa index", got: keys.AdminMFATwoStepIndexRedisKey(7), want: "app:site-a:admin:mfa:two_step:index:7"},
+		{name: "mfa two step", got: keys.AdminMFATwoStepRedisKey(7), want: "app:site-a:admin:mfa:two_step:7"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -60,10 +60,10 @@ func TestAdminRedisKeysUseAppScope(t *testing.T) {
 // TestAdminRedisKeysFailClosedWithoutAppID 验证缺少 app_id 时不会生成裸业务 key。
 func TestAdminRedisKeysFailClosedWithoutAppID(t *testing.T) {
 	useAppID(t, "")
-	if got := keys.AdminInfoRedisKey(7); got != "" {
-		t.Fatalf("keys.AdminInfoRedisKey(empty app) = %q, want empty", got)
+	if got := keys.AdminSessionRedisKey(7); got != "" {
+		t.Fatalf("keys.AdminSessionRedisKey(empty app) = %q, want empty", got)
 	}
-	if got := keys.AdminMFATwoStepTicketRedisKey(7, "ticket-1"); got != "" {
-		t.Fatalf("keys.AdminMFATwoStepTicketRedisKey(empty app) = %q, want empty", got)
+	if got := keys.AdminMFATwoStepRedisKey(7); got != "" {
+		t.Fatalf("keys.AdminMFATwoStepRedisKey(empty app) = %q, want empty", got)
 	}
 }

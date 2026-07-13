@@ -19,6 +19,11 @@ name: test
 host: 127.0.0.1
 port: 8888
 Mode: dev
+internal_server:
+  host: 127.0.0.1
+  port: 8900
+ops:
+  token: test-admin-ops-token
 app_id: "1"
 snowflake:
   worker_id: 512

@@ -1,0 +1,6 @@
+-- 代码资产：释放单表回填命名锁。
+-- SQL 方言：MySQL 8.0。
+-- 调用方：cmd/shardbackfill.releaseTableLock。
+-- 参数来源：已获取的锁名通过预编译参数传入。
+-- 安全边界：失败由连接关闭兜底释放。
+SELECT RELEASE_LOCK(?)

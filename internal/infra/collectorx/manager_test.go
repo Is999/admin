@@ -1,12 +1,14 @@
 package collectorx
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"admin/common/runtimecfg"
 	"admin/internal/config"
@@ -81,6 +83,29 @@ func TestNewRequiresRedisWhenAnyTaskIdempotencyEnabled(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Redis") {
 		t.Fatalf("期望开启任务去重但 Redis 缺失时返回错误，实际 err=%v", err)
 	}
+}
+
+// TestManagerReadyRejectsMissingKafkaWriter 确保启用 Collector 后没有可用 Topic 时不会误报就绪。
+func TestManagerReadyRejectsMissingKafkaWriter(t *testing.T) {
+	manager := &Manager{cfg: config.CollectorConfig{Enabled: true}, writers: map[string]kafkaMessageWriter{}}
+	if err := manager.Ready(context.Background(), false); err == nil {
+		t.Fatal("Ready() expected missing Kafka writer error")
+	}
+}
+
+// TestManagerStopHonorsContextDeadline 确保 Kafka 关闭阻塞时不会突破应用停止期限。
+func TestManagerStopHonorsContextDeadline(t *testing.T) {
+	closeBlock := make(chan struct{})
+	writer := &fakeKafkaWriter{closeBlock: closeBlock}
+	manager := &Manager{writers: map[string]kafkaMessageWriter{"collector_events": writer}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := manager.Stop(ctx); err == nil {
+		close(closeBlock)
+		t.Fatal("Stop() expected context deadline error")
+	}
+	close(closeBlock)
 }
 
 // TestEnqueueKafkaSuccessDoesNotRequireFailureDB 确保 Kafka 投递成功不会写 DB 失败账本。
@@ -162,6 +187,75 @@ func TestEnqueueRequiresStableEventID(t *testing.T) {
 	}
 }
 
+// TestEnqueueRejectsEventsOutsideStorageContract 确保生产入口在写 Kafka 前拒绝无法安全落入失败账本的事件。
+func TestEnqueueRejectsEventsOutsideStorageContract(t *testing.T) {
+	oversizedPayload := json.RawMessage(`"` + strings.Repeat("a", maxCollectorPayloadBytes-1) + `"`)
+	escapedMessagePayload := json.RawMessage(`"` + strings.Repeat("<", 12000) + `"`)
+	tests := []struct {
+		name  string // 测试场景名称
+		event Event  // 待投递的非法事件
+		want  string // 期望错误包含的边界信息
+	}{
+		{name: "event id 字节超限", event: Event{EventID: strings.Repeat("界", 22), BizType: "biz"}, want: "64 字节"},
+		{name: "biz type 字节超限", event: Event{EventID: "event-1", BizType: strings.Repeat("b", maxCollectorBizTypeBytes+1)}, want: "100 字节"},
+		{name: "partition key 字节超限", event: Event{EventID: "event-1", BizType: "biz", PartitionKey: strings.Repeat("p", maxCollectorPartitionKeyBytes+1)}, want: "128 字节"},
+		{name: "payload 字节超限", event: Event{EventID: "event-1", BizType: "biz", Payload: oversizedPayload}, want: "61440 字节"},
+		{name: "payload JSON 无效", event: Event{EventID: "event-1", BizType: "biz", Payload: json.RawMessage(`{`)}, want: "JSON"},
+		{name: "payload UTF-8 无效", event: Event{EventID: "event-1", BizType: "biz", Payload: json.RawMessage{'"', 0xff, '"'}}, want: "UTF-8"},
+		{name: "Kafka 信封超限", event: Event{EventID: "event-1", BizType: "biz", Payload: escapedMessagePayload}, want: "65536 字节"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writer := &fakeKafkaWriter{}
+			manager := &Manager{
+				cfg:     collectorTestConfigForTopic("collector_events"),
+				writers: map[string]kafkaMessageWriter{"collector_events": writer},
+			}
+			if _, err := manager.Enqueue(context.Background(), tt.event); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Enqueue() err=%v, want contains %q", err, tt.want)
+			}
+			if len(writer.messages) != 0 {
+				t.Fatalf("越界事件不应写入 Kafka，messages=%d", len(writer.messages))
+			}
+		})
+	}
+}
+
+// TestEnqueueAcceptsStorageBoundaryEvent 确保字段和 JSON 负载恰好达到上限时仍可正常投递。
+func TestEnqueueAcceptsStorageBoundaryEvent(t *testing.T) {
+	writer := &fakeKafkaWriter{}
+	manager := &Manager{
+		cfg:     collectorTestConfigForTopic("collector_events"),
+		writers: map[string]kafkaMessageWriter{"collector_events": writer},
+	}
+	event := Event{
+		EventID:      strings.Repeat("界", 21) + "e",
+		BizType:      strings.Repeat("类", 33) + "b",
+		PartitionKey: strings.Repeat("键", 42) + "pp",
+		Payload:      json.RawMessage(`"` + strings.Repeat("a", maxCollectorPayloadBytes-2) + `"`),
+	}
+	if len(event.EventID) != maxCollectorEventIDBytes || len(event.BizType) != maxCollectorBizTypeBytes || len(event.PartitionKey) != maxCollectorPartitionKeyBytes || len(event.Payload) != maxCollectorPayloadBytes {
+		t.Fatalf("测试事件未命中精确字节边界 event_id=%d biz_type=%d partition_key=%d payload=%d", len(event.EventID), len(event.BizType), len(event.PartitionKey), len(event.Payload))
+	}
+	_, err := manager.Enqueue(context.Background(), event)
+	if err != nil {
+		t.Fatalf("Enqueue() boundary event error = %v", err)
+	}
+	if len(writer.messages) != 1 || len(writer.messages[0].Value) > maxCollectorKafkaMessageBytes {
+		t.Fatalf("边界事件 Kafka 消息不符合限制 count=%d bytes=%d", len(writer.messages), len(writer.messages[0].Value))
+	}
+}
+
+// TestKafkaReaderConfigSetsBoundedFetchTarget 确保 Kafka Reader 使用与事件信封一致的常规 fetch 目标。
+func TestKafkaReaderConfigSetsBoundedFetchTarget(t *testing.T) {
+	manager := &Manager{cfg: config.CollectorConfig{Kafka: config.CollectorKafkaConfig{Brokers: []string{"kafka:9092"}}}}
+	cfg := manager.kafkaReaderConfig(collectorKafkaRoute{topic: "events", groupID: "collector"})
+	if cfg.MaxBytes != maxCollectorKafkaMessageBytes {
+		t.Fatalf("Reader MaxBytes=%d, want %d", cfg.MaxBytes, maxCollectorKafkaMessageBytes)
+	}
+}
+
 // TestEnqueueKafkaFailureReturnsError 确保 Kafka 写入失败直接返回错误。
 func TestEnqueueKafkaFailureReturnsError(t *testing.T) {
 	manager := &Manager{
@@ -235,6 +329,32 @@ func TestProcessBatchIsolatesBizTypesInStableOrder(t *testing.T) {
 	}
 }
 
+// TestProcessBatchKeepsSameEventIDAcrossBizTypes 确保不同业务可复用 eventID 且结果互不覆盖。
+func TestProcessBatchKeepsSameEventIDAcrossBizTypes(t *testing.T) {
+	manager := &Manager{processors: make(map[string]Processor)}
+	if err := manager.RegisterProcessorFunc("biz-a", func(context.Context, []Event) ([]ProcessResult, error) {
+		return []ProcessResult{{EventID: "shared", Success: true}}, nil
+	}); err != nil {
+		t.Fatalf("注册 biz-a Processor 失败: %v", err)
+	}
+	if err := manager.RegisterProcessorFunc("biz-b", func(context.Context, []Event) ([]ProcessResult, error) {
+		return []ProcessResult{{EventID: "shared", Success: false, Error: "biz-b failed"}}, nil
+	}); err != nil {
+		t.Fatalf("注册 biz-b Processor 失败: %v", err)
+	}
+
+	success, failed := manager.processBatch(context.Background(), []Event{
+		{EventID: "shared", BizType: "biz-a"},
+		{EventID: "shared", BizType: "biz-b"},
+	})
+	if _, ok := success[eventKey{bizType: "biz-a", eventID: "shared"}]; !ok {
+		t.Fatalf("biz-a 成功结果丢失: %v", success)
+	}
+	if got := failed[eventKey{bizType: "biz-b", eventID: "shared"}]; got != "biz-b failed" {
+		t.Fatalf("biz-b 失败结果 = %q, want biz-b failed", got)
+	}
+}
+
 // TestProcessBatchUsesPerEventResult 确保 Processor 可以精确表达部分成功、部分失败和漏返回结果。
 func TestProcessBatchUsesPerEventResult(t *testing.T) {
 	manager := &Manager{processors: make(map[string]Processor)}
@@ -254,16 +374,16 @@ func TestProcessBatchUsesPerEventResult(t *testing.T) {
 		{EventID: "e2", BizType: "biz"},
 		{EventID: "e3", BizType: "biz"},
 	})
-	if _, ok := success["e1"]; !ok {
+	if _, ok := success[eventKey{bizType: "biz", eventID: "e1"}]; !ok {
 		t.Fatalf("期望 e1 成功，success=%v", success)
 	}
-	if failed["e2"] != "duplicate" {
+	if failed[eventKey{bizType: "biz", eventID: "e2"}] != "duplicate" {
 		t.Fatalf("期望 e2 返回业务失败原因，failed=%v", failed)
 	}
-	if failed["e3"] == "" {
+	if failed[eventKey{bizType: "biz", eventID: "e3"}] == "" {
 		t.Fatalf("期望 e3 因 Processor 漏返回而失败，failed=%v", failed)
 	}
-	if _, ok := success["unknown"]; ok {
+	if _, ok := success[eventKey{bizType: "biz", eventID: "unknown"}]; ok {
 		t.Fatalf("未知事件不应被计入成功集合，success=%v", success)
 	}
 }
@@ -278,7 +398,7 @@ func TestProcessBatchFailsUnregisteredBizType(t *testing.T) {
 	if len(success) != 0 {
 		t.Fatalf("未注册 bizType 不应成功，success=%v", success)
 	}
-	if failed["e1"] == "" {
+	if failed[eventKey{bizType: "missing", eventID: "e1"}] == "" {
 		t.Fatalf("未注册 bizType 应返回失败原因，failed=%v", failed)
 	}
 }
@@ -295,7 +415,7 @@ func TestProcessBatchReportsMissingProcessor(t *testing.T) {
 	})
 
 	_, failed := manager.processBatch(context.Background(), []Event{{EventID: "e1", BizType: "missing"}})
-	if failed["e1"] == "" {
+	if failed[eventKey{bizType: "missing", eventID: "e1"}] == "" {
 		t.Fatalf("未注册 bizType 应返回失败原因，failed=%v", failed)
 	}
 	select {
@@ -323,7 +443,7 @@ func TestProcessBatchRecoversProcessorPanic(t *testing.T) {
 	if len(success) != 0 {
 		t.Fatalf("Processor panic 不应成功，success=%v", success)
 	}
-	if !strings.Contains(failed["e1"], "panic") {
+	if !strings.Contains(failed[eventKey{bizType: "biz", eventID: "e1"}], "panic") {
 		t.Fatalf("期望失败原因包含 panic，failed=%v", failed)
 	}
 }
@@ -335,7 +455,7 @@ func TestFailureSeedsFromResultsOnlyKeepsFailedEvents(t *testing.T) {
 	seeds := manager.failureSeedsFromResults([]Event{
 		{EventID: "ok", BizType: "biz", Payload: json.RawMessage(`{"ok":true}`)},
 		{EventID: "failed", BizType: "biz", Payload: json.RawMessage(`{"ok":false}`)},
-	}, map[string]string{"failed": "write failed"}, now)
+	}, map[eventKey]string{{bizType: "biz", eventID: "failed"}: "write failed"}, now)
 	if len(seeds) != 1 {
 		t.Fatalf("失败账本记录数量 = %d, want 1", len(seeds))
 	}
@@ -353,6 +473,70 @@ func TestInvalidKafkaFailureCreatesDeadEvent(t *testing.T) {
 	}
 	if seed.event.BizType != "collector.invalid" || !strings.HasPrefix(seed.event.EventID, "collector:invalid:") {
 		t.Fatalf("坏消息合成事件不符合预期: %+v", seed.event)
+	}
+}
+
+// TestKafkaWorkItemConvertsInvalidEventsToDeadSeed 确保消费侧字段或消息体越界时生成可落库死信，不进入 Processor。
+func TestKafkaWorkItemConvertsInvalidEventsToDeadSeed(t *testing.T) {
+	manager := &Manager{cfg: config.CollectorConfig{FailureRetry: config.CollectorFailureRetryConfig{MaxRetryTimes: 6}}}
+	marshalEvent := func(event Event) []byte {
+		t.Helper()
+		body, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		return body
+	}
+	tests := []struct {
+		name  string // 测试场景名称
+		value []byte // Kafka 原始消息体
+	}{
+		{name: "event id 超限", value: marshalEvent(Event{EventID: strings.Repeat("e", maxCollectorEventIDBytes+1), BizType: "biz"})},
+		{name: "biz type 超限", value: marshalEvent(Event{EventID: "event-1", BizType: strings.Repeat("b", maxCollectorBizTypeBytes+1)})},
+		{name: "partition key 超限", value: marshalEvent(Event{EventID: "event-1", BizType: "biz", PartitionKey: strings.Repeat("p", maxCollectorPartitionKeyBytes+1)})},
+		{name: "payload 超限", value: marshalEvent(Event{EventID: "event-1", BizType: "biz", Payload: json.RawMessage(`"` + strings.Repeat("a", maxCollectorPayloadBytes-1) + `"`)})},
+		{name: "JSON 无效", value: []byte("{")},
+		{name: "UTF-8 无效", value: []byte{0xff}},
+		{name: "消息体超限", value: bytes.Repeat([]byte("x"), maxCollectorKafkaMessageBytes+1)},
+	}
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := manager.kafkaWorkItem(kafka.Message{Topic: "events", Partition: 3, Offset: int64(index + 1), Value: tt.value})
+			if item.failure == nil || item.failure.state != model.CollectorFailedEventStateDead {
+				t.Fatalf("非法消息未转成 dead seed: %+v", item)
+			}
+			if !strings.HasPrefix(item.failure.event.EventID, "collector:invalid:") || item.failure.event.BizType != "collector.invalid" {
+				t.Fatalf("非法消息沿用了原始超限字段: %+v", item.failure.event)
+			}
+			assertFailureSeedFitsStorageContract(t, *item.failure)
+		})
+	}
+}
+
+// TestInvalidKafkaFailureBoundsPoisonMetadata 确保超长或非法 UTF-8 诊断信息不会再次毒化失败账本写入。
+func TestInvalidKafkaFailureBoundsPoisonMetadata(t *testing.T) {
+	manager := &Manager{
+		cfg:      config.CollectorConfig{FailureRetry: config.CollectorFailureRetryConfig{MaxRetryTimes: 6}},
+		failures: newCollectorDryRunDB(t),
+	}
+	msg := kafka.Message{
+		Topic:     strings.Repeat("&", maxInvalidKafkaTopicBytes+100),
+		Partition: 12,
+		Offset:    99,
+		Key:       append([]byte{0xff}, bytes.Repeat([]byte{0}, maxInvalidKafkaKeyBytes+100)...),
+		Value:     append([]byte{0xff}, bytes.Repeat([]byte{0}, maxCollectorKafkaMessageBytes+100)...),
+	}
+	seed := manager.invalidKafkaFailure(msg, errors.Errorf("%s", strings.Repeat("错误", maxCollectorLastErrorBytes)))
+	assertFailureSeedFitsStorageContract(t, seed)
+	if err := manager.saveFailureEvents(context.Background(), []failureEventSeed{seed}); err != nil {
+		t.Fatalf("有界坏消息写入失败账本 error = %v", err)
+	}
+	var snapshot invalidKafkaSnapshot
+	if err := json.Unmarshal(seed.event.Payload, &snapshot); err != nil {
+		t.Fatalf("解析坏消息快照 error = %v", err)
+	}
+	if snapshot.OriginalKeyBytes != len(msg.Key) || snapshot.OriginalValueBytes != len(msg.Value) {
+		t.Fatalf("坏消息原始长度丢失: %+v", snapshot)
 	}
 }
 
@@ -472,6 +656,51 @@ func TestHandleKafkaBatchSkipsAlreadyDoneEventID(t *testing.T) {
 	}
 }
 
+// TestHandleKafkaBatchRetriesProcessingEventID 确保其它 worker 正在处理时不调用 Processor，由调用方保留 Kafka offset 重试。
+func TestHandleKafkaBatchRetriesProcessingEventID(t *testing.T) {
+	useCollectorTestAppID(t)
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := newIdempotencyStore(client, time.Hour, time.Minute, 20)
+	event := Event{EventID: "e1", BizType: "biz"}
+	claim, err := store.newClaim(event)
+	if err != nil {
+		t.Fatalf("newClaim() error = %v", err)
+	}
+	busyState := idempotencyProcessingPrefix + "other"
+	if err = client.Set(context.Background(), claim.Key, busyState, time.Hour).Err(); err != nil {
+		t.Fatalf("写入其它 worker 占用失败: %v", err)
+	}
+	manager := &Manager{
+		cfg:          configWithIdempotencyForTest(),
+		idempotency:  store,
+		processors:   make(map[string]Processor),
+		runtimeStats: newCollectorRuntimeStats(),
+	}
+	calls := 0
+	if err = manager.RegisterProcessorFunc("biz", func(_ context.Context, _ []Event) ([]ProcessResult, error) {
+		calls++
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("注册 Processor 失败: %v", err)
+	}
+
+	err = manager.handleKafkaBatch(context.Background(), kafkaBatch{
+		messages: []kafka.Message{{Offset: 1}},
+		events:   []Event{event},
+	})
+	if err == nil {
+		t.Fatal("其它 worker 处理中时应返回可重试错误")
+	}
+	if calls != 0 {
+		t.Fatalf("Processor 不应被调用 calls=%d", calls)
+	}
+	if value, getErr := client.Get(context.Background(), claim.Key).Result(); getErr != nil || value != busyState {
+		t.Fatalf("其它 worker 占用被意外修改 value=%q err=%v", value, getErr)
+	}
+}
+
 // TestHandleKafkaBatchIdempotencyIsolatesBizType 确保不同任务相同 EventID 不会互相去重。
 func TestHandleKafkaBatchIdempotencyIsolatesBizType(t *testing.T) {
 	cfg := configEnabledForRuntimeMetricTest()
@@ -517,6 +746,49 @@ func TestHandleKafkaBatchIdempotencyIsolatesBizType(t *testing.T) {
 	}
 	if snapshot := manager.RuntimeMetricsSnapshot(); snapshot.Totals.Duplicate != 2 {
 		t.Fatalf("重复批次去重指标 = %+v, want duplicate=2", snapshot.Totals)
+	}
+}
+
+// TestBeginIdempotentEventsHonorsEachTaskSetting 确保混合调用时每个 BizType 独立应用自身幂等开关。
+func TestBeginIdempotentEventsHonorsEachTaskSetting(t *testing.T) {
+	useCollectorTestAppID(t)
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := newIdempotencyStore(client, time.Hour, time.Minute, 20)
+	enabled := true
+	disabled := false
+	cfg := configEnabledForRuntimeMetricTest()
+	cfg.Tasks = map[string]config.CollectorTaskConfig{
+		"enabled":  {IdempotencyEnabled: &enabled},
+		"disabled": {IdempotencyEnabled: &disabled},
+	}
+	manager := &Manager{cfg: cfg, idempotency: store}
+	enabledEvent := Event{EventID: "done", BizType: "enabled"}
+	disabledEvent := Event{EventID: "busy", BizType: "disabled"}
+	enabledClaim, err := store.newClaim(enabledEvent)
+	if err != nil {
+		t.Fatalf("enabled newClaim() error = %v", err)
+	}
+	disabledClaim, err := store.newClaim(disabledEvent)
+	if err != nil {
+		t.Fatalf("disabled newClaim() error = %v", err)
+	}
+	if err = client.Set(context.Background(), enabledClaim.Key, idempotencyDone, time.Hour).Err(); err != nil {
+		t.Fatalf("写入 enabled 终态失败: %v", err)
+	}
+	if err = client.Set(context.Background(), disabledClaim.Key, idempotencyProcessingPrefix+"other", time.Hour).Err(); err != nil {
+		t.Fatalf("写入 disabled 占用失败: %v", err)
+	}
+
+	for _, events := range [][]Event{{disabledEvent, enabledEvent}, {enabledEvent, disabledEvent}} {
+		processEvents, claims, duplicate, beginErr := manager.beginIdempotentEvents(context.Background(), events)
+		if beginErr != nil || len(claims) != 0 || duplicate != 1 {
+			t.Fatalf("beginIdempotentEvents() claims=%+v duplicate=%d err=%v", claims, duplicate, beginErr)
+		}
+		if len(processEvents) != 1 || processEvents[0].BizType != "disabled" {
+			t.Fatalf("任务级幂等开关未独立生效 events=%+v", processEvents)
+		}
 	}
 }
 
@@ -946,10 +1218,29 @@ func TestSaveFailureEventsUsesFailedEventTable(t *testing.T) {
 	}
 }
 
+// assertFailureSeedFitsStorageContract 校验失败事件字段、UTF-8 和 JSON 均满足真实表结构约束。
+func assertFailureSeedFitsStorageContract(t *testing.T, seed failureEventSeed) {
+	t.Helper()
+	event := seed.event
+	if err := normalizeAndValidateEvent(&event); err != nil {
+		t.Fatalf("失败事件不符合存储契约: %v, event=%+v", err, event)
+	}
+	if len(event.EventID) > maxCollectorEventIDBytes || len(event.BizType) > maxCollectorBizTypeBytes || len(event.PartitionKey) > maxCollectorPartitionKeyBytes {
+		t.Fatalf("失败事件字段超限: %+v", event)
+	}
+	if len(event.Payload) > maxCollectorPayloadBytes || !json.Valid(event.Payload) || !utf8.Valid(event.Payload) {
+		t.Fatalf("失败事件 payload 不安全 bytes=%d payload=%q", len(event.Payload), event.Payload)
+	}
+	if len(seed.lastError) > maxCollectorLastErrorBytes || !utf8.ValidString(seed.lastError) {
+		t.Fatalf("失败原因不安全 bytes=%d value=%q", len(seed.lastError), seed.lastError)
+	}
+}
+
 // fakeKafkaWriter 是 Enqueue 单测使用的 Kafka 写入器。
 type fakeKafkaWriter struct {
-	messages []kafka.Message // 捕获写入消息
-	err      error           // 写入时返回的错误
+	messages   []kafka.Message // 捕获写入消息
+	err        error           // 写入时返回的错误
+	closeBlock <-chan struct{} // 非空时阻塞 Close，用于停止期限测试
 }
 
 // WriteMessages 捕获 Kafka 写入参数。
@@ -960,6 +1251,9 @@ func (w *fakeKafkaWriter) WriteMessages(_ context.Context, messages ...kafka.Mes
 
 // Close 实现 kafkaMessageWriter。
 func (w *fakeKafkaWriter) Close() error {
+	if w.closeBlock != nil {
+		<-w.closeBlock
+	}
 	return nil
 }
 

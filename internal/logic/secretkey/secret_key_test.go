@@ -38,6 +38,24 @@ func TestParseSecretKeyStatusFieldRequiresCurrentField(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("invalid status = %d, want 0", status)
 	}
+	status, exists = parseSecretKeyStatusField(map[string]string{
+		secretKeyCacheFieldCryptoStatus: "2",
+	}, secretKeyCacheFieldCryptoStatus)
+	if exists || status != 0 {
+		t.Fatalf("out-of-range status = %d, exists = %v, want 0, false", status, exists)
+	}
+}
+
+// TestValidateSecretKeyRouteConfigAcceptsIndependentSwitches 验证运行时选路允许签名和加密分别启用。
+func TestValidateSecretKeyRouteConfigAcceptsIndependentSwitches(t *testing.T) {
+	for _, route := range []*SecretKeyRouteConfig{
+		{Status: 1, SignStatus: 1},
+		{Status: 1, CryptoStatus: 1},
+	} {
+		if err := validateSecretKeyRouteConfig(route); err != nil {
+			t.Fatalf("validateSecretKeyRouteConfig(%+v) error = %v", route, err)
+		}
+	}
 }
 
 // TestNormalizeSecretKeyVersionHintRejectsHighCardinalityInput 验证异常版本号不会进入 Redis key。

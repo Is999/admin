@@ -2,7 +2,6 @@ package svc
 
 import (
 	"encoding/json"
-	"strings"
 	"sync"
 
 	"admin/internal/config"
@@ -12,21 +11,15 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
-const (
-	// defaultStorageVirusScannerName 表示默认病毒扫描器注册名称。
-	defaultStorageVirusScannerName = "noop"
-)
-
-// StorageRuntime 负责统一托管文件存储与上传安全扩展运行时。
-// 该结构只缓存可复用组件实例，具体实现仍由 pkg/storage 注册表按配置创建。
+// StorageRuntime 统一缓存文件存储与病毒扫描器实例。
 type StorageRuntime struct {
 	mu sync.RWMutex // 保护下方缓存字段
 
 	objectStorage            storage.ObjectStorage // 当前文件存储实例
 	objectStorageFingerprint string                // 当前文件存储配置指纹
 
-	virusScanner     storage.VirusScanner // 当前病毒扫描器实例
-	virusScannerName string               // 当前病毒扫描器注册名称
+	virusScanner       storage.VirusScanner                 // 当前病毒扫描器实例
+	virusScannerConfig config.FileStorageVirusScannerConfig // 当前病毒扫描器配置
 }
 
 // NewStorageRuntime 创建文件存储运行时容器。
@@ -51,7 +44,7 @@ func (r *StorageRuntime) ObjectStorage(cfg config.FileStorageConfig) (storage.Ob
 	}
 	r.mu.RUnlock()
 
-	// 配置变化或首次访问时进入写锁，二次确认后再按注册表创建实现。
+	// 配置变化或首次访问时进入写锁，二次确认后再创建实现。
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.objectStorage != nil && r.objectStorageFingerprint == fingerprint {
@@ -67,34 +60,30 @@ func (r *StorageRuntime) ObjectStorage(cfg config.FileStorageConfig) (storage.Ob
 }
 
 // VirusScanner 按配置返回病毒扫描器实例。
-// 扫描器通过注册名称选择，未配置时使用 pkg/storage 内置 noop 实现。
 func (r *StorageRuntime) VirusScanner(cfg config.FileStorageConfig) (storage.VirusScanner, error) {
 	if r == nil {
 		return nil, errors.Errorf("文件存储运行时未初始化")
 	}
-	name := normalizeVirusScannerName(cfg.VirusScanner.Name)
-
-	// 扫描器实例按注册名缓存，保证上传完成校验链路不重复初始化外部客户端。
+	// 扫描器实例按完整配置缓存，保证上传完成校验链路不重复查找外部命令。
 	r.mu.RLock()
-	if r.virusScanner != nil && r.virusScannerName == name {
+	if r.virusScanner != nil && r.virusScannerConfig == cfg.VirusScanner {
 		scanner := r.virusScanner
 		r.mu.RUnlock()
 		return scanner, nil
 	}
 	r.mu.RUnlock()
 
-	// 注册名变化时重新从 pkg/storage 注册表获取扫描器实现。
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.virusScanner != nil && r.virusScannerName == name {
+	if r.virusScanner != nil && r.virusScannerConfig == cfg.VirusScanner {
 		return r.virusScanner, nil
 	}
-	scanner, err := storage.NewNamedVirusScanner(name)
+	scanner, err := storage.NewVirusScanner(cfg.VirusScanner)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	r.virusScanner = scanner
-	r.virusScannerName = name
+	r.virusScannerConfig = cfg.VirusScanner
 	return scanner, nil
 }
 
@@ -152,13 +141,4 @@ func objectStorageFingerprint(cfg config.FileStorageConfig) string {
 		return ""
 	}
 	return utils.SHA256(string(body))
-}
-
-// normalizeVirusScannerName 归一化病毒扫描器名称，空值交给 pkg/storage 回退到 noop。
-func normalizeVirusScannerName(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return defaultStorageVirusScannerName
-	}
-	return name
 }

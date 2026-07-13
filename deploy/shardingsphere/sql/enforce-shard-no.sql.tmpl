@@ -1,0 +1,8 @@
+-- 只允许源表已存在同名同义公式约束时，在尚未接入流量、没有迁移数据的空目标逻辑表执行。
+-- MySQL 8.4 为该变更选择 ALGORITHM=COPY；禁止直接用于已装数据源表，否则会破坏零停写目标。
+-- 表名、UID列和约束名必须来自发布白名单；迁移要求源/目标结构一致，禁止只在目标添加。
+ALTER TABLE `__UID_TABLE__`
+  MODIFY COLUMN `shard_no` int NOT NULL COMMENT 'CRC32(uid十进制字符串)%1024固定逻辑桶',
+  ADD CONSTRAINT `__CHECK_NAME__` CHECK (
+    `shard_no` = MOD(CRC32(CAST(`__UID_COLUMN__` AS CHAR)), 1024)
+  ) ENFORCED;

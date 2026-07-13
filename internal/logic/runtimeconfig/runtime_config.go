@@ -598,29 +598,48 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
+	resp := &types.RuntimeConfigPublishResp{
+		ReleaseID: release.ID,
+		VersionNo: release.VersionNo,
+		Checksum:  release.Checksum,
+	}
 	if err = l.invalidateRuntimeConfigCache(release.ID, previousReleaseID); err != nil {
-		return nil, errors.Tag(err)
+		corelogic.LogWrappedError(l.Logger, err,
+			"RuntimeConfigLogic.publishSnapshot 发布ID[%d]已提交但缓存失效失败", release.ID)
+		return resp, nil
 	}
 	reload := svc.RuntimeConfigReloadResult{}
 	if l.Svc != nil && l.Svc.ConfigReload != nil {
 		reload, err = l.Svc.ConfigReload.ReloadRuntimeConfig(l.Ctx, "runtime_config_publish")
 		if err != nil {
-			return nil, errors.Tag(err)
+			resp.Applied = false
+			corelogic.LogWrappedError(l.Logger, err,
+				"RuntimeConfigLogic.publishSnapshot 发布ID[%d]已提交但运行态应用失败", release.ID)
+			return resp, nil
+		}
+		if runtimeConfigReloadMatchesRelease(release, reload) {
+			resp.Applied = true
+			resp.RestartRequired = reload.RestartRequired
+			resp.RestartReason = reload.RestartReason
 		}
 	}
-	if reload.RestartRequired || reload.RestartReason != "" {
-		_ = db.Model(&model.RuntimeConfigRelease{}).Where("id = ?", release.ID).Updates(map[string]any{
+	if resp.Applied && (reload.RestartRequired || reload.RestartReason != "") {
+		if updateErr := db.Model(&model.RuntimeConfigRelease{}).Where("id = ?", release.ID).Updates(map[string]any{
 			"restart_required": reload.RestartRequired,
 			"restart_reason":   reload.RestartReason,
-		}).Error
+		}).Error; updateErr != nil {
+			corelogic.LogWrappedError(l.Logger, updateErr,
+				"RuntimeConfigLogic.publishSnapshot 更新发布ID[%d]重启提示失败", release.ID)
+		}
 	}
-	return &types.RuntimeConfigPublishResp{
-		ReleaseID:       release.ID,
-		VersionNo:       release.VersionNo,
-		Checksum:        release.Checksum,
-		RestartRequired: reload.RestartRequired,
-		RestartReason:   reload.RestartReason,
-	}, nil
+	return resp, nil
+}
+
+// runtimeConfigReloadMatchesRelease 判断重载回执是否精确对应本次发布。
+func runtimeConfigReloadMatchesRelease(release model.RuntimeConfigRelease, reload svc.RuntimeConfigReloadResult) bool {
+	return reload.ReleaseID == release.ID &&
+		reload.VersionNo == release.VersionNo &&
+		reload.Checksum == release.Checksum
 }
 
 // buildDraftSnapshot 从当前草稿表组装可发布快照。

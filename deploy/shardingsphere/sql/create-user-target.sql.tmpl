@@ -1,0 +1,34 @@
+-- 代码资产：通过 ShardingSphere-Proxy 创建 user 空目标分片表。
+-- SQL 方言：MySQL 8.0，经 ShardingSphere-Proxy 执行。
+-- 调用方：生产迁移阶段由 DBA 在已创建 user 分片规则后执行。
+-- 参数来源：无动态参数；逻辑表 schema 与 api/internal/database/assets/user_schema.sql.tmpl 对齐。
+-- 安全边界：仅允许在全新空目标逻辑库执行；重复对象必须报错，迁移期结构与源表一致，随后在全部物理表安装公式保护触发器。
+CREATE TABLE `user` (
+  `id` bigint NOT NULL COMMENT '雪花ID',
+  `shard_no` int NOT NULL DEFAULT 0 COMMENT 'ID哈希分片，CRC32(id字符串)%1024，用于分表和分片游标查询',
+  `username` varchar(32) NOT NULL COMMENT '用户名',
+  `nickname` varchar(64) NOT NULL DEFAULT '' COMMENT '昵称',
+  `password_hash` varchar(255) NOT NULL COMMENT '密码哈希',
+  `email_ciphertext` varchar(512) NOT NULL DEFAULT '' COMMENT '邮箱AES-GCM密文',
+  `email_hash` char(64) NOT NULL DEFAULT '' COMMENT '邮箱HMAC查询哈希',
+  `email_masked` varchar(128) NOT NULL DEFAULT '' COMMENT '邮箱脱敏展示值',
+  `email_key_version` varchar(32) NOT NULL DEFAULT '' COMMENT '邮箱加密密钥版本',
+  `phone_ciphertext` varchar(512) NOT NULL DEFAULT '' COMMENT '手机号AES-GCM密文',
+  `phone_hash` char(64) NOT NULL DEFAULT '' COMMENT '手机号HMAC查询哈希',
+  `phone_masked` varchar(32) NOT NULL DEFAULT '' COMMENT '手机号脱敏展示值',
+  `phone_key_version` varchar(32) NOT NULL DEFAULT '' COMMENT '手机号加密密钥版本',
+  `avatar` varchar(255) NOT NULL DEFAULT '' COMMENT '头像',
+  `status` tinyint NOT NULL DEFAULT 1 COMMENT '状态：1 正常，0 禁用',
+  `auth_version` bigint unsigned NOT NULL DEFAULT 1 COMMENT '认证版本，敏感变更时单调递增',
+  `last_login_at` datetime NULL DEFAULT NULL COMMENT '最后登录时间',
+  `last_login_ip` varchar(45) NOT NULL DEFAULT '' COMMENT '最后登录 IP',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_username` (`username`),
+  KEY `idx_user_shard_no_id` (`shard_no`, `id`),
+  KEY `idx_user_email_hash` (`email_hash`),
+  KEY `idx_user_phone_hash` (`phone_hash`),
+  KEY `idx_user_status_id` (`status`, `id`),
+  CONSTRAINT `chk_user_shard_no` CHECK (`shard_no` BETWEEN 0 AND 1023)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='业务用户表';

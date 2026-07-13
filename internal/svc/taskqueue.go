@@ -56,12 +56,6 @@ const (
 	TaskRuntimeAlertKindCollectorInvalidEvent = "collector_invalid_event"
 	// TaskRuntimeAlertKindCollectorDeadEvent 表示 Collector 事件超过重试次数进入死信。
 	TaskRuntimeAlertKindCollectorDeadEvent = "collector_dead_event"
-	// TaskRuntimeAlertKindBatchProcessorFlushFailed 表示批处理收集器 flush 失败。
-	TaskRuntimeAlertKindBatchProcessorFlushFailed = "batch_processor_flush_failed"
-	// TaskRuntimeAlertKindBatchProcessorFallbackFailed 表示批处理收集器必达兜底失败。
-	TaskRuntimeAlertKindBatchProcessorFallbackFailed = "batch_processor_fallback_failed"
-	// TaskRuntimeAlertKindBatchProcessorProcessFailed 表示批处理后台 process 失败。
-	TaskRuntimeAlertKindBatchProcessorProcessFailed = "batch_processor_process_failed"
 	// TaskRuntimeAlertKindAppLifecycleFailed 表示服务启动或平滑停止生命周期失败。
 	TaskRuntimeAlertKindAppLifecycleFailed = "app_lifecycle_failed"
 	// TaskRuntimeAlertKindConfigReloadFailed 表示 config.yaml 热加载失败。
@@ -70,18 +64,19 @@ const (
 	TaskRuntimeAlertKindRuntimeConfigReloadFailed = "runtime_config_reload_failed"
 )
 
-// TaskRuntimeAlerter 表示任务系统可选暴露的运行异常告警入口。
+// TaskRuntimeAlerter 表示统一运行异常告警入口。
 type TaskRuntimeAlerter interface {
 	NotifyRuntimeAlert(ctx context.Context, alert TaskRuntimeAlert)
 }
 
-// NotifyTaskRuntimeAlert 通过任务系统上报运行异常；未启用任务系统时静默降级。
-func NotifyTaskRuntimeAlert(ctx context.Context, task TaskQueue, alert TaskRuntimeAlert) {
-	if task == nil {
-		return
-	}
-	alerter, ok := task.(TaskRuntimeAlerter)
-	if !ok {
+// TaskQueueReadiness 约束任务队列对健康检查暴露的底层依赖和运行态探测。
+type TaskQueueReadiness interface {
+	Ready(ctx context.Context, requireWorker bool, requireScheduler bool) error
+}
+
+// NotifyTaskRuntimeAlert 通过独立告警入口上报运行异常；未配置外部告警时静默降级。
+func NotifyTaskRuntimeAlert(ctx context.Context, alerter TaskRuntimeAlerter, alert TaskRuntimeAlert) {
+	if alerter == nil {
 		return
 	}
 	alerter.NotifyRuntimeAlert(ctx, alert)

@@ -57,32 +57,21 @@ func (r *AdminListReq) Validate() error {
 
 // UpdateAdminReq 表示编辑管理员请求。
 type UpdateAdminReq struct {
-	ID            int     `path:"id" json:"id,optional" form:"id,optional"`                       // 管理员 ID
-	RealName      *string `json:"realName,optional"`                                              // 真实姓名
-	Email         *string `json:"email,optional"`                                                 // 邮箱
-	Phone         *string `json:"phone,optional"`                                                 // 电话
-	MfaSecureKey  *string `json:"mfaSecureKey,optional"`                                          // TOTP MFA 密钥
-	MfaStatus     *int    `json:"mfaStatus,optional"`                                             // MFA 状态：0 未启用，1 已启用
-	Status        *int    `json:"status,optional"`                                                // 账号状态：1 正常，0 禁用
-	Avatar        *string `json:"avatar,optional"`                                                // 头像地址
-	Description   *string `json:"description,optional"`                                           // 备注说明
-	Password      *string `json:"password,optional"`                                              // 新密码，非空时重置
-	RoleIDs       []int   `json:"roleIDs,optional"`                                               // 角色 ID 列表
-	IsUpdateRoles bool    `json:"isUpdateRoles,optional" form:"isUpdateRoles,optional,default=0"` // 是否同步更新角色
-	TwoStepKey    string  `json:"twoStepKey,optional"`                                            // 二次校验票据 key
-	TwoStepValue  string  `json:"twoStepValue,optional"`                                          // 二次校验票据 value
+	ID           int     `path:"id" json:"id,optional" form:"id,optional"` // 管理员 ID
+	RealName     *string `json:"realName,optional"`                        // 真实姓名
+	Email        *string `json:"email,optional"`                           // 邮箱
+	Phone        *string `json:"phone,optional"`                           // 电话
+	Avatar       *string `json:"avatar,optional"`                          // 头像地址
+	Description  *string `json:"description,optional"`                     // 备注说明
+	Password     *string `json:"password,optional"`                        // 新密码，非空时重置
+	TwoStepKey   string  `json:"twoStepKey,optional"`                      // 二次校验票据 key
+	TwoStepValue string  `json:"twoStepValue,optional"`                    // 二次校验票据 value
 }
 
 // Validate 校验编辑管理员请求。
 func (r *UpdateAdminReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("管理员ID不能为空")
-	}
-	if r.Status != nil && (*r.Status != 0 && *r.Status != 1) {
-		return errors.Errorf("账号状态不合法")
-	}
-	if r.MfaStatus != nil && (*r.MfaStatus != 0 && *r.MfaStatus != 1) {
-		return errors.Errorf("MFA状态不合法")
 	}
 	if r.Password != nil {
 		if err := validateAdminPasswordOptional(*r.Password, "密码"); err != nil {
@@ -188,7 +177,7 @@ func (r *InitAdminBootstrapReq) Validate() error {
 // AdminRoleAssignReq 表示管理员角色分配请求。
 type AdminRoleAssignReq struct {
 	ID           int    `path:"id" json:"id,optional" form:"id,optional"`           // 管理员 ID
-	RoleIDs      []int  `json:"roleIDs,optional"`                                   // 角色 ID 列表
+	RoleIDs      []int  `json:"roleIDs"`                                            // 角色 ID 列表，显式空数组表示撤销全部角色
 	TwoStepKey   string `json:"twoStepKey,optional" form:"twoStepKey,optional"`     // MFA 二次校验票据 key
 	TwoStepValue string `json:"twoStepValue,optional" form:"twoStepValue,optional"` // MFA 二次校验票据 value
 }
@@ -198,9 +187,15 @@ func (r *AdminRoleAssignReq) Validate() error {
 	if r.ID <= 0 {
 		return errors.Errorf("管理员ID不能为空")
 	}
-	if len(UniquePositiveInts(r.RoleIDs)) == 0 {
-		return errors.Errorf("角色 ID不能为空")
+	if r.RoleIDs == nil {
+		return errors.Errorf("必须提交角色 ID列表")
 	}
+	for _, roleID := range r.RoleIDs {
+		if roleID <= 0 {
+			return errors.Errorf("角色 ID不合法")
+		}
+	}
+	r.RoleIDs = UniquePositiveInts(r.RoleIDs)
 	return nil
 }
 
@@ -221,6 +216,8 @@ type AdminItem struct {
 	LastLoginIPAddr   string          `json:"lastLoginIpaddr"`   // 最近登录 IP 归属地
 	RoleIDs           []int           `json:"roleIDs"`           // 已绑定角色 ID 列表
 	Roles             []AdminRoleItem `json:"roles"`             // 已绑定角色列表
+	Manageable        bool            `json:"manageable"`        // 当前管理员是否有权管理该账号
+	Self              bool            `json:"self"`              // 是否为当前登录管理员本人
 	CreatedAt         string          `json:"createdAt"`         // 创建时间
 	UpdatedAt         string          `json:"updatedAt"`         // 更新时间
 }
@@ -243,4 +240,5 @@ type InitAdminBootstrapResp struct {
 	MfaStatus         int    `json:"mfaStatus"`         // MFA 状态：0 未启用，1 已启用
 	Status            int    `json:"status"`            // 账号状态：1 正常，0 禁用
 	Operation         string `json:"operation"`         // 本次操作类型：当前固定为 reset，表示重置既有超级管理员账号
+	SyncPending       bool   `json:"syncPending"`       // 是否仍有管理员安全缓存补偿未完成
 }

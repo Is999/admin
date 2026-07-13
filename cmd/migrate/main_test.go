@@ -2,12 +2,20 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	keys "admin/common/rediskeys"
 	"admin/common/runtimecfg"
 	"admin/internal/config"
 	"admin/internal/database"
+
+	"github.com/alicebob/miniredis/v2"
+	miniredisserver "github.com/alicebob/miniredis/v2/server"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 // TestResolveMigrationActionDefault 验证空 action 默认只查看迁移状态。
@@ -69,8 +77,8 @@ func TestPrintResultsRejectsNilWriter(t *testing.T) {
 	}
 }
 
-// TestPermissionCacheRefreshRequired 验证只有 up 模式下的权限数据迁移会触发权限缓存刷新。
-func TestPermissionCacheRefreshRequired(t *testing.T) {
+// TestAuthorizationCacheRefreshRequired 验证只有 up 模式下的鉴权数据迁移会触发缓存刷新。
+func TestAuthorizationCacheRefreshRequired(t *testing.T) {
 	tests := []struct {
 		name    string                      // name 表示测试场景。
 		action  string                      // action 表示迁移动作。
@@ -81,7 +89,7 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			name:   "skip dry run",
 			action: actionDryRun,
 			results: []database.MigrationRunItem{
-				{Name: "sync_document_permissions", Status: database.MigrationStatusExecuted},
+				{Name: "bootstrap_admin_permission", Status: database.MigrationStatusExecuted},
 			},
 		},
 		{
@@ -92,34 +100,50 @@ func TestPermissionCacheRefreshRequired(t *testing.T) {
 			},
 		},
 		{
-			name:   "refresh executed document permission migration",
+			name:   "refresh executed permission baseline",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Name: "sync_document_permissions", Status: database.MigrationStatusExecuted},
+				{Name: "bootstrap_admin_permission", Status: database.MigrationStatusExecuted},
 			},
 			want: true,
 		},
 		{
-			name:   "refresh applied document permission migration by asset",
+			name:   "refresh applied permission baseline by asset",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Asset: "document_permission_seed.sql", Status: database.MigrationStatusApplied},
+				{Asset: "admin_permission.sql", Status: database.MigrationStatusApplied},
 			},
 			want: true,
 		},
 		{
-			name:   "skip pending document permission migration",
+			name:   "refresh executed document permission baseline",
 			action: actionUp,
 			results: []database.MigrationRunItem{
-				{Name: "sync_document_permissions", Status: database.MigrationStatusPending},
+				{Name: "bootstrap_admin_doc_permission", Status: database.MigrationStatusExecuted},
+			},
+			want: true,
+		},
+		{
+			name:   "refresh applied document permission baseline by asset",
+			action: actionUp,
+			results: []database.MigrationRunItem{
+				{Asset: "admin_doc_permission.sql", Status: database.MigrationStatusApplied},
+			},
+			want: true,
+		},
+		{
+			name:   "skip pending permission baseline",
+			action: actionUp,
+			results: []database.MigrationRunItem{
+				{Name: "bootstrap_admin_permission", Status: database.MigrationStatusPending},
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := permissionCacheRefreshRequired(tt.action, tt.results); got != tt.want {
-				t.Fatalf("permissionCacheRefreshRequired() = %v, want %v", got, tt.want)
+			if got := authorizationCacheRefreshRequired(tt.action, tt.results); got != tt.want {
+				t.Fatalf("authorizationCacheRefreshRequired() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -140,5 +164,89 @@ func TestPublishMigrationRuntimeConfigRestoresPreviousAppID(t *testing.T) {
 	restore()
 	if got := runtimecfg.AppID(); got != "before" {
 		t.Fatalf("runtimecfg.AppID() after restore = %q, want before", got)
+	}
+}
+
+// TestRefreshAuthorizationCacheAfterMigrationPropagatesRoleQueryError 验证角色 ID 查询失败会阻止缓存刷新。
+func TestRefreshAuthorizationCacheAfterMigrationPropagatesRoleQueryError(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{
+		DSN:                       "root@tcp(127.0.0.1:1)/test?timeout=50ms&charset=utf8mb4&parseTime=True&loc=Local",
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatalf("创建迁移缓存刷新测试数据库失败: %v", err)
+	}
+
+	err = refreshAuthorizationCacheAfterMigration(context.Background(), config.Config{}, db)
+	if err == nil || !strings.Contains(err.Error(), "查询角色 ID 失败") {
+		t.Fatalf("refreshAuthorizationCacheAfterMigration() error = %v, want role query error", err)
+	}
+}
+
+// TestRefreshAuthorizationCacheAfterMigrationDeletesSharedAndRoleCaches 验证迁移后清理共享索引和全部角色权限缓存。
+func TestRefreshAuthorizationCacheAfterMigrationDeletesSharedAndRoleCaches(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	redisServer.Server().SetPreHook(func(peer *miniredisserver.Peer, command string, args ...string) bool {
+		if !strings.EqualFold(command, "cluster") || len(args) != 1 || !strings.EqualFold(args[0], "info") {
+			return false
+		}
+		peer.WriteError("ERR This instance has cluster support disabled")
+		return true
+	})
+	db, err := gorm.Open(mysql.New(mysql.Config{
+		DSN:                       "root@tcp(127.0.0.1:1)/test?timeout=50ms&charset=utf8mb4&parseTime=True&loc=Local",
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatalf("创建迁移缓存刷新测试数据库失败: %v", err)
+	}
+	roleQueryCount := 0
+	if err = db.Callback().Query().Replace("gorm:query", func(tx *gorm.DB) {
+		roleQueryCount++
+		roleIDs, ok := tx.Statement.Dest.(*[]int)
+		if !ok {
+			tx.AddError(fmt.Errorf("角色 ID 查询目标类型错误: %T", tx.Statement.Dest))
+			return
+		}
+		*roleIDs = []int{2, 3}
+	}); err != nil {
+		t.Fatalf("替换角色 ID 查询回调失败: %v", err)
+	}
+	cfg := config.Config{
+		AppID: "site-a",
+		Redis: config.RedisConfig{
+			Type:     "single",
+			Addrs:    []string{redisServer.Addr()},
+			PoolSize: 1,
+		},
+	}
+	cacheKeys := []string{
+		keys.PermissionTree,
+		keys.RoutePermissionIDs,
+		keys.PermissionUUID,
+		keys.DocPermissionList,
+		keys.DocResourcePermissionID,
+		fmt.Sprintf(keys.RolePermission, 2),
+		fmt.Sprintf(keys.RolePermission, 3),
+		fmt.Sprintf(keys.RoleDocPermission, 2),
+		fmt.Sprintf(keys.RoleDocPermission, 3),
+	}
+	for _, cacheKey := range cacheKeys {
+		if err := redisServer.Set("app:site-a:table:"+cacheKey, "value"); err != nil {
+			t.Fatalf("写入权限缓存[%s]失败: %v", cacheKey, err)
+		}
+	}
+
+	if err = refreshAuthorizationCacheAfterMigration(context.Background(), cfg, db); err != nil {
+		t.Fatalf("refreshAuthorizationCacheAfterMigration() error = %v", err)
+	}
+	if roleQueryCount != 1 {
+		t.Fatalf("refreshAuthorizationCacheAfterMigration() role query count = %d, want 1", roleQueryCount)
+	}
+	for _, cacheKey := range cacheKeys {
+		physicalKey := "app:site-a:table:" + cacheKey
+		if redisServer.Exists(physicalKey) {
+			t.Fatalf("refreshAuthorizationCacheAfterMigration() key %s still exists", physicalKey)
+		}
 	}
 }

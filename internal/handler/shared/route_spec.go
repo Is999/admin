@@ -17,7 +17,7 @@ const (
 	RouteAccessPublic RouteAccess = "public"
 	// RouteAccessAuth 表示后台登录态鉴权。
 	RouteAccessAuth RouteAccess = "auth"
-	// RouteAccessInternal 表示内网 IP 白名单入口。
+	// RouteAccessInternal 表示独立内网监听器的来源、Ops HMAC 和 nonce 鉴权入口。
 	RouteAccessInternal RouteAccess = "internal"
 	// RouteAccessDocs 表示文档会话 JWT 鉴权。
 	RouteAccessDocs RouteAccess = "docs"
@@ -31,7 +31,7 @@ type RouteHandler func(*svc.ServiceContext) http.HandlerFunc
 // RouteSpec 是路由注册、访问边界、契约和访问日志策略的单一规格。
 type RouteSpec struct {
 	Module        string                // 路由模块名称，由默认模块聚合时写入
-	Method        string                // HTTP Method
+	Method        string                // HTTP 请求方法
 	Path          string                // go-zero 路由路径
 	Access        RouteAccess           // 入口鉴权类型
 	Meta          RouteMeta             // 业务路由元数据，空值表示该路由不进入业务鉴权链
@@ -58,7 +58,7 @@ func (s RouteSpec) Describe() string {
 }
 
 // RestRoute 将路由规格转换为 go-zero 路由。
-func (s RouteSpec) RestRoute(svcCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware, internalMw *middleware.InternalOnlyMiddleware) rest.Route {
+func (s RouteSpec) RestRoute(svcCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware, opsMw *middleware.OpsMiddleware) rest.Route {
 	if s.Handler == nil {
 		panic("路由规格缺少 Handler: " + s.Method + " " + s.Path)
 	}
@@ -72,7 +72,7 @@ func (s RouteSpec) RestRoute(svcCtx *svc.ServiceContext, authMw *middleware.Auth
 			handler = authMw.PublicHandle(handler, alias)
 		}
 	case RouteAccessInternal:
-		handler = internalMw.Handle(handler, alias)
+		handler = opsMw.Handle(handler, alias)
 	case RouteAccessDocs:
 		handler = middleware.DocsJwtMiddleware(svcCtx)(handler)
 	}
@@ -83,10 +83,10 @@ func (s RouteSpec) RestRoute(svcCtx *svc.ServiceContext, authMw *middleware.Auth
 }
 
 // AddRouteSpecs 按声明顺序注册一组路由规格。
-func AddRouteSpecs(server *rest.Server, svcCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware, internalMw *middleware.InternalOnlyMiddleware, specs []RouteSpec) {
+func AddRouteSpecs(server *rest.Server, svcCtx *svc.ServiceContext, authMw *middleware.AuthMiddleware, opsMw *middleware.OpsMiddleware, specs []RouteSpec) {
 	routes := make([]rest.Route, 0, len(specs))
 	for _, spec := range specs {
-		routes = append(routes, spec.RestRoute(svcCtx, authMw, internalMw))
+		routes = append(routes, spec.RestRoute(svcCtx, authMw, opsMw))
 	}
 	server.AddRoutes(routes)
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	tasklimits "admin/internal/task/limits"
 	"admin/internal/task/stats"
 
 	"github.com/Is999/go-utils/errors"
@@ -34,8 +35,14 @@ func (r *TriggerTaskWorkflowReq) Validate() error {
 	if strings.TrimSpace(r.Name) == "" {
 		return errors.Errorf("工作流名称不能为空")
 	}
-	if r.ShardTotal <= 0 {
+	if r.ShardTotal < 0 {
+		return errors.Errorf("shardTotal 不能小于 0")
+	}
+	if r.ShardTotal == 0 {
 		r.ShardTotal = 1
+	}
+	if r.ShardTotal > tasklimits.MaxShardTotal {
+		return errors.Errorf("shardTotal 不能超过 %d", tasklimits.MaxShardTotal)
 	}
 	if r.GrayPercent <= 0 {
 		r.GrayPercent = 100
@@ -65,8 +72,14 @@ func (r *TriggerTaskWorkflowReq) Validate() error {
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")
 	}
+	if r.TimeoutSeconds != nil && *r.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
+		return errors.Errorf("timeoutSeconds 不能超过 %d", tasklimits.MaxTimeoutSeconds)
+	}
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")
+	}
+	if r.Retry != nil && *r.Retry > tasklimits.MaxRetry {
+		return errors.Errorf("retry 不能超过 %d", tasklimits.MaxRetry)
 	}
 	return nil
 }
@@ -158,17 +171,17 @@ func (r *ListTaskItemsReq) Validate() error {
 // ListTaskItemsOverviewReq 表示任务列表总览查询请求。
 // 该接口用于管理后台“任务列表”页首屏和模糊排障场景，支持按需精确查询，也支持受控聚合查询。
 type ListTaskItemsOverviewReq struct {
-	Queue              string `json:"queue,optional" form:"queue,optional"`                  // 队列名称；为空时按全部可见队列聚合
-	State              string `json:"state,optional" form:"state,optional"`                  // 指定任务状态；为空时聚合常用状态并按任务时间倒序返回
-	Group              string `json:"group,optional" form:"group,optional"`                  // 聚合组名称，仅 aggregating 使用
-	TaskID             string `json:"taskId,optional" form:"taskId,optional"`                // 任务 ID 关键字；填写后按任务 ID 片段筛选
-	WorkflowID         string `json:"workflowId,optional" form:"workflowId,optional"`        // 工作流实例 ID；填写后仅返回该链路下的任务
-	TaskName           string `json:"taskName,optional" form:"taskName,optional"`            // 任务名称关键字；支持按周期任务名或展示名包含匹配
-	StartTime          string `json:"startTime,optional" form:"startTime,optional"`          // 任务活动时间开始，RFC3339；scheduled 按 nextProcessAt 过滤
-	EndTime            string `json:"endTime,optional" form:"endTime,optional"`              // 任务活动时间结束，RFC3339；scheduled 按 nextProcessAt 过滤
-	Page               int    `json:"page,optional" form:"page,optional"`                    // 页码，从 1 开始
-	PageSize           int    `json:"pageSize,optional" form:"pageSize,optional"`            // 每页条数
-	IncludeAggregating bool   `json:"includeAggregating,optional" form:"includeAggregating"` // 状态为空时，是否把 aggregating 纳入聚合范围
+	Queue              string `json:"queue,optional" form:"queue,optional"`                           // 队列名称；为空时按全部可见队列聚合
+	State              string `json:"state,optional" form:"state,optional"`                           // 指定任务状态；为空时聚合常用状态并按任务时间倒序返回
+	Group              string `json:"group,optional" form:"group,optional"`                           // 聚合组名称，仅 aggregating 使用
+	TaskID             string `json:"taskId,optional" form:"taskId,optional"`                         // 任务 ID 关键字；填写后按任务 ID 片段筛选
+	WorkflowID         string `json:"workflowId,optional" form:"workflowId,optional"`                 // 工作流实例 ID；填写后仅返回该链路下的任务
+	TaskName           string `json:"taskName,optional" form:"taskName,optional"`                     // 任务名称关键字；支持按周期任务名或展示名包含匹配
+	StartTime          string `json:"startTime,optional" form:"startTime,optional"`                   // 任务活动时间开始，RFC3339；scheduled 按 nextProcessAt 过滤
+	EndTime            string `json:"endTime,optional" form:"endTime,optional"`                       // 任务活动时间结束，RFC3339；scheduled 按 nextProcessAt 过滤
+	Page               int    `json:"page,optional" form:"page,optional"`                             // 页码，从 1 开始
+	PageSize           int    `json:"pageSize,optional" form:"pageSize,optional"`                     // 每页条数
+	IncludeAggregating bool   `json:"includeAggregating,optional" form:"includeAggregating,optional"` // 状态为空时，是否把 aggregating 纳入聚合范围
 }
 
 // Validate 校验任务总览查询请求。
@@ -286,8 +299,14 @@ func (r *EnqueueTaskReq) Validate() error {
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")
 	}
+	if r.TimeoutSeconds != nil && *r.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
+		return errors.Errorf("timeoutSeconds 不能超过 %d", tasklimits.MaxTimeoutSeconds)
+	}
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")
+	}
+	if r.Retry != nil && *r.Retry > tasklimits.MaxRetry {
+		return errors.Errorf("retry 不能超过 %d", tasklimits.MaxRetry)
 	}
 	return nil
 }
@@ -371,6 +390,13 @@ type TaskListResp struct {
 	PageSize   int        `json:"pageSize"`             // 当前页大小
 	Total      int64      `json:"total"`                // 该状态任务总数
 	Tasks      []TaskItem `json:"tasks"`                // 任务列表
+}
+
+// TaskReportScanUsage 记录日报读取一个 Asynq 原生页的受控资源消耗。
+type TaskReportScanUsage struct {
+	Tasks       int   // 已检查的原生页任务槽位数
+	Bytes       int64 // 已允许读取的 msg、result 和运行快照估算字节数
+	ByteLimited bool  // 是否因页级或全局字节预算停止读取
 }
 
 // TaskListOverviewResp 表示任务总览查询响应。
@@ -588,6 +614,7 @@ type TaskSchedulerItem struct {
 	RenewIntervalSeconds     int    `json:"renewIntervalSeconds"`              // leader 锁续租间隔（秒）
 	SyncIntervalSeconds      int    `json:"syncIntervalSeconds"`               // 周期任务配置同步间隔（秒）
 	HeartbeatIntervalSeconds int    `json:"heartbeatIntervalSeconds"`          // 调度器心跳间隔（秒）
+	MaxQueueBacklog          int    `json:"maxQueueBacklog"`                   // 周期任务投递前允许的队列积压上限，0 表示关闭背压
 	PeriodicTaskCount        int    `json:"periodicTaskCount"`                 // 当前有效周期任务数量
 	LastStatus               string `json:"lastStatus,omitempty"`              // 最近一次调度器总体状态
 	LastMessage              string `json:"lastMessage,omitempty"`             // 最近一次调度器总体状态说明

@@ -1,0 +1,10 @@
+-- 仅当源表还没有 shard_no 时使用；表名、主键名和索引名必须来自发布白名单。
+-- 两段 DDL 必须分别执行并观察实例负载；ALGORITHM/LOCK 不满足时直接失败，禁止自动降级成长时间阻塞写入。
+ALTER TABLE `__UID_TABLE__`
+  ADD COLUMN `shard_no` int NOT NULL DEFAULT 0 COMMENT 'CRC32(uid十进制字符串)%1024固定逻辑桶，回填前仅为兼容默认值',
+  ALGORITHM=INSTANT;
+
+ALTER TABLE `__UID_TABLE__`
+  ADD INDEX `__SHARD_INDEX__` (`shard_no`, `__PRIMARY_KEY__`),
+  ALGORITHM=INPLACE,
+  LOCK=NONE;

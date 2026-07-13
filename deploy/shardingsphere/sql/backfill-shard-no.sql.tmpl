@@ -1,0 +1,12 @@
+-- user 单批执行模板：发布任务必须按主键游标推进，并在每批后提交、限速和记录边界。
+-- __BATCH_SIZE__ 必须替换为经过压测的正整数，禁止无上限执行。
+SET @cursor_start = __CURSOR_START__;
+SET @cursor_end = __CURSOR_END__;
+
+UPDATE `user`
+SET `shard_no` = MOD(CRC32(CAST(`id` AS CHAR)), 1024)
+WHERE `id` > @cursor_start
+  AND `id` <= @cursor_end
+  AND (`shard_no` IS NULL OR `shard_no` <> MOD(CRC32(CAST(`id` AS CHAR)), 1024))
+ORDER BY `id`
+LIMIT __BATCH_SIZE__;

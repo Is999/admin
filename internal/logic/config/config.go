@@ -46,6 +46,16 @@ func NewSysConfigLogicWithContext(ctx context.Context, svcCtx *svc.ServiceContex
 	}
 }
 
+// sysConfigInputResult 把字典配置业务数据错误转换为参数错误，其他错误交给调用方分类。
+func sysConfigInputResult(err error, operation string) *types.BizResult {
+	var inputErr types.BizError
+	if !errors.As(err, &inputErr) {
+		return nil
+	}
+	return types.ParamErrorResult(inputErr).
+		WithError(corelogic.WrapLogicError(err, operation))
+}
+
 // List 分页查询系统常量配置。
 func (l *SysConfigLogic) List(req *types.SysConfigListReq) *types.BizResult {
 	dbq := l.Svc.ReadDB(svc.DatabaseMain).Model(&model.SysConfig{})
@@ -107,25 +117,60 @@ func (l *SysConfigLogic) Create(req *types.SaveSysConfigReq) *types.BizResult {
 		UpdatedAt: time.Now(),
 	}
 
-	if err = l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
-		pids, err := l.sysConfigPidsTx(tx, req.Pid, 0)
-		if err != nil {
-			return errors.Tag(err)
+	var txErr error
+	var txOutcome sysConfigTxOutcome
+	err = l.withSysConfigMutationLock(l.Ctx, func(ctx context.Context) error {
+		writeDB := l.Svc.WriteDB(svc.DatabaseMain)
+		if writeDB == nil {
+			return errors.Errorf("字典配置主库未初始化")
 		}
-		cfg.Pids = pids
-		if err := l.ensureSysConfigUUIDUniqueTx(tx, req.UUID, 0); err != nil {
-			return errors.Tag(err)
+		txOutcome, txErr = runSysConfigTransaction(writeDB.WithContext(ctx), func(tx *gorm.DB) error {
+			pids, err := l.sysConfigPidsTx(tx, req.Pid, 0)
+			if err != nil {
+				return errors.Tag(err)
+			}
+			cfg.Pids = pids
+			if err := l.ensureSysConfigUUIDUniqueTx(tx, req.UUID, 0); err != nil {
+				return errors.Tag(err)
+			}
+			if err := tx.Create(&cfg).Error; err != nil {
+				return errors.Wrap(err, "创建系统配置失败")
+			}
+			return nil
+		})
+		return errors.Tag(txErr)
+	})
+	if err != nil {
+		if txOutcome == sysConfigTxUncertain {
+			if cacheErr := l.invalidateSysConfigCaches(map[string]struct{}{req.UUID: {}}); cacheErr != nil {
+				err = errors.Join(err, cacheErr)
+			}
+			return types.DBError(i18n.MsgKeyDBError, err,
+				"SysConfigLogic.Create 创建事务结果不确定，已删除配置UUID[%s]缓存", req.UUID).ToBizResult()
 		}
-		if err := tx.Create(&cfg).Error; err != nil {
-			return errors.Wrap(err, "创建系统配置失败")
+		if txOutcome == sysConfigTxCommitted {
+			// 数据库已经提交时，锁释放异常只能告警，不能把成功创建误报为失败。
+			corelogic.LogWrappedError(l.Logger, err,
+				"SysConfigLogic.Create 创建已提交但字典写入锁释放异常 uuid=%s", req.UUID)
+		} else if errors.Is(err, cachelogic.ErrRedisUnavailable) {
+			return sysConfigInfrastructureResult(err,
+				"SysConfigLogic.Create 字典配置写入锁 Redis 依赖不可用")
+		} else if inputResult := sysConfigInputResult(txErr,
+			"SysConfigLogic.Create 字典配置数据校验失败"); inputResult != nil {
+			return inputResult
+		} else if txErr != nil {
+			return types.DBError(i18n.MsgKeyDBError, txErr,
+				"SysConfigLogic.Create 创建系统配置[%s]失败", req.UUID).ToBizResult()
+		} else {
+			return sysConfigInfrastructureResult(err,
+				"SysConfigLogic.Create 获取字典写入锁失败")
 		}
-		return nil
-	}); err != nil {
-		return types.DBError(i18n.MsgKeyDBError, err,
-			"SysConfigLogic.Create 创建系统配置[%s]失败", req.UUID).ToBizResult()
 	}
 
-	_ = l.RenewByUUID(req.UUID)
+	if err := l.RenewByUUID(req.UUID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.AddSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"SysConfigLogic.Create 配置UUID[%s]缓存同步失败", req.UUID)
+	}
 	return types.NewBizResult(codes.AddSuccess).
 		SetI18nMessage(i18n.MsgKeyAddSuccess)
 }
@@ -171,47 +216,95 @@ func (l *SysConfigLogic) Update(req *types.SaveSysConfigReq) *types.BizResult {
 		nextPid = req.Pid
 	}
 
-	if err = l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
-		pids, err := l.sysConfigPidsTx(tx, nextPid, req.ID)
-		if err != nil {
-			return errors.Tag(err)
+	var txErr error
+	var txOutcome sysConfigTxOutcome
+	err = l.withSysConfigMutationLock(l.Ctx, func(ctx context.Context) error {
+		writeDB := l.Svc.WriteDB(svc.DatabaseMain)
+		if writeDB == nil {
+			return errors.Errorf("字典配置主库未初始化")
 		}
-		if err := l.ensureSysConfigUUIDUniqueTx(tx, req.UUID, req.ID); err != nil {
-			return errors.Tag(err)
+		txOutcome, txErr = runSysConfigTransaction(writeDB.WithContext(ctx), func(tx *gorm.DB) error {
+			pids, err := l.sysConfigPidsTx(tx, nextPid, req.ID)
+			if err != nil {
+				return errors.Tag(err)
+			}
+			if err := l.ensureSysConfigUUIDUniqueTx(tx, req.UUID, req.ID); err != nil {
+				return errors.Tag(err)
+			}
+			result := tx.Model(&model.SysConfig{}).
+				Where("id = ? AND version = ?", req.ID, expectedVersion).
+				Updates(map[string]any{
+					"uuid":       req.UUID,
+					"title":      req.Title,
+					"value":      value,
+					"example":    example,
+					"remark":     req.Remark,
+					"page":       req.Page,
+					"pid":        nextPid,
+					"pids":       pids,
+					"version":    gorm.Expr("version + 1"),
+					"updated_at": time.Now(),
+				})
+			if result.Error != nil {
+				return errors.Wrap(result.Error, "更新系统配置失败")
+			}
+			if result.RowsAffected == 0 {
+				return errors.Errorf("配置已被其他人修改，请刷新后重试")
+			}
+			return nil
+		})
+		return errors.Tag(txErr)
+	})
+	if err != nil {
+		if txOutcome == sysConfigTxUncertain {
+			// changedUUIDs 同时覆盖旧 UUID 和新 UUID，避免大小写或改名场景残留旧缓存。
+			changedUUIDs := map[string]struct{}{
+				old.UUID: {},
+				req.UUID: {},
+			}
+			if cacheErr := l.invalidateSysConfigCaches(changedUUIDs); cacheErr != nil {
+				err = errors.Join(err, cacheErr)
+			}
+			return types.DBError(i18n.MsgKeyDBError, err,
+				"SysConfigLogic.Update 更新事务结果不确定，已删除配置ID[%d]相关缓存", req.ID).ToBizResult()
 		}
-		result := tx.Model(&model.SysConfig{}).
-			Where("id = ? AND version = ?", req.ID, expectedVersion).
-			Updates(map[string]any{
-				"uuid":       req.UUID,
-				"title":      req.Title,
-				"value":      value,
-				"example":    example,
-				"remark":     req.Remark,
-				"page":       req.Page,
-				"pid":        nextPid,
-				"pids":       pids,
-				"version":    gorm.Expr("version + 1"),
-				"updated_at": time.Now(),
-			})
-		if result.Error != nil {
-			return errors.Wrap(result.Error, "更新系统配置失败")
-		}
-		if result.RowsAffected == 0 {
-			return errors.Errorf("配置已被其他人修改，请刷新后重试")
-		}
-		return nil
-	}); err != nil {
-		if strings.Contains(err.Error(), "配置已被其他人修改，请刷新后重试") {
+		if txOutcome == sysConfigTxCommitted {
+			// 数据库已经提交时，锁释放异常只能告警，不能把成功更新误报为失败。
+			corelogic.LogWrappedError(l.Logger, err,
+				"SysConfigLogic.Update 更新已提交但字典写入锁释放异常 id=%d", req.ID)
+		} else if errors.Is(err, cachelogic.ErrRedisUnavailable) {
+			return sysConfigInfrastructureResult(err,
+				"SysConfigLogic.Update 字典配置写入锁 Redis 依赖不可用")
+		} else if inputResult := sysConfigInputResult(txErr,
+			"SysConfigLogic.Update 字典配置数据校验失败"); inputResult != nil {
+			return inputResult
+		} else if txErr != nil && strings.Contains(txErr.Error(), "配置已被其他人修改，请刷新后重试") {
 			return types.NewBizResult(codes.ParamError).
 				SetI18nMessage(i18n.MsgKeyConfigVersionConflict).
-				WithError(corelogic.WrapLogicError(err, "SysConfigLogic.Update 乐观锁校验失败"))
+				WithError(corelogic.WrapLogicError(txErr, "SysConfigLogic.Update 乐观锁校验失败"))
+		} else if txErr != nil {
+			return types.DBError(i18n.MsgKeyDBError, txErr,
+				"SysConfigLogic.Update 更新系统配置ID[%d]失败", req.ID).ToBizResult()
+		} else {
+			return sysConfigInfrastructureResult(err,
+				"SysConfigLogic.Update 获取字典写入锁失败")
 		}
-		return types.DBError(i18n.MsgKeyDBError, err,
-			"SysConfigLogic.Update 更新系统配置ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	_ = l.RdsDelKeys(cachelogic.TableCachePhysicalKeys(l.BaseLogic, fmt.Sprintf(keys.SysConfigUUID, old.UUID))...)
-	_ = l.RenewByUUID(req.UUID)
+	// cacheErr 保留首个缓存同步错误，旧 key 清理与新 key 刷新仍都尝试执行。
+	var cacheErr error
+	if old.UUID != req.UUID {
+		cacheErr = l.RdsDelKeys(cachelogic.TableCachePhysicalKeys(l.BaseLogic, fmt.Sprintf(keys.SysConfigUUID, old.UUID))...)
+	}
+	if err := l.RenewByUUID(req.UUID); err != nil {
+		if cacheErr == nil {
+			cacheErr = err
+		}
+	}
+	if cacheErr != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, cacheErr,
+			"SysConfigLogic.Update 配置ID[%d]缓存同步失败", req.ID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -514,14 +607,17 @@ func (l *SysConfigLogic) sysConfigPidsTx(tx *gorm.DB, pid int, selfID int) (stri
 		return "", nil
 	}
 	if pid == selfID {
-		return "", errors.Errorf("上级配置不能是自己")
+		return "", errors.Tag(types.BizError("上级配置不能是自己"))
 	}
 	var parent model.SysConfig
 	if err := tx.Where("id = ?", pid).First(&parent).Error; err != nil {
-		return "", errors.Wrap(err, "上级配置不存在")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", errors.Tag(types.BizError("上级配置不存在"))
+		}
+		return "", errors.Wrap(err, "查询上级配置失败")
 	}
 	if corelogic.ContainsTreeID(parent.Pids, selfID) {
-		return "", errors.Errorf("不能把配置移动到自己的子级下面")
+		return "", errors.Tag(types.BizError("不能把配置移动到自己的子级下面"))
 	}
 	return corelogic.BuildTreePids(parent.ID, parent.Pids), nil
 }
@@ -537,7 +633,7 @@ func (l *SysConfigLogic) ensureSysConfigUUIDUniqueTx(tx *gorm.DB, uuid string, i
 		return errors.Wrap(err, "检查配置UUID唯一失败")
 	}
 	if count > 0 {
-		return errors.Errorf("配置UUID[%s]已存在", uuid)
+		return errors.Tag(types.BizError(fmt.Sprintf("配置UUID[%s]已存在", uuid)))
 	}
 	return nil
 }

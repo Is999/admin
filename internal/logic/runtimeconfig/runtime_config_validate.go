@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"admin/internal/config"
+	tasklimits "admin/internal/task/limits"
 	taskqueue "admin/internal/task/queue"
 
 	"github.com/Is999/go-utils/errors"
@@ -44,6 +45,15 @@ func validatePeriodicConfigs(items []config.TaskPeriodicConfig) error {
 		}
 		if item.Retry < 0 || item.TimeoutSeconds < 0 || item.ShardTotal < 0 || item.UniqueTTLSeconds < 0 {
 			return errors.Errorf("周期任务数值参数不能小于 0 name=%s", strings.TrimSpace(item.Name))
+		}
+		if item.Retry > tasklimits.MaxRetry {
+			return errors.Errorf("周期任务 retry 不能超过 %d name=%s", tasklimits.MaxRetry, strings.TrimSpace(item.Name))
+		}
+		if item.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
+			return errors.Errorf("周期任务 timeout_seconds 不能超过 %d name=%s", tasklimits.MaxTimeoutSeconds, strings.TrimSpace(item.Name))
+		}
+		if item.ShardTotal > tasklimits.MaxShardTotal {
+			return errors.Errorf("周期任务 shard_total 不能超过 %d name=%s", tasklimits.MaxShardTotal, strings.TrimSpace(item.Name))
 		}
 		taskKey, err := taskqueue.PeriodicTaskConfigKey(item)
 		if err != nil {

@@ -1,12 +1,30 @@
 package manifest
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	componentbuiltin "admin/internal/bootstrap/components/builtin"
 	"admin/internal/bootstrap/register"
 	"admin/internal/handler"
 )
+
+// TestDefaultItemsCoveredByComponentDoc 确保默认注册项不会脱离组件清单文档。
+func TestDefaultItemsCoveredByComponentDoc(t *testing.T) {
+	docPath := filepath.Join("..", "..", "..", "docs", "site", "角色文档", "后端开发", "组件注册清单.md")
+	content, err := os.ReadFile(docPath)
+	if err != nil {
+		t.Fatalf("读取组件注册清单失败: %v", err)
+	}
+	doc := string(content)
+	for _, item := range Default() {
+		if !strings.Contains(doc, "`"+item.Name+"`") {
+			t.Fatalf("组件注册清单缺少默认项: kind=%s name=%s", item.Kind, item.Name)
+		}
+	}
+}
 
 // TestBuiltinRouteModulesCoverRouteContracts 确保启动默认路由模块覆盖所有内置路由契约。
 func TestBuiltinRouteModulesCoverRouteContracts(t *testing.T) {

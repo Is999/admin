@@ -1,0 +1,8 @@
+-- 代码资产：在同一事务内推进全量校验游标和累计结果。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.updateVerifyProgress。
+-- 参数来源：进度、累计值、状态和任务名通过预编译参数传入。
+-- 安全边界：任务名主键确保只更新一行。
+UPDATE `shard_backfill_checkpoint`
+SET `verify_cursor` = ?, `verified_rows` = ?, `mismatch_rows` = ?, `status` = ?
+WHERE `job_name` = ?

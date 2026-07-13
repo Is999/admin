@@ -15,6 +15,7 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
+// requirePayloadText 读取文本消息内容，并在载荷缺失时立即终止测试。
 func requirePayloadText(t *testing.T, payload messagePayload) string {
 	t.Helper()
 	if payload.Content == nil {
@@ -23,6 +24,7 @@ func requirePayloadText(t *testing.T, payload messagePayload) string {
 	return payload.Content.Text
 }
 
+// requireCardText 汇总卡片可见文本，并在卡片缺失时立即终止测试。
 func requireCardText(t *testing.T, payload messagePayload) string {
 	t.Helper()
 	if payload.Card == nil {
@@ -31,6 +33,7 @@ func requireCardText(t *testing.T, payload messagePayload) string {
 	return cardTextContent(*payload.Card)
 }
 
+// cardTextContent 按卡片展示顺序拼接标题、正文和字段文本。
 func cardTextContent(card messageCard) string {
 	parts := make([]string, 0, 8)
 	if card.Header != nil {

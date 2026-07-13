@@ -2,6 +2,7 @@ package security
 
 import (
 	corelogic "admin/internal/logic"
+	cachelogic "admin/internal/logic/cache"
 	configlogic "admin/internal/logic/config"
 	"crypto/aes"
 	"crypto/cipher"
@@ -34,8 +35,6 @@ const (
 	mfaSecretCipherPrefix = "mfa:v1:"
 	// mfaTwoStepDefaultTTL 表示未配置校验频率时，二次校验票据默认沿用 300 秒窗口。
 	mfaTwoStepDefaultTTL = 300 * time.Second
-	// mfaTwoStepIndexExtraTTL 表示二次校验票据索引比真实票据多保留的时间，便于清理时覆盖轻微过期抖动。
-	mfaTwoStepIndexExtraTTL = time.Minute
 	// loginMFAFlagToleranceSeconds 为登录时间与 MFA 完成标记之间允许的秒级容差。
 	// 登录请求写库时间与随后 MFA 校验写 Redis 时间可能落在相邻秒，容差用于消除该类抖动。
 	loginMFAFlagToleranceSeconds int64 = 1
@@ -97,6 +96,7 @@ type mfaBindingVerifyResult struct {
 type mfaTwoStepTicketPayload struct {
 	Scenario     int    // 票据对应的 MFA 场景
 	Value        string // 票据随机值
+	ExpiresAt    int64  // 票据过期时间，Unix 毫秒
 	SecretSource string // 绑定校验通过的秘钥来源
 	SecretDigest string // 绑定校验通过的秘钥摘要
 }
@@ -105,23 +105,43 @@ type mfaTwoStepTicketPayload struct {
 type MFATwoStepTicketPayload = mfaTwoStepTicketPayload
 
 // HasPassedLoginMFA 判断当前管理员是否已经完成本次登录后的 MFA 校验。
-func (l *SecurityLogic) HasPassedLoginMFA(admin *model.Admin) bool {
-	if admin == nil || l.Redis() == nil {
-		return false
+func (l *SecurityLogic) HasPassedLoginMFA(admin *model.Admin) (bool, error) {
+	if admin == nil {
+		return false, nil
 	}
-	flag, err := l.Redis().Get(l.Ctx, l.loginMFAFlagKey(admin.ID)).Int64()
+	if l.Redis() == nil {
+		return false, cachelogic.WrapRedisUnavailable(nil, "读取管理员登录MFA状态失败")
+	}
+	cacheKey := l.loginMFAFlagKey(admin.ID)
+	if cacheKey == "" {
+		return false, cachelogic.WrapRedisUnavailable(nil, "读取管理员登录MFA状态失败：缓存 Key 未初始化")
+	}
+	flag, err := l.Redis().Get(l.Ctx, cacheKey).Int64()
+	if errors.Is(err, redis.Nil) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, cachelogic.WrapRedisUnavailable(err, "读取管理员登录MFA状态失败")
 	}
-	return loginMFAFlagMatches(flag, admin.LastLoginTime)
+	return loginMFAFlagMatches(flag, admin.LastLoginTime), nil
 }
 
 // MarkLoginMFACompleted 标记当前管理员已经完成本次登录后的 MFA 校验。
 func (l *SecurityLogic) MarkLoginMFACompleted(adminID int) error {
-	if adminID <= 0 || l.Redis() == nil {
+	if adminID <= 0 {
 		return nil
 	}
-	return errors.Tag(l.Redis().Set(l.Ctx, l.loginMFAFlagKey(adminID), time.Now().Unix(), loginCheckMFAFlagTTL()).Err())
+	if l.Redis() == nil {
+		return cachelogic.WrapRedisUnavailable(nil, "写入管理员登录MFA状态失败")
+	}
+	cacheKey := l.loginMFAFlagKey(adminID)
+	if cacheKey == "" {
+		return cachelogic.WrapRedisUnavailable(nil, "写入管理员登录MFA状态失败：缓存 Key 未初始化")
+	}
+	if err := l.Redis().Set(l.Ctx, cacheKey, time.Now().Unix(), loginCheckMFAFlagTTL()).Err(); err != nil {
+		return cachelogic.WrapRedisUnavailable(err, "写入管理员登录MFA状态失败")
+	}
+	return nil
 }
 
 // loginMFAFlagMatches 判断 Redis 中的登录 MFA 完成标记是否覆盖当前登录会话。
@@ -134,10 +154,20 @@ func loginMFAFlagMatches(flag int64, lastLoginTime time.Time) bool {
 
 // ClearLoginMFACompleted 清理当前管理员登录后的 MFA 校验标记。
 func (l *SecurityLogic) ClearLoginMFACompleted(adminID int) error {
-	if adminID <= 0 || l.Redis() == nil {
+	if adminID <= 0 {
 		return nil
 	}
-	return errors.Tag(l.Redis().Del(l.Ctx, l.loginMFAFlagKey(adminID)).Err())
+	if l.Redis() == nil {
+		return cachelogic.WrapRedisUnavailable(nil, "清理管理员登录MFA状态失败")
+	}
+	cacheKey := l.loginMFAFlagKey(adminID)
+	if cacheKey == "" {
+		return cachelogic.WrapRedisUnavailable(nil, "清理管理员登录MFA状态失败：缓存 Key 未初始化")
+	}
+	if err := l.Redis().Del(l.Ctx, cacheKey).Err(); err != nil {
+		return cachelogic.WrapRedisUnavailable(err, "清理管理员登录MFA状态失败")
+	}
+	return nil
 }
 
 // verifyMFACodeBySecret 按给定 MFA 秘钥校验动态码。
@@ -235,33 +265,42 @@ func (l *SecurityLogic) issueMFATwoStepTicket(adminID int, scenario int, verifyR
 		return nil, errors.Errorf("管理员ID不能为空")
 	}
 	if l.Redis() == nil {
-		return nil, errors.Errorf("Redis未初始化")
+		return nil, cachelogic.WrapRedisUnavailable(nil, "签发MFA二次校验票据失败")
 	}
 	key := uuid.NewString()
-	value := utils.RandomLetters(32, utils.RandSource)
+	value, err := utils.SecureRandomLetters(32)
+	if err != nil {
+		return nil, errors.Wrap(err, "生成MFA二次校验票据失败")
+	}
 	ttl := l.mfaFrequencyTTL()
-	cacheKey := l.mfaTwoStepTicketKey(adminID, key)
+	expiresAt := time.Now().Add(ttl).UnixMilli()
 	cacheValue := encodeMFATwoStepTicketPayload(&mfaTwoStepTicketPayload{
-		Scenario: scenario,
-		Value:    value,
+		Scenario:  scenario,
+		Value:     value,
+		ExpiresAt: expiresAt,
 	})
 	if verifyResult != nil {
 		cacheValue = encodeMFATwoStepTicketPayload(&mfaTwoStepTicketPayload{
 			Scenario:     scenario,
 			Value:        value,
+			ExpiresAt:    expiresAt,
 			SecretSource: strings.TrimSpace(verifyResult.SecretSource),
 			SecretDigest: strings.TrimSpace(verifyResult.SecretDigest),
 		})
 	}
-	ctx := l.Ctx
-	indexKey := l.mfaTwoStepIndexKey(adminID)
-	pipe := l.Redis().Pipeline()
-	// 写入管理员维度索引，后续重置账号时按索引精确删除。
-	pipe.Set(ctx, cacheKey, cacheValue, ttl)
-	pipe.SAdd(ctx, indexKey, cacheKey)
-	pipe.Expire(ctx, indexKey, mfaTwoStepIndexTTL(ttl))
-	if _, err := pipe.Exec(ctx); err != nil {
-		return nil, errors.Tag(err)
+	cacheKey := l.mfaTwoStepKey(adminID)
+	if cacheKey == "" {
+		return nil, cachelogic.WrapRedisUnavailable(nil, "签发MFA二次校验票据失败：缓存 Key 未初始化")
+	}
+	if _, err := setMFATwoStepTicketScript.Run(
+		l.Ctx,
+		l.Redis(),
+		[]string{cacheKey},
+		key,
+		cacheValue,
+		ttl.Milliseconds(),
+	).Result(); err != nil {
+		return nil, cachelogic.WrapRedisUnavailable(err, "签发MFA二次校验票据失败")
 	}
 	return &types.ProfileTwoStepResp{
 		Key:    key,
@@ -284,26 +323,22 @@ func (l *SecurityLogic) ConsumeMFATwoStepTicket(adminID int, scenario int, key s
 	return l.verifyMFATwoStepTicketPayload(adminID, scenario, key, value, true)
 }
 
-// ClearAdminMFATwoStepTickets 按管理员维度索引精确清理 MFA 二次校验票据。
+// ClearAdminMFATwoStepTickets 按管理员维度精确清理 MFA 二次校验票据 Hash。
 func (l *SecurityLogic) ClearAdminMFATwoStepTickets(adminID int) error {
-	if adminID <= 0 || l.Redis() == nil {
+	if adminID <= 0 {
 		return nil
 	}
-	indexKey := l.mfaTwoStepIndexKey(adminID)
-	members, err := l.Redis().SMembers(l.Ctx, indexKey).Result()
-	if err != nil {
-		return errors.Tag(err)
+	if l.Redis() == nil {
+		return cachelogic.WrapRedisUnavailable(nil, "清理管理员MFA二次校验票据失败")
 	}
-	deleteKeys := make([]string, 0, len(members)+1)
-	for _, member := range members {
-		member = strings.TrimSpace(member)
-		if member == "" || !mfaTwoStepTicketKeyBelongsToAdmin(member, adminID) {
-			continue
-		}
-		deleteKeys = append(deleteKeys, member)
+	cacheKey := l.mfaTwoStepKey(adminID)
+	if cacheKey == "" {
+		return cachelogic.WrapRedisUnavailable(nil, "清理管理员MFA二次校验票据失败：缓存 Key 未初始化")
 	}
-	deleteKeys = append(deleteKeys, indexKey)
-	return errors.Tag(l.RdsDelKeys(deleteKeys...))
+	if err := l.RdsDelKeys(cacheKey); err != nil {
+		return cachelogic.WrapRedisUnavailable(err, "清理管理员MFA二次校验票据失败")
+	}
+	return nil
 }
 
 // verifyMFATwoStepTicketPayload 校验指定场景的二次校验票据，并按需返回票据携带的元信息。
@@ -312,23 +347,30 @@ func (l *SecurityLogic) verifyMFATwoStepTicketPayload(adminID int, scenario int,
 		return nil, ErrAdminMFATwoStepExpired
 	}
 	if l.Redis() == nil {
-		return nil, errors.Errorf("Redis未初始化")
+		return nil, cachelogic.WrapRedisUnavailable(nil, "校验MFA二次校验票据失败")
 	}
 	key = strings.TrimSpace(key)
 	value = strings.TrimSpace(value)
 	if key == "" || value == "" {
 		return nil, ErrAdminMFATwoStepExpired
 	}
-	cacheKey := l.mfaTwoStepTicketKey(adminID, key)
-	cacheValue, err := l.Redis().Get(l.Ctx, cacheKey).Result()
+	cacheKey := l.mfaTwoStepKey(adminID)
+	if cacheKey == "" {
+		return nil, cachelogic.WrapRedisUnavailable(nil, "校验MFA二次校验票据失败：缓存 Key 未初始化")
+	}
+	cacheValue, err := l.Redis().HGet(l.Ctx, cacheKey, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, ErrAdminMFATwoStepExpired
 		}
-		return nil, errors.Tag(err)
+		return nil, cachelogic.WrapRedisUnavailable(err, "读取MFA二次校验票据失败")
 	}
 	payload, err := decodeMFATwoStepTicketPayload(cacheValue)
 	if err != nil || payload == nil {
+		return nil, ErrAdminMFATwoStepExpired
+	}
+	if payload.ExpiresAt <= time.Now().UnixMilli() {
+		_ = l.Redis().HDel(l.Ctx, cacheKey, key).Err()
 		return nil, ErrAdminMFATwoStepExpired
 	}
 	if payload.Value != value {
@@ -393,37 +435,44 @@ func (l *SecurityLogic) IsMFAScenarioDisabled(scenario int) bool {
 }
 
 // NeedMFATwoStep 判断指定管理员在当前场景下是否需要二次校验票据。
-func (l *SecurityLogic) NeedMFATwoStep(admin *model.Admin, scenario int) bool {
+func (l *SecurityLogic) NeedMFATwoStep(admin *model.Admin, scenario int) (bool, error) {
 	if admin == nil {
-		return false
+		return false, nil
 	}
 	// 首次登录或管理员重置后的临时密码阶段，用户必须先完成改密，MFA 允许稍后再设置。
 	if scenario == MFAScenarioChangePassword && admin.NeedResetPassword == 1 {
-		return false
+		return false, nil
 	}
-	forceMFA := SecurityConfigBool(l.Ctx, l.Svc, ConfigAdminMFACheckEnable, false)
+	forceMFA, err := l.ForceLoginMFAEnabled()
+	if err != nil {
+		return false, errors.Tag(err)
+	}
 	if !forceMFA && admin.MfaStatus != 1 {
-		return false
+		return false, nil
 	}
 	if l.IsMFAScenarioDisabled(scenario) {
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // NeedOperateMFATwoStep 判断后台管理类敏感操作是否需要 MFA 二次校验票据。
 // 这类“代操作”场景统一只受系统强制开关和禁用场景配置控制，不再额外要求操作者自己已启用 MFA。
-func (l *SecurityLogic) NeedOperateMFATwoStep(scenario int) bool {
+func (l *SecurityLogic) NeedOperateMFATwoStep(scenario int) (bool, error) {
 	if scenario <= MFAScenarioLogin {
-		return false
+		return false, nil
 	}
-	if !l.ForceLoginMFAEnabled() {
-		return false
+	forceMFA, err := l.ForceLoginMFAEnabled()
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	if !forceMFA {
+		return false, nil
 	}
 	if l.IsMFAScenarioDisabled(scenario) {
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // buildAdminMFAURLBySecret 使用给定秘钥拼装管理员 MFA 绑定地址。
@@ -550,30 +599,18 @@ func (l *SecurityLogic) mfaFrequencyTTL() time.Duration {
 
 // loginMFAFlagKey 返回当前 app_id 作用域下的登录 MFA 完成标记 key。
 func (l *SecurityLogic) loginMFAFlagKey(adminID int) string {
-	return keys.LoginCheckMFAFlagRedisKey(adminID)
-}
-
-// mfaTwoStepTicketKey 返回当前 app_id 作用域下的 MFA 二次票据 key。
-func (l *SecurityLogic) mfaTwoStepTicketKey(adminID int, ticketKey string) string {
-	return keys.AdminMFATwoStepTicketRedisKey(adminID, ticketKey)
-}
-
-// mfaTwoStepIndexKey 返回当前 app_id 作用域下的 MFA 二次票据索引 key。
-func (l *SecurityLogic) mfaTwoStepIndexKey(adminID int) string {
-	return keys.AdminMFATwoStepIndexRedisKey(adminID)
-}
-
-// mfaTwoStepIndexTTL 返回 MFA 二次票据索引过期时间，索引稍长于票据本体以覆盖清理时钟抖动。
-func mfaTwoStepIndexTTL(ticketTTL time.Duration) time.Duration {
-	if ticketTTL <= 0 {
-		return mfaTwoStepDefaultTTL + mfaTwoStepIndexExtraTTL
+	if l == nil || l.BaseLogic == nil {
+		return ""
 	}
-	return ticketTTL + mfaTwoStepIndexExtraTTL
+	return l.AppRedisKey(fmt.Sprintf(keys.LoginCheckMFAFlag, adminID))
 }
 
-// mfaTwoStepTicketKeyBelongsToAdmin 校验索引成员确实属于当前管理员，避免脏索引误删其它管理员票据。
-func mfaTwoStepTicketKeyBelongsToAdmin(key string, adminID int) bool {
-	return keys.AdminMFATwoStepTicketBelongsToAdmin(key, adminID)
+// mfaTwoStepKey 返回当前 app_id 作用域下的管理员 MFA 二次票据 Hash key。
+func (l *SecurityLogic) mfaTwoStepKey(adminID int) string {
+	if l == nil || l.BaseLogic == nil {
+		return ""
+	}
+	return l.AppRedisKey(fmt.Sprintf(keys.AdminMFATwoStep, adminID))
 }
 
 // mfaTwoStepScenarioMatches 判断目标场景是否允许复用当前二次票据。
@@ -726,6 +763,7 @@ func encodeMFATwoStepTicketPayload(payload *mfaTwoStepTicketPayload) string {
 	parts := []string{
 		strconv.Itoa(payload.Scenario),
 		strings.TrimSpace(payload.Value),
+		strconv.FormatInt(payload.ExpiresAt, 10),
 	}
 	if strings.TrimSpace(payload.SecretSource) == "" && strings.TrimSpace(payload.SecretDigest) == "" {
 		return strings.Join(parts, ":")
@@ -734,25 +772,31 @@ func encodeMFATwoStepTicketPayload(payload *mfaTwoStepTicketPayload) string {
 	return strings.Join(parts, ":")
 }
 
-// decodeMFATwoStepTicketPayload 解析 Redis 中缓存的 MFA 二次票据内容，支持基础格式 `场景:值`。
+// decodeMFATwoStepTicketPayload 解析 Redis 中缓存的 MFA 二次票据内容。
 func decodeMFATwoStepTicketPayload(raw string) (*mfaTwoStepTicketPayload, error) {
-	parts := strings.SplitN(strings.TrimSpace(raw), ":", 4)
-	if len(parts) < 2 {
+	parts := strings.SplitN(strings.TrimSpace(raw), ":", 5)
+	if len(parts) != 3 && len(parts) != 5 {
 		return nil, errors.Errorf("MFA二次票据格式不正确")
 	}
 	scenario, err := strconv.Atoi(parts[0])
 	if err != nil {
 		return nil, errors.Wrap(err, "解析MFA二次票据场景失败")
 	}
+	expiresAt, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return nil, errors.Wrap(err, "解析MFA二次票据过期时间失败")
+	}
+	if expiresAt <= 0 {
+		return nil, errors.Errorf("MFA二次票据过期时间不正确")
+	}
 	payload := &mfaTwoStepTicketPayload{
-		Scenario: scenario,
-		Value:    parts[1],
+		Scenario:  scenario,
+		Value:     parts[1],
+		ExpiresAt: expiresAt,
 	}
-	if len(parts) >= 3 {
-		payload.SecretSource = strings.TrimSpace(parts[2])
-	}
-	if len(parts) >= 4 {
-		payload.SecretDigest = strings.TrimSpace(parts[3])
+	if len(parts) == 5 {
+		payload.SecretSource = strings.TrimSpace(parts[3])
+		payload.SecretDigest = strings.TrimSpace(parts[4])
 	}
 	return payload, nil
 }

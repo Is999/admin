@@ -62,3 +62,10 @@ func TestRegisterFileUploadPolicyRejectsUnsafeExt(t *testing.T) {
 		t.Fatal("危险扩展名不应允许注册")
 	}
 }
+
+// TestSecretKeyMaterialUploadPolicyRemoved 验证无生产消费方的秘钥材料上传类型不再对外开放。
+func TestSecretKeyMaterialUploadPolicyRemoved(t *testing.T) {
+	if _, err := fileUploadPolicyOf("secret-key-material"); err == nil {
+		t.Fatal("无消费方的秘钥材料上传类型应被拒绝")
+	}
+}

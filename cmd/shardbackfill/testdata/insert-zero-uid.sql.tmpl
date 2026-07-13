@@ -1,0 +1,7 @@
+-- 代码资产：验证源表插入保护拒绝非正业务 UID。
+-- SQL 方言：MySQL 8.0。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：无动态参数，仅使用固定测试对象名和值。
+-- 安全边界：语句预期由 AFTER INSERT 触发器拒绝并整体回滚。
+INSERT INTO `shard_backfill_case` (`id`, `uid`, `shard_no`)
+VALUES (7, 0, MOD(CRC32(CAST(0 AS CHAR)), 1024))

@@ -3,7 +3,9 @@ package cache
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	keys "admin/common/rediskeys"
 	"admin/internal/config"
@@ -14,13 +16,22 @@ import (
 	"github.com/Is999/go-utils/errors"
 	tablecache "github.com/Is999/table-cache"
 	"github.com/alicebob/miniredis/v2"
+	miniredisserver "github.com/alicebob/miniredis/v2/server"
 	"github.com/redis/go-redis/v9"
 )
 
-// deleteCommandCaptureHook 捕获测试中的 DEL 命令参数数量，验证 Redis Cluster 下不会发出跨 slot 多 key DEL。
-type deleteCommandCaptureHook struct {
-	directArgCounts   *[]int // directArgCounts 记录普通命令链路中的 DEL 参数数量。
-	pipelineArgCounts *[]int // pipelineArgCounts 记录管道命令链路中的 DEL 参数数量。
+// runCacheStandaloneRedis 模拟真实单机 Redis 的拓扑探测响应。
+func runCacheStandaloneRedis(t *testing.T) *miniredis.Miniredis {
+	t.Helper()
+	server := miniredis.RunT(t)
+	server.Server().SetPreHook(func(peer *miniredisserver.Peer, command string, args ...string) bool {
+		if !strings.EqualFold(command, "cluster") || len(args) != 1 || !strings.EqualFold(args[0], "info") {
+			return false
+		}
+		peer.WriteError("ERR This instance has cluster support disabled")
+		return true
+	})
+	return server
 }
 
 // TestTableCacheKeyScope 验证 table-cache 使用独立的 app:{id}:table:{key} 命名空间。
@@ -50,8 +61,8 @@ func TestTableCacheKeyScope(t *testing.T) {
 		},
 		{
 			name: "keeps direct app key unchanged",
-			key:  "app:site-a:admin:info:7",
-			want: "app:site-a:admin:info:7",
+			key:  "app:site-a:admin:session:7",
+			want: "app:site-a:admin:session:7",
 		},
 	}
 
@@ -59,6 +70,36 @@ func TestTableCacheKeyScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := TableCachePhysicalKey(base, tt.key); got != tt.want {
 				t.Fatalf("TableCachePhysicalKey() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTableCacheKeyScopeFailsClosed 确保 app_id 缺失或错配时不会生成裸缓存 key。
+func TestTableCacheKeyScopeFailsClosed(t *testing.T) {
+	tests := []struct {
+		name         string // name 表示测试场景名称。
+		runtimeAppID string // runtimeAppID 表示进程级 app_id。
+		baseAppID    string // baseAppID 表示请求服务上下文 app_id。
+	}{
+		{name: "missing app id"},
+		{name: "mismatched app id", runtimeAppID: "site-a", baseAppID: "site-b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useRuntimeAppID(t, tt.runtimeAppID)
+			server := runCacheStandaloneRedis(t)
+			client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+			base := corelogic.NewBaseLogicWithContext(
+				context.Background(),
+				svc.NewServiceContext(config.Config{AppID: tt.baseAppID}, svc.Dependencies{Rds: client}),
+			)
+			if got := TableCachePhysicalKey(base, keys.RoleTree); got != "" {
+				t.Fatalf("TableCachePhysicalKey() = %q, want empty", got)
+			}
+			if _, err := TableCacheManager(base); !errors.Is(err, ErrRedisUnavailable) {
+				t.Fatalf("TableCacheManager() error = %v, want ErrRedisUnavailable", err)
 			}
 		})
 	}
@@ -81,8 +122,8 @@ func TestTableCacheLogicalKey(t *testing.T) {
 		},
 		{
 			name: "keeps direct app key",
-			key:  "app:site-a:admin:info:7",
-			want: "app:site-a:admin:info:7",
+			key:  "app:site-a:admin:session:7",
+			want: "app:site-a:admin:session:7",
 		},
 		{
 			name: "keeps other app table cache key",
@@ -113,72 +154,103 @@ func TestIsTableCacheTargetNotFoundWithWrappedError(t *testing.T) {
 	}
 }
 
-// DialHook 不修改测试 Redis 连接行为，仅满足 go-redis Hook 接口。
-func (h deleteCommandCaptureHook) DialHook(next redis.DialHook) redis.DialHook {
-	return next
-}
-
-// ProcessHook 捕获非管道 DEL 命令参数数量。
-func (h deleteCommandCaptureHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
-	return func(ctx context.Context, cmd redis.Cmder) error {
-		if cmd.FullName() == "del" && h.directArgCounts != nil {
-			*h.directArgCounts = append(*h.directArgCounts, len(cmd.Args()))
-		}
-		return next(ctx, cmd)
-	}
-}
-
-// ProcessPipelineHook 捕获管道中的 DEL 命令参数数量。
-func (h deleteCommandCaptureHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
-	return func(ctx context.Context, cmds []redis.Cmder) error {
-		for _, cmd := range cmds {
-			if cmd.FullName() == "del" && h.pipelineArgCounts != nil {
-				*h.pipelineArgCounts = append(*h.pipelineArgCounts, len(cmd.Args()))
-			}
-		}
-		return next(ctx, cmds)
-	}
-}
-
-// TestInvalidateAdminRelationCachePreserveSession 验证个人中心自助更新时不会删除当前登录态缓存。
-func TestInvalidateAdminRelationCachePreserveSession(t *testing.T) {
-	server := miniredis.RunT(t)
+// TestInvalidateAdminSessionCacheDeletesOnlySession 验证会话失效不会误删管理员角色缓存。
+func TestInvalidateAdminSessionCacheDeletesOnlySession(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	server := runCacheStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
 
 	cacheLogic := NewCacheLogic(base.Ctx, base.Svc)
-	if err := cacheLogic.SetAdminInfo(7, &types.AdminInfo{
+	if err := cacheLogic.SetAdminSession(7, &types.AdminSession{
 		ID:       7,
 		UserName: "super999",
 		Token:    "token-7",
 	}); err != nil {
-		t.Fatalf("SetAdminInfo() error = %v", err)
+		t.Fatalf("SetAdminSession() error = %v", err)
 	}
 	roleKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 7))
-	permissionKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 7))
+	roleDetailKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, 7))
 	if err := client.Set(base.Ctx, roleKey, "1,2", 0).Err(); err != nil {
 		t.Fatalf("seed role key error = %v", err)
 	}
-	if err := client.Set(base.Ctx, permissionKey, "uuid-1", 0).Err(); err != nil {
-		t.Fatalf("seed permission key error = %v", err)
+	if err := client.Set(base.Ctx, roleDetailKey, "super", 0).Err(); err != nil {
+		t.Fatalf("seed role detail key error = %v", err)
 	}
 
-	InvalidateAdminRelationCachePreserveSession(base, 7)
+	if err := InvalidateAdminSessionCache(base, 7); err != nil {
+		t.Fatalf("InvalidateAdminSessionCache() error = %v", err)
+	}
 
-	if _, err := cacheLogic.GetAdminInfo(7); err != nil {
-		t.Fatalf("GetAdminInfo() error = %v, want session kept", err)
+	if _, err := cacheLogic.GetAdminSession(7); err == nil {
+		t.Fatal("GetAdminSession() error = nil, want session deleted")
 	}
-	if server.Exists(roleKey) {
-		t.Fatalf("role key %s should be deleted", roleKey)
+	if !server.Exists(roleKey) {
+		t.Fatalf("role key %s should be kept", roleKey)
 	}
-	if server.Exists(permissionKey) {
-		t.Fatalf("permission key %s should be deleted", permissionKey)
+	if !server.Exists(roleDetailKey) {
+		t.Fatalf("role detail key %s should be kept", roleDetailKey)
 	}
 }
 
-// TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins 验证只清理受影响管理员。
-func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(t *testing.T) {
-	server := miniredis.RunT(t)
+// TestInvalidateAdminSecurityCacheDeletesSessionAndMFA 验证账号安全属性变化会同时撤销会话和 MFA 运行态。
+func TestInvalidateAdminSecurityCacheDeletesSessionAndMFA(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	server := runCacheStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
+	cacheLogic := NewCacheLogic(base.Ctx, base.Svc)
+	if err := cacheLogic.SetAdminSession(7, &types.AdminSession{ID: 7, UserName: "admin-7", Token: "token-7"}); err != nil {
+		t.Fatalf("SetAdminSession() error = %v", err)
+	}
+	if err := client.Set(base.Ctx, keys.LoginCheckMFAFlagRedisKey(7), "1", time.Minute).Err(); err != nil {
+		t.Fatalf("seed login MFA flag error = %v", err)
+	}
+	if err := client.HSet(base.Ctx, keys.AdminMFATwoStepRedisKey(7), "ticket-1", "payload").Err(); err != nil {
+		t.Fatalf("seed MFA ticket hash error = %v", err)
+	}
+
+	if err := InvalidateAdminSecurityCache(base, 7); err != nil {
+		t.Fatalf("InvalidateAdminSecurityCache() error = %v", err)
+	}
+	for _, key := range []string{
+		keys.AdminSessionRedisKey(7),
+		keys.LoginCheckMFAFlagRedisKey(7),
+		keys.AdminMFATwoStepRedisKey(7),
+	} {
+		if server.Exists(key) {
+			t.Fatalf("security cache key %s should be deleted", key)
+		}
+	}
+}
+
+// TestInvalidateAdminSessionCacheFailsWithoutRedis 验证会话失效不会把 Redis 故障伪报成功。
+func TestInvalidateAdminSessionCacheFailsWithoutRedis(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{}))
+	if err := InvalidateAdminSessionCache(base, 7); err == nil {
+		t.Fatal("InvalidateAdminSessionCache() error = nil, want Redis unavailable failure")
+	}
+}
+
+// TestInvalidateAdminSessionCacheFailsClosedWithoutNamespace 验证命名空间异常不会吞掉失效请求。
+func TestInvalidateAdminSessionCacheFailsClosedWithoutNamespace(t *testing.T) {
+	useRuntimeAppID(t, "site-b")
+	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{})
+	base := corelogic.NewBaseLogicWithContext(context.Background(), svcCtx)
+
+	if err := InvalidateAdminSessionCache(base, 7); err == nil {
+		t.Fatal("InvalidateAdminSessionCache() error = nil, want namespace failure")
+	}
+	if !svcCtx.SecurityCacheSyncPending() {
+		t.Fatal("命名空间异常后应立即关闭当前进程缓存鉴权")
+	}
+}
+
+// TestInvalidateAdminRoleCacheByAdminIDsDeletesOnlyTargetAdmins 验证只清理受影响管理员的角色缓存。
+func TestInvalidateAdminRoleCacheByAdminIDsDeletesOnlyTargetAdmins(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	server := runCacheStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
 	ctx := context.Background()
@@ -186,16 +258,11 @@ func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(
 	targetKeys := []string{
 		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 7)),
 		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, 7)),
-		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, 7)),
-		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 7)),
 	}
 	untouchedKeys := []string{
 		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRoleIDs, 8)),
 		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminRolesDetail, 8)),
-		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionIDs, 8)),
-		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminPermissionUUIDs, 8)),
-		keys.AdminInfoRedisKey(7),
-		TableCachePhysicalKey(base, fmt.Sprintf(keys.AdminProfile, 7)),
+		keys.AdminSessionRedisKey(7),
 	}
 	for _, key := range append(targetKeys, untouchedKeys...) {
 		if err := client.SAdd(ctx, key, "value").Err(); err != nil {
@@ -203,62 +270,54 @@ func TestInvalidateAdminRoleAndPermissionCacheByAdminIDsDeletesOnlyTargetAdmins(
 		}
 	}
 
-	InvalidateAdminRoleAndPermissionCacheByAdminIDs(base, 7)
+	if err := InvalidateAdminRoleCacheByAdminIDs(base, 7); err != nil {
+		t.Fatalf("InvalidateAdminRoleCacheByAdminIDs() error = %v", err)
+	}
 
 	for _, key := range targetKeys {
 		if server.Exists(key) {
-			t.Fatalf("InvalidateAdminRoleAndPermissionCacheByAdminIDs() target key %s should be deleted", key)
+			t.Fatalf("InvalidateAdminRoleCacheByAdminIDs() target key %s should be deleted", key)
 		}
 	}
 	for _, key := range untouchedKeys {
 		if !server.Exists(key) {
-			t.Fatalf("InvalidateAdminRoleAndPermissionCacheByAdminIDs() unrelated key %s should be kept", key)
+			t.Fatalf("InvalidateAdminRoleCacheByAdminIDs() unrelated key %s should be kept", key)
 		}
 	}
 }
 
-// TestInvalidateRolePermissionCacheByRoleIDsDeletesOnlyTargetRoles 验证角色权限缓存按角色 ID 精确删除。
-func TestInvalidateRolePermissionCacheByRoleIDsDeletesOnlyTargetRoles(t *testing.T) {
-	server := miniredis.RunT(t)
+// TestStringHashFieldsWithCacheReadsSelectedFields 验证 Hash 点查不拉取无关字段。
+func TestStringHashFieldsWithCacheReadsSelectedFields(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	server := runCacheStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
 	ctx := context.Background()
-
-	targetKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 3))
-	untouchedKey := TableCachePhysicalKey(base, fmt.Sprintf(keys.RolePermission, 4))
-	for _, key := range []string{targetKey, untouchedKey} {
-		if err := client.SAdd(ctx, key, "value").Err(); err != nil {
-			t.Fatalf("SAdd(%s) error = %v", key, err)
-		}
+	cacheKey := TableCachePhysicalKey(base, keys.RoleStatus)
+	if err := client.HSet(ctx, cacheKey, "1", "1", "2", "0").Err(); err != nil {
+		t.Fatalf("HSet(%s) error = %v", cacheKey, err)
 	}
 
-	InvalidateRolePermissionCacheByRoleIDs(base, 3, 3, 0)
-
-	if server.Exists(targetKey) {
-		t.Fatalf("InvalidateRolePermissionCacheByRoleIDs() target key %s should be deleted", targetKey)
+	values, err := StringHashFieldsWithCache(base, keys.RoleStatus, []string{"1", "3"})
+	if err != nil {
+		t.Fatalf("StringHashFieldsWithCache() error=%v", err)
 	}
-	if !server.Exists(untouchedKey) {
-		t.Fatalf("InvalidateRolePermissionCacheByRoleIDs() unrelated key %s should be kept", untouchedKey)
+	if len(values) != 1 || values["1"] != "1" {
+		t.Fatalf("StringHashFieldsWithCache() values=%v, want map[1:1]", values)
 	}
 }
 
-// TestDeleteRedisKeysExactBatchesUsesSingleKeyDeleteCommands 验证精确删除缓存时不会发出跨 slot 多 key DEL。
-func TestDeleteRedisKeysExactBatchesUsesSingleKeyDeleteCommands(t *testing.T) {
-	server := miniredis.RunT(t)
+// TestDeleteTableCacheKeysExactDeletesRegisteredTargets 验证精确失效会删除全部已注册表缓存。
+func TestDeleteTableCacheKeysExactDeletesRegisteredTargets(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	server := runCacheStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	var directArgCounts []int
-	var pipelineArgCounts []int
-	client.AddHook(deleteCommandCaptureHook{
-		directArgCounts:   &directArgCounts,
-		pipelineArgCounts: &pipelineArgCounts,
-	})
-
 	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
 	ctx := context.Background()
 	cacheKeys := []string{
-		keys.PermissionTree,
-		keys.PermissionModule,
-		keys.PermissionUUID,
+		TableCachePhysicalKey(base, keys.PermissionTree),
+		TableCachePhysicalKey(base, keys.RoutePermissionIDs),
+		TableCachePhysicalKey(base, keys.PermissionUUID),
 	}
 	for _, key := range cacheKeys {
 		if err := client.Set(ctx, key, "value", 0).Err(); err != nil {
@@ -266,20 +325,33 @@ func TestDeleteRedisKeysExactBatchesUsesSingleKeyDeleteCommands(t *testing.T) {
 		}
 	}
 
-	DeleteRedisKeysExactBatches(base, "test delete", cacheKeys)
+	if err := DeleteTableCacheKeysExact(base, "test delete", cacheKeys); err != nil {
+		t.Fatalf("DeleteTableCacheKeysExact() error = %v", err)
+	}
 
 	for _, key := range cacheKeys {
 		if server.Exists(key) {
-			t.Fatalf("DeleteRedisKeysExactBatches() key %s should be deleted", key)
+			t.Fatalf("DeleteTableCacheKeysExact() key %s should be deleted", key)
 		}
 	}
-	allArgCounts := append(directArgCounts, pipelineArgCounts...)
-	if len(allArgCounts) != len(cacheKeys) {
-		t.Fatalf("DEL command count = %d, want %d, direct=%v pipeline=%v", len(allArgCounts), len(cacheKeys), directArgCounts, pipelineArgCounts)
+}
+
+// TestDeleteTableCacheKeysExactRejectsUnknownTarget 验证失效必须经过 table-cache 目标解析，不能退化成原始 DEL。
+func TestDeleteTableCacheKeysExactRejectsUnknownTarget(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	server := runCacheStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	base := corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client}))
+	cacheKey := TableCachePhysicalKey(base, "unknown_cache:1")
+	if err := client.Set(base.Ctx, cacheKey, "value", 0).Err(); err != nil {
+		t.Fatalf("Set(%s) error = %v", cacheKey, err)
 	}
-	for _, argCount := range allArgCounts {
-		if argCount != 2 {
-			t.Fatalf("DEL args length = %d, want 2(command + one key), direct=%v pipeline=%v", argCount, directArgCounts, pipelineArgCounts)
-		}
+
+	err := DeleteTableCacheKeysExact(base, "test unknown", []string{cacheKey})
+	if !IsTableCacheTargetNotFound(err) {
+		t.Fatalf("DeleteTableCacheKeysExact() error = %v, want ErrTargetNotFound", err)
+	}
+	if !server.Exists(cacheKey) {
+		t.Fatalf("DeleteTableCacheKeysExact() unknown key %s should be kept", cacheKey)
 	}
 }

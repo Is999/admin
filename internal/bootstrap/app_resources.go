@@ -27,7 +27,7 @@ func cleanupComponentState(ctx context.Context, state *components.State) {
 		return
 	}
 	// 注册失败时沿用 App 停机同一套资源释放顺序，避免不同失败阶段遗漏 DB/Kafka 连接池。
-	_ = bootstrapresources.CloseServiceContextResources(state.ServiceContext, state.TaskRedis, state.TaskRedisOwned)
+	_ = bootstrapresources.CloseServiceContextResources(ctx, state.ServiceContext, state.TaskRedis, state.TaskRedisOwned)
 	if state.Shutdown != nil {
 		_ = state.Shutdown(ctx)
 	}

@@ -27,6 +27,14 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
+			Path:        "/api/caches/metrics", // 查看当前进程表缓存运行指标。
+			Access:      shared.RouteAccessAuth,
+			Alias:       shared.CacheServerInfo.Alias,
+			Description: "查看表缓存运行指标",
+			Handler:     GetCacheMetricsHandler,
+		},
+		{
+			Method:      http.MethodGet,
 			Path:        "/api/caches/key-info", // 查看缓存键信息。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.CacheKeyInfo,

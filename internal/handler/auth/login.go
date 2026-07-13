@@ -15,18 +15,27 @@ import (
 	"admin/internal/svc"
 	"admin/internal/types"
 
-	"github.com/Is999/go-utils"
 	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/rest/httpx"
 )
 
 // LoginCaptchaHandler 返回登录图形验证码。
 func LoginCaptchaHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.RespHandlerFunc(func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+	handler := shared.RespHandlerFunc(func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		requestctx.SetRoute(r.Context(), string(shared.AuthCaptcha.Alias))
 		logicObj := adminlogic.NewAdminLogic(r, sCtx)
 		return logicObj, logicObj.BuildLoginCaptcha()
 	})
+	return func(w http.ResponseWriter, r *http.Request) {
+		setCaptchaNoStoreHeaders(w)
+		handler(w, r)
+	}
+}
+
+// setCaptchaNoStoreHeaders 禁止浏览器和代理缓存一次性登录验证码。
+func setCaptchaNoStoreHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 }
 
 // LoginHandler 处理管理员登录请求，并在成功后补齐当前请求的审计与用户上下文。
@@ -40,7 +49,7 @@ func LoginHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
 			return
 		}
-		req.IP = utils.ClientIP(r)
+		req.IP = sCtx.ClientIP(r)
 		logicObj := adminlogic.NewAdminLogic(r, sCtx)
 		if captchaResp := logicObj.VerifyLoginCaptcha(req.Key, req.Captcha); captchaResp.IsFailure() {
 			message := captchaResp.ResolveMessage(r.Context())

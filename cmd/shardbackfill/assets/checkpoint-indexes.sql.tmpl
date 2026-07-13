@@ -1,0 +1,9 @@
+-- 代码资产：读取 shardbackfill checkpoint 全部索引定义。
+-- SQL 方言：MySQL 8.0 information_schema。
+-- 调用方：cmd/shardbackfill.validateCheckpointSchema。
+-- 参数来源：无动态参数，固定检查运维进度表。
+-- 安全边界：只读单表索引元数据，不扫描任务数据。
+SELECT `INDEX_NAME`, `NON_UNIQUE`, `SEQ_IN_INDEX`, `COLUMN_NAME`, `SUB_PART`, `INDEX_TYPE`, `IS_VISIBLE`, `EXPRESSION`
+FROM `information_schema`.`STATISTICS`
+WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'shard_backfill_checkpoint'
+ORDER BY CASE WHEN `INDEX_NAME` = 'PRIMARY' THEN 0 ELSE 1 END, `INDEX_NAME`, `SEQ_IN_INDEX`

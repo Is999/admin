@@ -2,8 +2,6 @@ package docs
 
 import (
 	"net/http"
-	"net/url"
-	pathpkg "path"
 	"strings"
 
 	codes "admin/common/codes"
@@ -13,14 +11,17 @@ import (
 	"admin/internal/logic/apiruntime"
 	"admin/internal/middleware"
 	"admin/internal/requestctx"
+	"admin/internal/routealias"
 	"admin/internal/svc"
 )
 
 const (
+	// docsPathPrefix 表示 Admin 文档站统一路由前缀。
+	docsPathPrefix = "/api/docs"
 	// docsSessionMaxAgeSeconds 控制文档 cookie 最长有效期，实际访问仍受 JWT 与 Redis 会话约束。
 	docsSessionMaxAgeSeconds = 3600
 	// apiDocsProxyPathPrefix 表示 Admin 文档站内的 API 文档代理前缀。
-	apiDocsProxyPathPrefix = "/api/docs/api"
+	apiDocsProxyPathPrefix = docsPathPrefix + "/api"
 	// apiDocsIndexAssetPath 表示前台 API 独立文档站壳层静态资源。
 	apiDocsIndexAssetPath = "api/index.html"
 	// docsSidebarAssetPath 表示 docsify 侧边导航资源。
@@ -120,10 +121,14 @@ func apiDocsProxyPath(requestPath string) (string, bool) {
 
 // cleanDocsRequestPath 统一清洗文档站请求路径，避免编码路径和穿越路径绕过判断。
 func cleanDocsRequestPath(requestPath string) string {
-	if text, err := url.PathUnescape(strings.TrimSpace(requestPath)); err == nil {
-		requestPath = text
+	docsPath, ok := routealias.NormalizeDocsRequestPath(requestPath)
+	if !ok {
+		return ""
 	}
-	return pathpkg.Clean("/" + strings.TrimLeft(strings.TrimSpace(requestPath), "/"))
+	if docsPath == "" {
+		return docsPathPrefix
+	}
+	return docsPathPrefix + "/" + docsPath
 }
 
 // serveAPIDocsIndex 返回前台 API 独立文档站壳层，避免复用 Admin 文档导航。
@@ -173,7 +178,7 @@ func serveAPIDocsProxy(w http.ResponseWriter, r *http.Request, svcCtx *svc.Servi
 	if docsPath == "/"+docsSidebarAssetPath {
 		access, accessErr := docsAccessForRequest(r, svcCtx)
 		if accessErr != nil {
-			http.Error(w, "文档权限不可用", http.StatusInternalServerError)
+			http.Error(w, "文档权限不可用", http.StatusServiceUnavailable)
 			return
 		}
 		body = filterDocsNavigation(asset.Body, apiDocsProxyBasePath, access)

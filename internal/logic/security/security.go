@@ -7,7 +7,7 @@ import (
 	rbaclogic "admin/internal/logic/rbac"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +21,7 @@ import (
 
 	keys "admin/common/rediskeys"
 	"admin/internal/model"
+	"admin/internal/requestctx"
 	"admin/internal/routealias"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -32,8 +33,8 @@ import (
 )
 
 const (
-	// ConfigAdminIPWhitelistDisable 表示是否禁用后台 IP 白名单，true 时跳过白名单校验。
-	ConfigAdminIPWhitelistDisable = "adminIpWhitelistDisable"
+	// ConfigAdminIPWhitelistEnabled 表示是否启用后台 IP 白名单。
+	ConfigAdminIPWhitelistEnabled = "adminIpWhitelistEnabled"
 	// ConfigAdminIPWhitelist 表示后台 IP 白名单配置。
 	ConfigAdminIPWhitelist = "adminIpWhitelist"
 	// ConfigAdminCheckChangeIP 表示是否校验后台登录 IP 变更。
@@ -49,6 +50,8 @@ const (
 const (
 	// routePermissionBypassAlias 必须与 middleware.Ignore 保持一致，用于已登录但不绑定业务权限码的通用接口。
 	routePermissionBypassAlias = routealias.Ignore
+	// adminAccessMFASecretUnknown 表示登录态缓存不保存 MFA 秘钥，只有未完成登录 MFA 时才按需回源判断。
+	adminAccessMFASecretUnknown = "__cache_unknown__"
 	// securityOptionalConfigTimeout 表示安全链路读取“可回退”的系统配置时使用的独立短超时。
 	// 登录、鉴权等主链路不应因为这类兜底配置读取抖动而整体超时。
 	securityOptionalConfigTimeout = 500 * time.Millisecond
@@ -89,13 +92,13 @@ func NewSecurityLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Security
 	}
 }
 
-// CheckAdminAccess 按 laravel-admin AdminAuth 的顺序校验管理员状态、IP、MFA 与业务权限。
-func (l *SecurityLogic) CheckAdminAccess(userID int, routeAlias string, currentIP string, loginIP string) error {
+// CheckAdminAccess 复用已校验会话，按账号状态、IP、MFA 与业务权限顺序完成访问校验。
+func (l *SecurityLogic) CheckAdminAccess(session *types.AdminSession, routeAlias string, currentIP string, loginIP string) error {
 	routeAlias = strings.TrimSpace(routeAlias)
 	if routeAlias == "" {
 		return errors.Tag(ErrAdminPermissionDenied)
 	}
-	admin, err := l.getAdminForAccess(userID)
+	admin, err := adminForAccess(session)
 	if err != nil {
 		return errors.Tag(err)
 	}
@@ -113,7 +116,7 @@ func (l *SecurityLogic) CheckAdminAccess(userID int, routeAlias string, currentI
 			return errors.Tag(err)
 		}
 	}
-	allowed, err := l.CheckRoutePermission(userID, routeAlias)
+	allowed, err := l.CheckRoutePermission(admin.ID, routeAlias)
 	if err != nil {
 		return errors.Tag(err)
 	}
@@ -123,8 +126,9 @@ func (l *SecurityLogic) CheckAdminAccess(userID int, routeAlias string, currentI
 	return nil
 }
 
-// CheckRoutePermission 根据路由别名校验管理员是否拥有对应权限。
+// CheckRoutePermission 使用规范化角色关系缓存校验路由权限。
 func (l *SecurityLogic) CheckRoutePermission(userID int, routeAlias string) (bool, error) {
+	routeAlias = strings.TrimSpace(routeAlias)
 	alias := routeAliasKey(routeAlias)
 	if alias == routePermissionBypassAlias {
 		// 显式挂 middleware.Ignore 的路由只跳过业务权限表；JWT、账号状态、IP 与 MFA 仍在 CheckAdminAccess 前置校验。
@@ -133,89 +137,345 @@ func (l *SecurityLogic) CheckRoutePermission(userID int, routeAlias string) (boo
 	if permissionAllowlist[alias] {
 		return true, nil
 	}
-
+	if userID <= 0 || routeAlias == "" {
+		return false, nil
+	}
+	if l.Redis() == nil {
+		return false, cachelogic.WrapRedisUnavailable(nil, "校验管理员路由权限失败")
+	}
 	roleIDs, err := l.EnabledRoleIDs(userID)
 	if err != nil {
 		return false, errors.Tag(err)
 	}
-	if len(roleIDs) == 0 {
+	if containsSuperRole(roleIDs) {
+		return true, nil
+	}
+	permissionIDs, err := l.routePermissionIDsWithCache(routeAlias)
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	return l.rolePermissionSetsContain(roleIDs, keys.RolePermission, cachelogic.TableCacheIndexRolePermission, permissionIDs)
+}
+
+// CheckDocPermission 使用规范化角色关系缓存校验单篇文档权限。
+func (l *SecurityLogic) CheckDocPermission(userID int, resource routealias.DocResource) (bool, error) {
+	resourceKey := resource.Key()
+	if userID <= 0 || resourceKey == "" {
 		return false, nil
 	}
-	for _, roleID := range roleIDs {
-		if roleID == corelogic.AdminSuperRoleID {
-			return true, nil
+	if l.Redis() == nil {
+		return false, cachelogic.WrapRedisUnavailable(nil, "校验管理员文档权限失败")
+	}
+	roleIDs, err := l.EnabledRoleIDs(userID)
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	if containsSuperRole(roleIDs) {
+		return true, nil
+	}
+	permissionID, err := l.docResourcePermissionIDWithCache(resourceKey)
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	return l.rolePermissionSetsContain(
+		roleIDs,
+		keys.RoleDocPermission,
+		cachelogic.TableCacheIndexRoleDocPermission,
+		[]int{permissionID},
+	)
+}
+
+// AllowedDocResources 通过角色文档关系缓存计算账号可见资源。
+func (l *SecurityLogic) AllowedDocResources(userID int) ([]routealias.DocResource, error) {
+	if userID <= 0 {
+		return []routealias.DocResource{}, nil
+	}
+	if l.Redis() == nil {
+		return nil, cachelogic.WrapRedisUnavailable(nil, "读取管理员可见文档失败")
+	}
+	roleIDs, err := l.EnabledRoleIDs(userID)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	permissions, err := l.docPermissionsWithCache()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	isSuper := containsSuperRole(roleIDs)
+	allowedPermissionIDs := make(map[int]struct{})
+	if !isSuper {
+		permissionIDs, err := l.roleRelationPermissionIDsWithCache(roleIDs, keys.RoleDocPermission, "角色文档权限关系")
+		if err != nil {
+			return nil, errors.Tag(err)
+		}
+		allowedPermissionIDs = make(map[int]struct{}, len(permissionIDs))
+		for _, permissionID := range permissionIDs {
+			allowedPermissionIDs[permissionID] = struct{}{}
 		}
 	}
-
-	permissionIDs, err := l.routePermissionIDs(routeAlias)
-	if err != nil {
-		return false, errors.Tag(err)
+	resources := make([]routealias.DocResource, 0, len(permissions))
+	for _, permission := range permissions {
+		if permission.Status != 1 {
+			continue
+		}
+		if !isSuper {
+			if _, ok := allowedPermissionIDs[permission.ID]; !ok {
+				continue
+			}
+		}
+		resource := routealias.DocResource{Site: permission.Site, Path: permission.Path}
+		if resource.Key() == "" {
+			return nil, errors.Errorf("文档权限缓存资源不合法")
+		}
+		resources = append(resources, resource)
 	}
-	if len(permissionIDs) == 0 {
-		// 未配置到权限表的接口默认拒绝，避免新增敏感接口因漏初始化权限而越权访问。
+	return resources, nil
+}
+
+// containsSuperRole 判断启用角色集合是否包含超级管理员角色。
+func containsSuperRole(roleIDs []int) bool {
+	return slices.Contains(roleIDs, corelogic.AdminSuperRoleID)
+}
+
+// routePermissionIDsWithCache 根据路由别名读取启用权限 ID。
+func (l *SecurityLogic) routePermissionIDsWithCache(routeAlias string) ([]int, error) {
+	cache, err := cachelogic.StringHashFieldsWithCache(l.BaseLogic, keys.RoutePermissionIDs, []string{routeAlias})
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	value := strings.TrimSpace(cache[routeAlias])
+	if value == "" {
+		return []int{}, nil
+	}
+	return cachelogic.ParsePositiveIntStrings(strings.Split(value, ","), "路由权限索引")
+}
+
+// docResourcePermissionIDWithCache 根据文档资源键读取启用文档权限 ID。
+func (l *SecurityLogic) docResourcePermissionIDWithCache(resourceKey string) (int, error) {
+	cache, err := cachelogic.StringHashFieldsWithCache(l.BaseLogic, keys.DocResourcePermissionID, []string{resourceKey})
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	value := strings.TrimSpace(cache[resourceKey])
+	if value == "" {
+		return 0, nil
+	}
+	permissionID, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, errors.Wrapf(err, "解析文档权限索引失败 value=%s", value)
+	}
+	if permissionID <= 0 {
+		return 0, errors.Errorf("文档权限索引不是正整数 value=%s", value)
+	}
+	return permissionID, nil
+}
+
+// rolePermissionSetsContain 判断任一启用角色是否拥有目标权限 ID。
+func (l *SecurityLogic) rolePermissionSetsContain(roleIDs []int, keyFormat string, cacheIndex string, permissionIDs []int) (bool, error) {
+	roleIDs = types.UniquePositiveInts(roleIDs)
+	permissionIDs = types.UniquePositiveInts(permissionIDs)
+	if len(roleIDs) == 0 || len(permissionIDs) == 0 {
 		return false, nil
 	}
-	userPermissionIDs, err := l.userPermissionIDsWithCache(userID)
+	if l.Redis() == nil {
+		return false, cachelogic.WrapRedisUnavailable(nil, "读取角色权限关系失败")
+	}
+	members := make([]any, 0, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		members = append(members, permissionID)
+	}
+	type setLookup struct {
+		cacheKey string              // table-cache 逻辑 Key
+		matches  *redis.BoolSliceCmd // 目标权限成员判断结果
+		exists   *redis.IntCmd       // 物理集合是否存在
+	}
+	lookups := make([]setLookup, 0, len(roleIDs))
+	pipe := l.Redis().Pipeline()
+	for _, roleID := range roleIDs {
+		cacheKey := fmt.Sprintf(keyFormat, roleID)
+		physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey)
+		if physicalKey == "" {
+			return false, cachelogic.WrapRedisUnavailable(nil, "角色权限关系缓存 Key 未初始化")
+		}
+		lookups = append(lookups, setLookup{
+			cacheKey: cacheKey,
+			matches:  pipe.SMIsMember(l.Ctx, physicalKey, members...),
+			exists:   pipe.Exists(l.Ctx, physicalKey),
+		})
+	}
+	if _, err := pipe.Exec(l.Ctx); err != nil {
+		return false, cachelogic.WrapRedisUnavailable(err, "批量读取角色权限关系失败")
+	}
+	missingKeys := make([]string, 0)
+	for _, lookup := range lookups {
+		matches, err := lookup.matches.Result()
+		if err != nil {
+			return false, cachelogic.WrapRedisUnavailable(err, "解析角色权限匹配结果失败")
+		}
+		if slices.Contains(matches, true) {
+			cachelogic.RecordTableCacheHit(l.BaseLogic, cacheIndex)
+			return true, nil
+		}
+		exists, err := lookup.exists.Result()
+		if err != nil {
+			return false, cachelogic.WrapRedisUnavailable(err, "解析角色权限缓存状态失败")
+		}
+		if exists == 0 {
+			missingKeys = append(missingKeys, lookup.cacheKey)
+		}
+	}
+	if len(missingKeys) == 0 {
+		cachelogic.RecordTableCacheHit(l.BaseLogic, cacheIndex)
+		return false, nil
+	}
+	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
 		return false, errors.Tag(err)
 	}
-	permissionSet := make(map[int]struct{}, len(userPermissionIDs))
-	for _, permissionID := range userPermissionIDs {
+	permissionSet := make(map[int]struct{}, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
 		permissionSet[permissionID] = struct{}{}
 	}
-	for _, permissionID := range permissionIDs {
-		if _, ok := permissionSet[permissionID]; ok {
-			return true, nil
+	for _, cacheKey := range missingKeys {
+		var values []string
+		result, err := manager.LoadThrough(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey), &values, nil)
+		if err != nil {
+			return false, errors.Tag(err)
+		}
+		if result.State == tablecache.LookupStateEmpty {
+			continue
+		}
+		cachedPermissionIDs, err := cachelogic.ParsePositiveIntStrings(values, "角色权限关系缓存")
+		if err != nil {
+			return false, errors.Tag(err)
+		}
+		for _, permissionID := range cachedPermissionIDs {
+			if _, ok := permissionSet[permissionID]; ok {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
 }
 
-// SecurityConfigBool 读取布尔型系统配置，读取失败时使用调用方给出的默认值。
-func SecurityConfigBool(ctx context.Context, svcCtx *svc.ServiceContext, uuid string, defaultValue bool) (result bool) {
-	result = defaultValue
-	defer func() {
-		if recover() != nil {
-			result = defaultValue
+// roleRelationPermissionIDsWithCache 合并少量角色的原始权限关系 ID。
+func (l *SecurityLogic) roleRelationPermissionIDsWithCache(roleIDs []int, keyFormat string, title string) ([]int, error) {
+	roleIDs = types.UniquePositiveInts(roleIDs)
+	if len(roleIDs) == 0 {
+		return []int{}, nil
+	}
+	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	permissionIDs := make([]int, 0)
+	for _, roleID := range roleIDs {
+		physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, fmt.Sprintf(keyFormat, roleID))
+		var values []string
+		result, err := manager.LoadThrough(l.Ctx, physicalKey, &values, nil)
+		if err != nil {
+			return nil, errors.Tag(err)
 		}
-	}()
+		if result.State == tablecache.LookupStateEmpty {
+			continue
+		}
+		rolePermissionIDs, err := cachelogic.ParsePositiveIntStrings(values, title)
+		if err != nil {
+			return nil, errors.Tag(err)
+		}
+		permissionIDs = append(permissionIDs, rolePermissionIDs...)
+	}
+	return types.UniquePositiveInts(permissionIDs), nil
+}
+
+// docPermissionsWithCache 读取完整文档权限快照，供导航按角色关系投影。
+func (l *SecurityLogic) docPermissionsWithCache() ([]model.AdminDocPermission, error) {
+	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	var permissions []model.AdminDocPermission
+	result, err := manager.LoadThrough(
+		l.Ctx,
+		cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.DocPermissionList),
+		&permissions,
+		nil,
+	)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if result.State == tablecache.LookupStateEmpty {
+		return []model.AdminDocPermission{}, nil
+	}
+	return permissions, nil
+}
+
+// SecurityConfigBool 读取可选布尔型系统配置，读取失败时使用调用方给出的默认值。
+func SecurityConfigBool(ctx context.Context, svcCtx *svc.ServiceContext, uuid string, defaultValue bool) bool {
+	result, err := securityConfigBool(ctx, svcCtx, uuid)
+	if err != nil {
+		return defaultValue
+	}
+	return result
+}
+
+// securityConfigBool 读取安全链路布尔配置，缺失、类型错误或依赖异常时返回错误。
+func securityConfigBool(ctx context.Context, svcCtx *svc.ServiceContext, uuid string) (bool, error) {
+	if svcCtx == nil {
+		return false, errors.Errorf("安全配置服务上下文未初始化")
+	}
 	configCtx, cancel := optionalSecurityConfigContext(ctx)
 	defer cancel()
 	value, err := configlogic.NewSysConfigLogicWithContext(configCtx, svcCtx).GetCachedValue(uuid)
 	if err != nil {
-		return result
+		return false, errors.Wrapf(err, "读取安全配置[%s]失败", uuid)
 	}
 	switch v := value.(type) {
 	case bool:
-		return v
+		return v, nil
 	case string:
-		return v == "1" || strings.EqualFold(v, "true")
+		value := strings.TrimSpace(v)
+		if value == "1" || strings.EqualFold(value, "true") {
+			return true, nil
+		}
+		if value == "0" || strings.EqualFold(value, "false") {
+			return false, nil
+		}
 	case int:
-		return v == 1
+		if v == 0 || v == 1 {
+			return v == 1, nil
+		}
 	case float64:
-		return int(v) == 1
-	default:
-		return result
+		if v == 0 || v == 1 {
+			return v == 1, nil
+		}
 	}
+	return false, errors.Errorf("安全配置[%s]不是合法布尔值", uuid)
 }
 
 // SecurityConfigStringSlice 读取字符串数组配置，读取失败时使用调用方给出的默认值。
-func SecurityConfigStringSlice(ctx context.Context, svcCtx *svc.ServiceContext, uuid string, defaultValue []string) (result []string) {
-	result = defaultValue
-	defer func() {
-		if recover() != nil {
-			result = defaultValue
-		}
-	}()
+func SecurityConfigStringSlice(ctx context.Context, svcCtx *svc.ServiceContext, uuid string, defaultValue []string) []string {
+	result, err := securityConfigStringSlice(ctx, svcCtx, uuid)
+	if err != nil {
+		return defaultValue
+	}
+	return result
+}
+
+// securityConfigStringSlice 读取安全链路字符串数组配置，缺失、类型错误或依赖异常时返回错误。
+func securityConfigStringSlice(ctx context.Context, svcCtx *svc.ServiceContext, uuid string) ([]string, error) {
+	if svcCtx == nil {
+		return nil, errors.Errorf("安全配置服务上下文未初始化")
+	}
 	configCtx, cancel := optionalSecurityConfigContext(ctx)
 	defer cancel()
 	value, err := configlogic.NewSysConfigLogicWithContext(configCtx, svcCtx).GetCachedValue(uuid)
 	if err != nil {
-		return result
+		return nil, errors.Wrapf(err, "读取安全配置[%s]失败", uuid)
 	}
 	switch v := value.(type) {
 	case []string:
-		return v
+		return helper.UniqueNonEmptyStrings(v), nil
 	case []any:
 		result := make([]string, 0, len(v))
 		for _, item := range v {
@@ -224,7 +484,7 @@ func SecurityConfigStringSlice(ctx context.Context, svcCtx *svc.ServiceContext, 
 				result = append(result, text)
 			}
 		}
-		return result
+		return helper.UniqueNonEmptyStrings(result), nil
 	case map[string]any:
 		result := make([]string, 0, len(v))
 		for key := range v {
@@ -232,10 +492,10 @@ func SecurityConfigStringSlice(ctx context.Context, svcCtx *svc.ServiceContext, 
 				result = append(result, strings.TrimSpace(key))
 			}
 		}
-		return result
+		return helper.UniqueNonEmptyStrings(result), nil
 	case string:
 		if strings.TrimSpace(v) == "" {
-			return []string{}
+			return []string{}, nil
 		}
 		parts := strings.Split(v, ",")
 		result := make([]string, 0, len(parts))
@@ -245,10 +505,9 @@ func SecurityConfigStringSlice(ctx context.Context, svcCtx *svc.ServiceContext, 
 				result = append(result, text)
 			}
 		}
-		return result
-	default:
-		return result
+		return helper.UniqueNonEmptyStrings(result), nil
 	}
+	return nil, errors.Errorf("安全配置[%s]不是合法字符串数组", uuid)
 }
 
 // optionalSecurityConfigContext 为安全链路中的“可失败可回退”配置读取创建独立短超时上下文。
@@ -257,338 +516,183 @@ func optionalSecurityConfigContext(context.Context) (context.Context, context.Ca
 	return context.WithTimeout(context.Background(), securityOptionalConfigTimeout)
 }
 
-// getAdminForAccess 查询管理员基础鉴权信息。
-func (l *SecurityLogic) getAdminForAccess(userID int) (*model.Admin, error) {
-	var admin model.Admin
-	if err := l.Svc.WriteDB(svc.DatabaseMain).
-		Select("id", "name", "status", "mfa_status", "need_reset_password", "last_login_time", "mfa_secure_key").
-		Where("id = ?", userID).
-		First(&admin).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrAdminNotFound
-		}
-		return nil, errors.Tag(err)
+// adminForAccess 把已校验会话转换为安全校验所需的最小管理员模型。
+func adminForAccess(session *types.AdminSession) (*model.Admin, error) {
+	if session == nil || session.ID <= 0 {
+		return nil, ErrAdminNotFound
 	}
-	return &admin, nil
+	var lastLoginTime time.Time
+	if value := strings.TrimSpace(session.LastLoginTime); value != "" {
+		parsed, err := time.ParseInLocation(time.DateTime, value, time.Local)
+		if err != nil {
+			return nil, errors.Wrap(err, "解析管理员登录态最后登录时间失败")
+		}
+		lastLoginTime = parsed
+	}
+	return &model.Admin{
+		ID:                session.ID,
+		Name:              session.UserName,
+		Status:            session.Status,
+		MfaStatus:         session.MfaStatus,
+		MfaSecureKey:      adminAccessMFASecretUnknown,
+		NeedResetPassword: session.NeedResetPassword,
+		LastLoginTime:     lastLoginTime,
+	}, nil
 }
 
 // checkAdminIP 校验 token 登录 IP、当前请求 IP 与白名单配置。
 func (l *SecurityLogic) checkAdminIP(currentIP string, loginIP string) error {
-	whitelistDisabled := SecurityConfigBool(l.Ctx, l.Svc, ConfigAdminIPWhitelistDisable, true)
-	if whitelistDisabled {
-		return nil
+	whitelistEnabled, err := securityConfigBool(l.Ctx, l.Svc, ConfigAdminIPWhitelistEnabled)
+	if err != nil {
+		return errors.Tag(err)
 	}
 	currentIP = strings.TrimSpace(currentIP)
 	loginIP = strings.TrimSpace(loginIP)
 	ipChanged := loginIP != "" && currentIP != "" && loginIP != currentIP
-	if ipChanged && SecurityConfigBool(l.Ctx, l.Svc, ConfigAdminCheckChangeIP, true) {
-		return ErrAdminIPChanged
-	}
 	if ipChanged {
-		whitelist := SecurityConfigStringSlice(l.Ctx, l.Svc, ConfigAdminIPWhitelist, nil)
-		if len(whitelist) > 0 && !utils.IsHas(currentIP, helper.UniqueNonEmptyStrings(whitelist)) {
+		checkChangeIP, err := securityConfigBool(l.Ctx, l.Svc, ConfigAdminCheckChangeIP)
+		if err != nil {
+			return errors.Tag(err)
+		}
+		if checkChangeIP {
+			return ErrAdminIPChanged
+		}
+	}
+	if whitelistEnabled {
+		whitelist, err := securityConfigStringSlice(l.Ctx, l.Svc, ConfigAdminIPWhitelist)
+		if err != nil {
+			return errors.Tag(err)
+		}
+		if currentIP == "" || !utils.Contains(currentIP, whitelist) {
 			return ErrAdminIPNotAllowed
 		}
 	}
 	return nil
 }
 
-// ForceLoginMFAEnabled 判断系统是否开启了登录阶段强制 MFA。
-func (l *SecurityLogic) ForceLoginMFAEnabled() bool {
-	return SecurityConfigBool(l.Ctx, l.Svc, ConfigAdminMFACheckEnable, false)
+// CheckAdminLoginIP 在签发登录 token 前校验当前来源 IP 与后台白名单。
+func (l *SecurityLogic) CheckAdminLoginIP(currentIP string) error {
+	return l.checkAdminIP(currentIP, "")
+}
+
+// ForceLoginMFAEnabled 判断系统是否开启了登录阶段强制 MFA；配置不可用时返回错误并阻断敏感操作。
+func (l *SecurityLogic) ForceLoginMFAEnabled() (bool, error) {
+	return securityConfigBool(l.Ctx, l.Svc, ConfigAdminMFACheckEnable)
 }
 
 // NeedLoginMFA 判断当前管理员登录态是否必须完成 MFA 校验。
-func (l *SecurityLogic) NeedLoginMFA(admin *model.Admin) bool {
+func (l *SecurityLogic) NeedLoginMFA(admin *model.Admin) (bool, error) {
 	if admin == nil {
-		return false
+		return false, nil
 	}
 	// 首次登录或重置密码后的临时密码阶段，优先放行改密流程，MFA 允许后续再补。
 	if admin.NeedResetPassword == 1 {
-		return false
+		return false, nil
 	}
 	if admin.MfaStatus == 1 {
-		return true
+		return true, nil
 	}
 	return l.ForceLoginMFAEnabled()
 }
 
 // NeedBindMFAOnLogin 判断当前管理员在登录阶段是否需要先完成 MFA 绑定并启用。
 // 账号状态已启用但秘钥不可用时，同样走登录绑定流程，避免账号被卡死在不可登录状态。
-func (l *SecurityLogic) NeedBindMFAOnLogin(admin *model.Admin) bool {
+func (l *SecurityLogic) NeedBindMFAOnLogin(admin *model.Admin) (bool, error) {
 	if admin == nil || admin.NeedResetPassword == 1 {
-		return false
+		return false, nil
 	}
-	return l.NeedLoginMFA(admin) && (admin.MfaStatus != 1 || !l.HasUsableAdminMFASecret(admin))
+	needMFA, err := l.NeedLoginMFA(admin)
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	return needMFA && (admin.MfaStatus != 1 || !l.HasUsableAdminMFASecret(admin)), nil
 }
 
-// checkAdminMFA 校验登录阶段是否已经完成 MFA；系统强制启用时，未开启账号也必须先完成绑定与校验。
+// checkAdminMFA 校验登录阶段是否已经完成 MFA；正常请求命中完成标记时不读取管理员表。
 func (l *SecurityLogic) checkAdminMFA(admin *model.Admin) error {
 	if admin == nil {
 		return ErrAdminNotFound
 	}
-	needMFA := l.NeedLoginMFA(admin)
-	if !needMFA || l.Redis() == nil {
-		return nil
-	}
-	if l.NeedBindMFAOnLogin(admin) {
-		return ErrAdminMFABindRequired
-	}
-	flag, err := l.Redis().Get(l.Ctx, l.loginMFAFlagKey(admin.ID)).Int64()
-	if errors.Is(err, redis.Nil) {
-		return ErrAdminMFARequired
-	}
+	needMFA, err := l.NeedLoginMFA(admin)
 	if err != nil {
 		return errors.Tag(err)
 	}
-	if !loginMFAFlagMatches(flag, admin.LastLoginTime) {
-		return ErrAdminMFARequired
+	if !needMFA {
+		return nil
 	}
-	return nil
+	if l.Redis() == nil {
+		return cachelogic.WrapRedisUnavailable(nil, "校验管理员登录MFA失败")
+	}
+	cacheKey := l.loginMFAFlagKey(admin.ID)
+	if cacheKey == "" {
+		return cachelogic.WrapRedisUnavailable(nil, "校验管理员登录MFA失败：缓存 Key 未初始化")
+	}
+	flag, err := l.Redis().Get(l.Ctx, cacheKey).Int64()
+	if err == nil && loginMFAFlagMatches(flag, admin.LastLoginTime) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return cachelogic.WrapRedisUnavailable(err, "读取管理员登录MFA状态失败")
+	}
+	if admin.MfaStatus != 1 {
+		return ErrAdminMFABindRequired
+	}
+	if admin.MfaSecureKey == adminAccessMFASecretUnknown {
+		var credential struct {
+			MfaSecureKey string `gorm:"column:mfa_secure_key"` // MFA 加密秘钥
+		}
+		if err := l.Svc.WriteDB(svc.DatabaseMain).
+			Model(&model.Admin{}).
+			Select("mfa_secure_key").
+			Where("id = ?", admin.ID).
+			Take(&credential).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAdminNotFound
+			}
+			return errors.Tag(err)
+		}
+		admin.MfaSecureKey = credential.MfaSecureKey
+	}
+	if !l.HasUsableAdminMFASecret(admin) {
+		return ErrAdminMFABindRequired
+	}
+	return ErrAdminMFARequired
 }
 
 // EnabledRoleIDs 查询用户拥有的启用角色 ID。
 func (l *SecurityLogic) EnabledRoleIDs(userID int) ([]int, error) {
-	return (&rbaclogic.AdminRoleLogic{BaseLogic: l.BaseLogic}).EnabledRoleIDsByUserWithCache(userID)
+	if roleIDs, ok := requestctx.EnabledRoleIDs(l.Ctx); ok {
+		return roleIDs, nil
+	}
+	roleIDs, err := (&rbaclogic.AdminRoleLogic{BaseLogic: l.BaseLogic}).EnabledRoleIDsByUserWithCache(userID)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	requestctx.SetEnabledRoleIDs(l.Ctx, roleIDs)
+	return roleIDs, nil
 }
 
-// routePermissionIDs 查询路由别名对应的启用权限 ID。
-func (l *SecurityLogic) routePermissionIDs(routeAlias string) ([]int, error) {
-	routeAlias = strings.TrimSpace(routeAlias)
-	modules := routePermissionModules(routeAlias)
-	if l.Redis() == nil {
-		return l.routePermissionIDsFromDB(modules)
-	}
-	cacheKey := fmt.Sprintf(keys.RoutePermissionIDs, routeAlias)
-	useRouteCache := shouldUseRoutePermissionCandidateCache(routeAlias)
-	if useRouteCache {
-		permissionIDs, found, err := l.readPositiveIntSetCache(cacheKey, "路由候选权限缓存")
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		if found {
-			cachelogic.TrackRoutePermissionAliasCache(l.BaseLogic, routeAlias)
-			return permissionIDs, nil
-		}
-	}
-	permissionIDs, found, err := l.routePermissionIDsFromModuleCache(routeAlias, useRouteCache)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	if found {
-		return permissionIDs, nil
-	}
-	if !useRouteCache {
-		return l.routePermissionIDsFromDB(modules)
-	}
-	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	cachelogic.TrackRoutePermissionAliasCache(l.BaseLogic, routeAlias)
-	var values []string
-	result, err := manager.LoadThrough(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey), &values, nil)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	if result.State == tablecache.LookupStateEmpty {
-		return []int{}, nil
-	}
-	if len(values) == 0 {
-		return []int{}, nil
-	}
-	return cachelogic.ParsePositiveIntStrings(values, "路由候选权限缓存")
-}
-
-// routePermissionIDsFromDB 从数据库读取当前路由匹配的启用权限 ID。
-func (l *SecurityLogic) routePermissionIDsFromDB(modules []string) ([]int, error) {
-	modules = helper.UniqueNonEmptyStrings(modules)
-	if len(modules) == 0 {
-		return []int{}, nil
-	}
-	var permissionIDs []int
-	err := l.Svc.WriteDB(svc.DatabaseMain).Model(&model.AdminPermission{}).
-		Where("status = 1 AND module IN ?", modules).
-		Order("id ASC").
-		Pluck("id", &permissionIDs).Error
-	return types.UniquePositiveInts(permissionIDs), errors.Tag(err)
-}
-
-// userPermissionIDsWithCache 查询管理员聚合权限 ID 集合，供鉴权链路优先走缓存。
-func (l *SecurityLogic) userPermissionIDsWithCache(userID int) ([]int, error) {
-	if userID <= 0 {
-		return []int{}, nil
-	}
-	if l.Redis() == nil {
-		roleIDs, err := l.EnabledRoleIDs(userID)
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		if len(roleIDs) == 0 {
-			return []int{}, nil
-		}
-		var permissionIDs []int
-		err = l.Svc.WriteDB(svc.DatabaseMain).Model(&model.AdminRolePermissionRel{}).
-			Distinct("permission_id").
-			Where("role_id IN ?", roleIDs).
-			Pluck("permission_id", &permissionIDs).Error
-		return permissionIDs, errors.Tag(err)
-	}
-	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	cacheKey := fmt.Sprintf(keys.AdminPermissionIDs, userID)
-	var values []string
-	result, err := manager.LoadThrough(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey), &values, nil)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	if result.State == tablecache.LookupStateEmpty {
-		return []int{}, nil
-	}
-	return cachelogic.ParsePositiveIntStrings(values, "管理员聚合权限缓存")
-}
-
-// UserPermissionUUIDsWithCache 查询管理员最终权限码集合，供高频权限初始化链路优先走缓存。
+// UserPermissionUUIDsWithCache 通过规范化角色关系缓存计算管理员权限码。
 func (l *SecurityLogic) UserPermissionUUIDsWithCache(userID int) ([]string, error) {
 	if userID <= 0 {
 		return []string{}, nil
 	}
 	if l.Redis() == nil {
-		permissionIDs, err := l.userPermissionIDsWithCache(userID)
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		return (&rbaclogic.AdminPermissionLogic{BaseLogic: l.BaseLogic}).PermissionUUIDsByIDsWithCache(permissionIDs)
+		return nil, cachelogic.WrapRedisUnavailable(nil, "读取管理员权限码失败")
 	}
-	cacheKey := fmt.Sprintf(keys.AdminPermissionUUIDs, userID)
-	values, found, err := l.readStringSetCache(cacheKey)
+	roleIDs, err := l.EnabledRoleIDs(userID)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if found {
-		return helper.UniqueNonEmptyStrings(values), nil
+	permissionLogic := &rbaclogic.AdminPermissionLogic{BaseLogic: l.BaseLogic}
+	if containsSuperRole(roleIDs) {
+		return permissionLogic.AllEnabledPermissionUUIDsWithCache()
 	}
-	permissionIDs, err := l.userPermissionIDsWithCache(userID)
+	permissionIDs, err := l.roleRelationPermissionIDsWithCache(roleIDs, keys.RolePermission, "角色路由权限关系")
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	values, err = (&rbaclogic.AdminPermissionLogic{BaseLogic: l.BaseLogic}).PermissionUUIDsByIDsWithCache(permissionIDs)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	values = helper.UniqueNonEmptyStrings(values)
-	if len(values) == 0 {
-		return []string{}, nil
-	}
-	if err := l.writeStringSetCache(cacheKey, values); err != nil {
-		return nil, errors.Tag(err)
-	}
-	return values, nil
-}
-
-// routePermissionIDsFromModuleCache 从权限模块缓存反查路由关联权限 ID。
-func (l *SecurityLogic) routePermissionIDsFromModuleCache(routeAlias string, writeRouteCache bool) ([]int, bool, error) {
-	routeAlias = strings.TrimSpace(routeAlias)
-	if routeAlias == "" || l.Redis() == nil {
-		return []int{}, false, nil
-	}
-	modules := routePermissionModules(routeAlias)
-	moduleSet := make(map[string]struct{}, len(modules))
-	for _, module := range modules {
-		moduleSet[module] = struct{}{}
-	}
-	moduleMap, err := l.Redis().HGetAll(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.PermissionModule)).Result()
-	if err != nil {
-		return nil, false, errors.Tag(err)
-	}
-	if len(moduleMap) == 0 {
-		return []int{}, false, nil
-	}
-	permissionIDs := make([]int, 0)
-	for permissionIDText, module := range moduleMap {
-		if _, ok := moduleSet[strings.TrimSpace(module)]; !ok {
-			continue
-		}
-		permissionID, convErr := strconv.Atoi(strings.TrimSpace(permissionIDText))
-		if convErr != nil || permissionID <= 0 {
-			return nil, false, errors.Wrap(convErr, "解析权限模块缓存ID失败")
-		}
-		permissionIDs = append(permissionIDs, permissionID)
-	}
-	permissionIDs = types.UniquePositiveInts(permissionIDs)
-	sort.Ints(permissionIDs)
-	if len(permissionIDs) == 0 {
-		return []int{}, false, nil
-	}
-	if !writeRouteCache {
-		return permissionIDs, true, nil
-	}
-	cacheKey := fmt.Sprintf(keys.RoutePermissionIDs, routeAlias)
-	values := make([]string, 0, len(permissionIDs))
-	for _, permissionID := range permissionIDs {
-		values = append(values, strconv.Itoa(permissionID))
-	}
-	if err := l.writeStringSetCache(cacheKey, values); err != nil {
-		return nil, false, errors.Tag(err)
-	}
-	cachelogic.TrackRoutePermissionAliasCache(l.BaseLogic, routeAlias)
-	return permissionIDs, true, nil
-}
-
-// readPositiveIntSetCache 读取缓存中的正整数集合并保持排序结果。
-func (l *SecurityLogic) readPositiveIntSetCache(cacheKey string, label string) ([]int, bool, error) {
-	values, found, err := l.readStringSetCache(cacheKey)
-	if err != nil || !found {
-		return nil, found, errors.Tag(err)
-	}
-	permissionIDs, err := cachelogic.ParsePositiveIntStrings(values, label)
-	return permissionIDs, true, errors.Tag(err)
-}
-
-// readStringSetCache 读取缓存集合，支持空集合标记避免穿透。
-func (l *SecurityLogic) readStringSetCache(cacheKey string) ([]string, bool, error) {
-	if l.Redis() == nil {
-		return nil, false, nil
-	}
-	values, err := l.Redis().SMembers(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey)).Result()
-	if err != nil {
-		return nil, false, errors.Tag(err)
-	}
-	if len(values) == 0 {
-		return []string{}, false, nil
-	}
-	if len(values) == 1 && corelogic.CacheIsEmptyMarker(values[0]) {
-		return []string{}, true, nil
-	}
-	sort.Strings(values)
-	return values, true, nil
-}
-
-// writeStringSetCache 重建字符串集合缓存，空集合写入统一空标记。
-func (l *SecurityLogic) writeStringSetCache(cacheKey string, values []string) error {
-	if l.Redis() == nil {
-		return nil
-	}
-	physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey)
-	pipe := l.Redis().Pipeline()
-	pipe.Del(l.Ctx, physicalKey)
-	if len(values) > 0 {
-		args := make([]any, 0, len(values))
-		for _, value := range values {
-			value = strings.TrimSpace(value)
-			if value != "" {
-				args = append(args, value)
-			}
-		}
-		if len(args) > 0 {
-			pipe.SAdd(l.Ctx, physicalKey, args...)
-		}
-	}
-	pipe.Expire(l.Ctx, physicalKey, time.Hour)
-	_, err := pipe.Exec(l.Ctx)
-	return errors.Tag(err)
+	return permissionLogic.PermissionUUIDsByIDsWithCache(permissionIDs)
 }
 
 // OperateMFABizResult 把后台敏感操作中的 MFA 错误转换成统一业务响应。
@@ -599,6 +703,11 @@ func OperateMFABizResult(err error, operation string) *types.BizResult {
 	operation = strings.TrimSpace(operation)
 	if operation == "" {
 		operation = "SecurityLogic.OperateMFABizResult"
+	}
+	if errors.Is(err, cachelogic.ErrRedisUnavailable) {
+		return types.NewBizResult(codes.RedisUnavailable).
+			SetI18nMessage(i18n.MsgKeyRedisUnavailable).
+			WithError(corelogic.WrapLogicError(err, "%s Redis不可用", operation))
 	}
 	if errors.Is(err, ErrAdminMFATwoStepExpired) || errors.Is(err, ErrAdminMFARequired) {
 		return types.NewBizResult(codes.CheckMFAAgain).
@@ -637,15 +746,16 @@ var permissionAllowlist = map[routealias.Alias]bool{
 	// 权限 UUID 预览只生成候选值，不写权限表；新增/编辑权限仍由权限保存接口做权限控制。
 	routealias.PermissionMaxUUID: true, // 查询下一个权限UUID不要求后台权限码。
 	// 消息中心属于个人收件箱能力，仅依赖登录态与账号安全校验，不绑定后台权限码。
-	routealias.AdminMessageList:          true, // 查询管理员消息收件箱不要求后台权限码。
-	routealias.AdminMessageSentList:      true, // 查询管理员已发送消息不要求后台权限码。
-	routealias.AdminMessageReceivers:     true, // 查询管理员消息收件人明细不要求后台权限码。
-	routealias.AdminMessageUnreadCount:   true, // 查询管理员未读消息数量不要求后台权限码。
-	routealias.AdminMessageNotifications: true, // 查询管理员通知列表不要求后台权限码。
-	routealias.AdminMessageMarkRead:      true, // 标记管理员消息已读不要求后台权限码。
-	routealias.AdminMessageDelete:        true, // 删除管理员消息不要求后台权限码。
-	routealias.AdminMessageSend:          true, // 发送管理员消息不要求后台权限码。
-	routealias.AdminMessageHandle:        true, // 标记管理员消息已处理不要求后台权限码。
+	routealias.AdminMessageList:            true, // 查询管理员消息收件箱不要求后台权限码。
+	routealias.AdminMessageSentList:        true, // 查询管理员已发送消息不要求后台权限码。
+	routealias.AdminMessageReceiverOptions: true, // 查询管理员消息可用收件人选项不要求后台权限码。
+	routealias.AdminMessageReceivers:       true, // 查询管理员消息收件人明细不要求后台权限码。
+	routealias.AdminMessageUnreadCount:     true, // 查询管理员未读消息数量不要求后台权限码。
+	routealias.AdminMessageNotifications:   true, // 查询管理员通知列表不要求后台权限码。
+	routealias.AdminMessageMarkRead:        true, // 标记管理员消息已读不要求后台权限码。
+	routealias.AdminMessageDelete:          true, // 删除管理员消息不要求后台权限码。
+	routealias.AdminMessageSend:            true, // 发送管理员消息不要求后台权限码。
+	routealias.AdminMessageHandle:          true, // 标记管理员消息已处理不要求后台权限码。
 }
 
 // passwordResetAllowlist 显式列出“必须先修改密码”状态下仍允许访问的自助接口。
@@ -682,29 +792,6 @@ var loginMFAAllowlist = map[routealias.Alias]bool{
 // routeAliasKey 归一化外部传入的路由别名，避免白名单判断受空白字符影响。
 func routeAliasKey(routeAlias string) routealias.Alias {
 	return routealias.Alias(strings.TrimSpace(routeAlias))
-}
-
-// routePermissionModules 返回路由权限可匹配的 module；单篇文档只匹配自身文件权限。
-func routePermissionModules(routeAlias string) []string {
-	aliases := routealias.DocsCandidateAliases(routeAliasKey(routeAlias))
-	modules := make([]string, 0, len(aliases))
-	for _, alias := range aliases {
-		module := strings.TrimSpace(string(alias))
-		if module == "" {
-			continue
-		}
-		modules = append(modules, module)
-	}
-	if len(modules) == 0 {
-		return []string{strings.TrimSpace(routeAlias)}
-	}
-	return helper.UniqueNonEmptyStrings(modules)
-}
-
-// shouldUseRoutePermissionCandidateCache 判断当前路由是否允许命中路由候选权限缓存。
-func shouldUseRoutePermissionCandidateCache(routeAlias string) bool {
-	_, isDocsFile := routealias.DocsFilePathFromAlias(routeAliasKey(routeAlias))
-	return !isDocsFile
 }
 
 // checkAdminNeedResetPassword 校验管理员是否处于必须先修改登录密码状态。

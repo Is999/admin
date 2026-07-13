@@ -1,0 +1,6 @@
+-- 代码资产：无等待获取单表回填命名锁。
+-- SQL 方言：MySQL 8.0。
+-- 调用方：cmd/shardbackfill.acquireTableLock。
+-- 参数来源：固定长度锁名通过预编译参数传入。
+-- 安全边界：等待时间固定为零，避免阻塞发布任务。
+SELECT GET_LOCK(?, 0)

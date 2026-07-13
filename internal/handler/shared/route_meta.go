@@ -62,10 +62,8 @@ var (
 	AuthCodes = newRouteMeta(routealias.AuthCodes, "获取当前用户权限码")
 	// AuthProfile 获取当前登录资料。
 	AuthProfile = newRouteMeta(routealias.AuthProfile, "获取当前登录资料")
-	// AuthVerifyAccount 验证账号并生成MFA绑定信息。
-	AuthVerifyAccount = newRouteMeta(routealias.AuthVerifyAccount, "验证账号并生成MFA绑定信息")
-	// DocsSession 创建文档访问会话。
-	DocsSession = newRouteMeta(routealias.DocsIndex, "创建文档访问会话")
+	// DocsSession 创建文档访问会话，只校验登录安全状态，文档资源另行鉴权。
+	DocsSession = newRouteMeta(routealias.Ignore, "创建文档访问会话")
 	// InternalInitAdminBootstrap 内网初始化管理员账号。
 	InternalInitAdminBootstrap = newRouteMeta("internal.auth.init_admin_bootstrap", "内网初始化管理员账号")
 	// ProfileMine 获取当前管理员资料。
@@ -154,6 +152,8 @@ var (
 	AdminMessageList = newAuditRouteMeta(routealias.AdminMessageList, model.ActionAdminMessageList, "查询管理员消息收件箱")
 	// AdminMessageSentList 查询管理员已发送消息。
 	AdminMessageSentList = newAuditRouteMeta(routealias.AdminMessageSentList, model.ActionAdminMessageSentList, "查询管理员已发送消息")
+	// AdminMessageReceiverOptions 查询管理员消息可用收件人选项。
+	AdminMessageReceiverOptions = newRouteMeta(routealias.AdminMessageReceiverOptions, "查询管理员消息可用收件人选项")
 	// AdminMessageReceivers 查询管理员消息收件人明细。
 	AdminMessageReceivers = newAuditRouteMeta(routealias.AdminMessageReceivers, model.ActionAdminMessageReceivers, "查询管理员消息收件人明细")
 	// AdminMessageSend 发送管理员消息。
@@ -175,17 +175,17 @@ var (
 	// RoleTreeOptions 查询角色树下拉。
 	RoleTreeOptions = newRouteMeta(routealias.RoleTreeOptions, "查询角色树下拉")
 	// RoleAdd 新增角色。
-	RoleAdd = newAuditRouteMeta("role.add", model.ActionRoleAdd, "新增角色")
+	RoleAdd = newAuditRouteMeta(routealias.RoleAdd, model.ActionRoleAdd, "新增角色")
 	// RoleUpdate 编辑角色。
-	RoleUpdate = newAuditRouteMeta("role.update", model.ActionRoleUpdate, "编辑角色")
+	RoleUpdate = newAuditRouteMeta(routealias.RoleUpdate, model.ActionRoleUpdate, "编辑角色")
 	// RoleDelete 删除角色。
 	RoleDelete = newAuditRouteMeta("role.delete", model.ActionRoleDelete, "删除角色")
 	// RoleStatusUpdate 修改角色状态。
-	RoleStatusUpdate = newAuditRouteMeta("role.status.update", model.ActionRoleStatusUpdate, "修改角色状态")
+	RoleStatusUpdate = newAuditRouteMeta(routealias.RoleStatusUpdate, model.ActionRoleStatusUpdate, "修改角色状态")
 	// RolePermissionTree 查询角色权限树。
 	RolePermissionTree = newRouteMeta("role.permission.tree", "查询角色权限树")
 	// RolePermissionUpdate 编辑角色权限。
-	RolePermissionUpdate = newAuditRouteMeta("role.permission.update", model.ActionRolePermissionUpdate, "编辑角色权限")
+	RolePermissionUpdate = newAuditRouteMeta(routealias.RolePermissionUpdate, model.ActionRolePermissionUpdate, "编辑角色权限")
 	// PermissionList 查询权限列表。
 	PermissionList = newAuditRouteMeta("permission.list", model.ActionPermissionList, "查询权限列表")
 	// PermissionTreeList 查询权限树。
@@ -193,13 +193,17 @@ var (
 	// PermissionMaxUUID 查询下一个权限UUID。
 	PermissionMaxUUID = newRouteMeta(routealias.PermissionMaxUUID, "查询下一个权限UUID")
 	// PermissionAdd 新增权限。
-	PermissionAdd = newAuditRouteMeta("permission.add", model.ActionPermissionAdd, "新增权限")
+	PermissionAdd = newAuditRouteMeta(routealias.PermissionAdd, model.ActionPermissionAdd, "新增权限")
 	// PermissionUpdate 编辑权限。
-	PermissionUpdate = newAuditRouteMeta("permission.update", model.ActionPermissionUpdate, "编辑权限")
+	PermissionUpdate = newAuditRouteMeta(routealias.PermissionUpdate, model.ActionPermissionUpdate, "编辑权限")
 	// PermissionDelete 删除权限。
 	PermissionDelete = newAuditRouteMeta("permission.delete", model.ActionPermissionDelete, "删除权限")
 	// PermissionStatus 修改权限状态。
-	PermissionStatus = newAuditRouteMeta("permission.status.update", model.ActionPermissionStatus, "修改权限状态")
+	PermissionStatus = newAuditRouteMeta(routealias.PermissionStatusUpdate, model.ActionPermissionStatus, "修改权限状态")
+	// DocPermissionList 查询文档权限列表。
+	DocPermissionList = newAuditRouteMeta(routealias.DocPermissionList, model.ActionDocPermissionList, "查询文档权限列表")
+	// DocPermissionStatus 修改文档权限状态。
+	DocPermissionStatus = newAuditRouteMeta(routealias.DocPermissionStatusUpdate, model.ActionDocPermissionStatus, "修改文档权限状态")
 	// SysConfigList 查询系统配置。
 	SysConfigList = newAuditRouteMeta("system.config.list", model.ActionSysConfigList, "查询系统配置")
 	// SysConfigAdd 新增系统配置。
@@ -209,7 +213,7 @@ var (
 	// SysConfigExport 导出系统配置。
 	SysConfigExport = newAuditRouteMeta("system.config.export", model.ActionSysConfigExport, "导出系统配置")
 	// SysConfigImport 导入系统配置。
-	SysConfigImport = newAuditRouteMeta("system.config.import", model.ActionSysConfigImport, "导入系统配置")
+	SysConfigImport = newAuditRouteMeta(routealias.SysConfigImport, model.ActionSysConfigImport, "导入系统配置")
 	// SysConfigCache 查看系统配置缓存。
 	SysConfigCache = newAuditRouteMeta("system.config.cache", model.ActionSysConfigCache, "查看系统配置缓存")
 	// SysConfigRenew 刷新系统配置缓存。

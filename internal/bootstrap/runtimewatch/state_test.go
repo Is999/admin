@@ -22,7 +22,9 @@ func TestStateStartStop(t *testing.T) {
 	if ok := state.Start(func(context.Context) {}); ok {
 		t.Fatal("期望重复启动 watcher 被拒绝")
 	}
-	state.Stop()
+	if err := state.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
 	<-stopped
 }
 
@@ -45,8 +47,47 @@ func TestStateStartClearsAfterRunReturns(t *testing.T) {
 		close(stopped)
 	})
 	<-started
-	state.Stop()
+	if err := state.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
 	<-stopped
+}
+
+// TestStateStopBlocksConcurrentRestartUntilPreviousWatcherExits 确保停止完成前不会启动新的 DB 配置 watcher。
+func TestStateStopBlocksConcurrentRestartUntilPreviousWatcherExits(t *testing.T) {
+	var state State
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	if ok := state.Start(func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+	}); !ok {
+		t.Fatal("期望首次启动 watcher 成功")
+	}
+	<-started
+
+	stopDone := make(chan struct{})
+	go func() {
+		_ = state.Stop(context.Background())
+		close(stopDone)
+	}()
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("等待 watcher 收到停止信号超时")
+	}
+	if ok := state.Start(func(context.Context) {}); ok {
+		t.Fatal("停止完成前不应启动新的 watcher")
+	}
+	close(release)
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("等待 watcher 停止超时")
+	}
 }
 
 // TestStateAppliedWatermark 确保 active release 水位记录和判断稳定。

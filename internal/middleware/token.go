@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"admin/internal/config"
 	cachelogic "admin/internal/logic/cache"
+	"admin/internal/routealias"
 	"admin/internal/svc"
+	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/golang-jwt/jwt/v4"
@@ -34,11 +35,12 @@ var (
 
 // adminTokenIdentity 表示通过 JWT 和 Redis 会话校验后的管理员身份。
 type adminTokenIdentity struct {
-	UserID    int    // 管理员 ID，来自 JWT sub
-	UserName  string // 管理员用户名，来自 JWT username
-	Token     string // 当前请求携带的原始 token
-	ExpiresAt int64  // token 过期时间戳，单位秒
-	LoginIP   string // 登录时写入 JWT 的 IP，用于后台 IP 变更校验
+	UserID    int                 // 管理员 ID，来自 JWT sub
+	UserName  string              // 管理员用户名，以当前 Redis 会话为准
+	Token     string              // 当前请求携带的原始 token
+	ExpiresAt int64               // token 过期时间戳，单位秒
+	LoginIP   string              // 登录时写入 JWT 的 IP，用于后台 IP 变更校验
+	Session   *types.AdminSession // 当前 Redis 会话，供后续安全校验复用
 }
 
 // bearerToken 从 Authorization 请求头中提取 Bearer token。
@@ -76,6 +78,11 @@ func docsRequestToken(r *http.Request) (string, error) {
 
 // verifyAdminToken 统一校验后台 JWT，并按需校验 Redis 中的当前登录会话。
 func verifyAdminToken(ctx context.Context, svcCtx *svc.ServiceContext, tokenString string, requireSession bool) (*adminTokenIdentity, error) {
+	return verifyAdminTokenWithSessionGrace(ctx, svcCtx, tokenString, requireSession, false)
+}
+
+// verifyAdminTokenWithSessionGrace 校验后台 JWT；allowSessionGrace 只允许会话刷新和退出路由传入 true。
+func verifyAdminTokenWithSessionGrace(ctx context.Context, svcCtx *svc.ServiceContext, tokenString string, requireSession bool, allowSessionGrace bool) (*adminTokenIdentity, error) {
 	cfg := config.Config{}
 	if svcCtx != nil {
 		cfg = svcCtx.CurrentConfig()
@@ -86,7 +93,7 @@ func verifyAdminToken(ctx context.Context, svcCtx *svc.ServiceContext, tokenStri
 
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method != jwt.SigningMethodHS256 {
 			return nil, errors.Wrap(errInvalidToken, "签名算法不匹配")
 		}
 		return []byte(cfg.JwtSecret), nil
@@ -107,13 +114,6 @@ func verifyAdminToken(ctx context.Context, svcCtx *svc.ServiceContext, tokenStri
 		return nil, errInvalidToken
 	}
 	uid := int(userID)
-	if int64(exp) < time.Now().Unix() {
-		// token 过期时尽力清理 Redis 登录态；如果 Redis 依赖未注入，则只返回过期错误，避免中间件 panic。
-		if svcCtx.Rds != nil {
-			_ = cachelogic.NewCacheLogic(ctx, svcCtx).DeleteAdminInfo(uid)
-		}
-		return nil, errTokenExpired
-	}
 	loginIP := ""
 	if rawIP, ok := claims["ip"]; ok {
 		loginIP = fmt.Sprint(rawIP)
@@ -129,41 +129,46 @@ func verifyAdminToken(ctx context.Context, svcCtx *svc.ServiceContext, tokenStri
 		return identity, nil
 	}
 	if svcCtx.Rds == nil {
-		return nil, errInvalidToken
+		return nil, cachelogic.WrapRedisUnavailable(nil, "校验管理员会话失败")
 	}
 
-	// Redis 中保存的是当前管理员最新有效 token，这里完成单点登录和登出失效校验。
+	// Redis 会话只读取一次，后续账号状态、MFA 与权限校验复用同一份快照。
 	cacheLogic := cachelogic.NewCacheLogic(ctx, svcCtx)
-	logoutToken, err := cacheLogic.IsAdminLogoutToken(uid, tokenString)
+	session, err := cacheLogic.GetAdminSession(uid)
+	if errors.Is(err, redis.Nil) {
+		// 会话不存在表示已退出、被撤销或已过期，禁止从数据库恢复登录态。
+		return nil, errInvalidToken
+	}
 	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if session == nil || session.ID != uid {
 		return nil, errInvalidToken
 	}
-	if logoutToken {
-		return nil, errInvalidToken
-	}
-	adminToken, err := cacheLogic.GetAdminToken(uid)
-	if err == nil {
-		if adminToken != tokenString {
+	if allowSessionGrace {
+		allowed, err := cacheLogic.CanUseAdminSessionToken(uid, tokenString)
+		if err != nil {
+			return nil, cachelogic.WrapRedisUnavailable(err, "校验管理员会话宽限期失败")
+		}
+		if !allowed {
 			return nil, errInvalidToken
 		}
-		return identity, nil
-	}
-	if !errors.Is(err, redis.Nil) {
+	} else if session.Token != tokenString {
 		return nil, errInvalidToken
 	}
-	if _, rebuildErr := cacheLogic.RebuildAdminInfo(uid, tokenString); rebuildErr != nil {
-		return nil, errInvalidToken
-	}
+	identity.UserName = session.UserName
+	identity.Session = session
 	return identity, nil
 }
 
-// verifyAdminTokenFromRequest 从 HTTP 请求中提取并校验管理员 token。
-func verifyAdminTokenFromRequest(ctx context.Context, svcCtx *svc.ServiceContext, r *http.Request, requireSession bool) (*adminTokenIdentity, error) {
+// verifyAdminTokenFromRequestForRoute 仅为 auth.refresh 和 auth.logout 开启上一枚刷新 token 的短暂宽限。
+func verifyAdminTokenFromRequestForRoute(ctx context.Context, svcCtx *svc.ServiceContext, r *http.Request, requireSession bool, alias RouteAlias) (*adminTokenIdentity, error) {
 	tokenString, err := bearerToken(r.Header.Get("Authorization"))
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	return verifyAdminToken(ctx, svcCtx, tokenString, requireSession)
+	allowSessionGrace := alias == routealias.AuthRefresh || alias == routealias.AuthLogout
+	return verifyAdminTokenWithSessionGrace(ctx, svcCtx, tokenString, requireSession, allowSessionGrace)
 }
 
 // verifyAdminTokenFromDocsRequest 校验文档站请求 token，允许通过受保护接口写入的文档 cookie 访问静态资源。

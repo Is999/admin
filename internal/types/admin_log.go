@@ -79,8 +79,8 @@ type AdminLogItem struct {
 	Data         string `json:"data"`         // 请求/响应数据（JSON）
 	IP           string `json:"ip"`           // 客户端 IP
 	Ipaddr       string `json:"ipaddr"`       // IP 归属地
-	TraceID      string `json:"traceId"`      // Trace ID
-	SpanID       string `json:"spanId"`       // Span ID
+	TraceID      string `json:"traceId"`      // 链路追踪 ID
+	SpanID       string `json:"spanId"`       // 链路跨度 ID
 	HTTPStatus   int    `json:"httpStatus"`   // HTTP 状态码
 	BizCode      int    `json:"bizCode"`      // 业务状态码
 	LatencyMS    int64  `json:"latencyMs"`    // 请求耗时

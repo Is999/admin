@@ -1,6 +1,8 @@
 package routealias
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,77 +11,109 @@ import (
 	"testing"
 )
 
-// TestDocsAliasForPath 验证文档站优先映射到单篇文档权限。
-func TestDocsAliasForPath(t *testing.T) {
+// TestDocResourceKeyRoundTrip 验证文档权限资源键可无歧义编码和解析。
+func TestDocResourceKeyRoundTrip(t *testing.T) {
+	resource := DocResource{Site: DocSiteAdmin, Path: "接口文档/后台系统/角色管理接口.md"}
+	key := resource.Key()
+	parsed, ok := ParseDocResourceKey(key)
+	if !ok || parsed != resource {
+		t.Fatalf("ParseDocResourceKey(%q) = %v, %v; want %v, true", key, parsed, ok, resource)
+	}
+	for _, invalid := range []string{"", "unknown\x00path.md", DocSiteAdmin + "\x00"} {
+		if _, ok := ParseDocResourceKey(invalid); ok {
+			t.Fatalf("ParseDocResourceKey(%q) ok = true, want false", invalid)
+		}
+	}
+}
+
+// TestDocsEntryAliasForPath 验证后台与 API 文档分别使用自己的入口路由权限。
+func TestDocsEntryAliasForPath(t *testing.T) {
 	cases := []struct {
 		name string // name 表示测试场景名称。
 		path string // path 表示请求路径。
-		want Alias  // want 表示期望结果。
+		want Alias  // want 表示期望入口权限。
 	}{
-		{name: "首页", path: "/api/docs", want: DocsIndex},
-		{name: "站点公共资源", path: "/api/docs/_sidebar.md", want: DocsIndex},
-		{name: "文档首页", path: "/api/docs/文档首页.md", want: docsFileAlias("文档首页.md")},
-		{name: "运维角色文档", path: "/api/docs/角色文档/运维/部署发布指南.md", want: docsFileAlias("角色文档/运维/部署发布指南.md")},
-		{name: "后端开发文档", path: "/api/docs/角色文档/后端开发/AI开发规范.md", want: docsFileAlias("角色文档/后端开发/AI开发规范.md")},
-		{name: "前端测试文档", path: "/api/docs/角色文档/前端与测试/接口联调与验收说明.md", want: docsFileAlias("角色文档/前端与测试/接口联调与验收说明.md")},
-		{name: "任务系统功能文档", path: "/api/docs/功能模块/任务系统/任务系统首页.md", want: docsFileAlias("功能模块/任务系统/任务系统首页.md")},
-		{name: "用户标签功能文档", path: "/api/docs/功能模块/用户标签/用户标签首页.md", want: docsFileAlias("功能模块/用户标签/用户标签首页.md")},
-		{name: "接口文档首页", path: "/api/docs/接口文档/接口文档首页.md", want: docsFileAlias("接口文档/接口文档首页.md")},
-		{name: "后台系统接口文档", path: "/api/docs/接口文档/后台系统/权限管理接口.md", want: docsFileAlias("接口文档/后台系统/权限管理接口.md")},
-		{name: "任务系统接口文档", path: "/api/docs/接口文档/任务系统/任务列表接口.md", want: docsFileAlias("接口文档/任务系统/任务列表接口.md")},
-		{name: "用户标签接口文档", path: "/api/docs/接口文档/用户标签/用户标签接口.md", want: docsFileAlias("接口文档/用户标签/用户标签接口.md")},
-		{name: "前台 API 文档入口", path: "/api/docs/api", want: DocsAPIServiceIndex},
-		{name: "前台 API 侧边栏", path: "/api/docs/api/_sidebar.md", want: DocsAPIServiceIndex},
-		{name: "前台API接口规范", path: "/api/docs/api/接口文档/接口文档统一规范.md", want: docsFileAlias("api/接口文档/接口文档统一规范.md")},
-		{name: "前台API接口文档", path: "/api/docs/api/接口文档/前台系统/认证接口.md", want: docsFileAlias("api/接口文档/前台系统/认证接口.md")},
-		{name: "前台API角色文档", path: "/api/docs/api/角色文档/后端开发/AI开发规范.md", want: docsFileAlias("api/角色文档/后端开发/AI开发规范.md")},
-		{name: "编码路径", path: "/api/docs/%E6%8E%A5%E5%8F%A3%E6%96%87%E6%A1%A3/%E5%90%8E%E5%8F%B0%E7%B3%BB%E7%BB%9F/%E6%9D%83%E9%99%90%E7%AE%A1%E7%90%86%E6%8E%A5%E5%8F%A3.md", want: docsFileAlias("接口文档/后台系统/权限管理接口.md")},
+		{name: "后台首页", path: "/api/docs", want: DocsIndex},
+		{name: "后台公共资源", path: "/api/docs/_sidebar.md", want: DocsIndex},
+		{name: "后台正文", path: "/api/docs/文档首页.md", want: DocsIndex},
+		{name: "共享静态资源", path: "/api/docs/vendor/docsify/docsify.min.js", want: Ignore},
+		{name: "API 入口", path: "/api/docs/api", want: DocsAPIServiceIndex},
+		{name: "API 公共资源", path: "/api/docs/api/_sidebar.md", want: DocsAPIServiceIndex},
+		{name: "API 正文", path: "/api/docs/api/接口文档/前台系统/认证接口.md", want: DocsAPIServiceIndex},
 		{name: "路径穿越回退", path: "/api/docs/../secret.md", want: DocsIndex},
 	}
 	for _, tc := range cases {
-		if got := DocsAliasForPath(tc.path); got != tc.want {
-			t.Fatalf("%s DocsAliasForPath(%q) = %q, want %q", tc.name, tc.path, got, tc.want)
+		if got := DocsEntryAliasForPath(tc.path); got != tc.want {
+			t.Fatalf("%s DocsEntryAliasForPath(%q) = %q, want %q", tc.name, tc.path, got, tc.want)
 		}
 	}
 }
 
-// TestDocsCandidateAliases 验证单篇文档只匹配自身文件权限。
-func TestDocsCandidateAliases(t *testing.T) {
+// TestDocsResourceForPath 验证只有清单内 Markdown 才映射为精确文档资源。
+func TestDocsResourceForPath(t *testing.T) {
 	cases := []struct {
-		name  string  // name 表示测试场景名称。
-		alias Alias   // alias 表示文档权限别名。
-		want  []Alias // want 表示候选权限别名。
+		name string      // name 表示测试场景名称。
+		path string      // path 表示请求路径。
+		want DocResource // want 表示期望文档资源。
+		ok   bool        // ok 表示是否应该命中资源。
 	}{
-		{name: "后台具体接口文档", alias: docsFileAlias("接口文档/后台系统/权限管理接口.md"), want: []Alias{docsFileAlias("接口文档/后台系统/权限管理接口.md")}},
-		{name: "前台 API 具体接口文档", alias: docsFileAlias("api/接口文档/前台系统/认证接口.md"), want: []Alias{docsFileAlias("api/接口文档/前台系统/认证接口.md")}},
-		{name: "目录权限", alias: DocsRoleBackend, want: []Alias{DocsRoleBackend}},
+		{name: "后台文档", path: "/api/docs/角色文档/后端开发/AI开发规范.md", want: DocResource{Site: DocSiteAdmin, Path: "角色文档/后端开发/AI开发规范.md"}, ok: true},
+		{name: "API 文档", path: "/api/docs/api/接口文档/前台系统/认证接口.md", want: DocResource{Site: DocSiteAPI, Path: "接口文档/前台系统/认证接口.md"}, ok: true},
+		{name: "编码路径", path: "/api/docs/%E6%8E%A5%E5%8F%A3%E6%96%87%E6%A1%A3/%E5%90%8E%E5%8F%B0%E7%B3%BB%E7%BB%9F/%E6%9D%83%E9%99%90%E7%AE%A1%E7%90%86%E6%8E%A5%E5%8F%A3.md", want: DocResource{Site: DocSiteAdmin, Path: "接口文档/后台系统/权限管理接口.md"}, ok: true},
+		{name: "公共资源", path: "/api/docs/_sidebar.md", ok: false},
+		{name: "未知正文", path: "/api/docs/不存在.md", ok: false},
+		{name: "编码路径穿越", path: "/api/docs/%2e%2e/文档首页.md", ok: false},
 	}
 	for _, tc := range cases {
-		got := DocsCandidateAliases(tc.alias)
-		if len(got) != len(tc.want) {
-			t.Fatalf("%s DocsCandidateAliases() len = %d, want %d, got=%v", tc.name, len(got), len(tc.want), got)
-		}
-		for index := range tc.want {
-			if got[index] != tc.want[index] {
-				t.Fatalf("%s DocsCandidateAliases()[%d] = %q, want %q", tc.name, index, got[index], tc.want[index])
-			}
+		got, ok := DocsResourceForPath(tc.path)
+		if ok != tc.ok || got != tc.want {
+			t.Fatalf("%s DocsResourceForPath(%q) = (%+v, %t), want (%+v, %t)", tc.name, tc.path, got, ok, tc.want, tc.ok)
 		}
 	}
 }
 
-// TestDocsContentPathsMatchWorkspace 确保当前 Markdown 文档都纳入单篇文档权限清单。
-func TestDocsContentPathsMatchWorkspace(t *testing.T) {
-	adminRoot := routealiasTestAdminRoot(t)
-	got := DocsContentPaths()
-	sort.Strings(got)
-	want := append(
-		workspaceDocsContentPaths(t, filepath.Join(adminRoot, "docs/site"), ""),
-		workspaceDocsContentPaths(t, filepath.Join(adminRoot, "../api/docs/site"), "api/")...,
-	)
-	sort.Strings(want)
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("DocsContentPaths() mismatch\n got=%v\nwant=%v", got, want)
+// TestNormalizeDocsRequestPathRejectsDoubleEncodedTraversal 验证 HTTP 首次解码后的二次编码点段会被拒绝。
+func TestNormalizeDocsRequestPathRejectsDoubleEncodedTraversal(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/docs/%252e%252e/文档首页.md", nil)
+	if _, ok := NormalizeDocsRequestPath(req.URL.Path); ok {
+		t.Fatalf("NormalizeDocsRequestPath(%q) ok = true, want false", req.URL.Path)
 	}
+	if !DocsPathNeedsResourcePermission(req.URL.Path) {
+		t.Fatalf("DocsPathNeedsResourcePermission(%q) = false, want fail-closed true", req.URL.Path)
+	}
+}
+
+// TestDocsResourceForAssetPath 验证聚合导航能够按站点基路径解析文档资源。
+func TestDocsResourceForAssetPath(t *testing.T) {
+	got, ok := DocsResourceForAssetPath("api", "接口文档/接口文档统一规范.md")
+	want := DocResource{Site: DocSiteAPI, Path: "接口文档/接口文档统一规范.md"}
+	if !ok || got != want {
+		t.Fatalf("DocsResourceForAssetPath() = (%+v, %t), want (%+v, true)", got, ok, want)
+	}
+}
+
+// TestDocsResourcesMatchWorkspace 确保两个仓库的 Markdown 文档都纳入精确权限清单。
+func TestDocsResourcesMatchWorkspace(t *testing.T) {
+	adminRoot := routealiasTestAdminRoot(t)
+	apiRoot := routealiasTestSiblingRoot(t, adminRoot, "api")
+	got := docResourceKeys(DocsResources())
+	want := docResourceKeys(append(
+		workspaceDocsResources(t, filepath.Join(adminRoot, "docs/site"), DocSiteAdmin),
+		workspaceDocsResources(t, filepath.Join(apiRoot, "docs/site"), DocSiteAPI)...,
+	))
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("DocsResources() mismatch\n got=%v\nwant=%v", got, want)
+	}
+}
+
+// docResourceKeys 把文档资源转换为可稳定比较的排序键。
+func docResourceKeys(resources []DocResource) []string {
+	keys := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		keys = append(keys, resource.Site+"\x00"+resource.Path)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // routealiasTestAdminRoot 返回 admin 仓库根目录，避免测试依赖执行目录。
@@ -92,21 +126,35 @@ func routealiasTestAdminRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(currentFile), "../.."))
 }
 
-// workspaceDocsContentPaths 返回指定文档站目录下需要授权的 Markdown 文档。
-func workspaceDocsContentPaths(t *testing.T, root string, prefix string) []string {
+// routealiasTestSiblingRoot 从普通克隆或 Git worktree 中定位工作区兄弟仓库。
+func routealiasTestSiblingRoot(t *testing.T, start string, project string) string {
+	t.Helper()
+	dir := filepath.Clean(start)
+	for {
+		projectDir := filepath.Join(dir, project)
+		if info, err := os.Stat(projectDir); err == nil && info.IsDir() {
+			return projectDir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("workspace sibling project not found: %s", project)
+		}
+		dir = parent
+	}
+}
+
+// workspaceDocsResources 返回指定文档站目录下需要授权的 Markdown 文档。
+func workspaceDocsResources(t *testing.T, root string, site string) []DocResource {
 	t.Helper()
 	if _, err := os.Stat(root); err != nil {
 		t.Fatalf("docs root %s stat error: %v", root, err)
 	}
-	paths := make([]string, 0)
+	resources := make([]DocResource, 0)
 	err := filepath.WalkDir(root, func(itemPath string, item os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if item.IsDir() {
-			return nil
-		}
-		if !strings.EqualFold(filepath.Ext(item.Name()), ".md") {
+		if item.IsDir() || !strings.EqualFold(filepath.Ext(item.Name()), ".md") {
 			return nil
 		}
 		switch item.Name() {
@@ -117,11 +165,11 @@ func workspaceDocsContentPaths(t *testing.T, root string, prefix string) []strin
 		if err != nil {
 			return err
 		}
-		paths = append(paths, prefix+filepath.ToSlash(relativePath))
+		resources = append(resources, DocResource{Site: site, Path: filepath.ToSlash(relativePath)})
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("WalkDir(%s) error = %v", root, err)
 	}
-	return paths
+	return resources
 }

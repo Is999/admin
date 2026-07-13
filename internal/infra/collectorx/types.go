@@ -25,10 +25,10 @@ const (
 // Event 表示业务投递到通用收集器的一条结构化数据。
 // 注意：Payload 只保存业务数据，不允许塞入 SQL 语句；具体如何聚合、累加、落库由对应 bizType 的 Processor 决定。
 type Event struct {
-	EventID      string          `json:"eventId"`      // 事件唯一 ID；任务开启幂等时在同 BizType 内作为去重键
-	BizType      string          `json:"bizType"`      // 业务类型，用于路由到对应批量处理器
-	PartitionKey string          `json:"partitionKey"` // 分区键/聚合键，用于业务方控制冲突域或聚合维度
-	Payload      json.RawMessage `json:"payload"`      // 业务数据负载，必须是结构化 JSON 数据
+	EventID      string          `json:"eventId"`      // 事件唯一 ID，最多 64 字节
+	BizType      string          `json:"bizType"`      // 业务类型，最多 100 字节
+	PartitionKey string          `json:"partitionKey"` // 分区键/聚合键，最多 128 字节
+	Payload      json.RawMessage `json:"payload"`      // 有效 UTF-8 JSON 负载，最多 60 KiB
 }
 
 // RuntimeAlert 描述 Collector 后台投递、消费、失败账本和死信链路中的运行异常。
@@ -60,7 +60,9 @@ type ProcessResult struct {
 }
 
 // Processor 定义业务批量消费接口。
-// Processor 决定单批数据的落库、聚合、upsert 或转投递方式；任务开启幂等时 Collector 会按 BizType+EventID 去重。
+// Processor 决定单批数据的落库、聚合、upsert 或转投递方式；Collector 的 Redis token 只能减少重复执行。
+// 生产持久化必须使用 EventID 对应的唯一业务键或幂等 upsert，不能把 Redis 状态视为 exactly-once 保证。
+// 实现必须把 context 传给所有下游调用并及时响应取消；框架会同步等待返回，不会遗留孤儿执行。
 type Processor interface {
 	ProcessBatch(context.Context, []Event) ([]ProcessResult, error)
 }

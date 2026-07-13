@@ -4,27 +4,29 @@ package types
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"admin/internal/jobs/usertag/options"
+	tasklimits "admin/internal/task/limits"
 
 	"github.com/Is999/go-utils/errors"
 )
 
 // TriggerUserTagWorkflowReq 触发用户标签计算工作流请求。
 type TriggerUserTagWorkflowReq struct {
-	Mode             string  `json:"mode"`                      // full/delta/targeted/recalculate
-	TagTypes         []int   `json:"tagTypes,optional"`         // 指定标签类型
-	UIDs             []int64 `json:"uids,optional"`             // 指定用户 UID
-	Queue            string  `json:"queue,optional"`            // 指定任务队列
-	ShardTotal       int     `json:"shardTotal,optional"`       // 分片数
-	BatchSize        int     `json:"batchSize,optional"`        // 游标批次大小
-	WorkerCount      int     `json:"workerCount,optional"`      // 节点内部 worker 数
-	DryRun           bool    `json:"dryRun,optional"`           // 只计算不落库
-	UniqueKey        string  `json:"uniqueKey,optional"`        // 去重键
-	UniqueTTLSeconds *int    `json:"uniqueTTLSeconds,optional"` // 去重 TTL 秒
-	Retry            *int    `json:"retry,optional"`            // 覆盖默认重试次数
-	TimeoutSeconds   *int    `json:"timeoutSeconds,optional"`   // 触发任务超时时间
+	Mode             string   `json:"mode"`                      // 执行模式：full/delta/targeted/recalculate
+	TagTypes         []int    `json:"tagTypes,optional"`         // 指定标签类型
+	UIDs             []string `json:"uids,optional"`             // 指定用户 UID，JSON 使用十进制字符串避免前端精度丢失
+	Queue            string   `json:"queue,optional"`            // 指定任务队列
+	ShardTotal       int      `json:"shardTotal,optional"`       // 分片数
+	BatchSize        int      `json:"batchSize,optional"`        // 游标批次大小
+	WorkerCount      int      `json:"workerCount,optional"`      // 节点内部 worker 数
+	DryRun           bool     `json:"dryRun,optional"`           // 只计算不落库
+	UniqueKey        string   `json:"uniqueKey,optional"`        // 去重键
+	UniqueTTLSeconds *int     `json:"uniqueTTLSeconds,optional"` // 去重 TTL 秒
+	Retry            *int     `json:"retry,optional"`            // 覆盖默认重试次数
+	TimeoutSeconds   *int     `json:"timeoutSeconds,optional"`   // 触发任务超时时间
 }
 
 // ReleaseUserTagWorkflowLeaseReq 手动释放用户标签工作流互斥租约请求。
@@ -76,8 +78,17 @@ func (r *RecalculateUserTagReq) Validate() error {
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")
 	}
+	if r.Retry != nil && *r.Retry > tasklimits.MaxRetry {
+		return errors.Errorf("retry 不能超过 %d", tasklimits.MaxRetry)
+	}
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeout_seconds 必须大于 0")
+	}
+	if r.TimeoutSeconds != nil && *r.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
+		return errors.Errorf("timeout_seconds 不能超过 %d", tasklimits.MaxTimeoutSeconds)
+	}
+	if !r.DryRun {
+		return errors.Errorf("用户标签业务计算阶段尚未实现，仅允许 dry_run 骨架验证")
 	}
 	return nil
 }
@@ -158,7 +169,11 @@ func (r *TriggerUserTagWorkflowReq) Validate() error {
 		r.Mode = "full"
 	}
 	r.TagTypes = normalizeUserTagTypes(r.TagTypes)
-	r.UIDs = normalizeUserTagUIDs(r.UIDs)
+	var err error
+	r.UIDs, err = normalizeUserTagUIDs(r.UIDs)
+	if err != nil {
+		return errors.Tag(err)
+	}
 	switch r.Mode {
 	case "full", "delta", "targeted", "recalculate":
 	default:
@@ -202,29 +217,44 @@ func (r *TriggerUserTagWorkflowReq) Validate() error {
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")
 	}
+	if r.Retry != nil && *r.Retry > tasklimits.MaxRetry {
+		return errors.Errorf("retry 不能超过 %d", tasklimits.MaxRetry)
+	}
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")
+	}
+	if r.TimeoutSeconds != nil && *r.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
+		return errors.Errorf("timeoutSeconds 不能超过 %d", tasklimits.MaxTimeoutSeconds)
+	}
+	if !r.DryRun {
+		return errors.Errorf("用户标签业务计算阶段尚未实现，仅允许 dryRun 骨架验证")
 	}
 	return nil
 }
 
-// normalizeUserTagUIDs 对 UID 去重、过滤非法值并保持升序，避免重复目标放大计算量。
-func normalizeUserTagUIDs(items []int64) []int64 {
+// normalizeUserTagUIDs 校验十进制字符串 UID，并按数值去重升序，避免 JavaScript 大整数精度丢失。
+func normalizeUserTagUIDs(items []string) ([]string, error) {
 	if len(items) == 0 {
-		return nil
+		return nil, nil
 	}
 	seen := make(map[int64]struct{}, len(items))
-	out := make([]int64, 0, len(items))
+	values := make([]int64, 0, len(items)) // values 保存已校验 UID，排序后再转回规范十进制字符串
 	for _, item := range items {
-		if item <= 0 {
+		item = strings.TrimSpace(item)
+		uid, err := strconv.ParseInt(item, 10, 64)
+		if err != nil || uid <= 0 {
+			return nil, errors.Errorf("uid 必须为正 int64 十进制字符串: %s", item)
+		}
+		if _, ok := seen[uid]; ok {
 			continue
 		}
-		if _, ok := seen[item]; ok {
-			continue
-		}
-		seen[item] = struct{}{}
-		out = append(out, item)
+		seen[uid] = struct{}{}
+		values = append(values, uid)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	out := make([]string, 0, len(values))
+	for _, uid := range values {
+		out = append(out, strconv.FormatInt(uid, 10))
+	}
+	return out, nil
 }

@@ -153,19 +153,13 @@ type ObjectStorage interface {
 // ObjectStorageFactory 定义对象存储工厂函数。
 type ObjectStorageFactory func(config.FileStorageConfig) (ObjectStorage, error)
 
-// VirusScanner 定义病毒扫描扩展点；默认实现为空操作。
+// VirusScanner 定义上传文件病毒扫描能力。
 type VirusScanner interface {
+	// Ready 检查扫描服务是否能够完成请求。
+	Ready(ctx context.Context) error
 	// ScanFile 对指定文件执行病毒扫描；命中风险时返回错误阻断后续流程。
-	ScanFile(ctx context.Context, filePath string, bizType string) error
+	ScanFile(ctx context.Context, filePath string) error
 }
-
-// VirusScannerFactory 定义病毒扫描器工厂函数。
-type VirusScannerFactory func() VirusScanner
-
-const (
-	// defaultVirusScannerName 表示默认病毒扫描器名称。
-	defaultVirusScannerName = "noop"
-)
 
 // objectStorageFactories 保存对象存储类型到工厂函数的注册表。
 var objectStorageFactories = struct {
@@ -178,18 +172,6 @@ var objectStorageFactories = struct {
 		},
 		TypeS3: func(cfg config.FileStorageConfig) (ObjectStorage, error) {
 			return NewS3Storage(cfg)
-		},
-	},
-}
-
-// virusScannerFactories 保存病毒扫描器名称到工厂函数的注册表。
-var virusScannerFactories = struct {
-	mu        sync.RWMutex                   // 保护 factories 注册表
-	factories map[string]VirusScannerFactory // 扫描器名称到工厂函数的映射
-}{
-	factories: map[string]VirusScannerFactory{
-		defaultVirusScannerName: func() VirusScanner {
-			return noopVirusScanner{}
 		},
 	},
 }
@@ -237,52 +219,6 @@ func NewObjectStorage(cfg config.FileStorageConfig) (ObjectStorage, error) {
 		return nil, errors.Errorf("不支持的文件存储类型: %s", storageType)
 	}
 	return factory(cfg)
-}
-
-// RegisterVirusScanner 注册病毒扫描器实现，便于接入 ClamAV 或云查毒。
-func RegisterVirusScanner(name string, factory VirusScannerFactory) error {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return errors.Errorf("病毒扫描器名称不能为空")
-	}
-	if factory == nil {
-		return errors.Errorf("病毒扫描器工厂不能为空: %s", name)
-	}
-	virusScannerFactories.mu.Lock()
-	defer virusScannerFactories.mu.Unlock()
-	if _, exists := virusScannerFactories.factories[name]; exists {
-		return errors.Errorf("病毒扫描器已注册: %s", name)
-	}
-	virusScannerFactories.factories[name] = factory
-	return nil
-}
-
-// NewVirusScanner 返回当前启用的病毒扫描器；默认使用空实现。
-func NewVirusScanner() VirusScanner {
-	scanner, err := NewNamedVirusScanner(defaultVirusScannerName)
-	if err != nil {
-		return noopVirusScanner{}
-	}
-	return scanner
-}
-
-// NewNamedVirusScanner 按名称创建病毒扫描器。
-func NewNamedVirusScanner(name string) (VirusScanner, error) {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		name = defaultVirusScannerName
-	}
-	virusScannerFactories.mu.RLock()
-	factory := virusScannerFactories.factories[name]
-	virusScannerFactories.mu.RUnlock()
-	if factory == nil {
-		return nil, errors.Errorf("不支持的病毒扫描器: %s", name)
-	}
-	scanner := factory()
-	if scanner == nil {
-		return nil, errors.Errorf("病毒扫描器初始化为空: %s", name)
-	}
-	return scanner, nil
 }
 
 // NormalizeUploadMode 返回归一化后的上传模式；当本地存储误配直传时回退为服务端中转。
@@ -344,16 +280,19 @@ func normalizeVisibility(visibility string) string {
 
 // buildObjectKey 生成统一对象 key，包含可选路径前缀、业务段、日期分区和清洗后的文件名。
 func buildObjectKey(pathPrefix string, bizType string, storedFileName string) string {
+	objectPrefix := ObjectKeyPrefix(pathPrefix, bizType)
+	datePath := time.Now().Format(objectDatePathLayout)
+	return filepath.ToSlash(filepath.Join(objectPrefix, datePath, sanitizeFileName(storedFileName)))
+}
+
+// ObjectKeyPrefix 返回与统一存储写入规则一致的对象目录前缀。
+func ObjectKeyPrefix(pathPrefix string, bizType string) string {
 	normalizedPathPrefix := sanitizeObjectSegment(strings.TrimSpace(pathPrefix))
 	normalizedBizType := sanitizeObjectSegment(strings.TrimSpace(bizType))
 	if normalizedBizType == "" {
 		normalizedBizType = defaultObjectBizType
 	}
-	datePath := time.Now().Format(objectDatePathLayout)
-	if normalizedPathPrefix == "" {
-		return filepath.ToSlash(filepath.Join(normalizedBizType, datePath, sanitizeFileName(storedFileName)))
-	}
-	return filepath.ToSlash(filepath.Join(normalizedPathPrefix, normalizedBizType, datePath, sanitizeFileName(storedFileName)))
+	return filepath.ToSlash(filepath.Join(normalizedPathPrefix, normalizedBizType))
 }
 
 // sanitizeObjectSegment 清洗对象 key 的业务路径段，只保留安全字符。
@@ -635,13 +574,5 @@ func copyAcrossDevices(srcPath string, dstPath string) error {
 		return errors.Wrap(err, "提交跨设备目标文件失败")
 	}
 	_ = os.Remove(srcPath)
-	return nil
-}
-
-// noopVirusScanner 表示不执行实际扫描的默认病毒扫描器。
-type noopVirusScanner struct{}
-
-// ScanFile 默认不执行任何病毒扫描；后续可替换为 ClamAV 或云查毒实现。
-func (noopVirusScanner) ScanFile(context.Context, string, string) error {
 	return nil
 }

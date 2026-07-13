@@ -1,0 +1,23 @@
+-- 源表更新保护：清点并升级全部写入方后、开始回填前创建；允许旧错桶行做无关字段更新，但禁止继续制造错桶值。
+-- 表名、主键列、UID列和触发器名必须来自发布白名单；先查 information_schema.TRIGGERS 避免重名。
+-- lock_wait_timeout 让元数据锁无法快速取得时直接失败，禁止排队阻塞生产写入。
+SET SESSION lock_wait_timeout = 5;
+
+DELIMITER //
+CREATE TRIGGER `__UPDATE_TRIGGER__`
+BEFORE UPDATE ON `__UID_TABLE__`
+FOR EACH ROW
+BEGIN
+  IF NOT (NEW.`__PRIMARY_KEY__` <=> OLD.`__PRIMARY_KEY__`) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'backfill cursor primary key is immutable';
+  END IF;
+  IF (NOT (NEW.`__UID_COLUMN__` <=> OLD.`__UID_COLUMN__`)
+      OR NOT (NEW.`shard_no` <=> OLD.`shard_no`))
+     AND (NEW.`shard_no` IS NULL
+       OR NEW.`__UID_COLUMN__` IS NULL
+       OR NEW.`__UID_COLUMN__` <= 0
+       OR NEW.`shard_no` <> MOD(CRC32(CAST(NEW.`__UID_COLUMN__` AS CHAR)), 1024)) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'shard_no does not match fixed user bucket';
+  END IF;
+END//
+DELIMITER ;

@@ -44,15 +44,15 @@ func AddRoleHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionHandler[types.CreateRoleReq](shared.RoleAdd,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.CreateRoleReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := rbaclogic.NewAdminRoleLogic(r, svcCtx)
-			return logicObj, logicObj.Create(req.ToSaveRoleReq())
+			return logicObj, logicObj.Create(req)
 		},
 	)(sCtx)
 }
 
 // UpdateRoleHandler 编辑角色。
 func UpdateRoleHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SaveRoleReq](shared.RoleUpdate,
-		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SaveRoleReq) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionHandler[types.UpdateRoleReq](shared.RoleUpdate,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.UpdateRoleReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := rbaclogic.NewAdminRoleLogic(r, svcCtx)
 			return logicObj, logicObj.Update(req)
 		},
@@ -81,8 +81,8 @@ func UpdateRoleStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // GetRolePermissionHandler 查询角色权限树。
 func GetRolePermissionHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.RolePermissionReq](shared.RolePermissionTree,
-		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.RolePermissionReq) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionHandler[types.IDPathReq](shared.RolePermissionTree,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.IDPathReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := rbaclogic.NewAdminRoleLogic(r, svcCtx)
 			return logicObj, logicObj.PermissionTree(req)
 		},
@@ -130,15 +130,15 @@ func AddPermissionHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionHandler[types.CreatePermissionReq](shared.PermissionAdd,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.CreatePermissionReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := rbaclogic.NewAdminPermissionLogic(r, svcCtx)
-			return logicObj, logicObj.Create(req.ToSavePermissionReq())
+			return logicObj, logicObj.Create(req)
 		},
 	)(sCtx)
 }
 
 // UpdatePermissionHandler 编辑权限。
 func UpdatePermissionHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.SavePermissionReq](shared.PermissionUpdate,
-		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.SavePermissionReq) (shared.LogicObj, *types.BizResult) {
+	return shared.ActionHandler[types.UpdatePermissionReq](shared.PermissionUpdate,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.UpdatePermissionReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := rbaclogic.NewAdminPermissionLogic(r, svcCtx)
 			return logicObj, logicObj.Update(req)
 		},
@@ -160,6 +160,26 @@ func UpdatePermissionStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionHandler[types.PermissionStatusReq](shared.PermissionStatus,
 		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.PermissionStatusReq) (shared.LogicObj, *types.BizResult) {
 			logicObj := rbaclogic.NewAdminPermissionLogic(r, svcCtx)
+			return logicObj, logicObj.UpdateStatus(req)
+		},
+	)(sCtx)
+}
+
+// ListDocPermissionHandler 查询文档权限列表。
+func ListDocPermissionHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.DocPermissionListReq](shared.DocPermissionList,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.DocPermissionListReq) (shared.LogicObj, *types.BizResult) {
+			logicObj := rbaclogic.NewAdminDocPermissionLogic(r, svcCtx)
+			return logicObj, logicObj.List(req)
+		},
+	)(sCtx)
+}
+
+// UpdateDocPermissionStatusHandler 修改文档权限状态。
+func UpdateDocPermissionStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.DocPermissionStatusReq](shared.DocPermissionStatus,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.DocPermissionStatusReq) (shared.LogicObj, *types.BizResult) {
+			logicObj := rbaclogic.NewAdminDocPermissionLogic(r, svcCtx)
 			return logicObj, logicObj.UpdateStatus(req)
 		},
 	)(sCtx)

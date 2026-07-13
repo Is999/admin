@@ -1,0 +1,8 @@
+-- 代码资产：读取待回填表的存储引擎。
+-- SQL 方言：MySQL 8.0 information_schema。
+-- 调用方：cmd/shardbackfill.validateTableSchema。
+-- 参数来源：表名通过预编译参数传入。
+-- 安全边界：只读单表元数据，不扫描业务数据。
+SELECT `ENGINE`
+FROM `information_schema`.`TABLES`
+WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = ?

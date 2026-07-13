@@ -2,7 +2,12 @@
 
 package types
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+
+	tasklimits "admin/internal/task/limits"
+)
 
 // TestRecalculateUserTagReqValidate 验证对应场景。
 func TestRecalculateUserTagReqValidate(t *testing.T) {
@@ -36,6 +41,23 @@ func TestRecalculateUserTagReqValidate(t *testing.T) {
 	}
 }
 
+// TestUserTagReqValidateRejectsResourceOverridesAboveHardLimits 校验两个用户标签入口都继承任务重试和超时硬上限。
+func TestUserTagReqValidateRejectsResourceOverridesAboveHardLimits(t *testing.T) {
+	retry := tasklimits.MaxRetry + 1
+	timeout := tasklimits.MaxTimeoutSeconds + 1
+	tests := []interface{ Validate() error }{
+		&TriggerUserTagWorkflowReq{Mode: "full", DryRun: true, Retry: &retry},
+		&TriggerUserTagWorkflowReq{Mode: "full", DryRun: true, TimeoutSeconds: &timeout},
+		&RecalculateUserTagReq{TagTypes: []int{30}, DryRun: true, Retry: &retry},
+		&RecalculateUserTagReq{TagTypes: []int{30}, DryRun: true, TimeoutSeconds: &timeout},
+	}
+	for index, req := range tests {
+		if err := req.Validate(); err == nil {
+			t.Fatalf("场景 %d 期望超过任务资源硬上限时返回错误", index)
+		}
+	}
+}
+
 // TestRecalculateUserTagReqValidateRequiresTagTypes 验证对应场景。
 func TestRecalculateUserTagReqValidateRequiresTagTypes(t *testing.T) {
 	req := &RecalculateUserTagReq{}
@@ -57,15 +79,62 @@ func TestUserTagReqValidateRejectsNegativeRetry(t *testing.T) {
 	}
 }
 
+// TestUserTagReqValidateRejectsProductionRun 验证骨架接口不会创建注定失败或覆盖空结果的正式任务。
+func TestUserTagReqValidateRejectsProductionRun(t *testing.T) {
+	triggerReq := &TriggerUserTagWorkflowReq{Mode: "delta"}
+	if err := triggerReq.Validate(); err == nil {
+		t.Fatal("期望触发工作流拒绝非 dryRun 请求")
+	}
+	recalculateReq := &RecalculateUserTagReq{TagTypes: []int{30}}
+	if err := recalculateReq.Validate(); err == nil {
+		t.Fatal("期望标签重算拒绝非 dry_run 请求")
+	}
+}
+
 // TestTriggerUserTagWorkflowReqFullRejectsPartialTargets 验证 full 不能被误用成局部 UID 或指定标签补算。
 func TestTriggerUserTagWorkflowReqFullRejectsPartialTargets(t *testing.T) {
 	req := &TriggerUserTagWorkflowReq{Mode: "full", TagTypes: []int{30}}
 	if err := req.Validate(); err == nil {
 		t.Fatal("期望 full 指定 tagTypes 被拒绝")
 	}
-	req = &TriggerUserTagWorkflowReq{Mode: "full", UIDs: []int64{10001}}
+	req = &TriggerUserTagWorkflowReq{Mode: "full", UIDs: []string{"10001"}}
 	if err := req.Validate(); err == nil {
 		t.Fatal("期望 full 指定 uids 被拒绝")
+	}
+}
+
+// TestTriggerUserTagWorkflowReqKeepsSnowflakeUIDPrecision 验证 UID 字符串不会经过 JavaScript number 契约丢失精度。
+func TestTriggerUserTagWorkflowReqKeepsSnowflakeUIDPrecision(t *testing.T) {
+	req := &TriggerUserTagWorkflowReq{
+		Mode:     "targeted",
+		TagTypes: []int{30},
+		UIDs:     []string{"9223372036854775807", "778919762005200896", "778919762005200896"},
+		DryRun:   true,
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	want := []string{"778919762005200896", "9223372036854775807"}
+	if len(req.UIDs) != len(want) || req.UIDs[0] != want[0] || req.UIDs[1] != want[1] {
+		t.Fatalf("UIDs = %#v, want %#v", req.UIDs, want)
+	}
+	invalid := &TriggerUserTagWorkflowReq{Mode: "targeted", TagTypes: []int{30}, UIDs: []string{"9007199254740993.0"}, DryRun: true}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("期望拒绝非十进制 int64 UID 字符串")
+	}
+}
+
+// TestTriggerUserTagWorkflowReqJSONRequiresStringUIDs 验证 HTTP 契约拒绝会在浏览器侧丢精度的数字 UID。
+func TestTriggerUserTagWorkflowReqJSONRequiresStringUIDs(t *testing.T) {
+	var req TriggerUserTagWorkflowReq
+	if err := json.Unmarshal([]byte(`{"mode":"targeted","tagTypes":[30],"uids":["778919762005200896"],"dryRun":true}`), &req); err != nil {
+		t.Fatalf("Unmarshal(string UID) error = %v", err)
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("Validate(string UID) error = %v", err)
+	}
+	if err := json.Unmarshal([]byte(`{"mode":"targeted","tagTypes":[30],"uids":[778919762005200896],"dryRun":true}`), &req); err == nil {
+		t.Fatal("期望 JSON 数字 UID 被 string[] 契约拒绝")
 	}
 }
 

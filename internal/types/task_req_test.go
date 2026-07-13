@@ -31,9 +31,9 @@ func TestListTaskItemsOverviewReqValidate_AggregatingNeedGroup(t *testing.T) {
 	}
 }
 
-// TestListTaskItemsOverviewReqParse_AllowEmptyQueue 确保 GET 参数解析阶段允许 queue 缺省。
-func TestListTaskItemsOverviewReqParse_AllowEmptyQueue(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/tasks/overview?includeAggregating=false&page=1&pageSize=20", nil)
+// TestListTaskItemsOverviewReqParse_AllowOptionalOverviewFields 确保 GET 参数解析阶段允许可选总览字段缺省。
+func TestListTaskItemsOverviewReqParse_AllowOptionalOverviewFields(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/tasks/overview?page=1&pageSize=20", nil)
 
 	var bindReq ListTaskItemsOverviewReq
 	if err := httpx.Parse(req, &bindReq); err != nil {
@@ -41,6 +41,9 @@ func TestListTaskItemsOverviewReqParse_AllowEmptyQueue(t *testing.T) {
 	}
 	if bindReq.Queue != "" {
 		t.Fatalf("期望未传 queue 时保持空字符串，实际为: %q", bindReq.Queue)
+	}
+	if bindReq.IncludeAggregating {
+		t.Fatal("期望未传 includeAggregating 时保持 false")
 	}
 }
 

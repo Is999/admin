@@ -1,0 +1,10 @@
+-- 代码资产：读取单个回填任务的持久化进度。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.loadCheckpoint。
+-- 参数来源：任务名通过预编译参数传入；锁定语句由受控布尔参数追加。
+-- 安全边界：任务名主键点查，批次事务使用 FOR UPDATE 保证游标单写。
+SELECT `job_name`, `table_name`, `primary_key`, `uid_column`, `insert_trigger`, `update_trigger`,
+       `range_start`, `range_end`, `cursor_value`, `verify_cursor`,
+       `updated_rows`, `verified_rows`, `mismatch_rows`, `status`
+FROM `shard_backfill_checkpoint`
+WHERE `job_name` = ?

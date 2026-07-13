@@ -43,10 +43,10 @@ func TestDefaultRouteSecurityManifestMatchesPolicies(t *testing.T) {
 	for _, item := range DefaultRouteSecurityManifest() {
 		manifestByAlias[item.Alias] = item
 		policy := security.PolicyByRoute(item.Alias)
-		if !reflect.DeepEqual(item.RequestSign, emptyToNil(policy.RequestSign)) ||
-			!reflect.DeepEqual(item.RequestCipher, emptyToNil(policy.RequestCipher)) ||
-			!reflect.DeepEqual(item.ResponseSign, emptyToNil(policy.ResponseSign)) ||
-			!reflect.DeepEqual(item.ResponseCipher, emptyToNil(policy.ResponseCipher)) {
+		if !reflect.DeepEqual(item.RequestSign, policy.RequestSign) ||
+			!reflect.DeepEqual(item.RequestCipher, policy.RequestCipher) ||
+			!reflect.DeepEqual(item.ResponseSign, policy.ResponseSign) ||
+			!reflect.DeepEqual(item.ResponseCipher, policy.ResponseCipher) {
 			t.Fatalf("manifest policy mismatch alias=%s item=%+v policy=%+v", item.Alias, item, policy)
 		}
 	}
@@ -77,7 +77,7 @@ func TestDefaultRouteSecurityManifestReturnsCopies(t *testing.T) {
 func TestDefaultRouteSecurityManifestMatchesSnapshots(t *testing.T) {
 	wantSnapshot := routeSecurityManifestSnapshotValue()
 	wantJSON := routeSecurityManifestSnapshotJSON(t, wantSnapshot)
-	for _, target := range routeSecurityManifestSnapshotTargets() {
+	for _, target := range routeSecurityManifestSnapshotTargets(t) {
 		if os.Getenv("UPDATE_ROUTE_SECURITY_MANIFEST") == "1" {
 			if err := os.MkdirAll(filepath.Dir(target.path), 0o755); err != nil {
 				t.Fatalf("create route security manifest dir %s: %v", target.path, err)
@@ -130,10 +130,11 @@ func routeMetaRegistered(metas []shared.RouteMeta, want shared.RouteMeta) bool {
 }
 
 // routeSecurityManifestSnapshotTargets 返回路由测试辅助数据。
-func routeSecurityManifestSnapshotTargets() []struct {
+func routeSecurityManifestSnapshotTargets(t *testing.T) []struct {
 	name string // name 表示测试场景名称。
 	path string // path 表示请求路径。
 } {
+	t.Helper()
 	return []struct {
 		name string // name 表示测试场景名称。
 		path string // path 表示请求路径。
@@ -144,8 +145,28 @@ func routeSecurityManifestSnapshotTargets() []struct {
 		},
 		{
 			name: "admin-vue runtime manifest",
-			path: filepath.Join("..", "..", "..", "admin-vue", "apps", "web-antd", "src", "utils", "security", "route-security-manifest.json"),
+			path: workspaceSiblingPath(t, "admin-vue", "apps", "web-antd", "src", "utils", "security", "route-security-manifest.json"),
 		},
+	}
+}
+
+// workspaceSiblingPath 从普通克隆或 Git worktree 中定位工作区兄弟项目。
+func workspaceSiblingPath(t *testing.T, project string, path ...string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	for {
+		projectDir := filepath.Join(dir, project)
+		if info, statErr := os.Stat(projectDir); statErr == nil && info.IsDir() {
+			return filepath.Join(append([]string{projectDir}, path...)...)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("workspace sibling project not found: %s", project)
+		}
+		dir = parent
 	}
 }
 
@@ -196,9 +217,9 @@ func routeSecurityManifestSnapshotItems(items []RouteSecurityManifestItem) []rou
 			Path:           item.Path,
 			Access:         item.Access,
 			Describe:       item.Describe,
-			RequestSign:    emptyToSlice(item.RequestSign),
+			RequestSign:    item.RequestSign,
 			RequestCipher:  emptyToSlice(item.RequestCipher),
-			ResponseSign:   emptyToSlice(item.ResponseSign),
+			ResponseSign:   item.ResponseSign,
 			ResponseCipher: emptyToSlice(item.ResponseCipher),
 		})
 	}
@@ -208,14 +229,6 @@ func routeSecurityManifestSnapshotItems(items []RouteSecurityManifestItem) []rou
 // routeKey 返回路由测试辅助数据。
 func routeKey(method string, path string) string {
 	return method + " " + path
-}
-
-// emptyToNil 表示测试辅助逻辑。
-func emptyToNil(fields []string) []string {
-	if len(fields) == 0 {
-		return nil
-	}
-	return fields
 }
 
 // emptyToSlice 表示测试辅助逻辑。

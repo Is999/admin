@@ -1,0 +1,7 @@
+-- 代码资产：写入 shardbackfill 真实 MySQL 集成测试数据。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：无动态参数，固定六行错误桶测试数据。
+-- 安全边界：只允许在 SHARD_BACKFILL_TEST_DSN 指向的隔离测试库执行。
+INSERT INTO `shard_backfill_case` (`id`, `uid`, `shard_no`)
+VALUES (1,1,0),(2,2,0),(3,3,0),(4,4,0),(5,5,0),(6,6,0)

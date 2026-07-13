@@ -67,7 +67,7 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
-			Path:        "/api/roles/permissions/tree/:id/:isPid", // 查询角色权限树。
+			Path:        "/api/roles/permissions/tree/:id", // 查询角色权限树。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.RolePermissionTree,
 			Description: shared.RolePermissionTree.Describe,
@@ -136,6 +136,22 @@ func RouteSpecs() []shared.RouteSpec {
 			Meta:        shared.PermissionDelete,
 			Description: shared.PermissionDelete.Describe,
 			Handler:     DeletePermissionHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/doc-permissions", // 查询文档权限列表。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.DocPermissionList,
+			Description: shared.DocPermissionList.Describe,
+			Handler:     ListDocPermissionHandler,
+		},
+		{
+			Method:      http.MethodPatch,
+			Path:        "/api/doc-permissions/status/:id", // 修改文档权限状态。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.DocPermissionStatus,
+			Description: shared.DocPermissionStatus.Describe,
+			Handler:     UpdateDocPermissionStatusHandler,
 		},
 	}
 }

@@ -38,18 +38,20 @@ func NewSecretKeyManageLogic(r *http.Request, svcCtx *svc.ServiceContext) *Secre
 	}
 }
 
-// logSecretKeySignCheckFailure 输出签名自检失败所需的排障材料。
-func (l *SecretKeyLogic) logSecretKeySignCheckFailure(uuid string, keyVersion string, stage string, signPayload string, signValue string, secretType string, secretValue string, err error) {
-	// 自检日志统一复用当前请求上下文字段，保证 trace、审计和后台操作日志能串到同一条链路。
-	fields := []logx.LogField{
+// secretKeySignFailureFields 生成不含密钥、签名和待签名原文的安全日志字段。
+func secretKeySignFailureFields(uuid string, keyVersion string, stage string, secretType string) []logx.LogField {
+	return []logx.LogField{
 		logx.Field("uuid", strings.TrimSpace(uuid)),
 		logx.Field("key_version", strings.TrimSpace(keyVersion)),
 		logx.Field("stage", strings.TrimSpace(stage)),
-		logx.Field("sign_payload", signPayload),
-		logx.Field("sign_value", signValue),
 		logx.Field("secret_type", strings.TrimSpace(secretType)),
-		logx.Field("secret_value", secretValue),
 	}
+}
+
+// logSecretKeySignCheckFailure 输出签名自检失败所需的非敏感定位信息。
+func (l *SecretKeyLogic) logSecretKeySignCheckFailure(uuid string, keyVersion string, stage string, secretType string, err error) {
+	// 自检日志统一复用当前请求上下文字段，保证 trace、审计和后台操作日志能串到同一条链路。
+	fields := secretKeySignFailureFields(uuid, keyVersion, stage, secretType)
 	if err != nil {
 		fields = append(fields, loggerx.ErrorFields(errors.Tag(err))...)
 		loggerx.Infow(l.Ctx, "秘钥 签名自检失败", fields...)
@@ -185,7 +187,10 @@ func (l *SecretKeyLogic) Create(req *types.SaveSecretKeyReq) *types.BizResult {
 			"SecretKeyLogic.Create 创建秘钥[%s]失败", req.UUID).ToBizResult()
 	}
 
-	_ = l.RenewSecretKeyCache(req.UUID)
+	if err := l.RenewSecretKeyCache(req.UUID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.AddSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"SecretKeyLogic.Create AppID[%s]缓存同步失败", req.UUID)
+	}
 	return types.NewBizResult(codes.AddSuccess).
 		SetI18nMessage(i18n.MsgKeyAddSuccess)
 }
@@ -283,7 +288,10 @@ func (l *SecretKeyLogic) Update(req *types.SaveSecretKeyReq) *types.BizResult {
 			"SecretKeyLogic.Update 更新秘钥ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	_ = l.RenewSecretKeyCache(oldRow.UUID)
+	if err := l.RenewSecretKeyCache(oldRow.UUID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"SecretKeyLogic.Update AppID[%s]缓存同步失败", oldRow.UUID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -330,7 +338,10 @@ func (l *SecretKeyLogic) UpdateStatus(req *types.SecretKeyStatusReq) *types.BizR
 		return types.DBError(i18n.MsgKeyDBErrorFormat, err,
 			"SecretKeyLogic.UpdateStatus 更新秘钥ID[%d]状态失败", req.ID).ToBizResult()
 	}
-	_ = l.RenewSecretKeyCache(row.UUID)
+	if err := l.RenewSecretKeyCache(row.UUID); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyCacheSyncPending, err,
+			"SecretKeyLogic.UpdateStatus AppID[%s]缓存同步失败", row.UUID)
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
@@ -419,7 +430,11 @@ func (l *SecretKeyLogic) requireSecretKeyMFATwoStep(twoStepKey string, twoStepVa
 		return types.Nil
 	}
 	securityLogic := securitylogic.NewSecurityLogic(l.Ctx, l.Svc)
-	if !securityLogic.NeedOperateMFATwoStep(securitylogic.MFAScenarioSecretKeyManage) {
+	needTwoStep, err := securityLogic.NeedOperateMFATwoStep(securitylogic.MFAScenarioSecretKeyManage)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if !needTwoStep {
 		return nil
 	}
 	return securityLogic.VerifyMFATwoStepTicket(ctxAdmin.ID, securitylogic.MFAScenarioSecretKeyManage, twoStepKey, twoStepValue)
@@ -481,308 +496,6 @@ func secretKeySignEnabled(req *types.SaveSecretKeyReq) bool {
 // secretKeyCryptoEnabled 判断当前请求是否启用加密解密链路。
 func secretKeyCryptoEnabled(req *types.SaveSecretKeyReq) bool {
 	return req != nil && req.VersionStatus == 1 && req.CryptoStatus == 1
-}
-
-// checkSecretKeyPayload 统一执行秘钥静态校验与运行态自检，供预检、自检、启用前校验复用。
-func (l *SecretKeyLogic) checkSecretKeyPayload(req *types.SaveSecretKeyReq, versions []model.SecretKeyVersion, refreshCache bool, runtimeCheck bool) types.SecretKeyCheckResult {
-	start := time.Now()
-	sanitizedReq := req
-	if sanitizedReq == nil {
-		sanitizedReq = &types.SaveSecretKeyReq{}
-	}
-	items := make([]types.SecretKeyCheckItem, 0, 24)
-	result := types.SecretKeyCheckResult{
-		UUID:           strings.TrimSpace(sanitizedReq.UUID),
-		Title:          strings.TrimSpace(sanitizedReq.Title),
-		KeyVersion:     strings.TrimSpace(sanitizedReq.KeyVersion),
-		Mode:           "validate",
-		Status:         sanitizedReq.Status,
-		CanSave:        true,
-		CanEnable:      true,
-		RuntimeChecked: runtimeCheck,
-		CacheRefreshed: false,
-	}
-	if runtimeCheck {
-		result.Mode = "self_check"
-	}
-	signEnabled := secretKeySignEnabled(sanitizedReq)
-	cryptoEnabled := secretKeyCryptoEnabled(sanitizedReq)
-
-	appendItem := func(key string, label string, passed bool, successMessage string, failMessage string) {
-		message := successMessage
-		level := "success"
-		if !passed {
-			message = failMessage
-			level = "error"
-		}
-		items = append(items, types.SecretKeyCheckItem{
-			Key:     key,
-			Label:   label,
-			Passed:  passed,
-			Level:   level,
-			Message: message,
-		})
-		if !passed {
-			result.CanEnable = false
-		}
-	}
-	appendError := func(key string, label string, safeMessage string) {
-		errText := strings.TrimSpace(safeMessage)
-		if errText == "" {
-			errText = "校验失败，请检查配置"
-		}
-		items = append(items, types.SecretKeyCheckItem{
-			Key:     key,
-			Label:   label,
-			Passed:  false,
-			Level:   "error",
-			Message: errText,
-		})
-		result.CanSave = false
-		result.CanEnable = false
-	}
-
-	if result.UUID == "" {
-		appendError("uuid", "秘钥标识", "秘钥标识不能为空")
-	}
-	if strings.TrimSpace(sanitizedReq.Title) == "" {
-		appendError("title", "秘钥标题", "秘钥标题不能为空")
-	}
-	if result.KeyVersion == "" {
-		appendError("key_version", "秘钥版本", "秘钥版本不能为空")
-	}
-
-	if err := validateSecretKeyRouteWithVersions(sanitizedReq, versions); err != nil {
-		appendError("route.version", "版本路由配置", err.Error())
-	} else {
-		appendItem("route.version", "版本路由配置", true, "稳定版本与灰度版本配置合法", "")
-	}
-
-	aesKeyText := ""
-	aesIVText := ""
-	userPublicPEM := ""
-	serverPublicPEM := ""
-	serverPrivatePEM := ""
-	var serverPublicErr error
-	var serverPrivateErr error
-	var serverPublicKey *rsa.PublicKey
-	var serverPrivateKey *rsa.PrivateKey
-
-	if cryptoEnabled {
-		if _, err := normalizeSecretRef(sanitizedReq.AESKeyRef); err != nil {
-			appendError("aes_key_ref.path", "AES KEY路径", "开启加密解密后，AES KEY 必须填写绝对路径，且不能直接录入明文或 PEM")
-		} else {
-			appendItem("aes_key_ref.path", "AES KEY路径", true, "AES KEY 路径格式正确", "")
-		}
-		if _, err := normalizeSecretRef(sanitizedReq.AESIVRef); err != nil {
-			appendError("aes_iv_ref.path", "AES IV路径", "开启加密解密后，AES IV 必须填写绝对路径，且不能直接录入明文")
-		} else {
-			appendItem("aes_iv_ref.path", "AES IV路径", true, "AES IV 路径格式正确", "")
-		}
-		var err error
-		aesKeyText, err = normalizeSecretText(sanitizedReq.AESKeyRef)
-		if err != nil {
-			appendError("aes_key_ref.file", "AES KEY文件", "AES KEY 文件不存在、不可读或内容为空")
-		} else {
-			appendItem("aes_key_ref.file", "AES KEY文件", true, "AES KEY 文件可读取", "")
-		}
-		aesIVText, err = normalizeSecretText(sanitizedReq.AESIVRef)
-		if err != nil {
-			appendError("aes_iv_ref.file", "AES IV文件", "AES IV 文件不存在、不可读或内容为空")
-		} else {
-			appendItem("aes_iv_ref.file", "AES IV文件", true, "AES IV 文件可读取", "")
-		}
-		aesKeyLengthPassed := len(aesKeyText) == 16 || len(aesKeyText) == 24 || len(aesKeyText) == 32
-		appendItem("aes_key_ref.length", "AES KEY长度", aesKeyLengthPassed, "AES KEY 长度合法", "AES KEY长度必须是16、24或32位")
-		aesIVLengthPassed := len(aesIVText) == 16
-		appendItem("aes_iv_ref.length", "AES IV长度", aesIVLengthPassed, "AES IV 长度合法", "AES IV长度必须是16位")
-	} else {
-		appendItem("crypto_status", "加密解密状态", true, "当前已关闭加密解密链路，跳过 AES 校验", "")
-	}
-
-	if signEnabled || cryptoEnabled {
-		if _, err := normalizeSecretRef(sanitizedReq.RSAPublicKeyUserRef); err != nil {
-			appendError("rsa_public_key_user_ref.path", "用户 RSA公钥路径", "启用签名验签或加密解密后，用户 RSA 公钥必须填写绝对路径，且不能直接录入 PEM")
-		} else {
-			appendItem("rsa_public_key_user_ref.path", "用户 RSA公钥路径", true, "用户 RSA 公钥路径格式正确", "")
-		}
-		if _, err := normalizeSecretRef(sanitizedReq.RSAPrivateKeyServerRef); err != nil {
-			appendError("rsa_private_key_server_ref.path", "服务端 RSA私钥路径", "启用签名验签或加密解密后，服务端 RSA 私钥必须填写绝对路径，且不能直接录入 PEM")
-		} else {
-			appendItem("rsa_private_key_server_ref.path", "服务端 RSA 私钥路径", true, "服务端 RSA 私钥路径格式正确", "")
-		}
-		var err error
-		userPublicPEM, err = resolvePEMText(sanitizedReq.RSAPublicKeyUserRef)
-		if err != nil {
-			appendError("rsa_public_key_user_ref.file", "用户 RSA公钥文件", "用户 RSA 公钥文件不存在、不可读或内容不是有效 PEM")
-		} else {
-			appendItem("rsa_public_key_user_ref.file", "用户 RSA公钥文件", true, "用户 RSA 公钥文件可读取", "")
-		}
-		serverPrivatePEM, err = resolvePEMText(sanitizedReq.RSAPrivateKeyServerRef)
-		if err != nil {
-			appendError("rsa_private_key_server_ref.file", "服务端 RSA私钥文件", "服务端 RSA 私钥文件不存在、不可读或内容不是有效 PEM")
-		} else {
-			appendItem("rsa_private_key_server_ref.file", "服务端 RSA私钥文件", true, "服务端 RSA 私钥文件可读取", "")
-		}
-		if _, userPublicErr := security.ParseRSAPublicKey(userPublicPEM); userPublicErr != nil {
-			appendError("rsa_public_key_user_ref.pem", "用户 RSA公钥格式", "用户 RSA 公钥 PEM 格式不合法")
-		} else {
-			appendItem("rsa_public_key_user_ref.pem", "用户 RSA公钥格式", true, "用户 RSA 公钥 PEM 格式正确", "")
-		}
-		serverPrivateKey, serverPrivateErr = security.ParseRSAPrivateKey(serverPrivatePEM)
-		if serverPrivateErr != nil {
-			appendError("rsa_private_key_server_ref.pem", "服务端 RSA私钥格式", "服务端 RSA 私钥 PEM 格式不合法")
-		} else {
-			appendItem("rsa_private_key_server_ref.pem", "服务端 RSA私钥格式", true, "服务端 RSA 私钥 PEM 格式正确", "")
-		}
-	} else {
-		appendItem("sign_status", "签名验签状态", true, "当前已关闭签名验签链路，跳过 RSA 材料校验", "")
-	}
-
-	if signEnabled {
-		if strings.TrimSpace(sanitizedReq.RSAPublicKeyServerRef) == "" {
-			if serverPrivateErr != nil || serverPrivateKey == nil {
-				appendError("rsa_public_key_server_ref.derived", "服务端 RSA公钥", "服务端 RSA 私钥格式未通过，无法派生公钥")
-			} else {
-				var err error
-				serverPublicPEM, err = deriveRSAPublicPEMFromPrivateKey(serverPrivateKey)
-				if err != nil {
-					appendError("rsa_public_key_server_ref.derived", "服务端 RSA公钥", "服务端 RSA 公钥派生失败")
-				} else {
-					serverPublicKey = &serverPrivateKey.PublicKey
-					appendItem("rsa_public_key_server_ref.derived", "服务端 RSA公钥", true, "未配置公钥路径，已由服务端私钥派生", "")
-				}
-			}
-		} else {
-			if _, err := normalizeSecretRef(sanitizedReq.RSAPublicKeyServerRef); err != nil {
-				appendError("rsa_public_key_server_ref.path", "服务端 RSA公钥路径", "服务端 RSA 公钥路径格式错误，不能直接录入 PEM")
-			} else {
-				appendItem("rsa_public_key_server_ref.path", "服务端 RSA 公钥路径", true, "服务端 RSA 公钥路径格式正确", "")
-			}
-			var err error
-			serverPublicPEM, err = resolvePEMText(sanitizedReq.RSAPublicKeyServerRef)
-			if err != nil {
-				appendError("rsa_public_key_server_ref.file", "服务端 RSA公钥文件", "服务端 RSA 公钥文件不存在、不可读或内容不是有效 PEM")
-			} else {
-				appendItem("rsa_public_key_server_ref.file", "服务端 RSA公钥文件", true, "服务端 RSA 公钥文件可读取", "")
-			}
-			serverPublicKey, serverPublicErr = security.ParseRSAPublicKey(serverPublicPEM)
-			if serverPublicErr != nil {
-				appendError("rsa_public_key_server_ref.pem", "服务端 RSA公钥格式", "服务端 RSA 公钥 PEM 格式不合法")
-			} else {
-				appendItem("rsa_public_key_server_ref.pem", "服务端 RSA公钥格式", true, "服务端 RSA 公钥 PEM 格式正确", "")
-			}
-		}
-		if serverPublicKey != nil && serverPublicErr == nil && serverPrivateErr == nil {
-			rsaPairPassed := serverPublicKey.N.Cmp(serverPrivateKey.N) == 0 && serverPublicKey.E == serverPrivateKey.E
-			appendItem("rsa_server_pair.match", "服务端 RSA配对", rsaPairPassed, "服务端 RSA 公私钥配对正确", "服务端 RSA 公钥与私钥不是同一对")
-		} else {
-			appendError("rsa_server_pair.match", "服务端 RSA配对", "服务端 RSA 公私钥格式未通过，暂时无法判断是否配对")
-		}
-	}
-
-	if refreshCache && result.UUID != "" {
-		if err := l.RenewSecretKeyCache(result.UUID); err != nil {
-			appendError("cache.refresh", "缓存刷新", "刷新秘钥缓存失败，请检查 Redis、数据库和当前秘钥配置")
-		} else {
-			result.CacheRefreshed = true
-			appendItem("cache.refresh", "缓存刷新", true, "秘钥缓存刷新成功", "")
-		}
-	}
-
-	if runtimeCheck && result.UUID != "" {
-		if cryptoEnabled {
-			if aesCipher, err := security.NewAESCipher(aesKeyText, aesIVText); err != nil {
-				appendError("runtime.aes.init", "AES运行态初始化", "AES 运行态初始化失败，请检查 AES KEY 与 IV 内容")
-			} else {
-				appendItem("runtime.aes.init", "AES运行态初始化", true, "AES 运行态初始化成功", "")
-				const aesPlaintext = "admin-secret-check"
-				cipherText, encryptErr := aesCipher.Encrypt(aesPlaintext)
-				if encryptErr != nil {
-					appendError("runtime.aes.encrypt", "AES加密自检", "AES 加密自检失败")
-				} else {
-					plainText, decryptErr := aesCipher.Decrypt(cipherText)
-					if decryptErr != nil {
-						appendError("runtime.aes.decrypt", "AES解密自检", "AES 解密自检失败")
-					} else {
-						appendItem("runtime.aes.decrypt", "AES加解密自检", plainText == aesPlaintext, "AES 加解密链路可用", "AES 解密结果与原文不一致")
-					}
-				}
-			}
-		}
-
-		if signEnabled {
-			signer, signerErr := security.NewRSASigner(serverPrivatePEM, "")
-			if signerErr != nil {
-				l.logSecretKeySignCheckFailure(result.UUID, result.KeyVersion, "runtime.rsa.signer", secretKeyRSASignCheckPayload, "", RSAServerPrivateKey, serverPrivatePEM, signerErr)
-				appendError("runtime.rsa.signer", "RSA签名器初始化", "RSA 签名器初始化失败，请检查服务端私钥")
-			} else {
-				appendItem("runtime.rsa.signer", "RSA签名器初始化", true, "RSA 签名器初始化成功", "")
-				signValue, signErr := signer.Sign(secretKeyRSASignCheckPayload)
-				if signErr != nil {
-					l.logSecretKeySignCheckFailure(result.UUID, result.KeyVersion, "runtime.rsa.sign", secretKeyRSASignCheckPayload, "", RSAServerPrivateKey, serverPrivatePEM, signErr)
-					appendError("runtime.rsa.sign", "RSA签名自检", "RSA 签名自检失败")
-				} else {
-					appendItem("runtime.rsa.sign", "RSA签名自检", true, "RSA 签名链路可用", "")
-					verifySigner, verifyErr := security.NewRSASigner("", serverPublicPEM)
-					if verifyErr != nil {
-						l.logSecretKeySignCheckFailure(result.UUID, result.KeyVersion, "runtime.rsa.verify_init", secretKeyRSASignCheckPayload, signValue, RSAServerPublicKey, serverPublicPEM, verifyErr)
-						appendError("runtime.rsa.verify_init", "RSA验签器初始化", "RSA 验签器初始化失败，请检查服务端公钥")
-					} else {
-						verified, verifyRunErr := verifySigner.Verify(secretKeyRSASignCheckPayload, signValue)
-						if verifyRunErr != nil {
-							l.logSecretKeySignCheckFailure(result.UUID, result.KeyVersion, "runtime.rsa.verify", secretKeyRSASignCheckPayload, signValue, RSAServerPublicKey, serverPublicPEM, verifyRunErr)
-							appendError("runtime.rsa.verify", "RSA验签自检", "RSA 验签自检失败")
-						} else {
-							if !verified {
-								l.logSecretKeySignCheckFailure(result.UUID, result.KeyVersion, "runtime.rsa.verify", secretKeyRSASignCheckPayload, signValue, RSAServerPublicKey, serverPublicPEM, errors.New("RSA验签结果不匹配"))
-							}
-							appendItem("runtime.rsa.verify", "RSA验签自检", verified, "RSA 验签链路可用", "RSA 验签失败，请确认服务端公钥与服务端私钥是否对应")
-						}
-					}
-				}
-			}
-		}
-
-		if cryptoEnabled {
-			rsaCipher, rsaCipherErr := security.NewRSACipher(serverPrivatePEM, userPublicPEM)
-			if rsaCipherErr != nil {
-				appendError("runtime.rsa.cipher_init", "RSA加解密器初始化", "RSA 加解密器初始化失败，请检查服务端私钥与用户公钥")
-			} else {
-				appendItem("runtime.rsa.cipher_init", "RSA加解密器初始化", true, "RSA 加解密器初始化成功", "")
-				const rsaPlaintext = "admin-rsa-check"
-				_, encryptErr := rsaCipher.Encrypt(rsaPlaintext)
-				if encryptErr != nil {
-					appendError("runtime.rsa.encrypt", "RSA加密自检", "RSA 加密自检失败")
-				} else {
-					requestDecryptPassed, decryptErr := runSecretKeyRSARequestDecryptSelfCheck(serverPrivatePEM)
-					if decryptErr != nil {
-						appendError("runtime.rsa.decrypt", "RSA解密自检", "RSA 解密自检失败")
-					} else {
-						appendItem("runtime.rsa.decrypt", "RSA请求解密自检", requestDecryptPassed, "RSA 请求解密链路可用", "RSA 请求解密失败，请确认服务端公钥与服务端私钥是否对应")
-					}
-				}
-			}
-		}
-	}
-
-	result.Items = items
-	result.AllPassed = true
-	for _, item := range items {
-		if !item.Passed {
-			result.AllPassed = false
-			break
-		}
-	}
-	result.CanSave = result.CanSave && len(items) > 0
-	if sanitizedReq.Status != 1 {
-		result.CanEnable = false
-	} else {
-		result.CanEnable = result.CanEnable && result.AllPassed
-	}
-	result.CheckedAt = corelogic.FormatDateTime(time.Now())
-	result.DurationMs = time.Since(start).Milliseconds()
-	return result
 }
 
 // deriveRSAPublicPEMFromPrivateKey 从服务端 RSA 私钥派生对应公钥 PEM。

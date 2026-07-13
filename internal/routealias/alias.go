@@ -16,32 +16,10 @@ const (
 	AuthCodes Alias = "auth.codes"
 	// AuthProfile 表示获取当前登录资料路由别名。
 	AuthProfile Alias = "auth.profile"
-	// AuthVerifyAccount 表示登录预校验路由别名。
-	AuthVerifyAccount Alias = "auth.verify_account"
 	// DocsIndex 表示后台接口文档入口页面权限路由别名。
 	DocsIndex Alias = "docs.index"
-	// DocsRoleOps 表示运维角色文档目录路由别名。
-	DocsRoleOps Alias = "docs.role.ops"
-	// DocsRoleBackend 表示后端开发角色文档目录路由别名。
-	DocsRoleBackend Alias = "docs.role.backend"
-	// DocsRoleFrontend 表示前端与测试角色文档目录路由别名。
-	DocsRoleFrontend Alias = "docs.role.frontend"
-	// DocsFeatureTask 表示任务系统功能文档目录路由别名。
-	DocsFeatureTask Alias = "docs.feature.task"
-	// DocsFeatureUserTag 表示用户标签功能文档目录路由别名。
-	DocsFeatureUserTag Alias = "docs.feature.user_tag"
-	// DocsAPIIndex 表示接口文档首页和统一规范路由别名。
-	DocsAPIIndex Alias = "docs.api.index"
-	// DocsAPIAdmin 表示后台系统接口文档目录路由别名。
-	DocsAPIAdmin Alias = "docs.api.admin"
-	// DocsAPITask 表示任务系统接口文档目录路由别名。
-	DocsAPITask Alias = "docs.api.task"
-	// DocsUserTag 表示用户标签接口文档目录路由别名。
-	DocsUserTag Alias = "docs.user_tag"
-	// DocsAPIServiceIndex 表示前台 API 文档入口页面、首页和规范路由别名。
+	// DocsAPIServiceIndex 表示前台 API 文档入口页面权限路由别名。
 	DocsAPIServiceIndex Alias = "docs.api_service.index"
-	// DocsAPIServiceFront 表示前台 API 前台系统接口文档目录路由别名。
-	DocsAPIServiceFront Alias = "docs.api_service.front"
 )
 
 const (
@@ -116,10 +94,30 @@ const (
 )
 
 const (
+	// RoleAdd 表示新增角色路由别名。
+	RoleAdd Alias = "role.add"
+	// RoleUpdate 表示编辑角色路由别名。
+	RoleUpdate Alias = "role.update"
+	// RoleStatusUpdate 表示修改角色状态路由别名。
+	RoleStatusUpdate Alias = "role.status.update"
+	// RolePermissionUpdate 表示编辑角色权限路由别名。
+	RolePermissionUpdate Alias = "role.permission.update"
 	// RoleTreeOptions 表示角色树下拉路由别名。
 	RoleTreeOptions Alias = "role.tree.options"
+	// PermissionAdd 表示新增权限路由别名。
+	PermissionAdd Alias = "permission.add"
+	// PermissionUpdate 表示编辑权限路由别名。
+	PermissionUpdate Alias = "permission.update"
+	// PermissionStatusUpdate 表示修改权限状态路由别名。
+	PermissionStatusUpdate Alias = "permission.status.update"
 	// PermissionMaxUUID 表示权限 UUID 预览路由别名。
 	PermissionMaxUUID Alias = "permission.max_uuid"
+	// DocPermissionList 表示查询文档权限列表路由别名。
+	DocPermissionList Alias = "doc_permission.list"
+	// DocPermissionStatusUpdate 表示修改文档权限状态路由别名。
+	DocPermissionStatusUpdate Alias = "doc_permission.status.update"
+	// SysConfigImport 表示导入系统配置路由别名。
+	SysConfigImport Alias = "system.config.import"
 )
 
 const (
@@ -127,6 +125,8 @@ const (
 	AdminMessageList Alias = "message.list"
 	// AdminMessageSentList 表示管理员已发送消息路由别名。
 	AdminMessageSentList Alias = "message.sent_list"
+	// AdminMessageReceiverOptions 表示管理员消息可用收件人选项路由别名。
+	AdminMessageReceiverOptions Alias = "message.receiver_options"
 	// AdminMessageReceivers 表示管理员消息收件人明细路由别名。
 	AdminMessageReceivers Alias = "message.receivers"
 	// AdminMessageUnreadCount 表示管理员未读消息数量路由别名。

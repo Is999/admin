@@ -2,7 +2,7 @@ package svc
 
 import (
 	"context"
-	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,19 +21,6 @@ const (
 	// testUploadSessionTTLSeconds 表示测试上传会话 TTL。
 	testUploadSessionTTLSeconds = 60
 )
-
-// testServiceVirusScanner 是 ServiceContext 文件存储测试使用的病毒扫描器。
-type testServiceVirusScanner struct {
-	called *bool // 是否已执行扫描
-}
-
-// ScanFile 记录测试扫描调用。
-func (s testServiceVirusScanner) ScanFile(context.Context, string, string) error {
-	if s.called != nil {
-		*s.called = true
-	}
-	return nil
-}
 
 // TestServiceContextObjectStorageCachesByConfig 确保对象存储实例按配置指纹缓存并在配置变化后重建。
 func TestServiceContextObjectStorageCachesByConfig(t *testing.T) {
@@ -122,20 +109,18 @@ func TestScopedServiceContextSharesStorageRuntime(t *testing.T) {
 	}
 }
 
-// TestServiceContextVirusScannerUsesConfig 确保病毒扫描器按配置注册名加载。
+// TestServiceContextVirusScannerUsesConfig 确保病毒扫描器按配置创建并复用。
 func TestServiceContextVirusScannerUsesConfig(t *testing.T) {
-	called := false
-	scannerName := fmt.Sprintf("svc_scanner_%d", time.Now().UnixNano())
-	if err := storage.RegisterVirusScanner(scannerName, func() storage.VirusScanner {
-		return testServiceVirusScanner{called: &called}
-	}); err != nil {
-		t.Fatalf("注册测试病毒扫描器失败: %v", err)
+	command := filepath.Join(t.TempDir(), "clamdscan")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("创建 clamdscan 测试替身失败: %v", err)
 	}
 
 	svcCtx := NewServiceContext(config.Config{
 		FileStorage: config.FileStorageConfig{
 			VirusScanner: config.FileStorageVirusScannerConfig{
-				Name: scannerName,
+				Name:    config.VirusScannerClamAV,
+				Command: command,
 			},
 		},
 	}, Dependencies{})
@@ -144,11 +129,15 @@ func TestServiceContextVirusScannerUsesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("获取病毒扫描器失败: %v", err)
 	}
-	if err := scanner.ScanFile(context.Background(), "/tmp/demo.txt", "demo"); err != nil {
+	if err := scanner.Ready(context.Background()); err != nil {
+		t.Fatalf("检查病毒扫描器失败: %v", err)
+	}
+	if err := scanner.ScanFile(context.Background(), "/tmp/demo.txt"); err != nil {
 		t.Fatalf("执行病毒扫描失败: %v", err)
 	}
-	if !called {
-		t.Fatal("期望配置指定的病毒扫描器被调用")
+	again, err := svcCtx.VirusScanner()
+	if err != nil || again != scanner {
+		t.Fatalf("相同配置应复用病毒扫描器 instance_same=%t err=%v", again == scanner, err)
 	}
 }
 

@@ -9,11 +9,29 @@ import (
 
 	sitedocs "admin/docs"
 	"admin/internal/config"
+	"admin/internal/handler/shared"
 	"admin/internal/middleware"
 	"admin/internal/requestctx"
 	"admin/internal/routealias"
 	"admin/internal/svc"
 )
+
+// TestDocsSessionRouteUsesLoginOnlyPermission 校验文档会话只要求登录态，具体文档权限由资源路由校验。
+func TestDocsSessionRouteUsesLoginOnlyPermission(t *testing.T) {
+	for _, spec := range RouteSpecs() {
+		if spec.Method != http.MethodPost || spec.Path != "/api/docs/session" {
+			continue
+		}
+		if spec.Access != shared.RouteAccessAuth {
+			t.Fatalf("docs session access = %q, want %q", spec.Access, shared.RouteAccessAuth)
+		}
+		if spec.RouteAlias() != routealias.Ignore {
+			t.Fatalf("docs session alias = %q, want %q", spec.RouteAlias(), routealias.Ignore)
+		}
+		return
+	}
+	t.Fatal("docs session route not found")
+}
 
 // TestDocsSessionCookieLimitsScope 校验文档会话 cookie 只挂在文档路径下。
 func TestDocsSessionCookieLimitsScope(t *testing.T) {
@@ -180,7 +198,7 @@ func TestDocsAccessForRequestNonProdAnonymousDenied(t *testing.T) {
 			if err != nil {
 				t.Fatalf("docsAccessForRequest returned error: %v", err)
 			}
-			if access.all || len(access.aliases) != 0 {
+			if len(access.resources) != 0 {
 				t.Fatalf("%s anonymous docs request should be denied, got %+v", mode, access)
 			}
 		})
@@ -198,8 +216,16 @@ func TestDocsAccessForRequestProdAnonymousDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("docsAccessForRequest returned error: %v", err)
 	}
-	if access.all || len(access.aliases) != 0 {
+	if len(access.resources) != 0 {
 		t.Fatalf("prod anonymous docs request should be denied, got %+v", access)
+	}
+}
+
+// TestDocsAccessForRequestFailsWithoutServiceContext 校验文档权限依赖缺失时失败关闭。
+func TestDocsAccessForRequestFailsWithoutServiceContext(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/docs/_sidebar.md", nil)
+	if _, err := docsAccessForRequest(req, nil); err == nil {
+		t.Fatal("docsAccessForRequest() error = nil, want service context error")
 	}
 }
 
@@ -209,13 +235,10 @@ func TestFilterDocsNavigationByAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read sidebar asset: %v", err)
 	}
-	access := docsAccessSet{aliases: map[routealias.Alias]struct{}{
-		routealias.DocsIndex:                            {},
-		routealias.DocsAPIAdmin:                         {},
-		routealias.DocsRoleBackend:                      {},
-		routealias.DocsAliasForAssetPath("", "文档首页.md"): {},
-		routealias.DocsAliasForAssetPath("", "接口文档/接口文档统一规范.md"):    {},
-		routealias.DocsAliasForAssetPath("", "角色文档/后端开发/AI开发规范.md"): {},
+	access := docsAccessSet{resources: map[routealias.DocResource]struct{}{
+		{Site: routealias.DocSiteAdmin, Path: "文档首页.md"}:             {},
+		{Site: routealias.DocSiteAdmin, Path: "接口文档/接口文档统一规范.md"}:    {},
+		{Site: routealias.DocSiteAdmin, Path: "角色文档/后端开发/AI开发规范.md"}: {},
 	}}
 
 	body := string(filterDocsNavigation(content, "", access))
@@ -242,11 +265,9 @@ func TestFilterAPIDocsNavigationByAccess(t *testing.T) {
     - 后端开发
       - [AI开发规范](角色文档/后端开发/AI开发规范.md)
 `)
-	access := docsAccessSet{aliases: map[routealias.Alias]struct{}{
-		routealias.DocsAPIServiceIndex: {},
-		routealias.DocsAPIServiceFront: {},
-		routealias.DocsAliasForAssetPath(apiDocsProxyBasePath, "接口文档/接口文档统一规范.md"):    {},
-		routealias.DocsAliasForAssetPath(apiDocsProxyBasePath, "角色文档/后端开发/AI开发规范.md"): {},
+	access := docsAccessSet{resources: map[routealias.DocResource]struct{}{
+		{Site: routealias.DocSiteAPI, Path: "接口文档/接口文档统一规范.md"}:    {},
+		{Site: routealias.DocSiteAPI, Path: "角色文档/后端开发/AI开发规范.md"}: {},
 	}}
 
 	body := string(filterDocsNavigation(content, apiDocsProxyBasePath, access))

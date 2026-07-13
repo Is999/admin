@@ -1,0 +1,6 @@
+-- 代码资产：制造 shardbackfill 集成测试错桶行。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：无动态参数，仅更新固定测试行。
+-- 安全边界：只允许在保护触发器短暂移除的隔离测试库执行。
+UPDATE `shard_backfill_case` SET `shard_no` = 0 WHERE `id` = 1

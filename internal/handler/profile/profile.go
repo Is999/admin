@@ -9,16 +9,6 @@ import (
 	"admin/internal/types"
 )
 
-// AuthVerifyAccountHandler 验证账号密码并返回 MFA 绑定信息。
-func AuthVerifyAccountHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.RespHandler[types.ProfileLoginReq](
-		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ProfileLoginReq) (shared.LogicObj, *types.BizResult) {
-			logicObj := profilelogic.NewProfileLogic(r, svcCtx)
-			return logicObj, logicObj.BuildSecretVerifyAccount(req)
-		},
-	)(sCtx)
-}
-
 // ProfileMineHandler 返回当前登录管理员资料。
 func ProfileMineHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.ProfileMine, func(r *http.Request) (shared.LogicObj, *types.BizResult) {

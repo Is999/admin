@@ -1,0 +1,9 @@
+-- 代码资产：确认 shardbackfill checkpoint 表在集成测试前是否已存在。
+-- SQL 方言：MySQL 8.0 information_schema。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：无动态参数，仅检查固定运维表名。
+-- 安全边界：用于决定测试结束时是否清理本轮创建的 checkpoint 表。
+SELECT EXISTS(
+  SELECT 1 FROM `information_schema`.`TABLES`
+  WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'shard_backfill_checkpoint'
+)

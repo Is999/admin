@@ -2,8 +2,8 @@ package middleware
 
 import "testing"
 
-// TestIsPrivateClientIP 验证对应场景。
-func TestIsPrivateClientIP(t *testing.T) {
+// TestIsInternalClientAddr 验证仅回环和私网地址属于内网来源。
+func TestIsInternalClientAddr(t *testing.T) {
 	cases := []struct {
 		name string // name 表示测试场景名称。
 		ip   string // ip 表示测试字段。
@@ -26,7 +26,9 @@ func TestIsPrivateClientIP(t *testing.T) {
 		{name: "invalid", ip: "not-an-ip", want: false},
 	}
 	for _, tc := range cases {
-		if got := isPrivateClientIP(tc.ip); got != tc.want {
+		addr, ok := parseAddrValue(tc.ip)
+		got := ok && isInternalClientAddr(addr)
+		if got != tc.want {
 			t.Fatalf("%s: expected %v, got %v", tc.name, tc.want, got)
 		}
 	}

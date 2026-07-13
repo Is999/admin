@@ -20,6 +20,8 @@ const (
 	AdminExportStatusFailed = excel.StatusFailed
 	// AdminExportTaskType 表示管理员列表导出的后台任务类型。
 	AdminExportTaskType = "admin:export"
+	// AdminExportCleanupTaskType 表示管理员导出文件的延迟清理任务类型。
+	AdminExportCleanupTaskType = "admin:export:cleanup"
 )
 
 // AdminExportReq 表示管理员列表导出请求；筛选条件与列表页保持一致，但不携带分页参数。
@@ -83,6 +85,12 @@ type AdminExportTaskPayload struct {
 	Request      AdminExportReq `json:"request"`                // 导出筛选条件快照
 }
 
+// AdminExportCleanupTaskPayload 表示管理员导出文件延迟清理任务负载。
+type AdminExportCleanupTaskPayload struct {
+	JobID     string `json:"jobId"`     // 导出任务 ID
+	ObjectKey string `json:"objectKey"` // 需要删除的统一存储对象 key
+}
+
 // AdminExportStatusResp 表示管理员导出任务的可轮询状态。
 type AdminExportStatusResp struct {
 	JobID              string `json:"jobId"`             // 导出任务 ID
@@ -91,7 +99,7 @@ type AdminExportStatusResp struct {
 	Status             string `json:"status"`            // 导出状态
 	Progress           int    `json:"progress"`          // 进度百分比：0-100
 	Processed          int64  `json:"processed"`         // 已处理行数
-	Total              int64  `json:"total"`             // 预估总行数
+	Total              int64  `json:"total"`             // 总行数，统计阶段为 0
 	EstimatedSeconds   int64  `json:"estimatedSeconds"`  // 剩余预估秒数
 	FileName           string `json:"fileName"`          // 导出文件名
 	DownloadReady      bool   `json:"downloadReady"`     // 是否已可下载

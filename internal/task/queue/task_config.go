@@ -13,33 +13,21 @@ import (
 	"admin/internal/types"
 )
 
+const (
+	// taskCompletedRetention 固定保留两天，避免配置误改导致日报缺数。
+	taskCompletedRetention = 48 * time.Hour
+	// taskArchivedRetentionDefaultSeconds 是失败归档任务未配置时的七天保留期。
+	taskArchivedRetentionDefaultSeconds = 7 * 24 * 60 * 60
+)
+
 // workflowUniqueLockTTL 返回幂等预占互斥锁的超时时间。
 func (m *Manager) workflowUniqueLockTTL() time.Duration {
 	return 15 * time.Second
 }
 
-// workflowRetention 返回工作流元数据在 Redis 中的保留时长。
-// 工作流状态与成功任务查询窗口保持一致，避免两个保留配置互相漂移。
-func (m *Manager) workflowRetention() time.Duration {
-	return m.completedRetention()
-}
-
-// completedRetention 返回已完成任务在 Asynq 中的保留时长。
-// 该配置用于任务列表查看成功执行记录；未显式配置时默认保留 24 小时。
-func (m *Manager) completedRetention() time.Duration {
-	seconds := m.CurrentConfig().CompletedRetentionSeconds
-	if seconds <= 0 {
-		seconds = 86400
-	}
-	return time.Duration(seconds) * time.Second
-}
-
 // CompletedRetention 返回成功任务交给 Asynq completed 队列保留的时长。
 func (m *Manager) CompletedRetention() time.Duration {
-	if m == nil {
-		return 24 * time.Hour
-	}
-	return m.completedRetention()
+	return taskCompletedRetention
 }
 
 // archivedRetention 返回归档失败任务在 Asynq 中的保留时长。
@@ -49,6 +37,11 @@ func (m *Manager) archivedRetention() time.Duration {
 		seconds = taskArchivedRetentionDefaultSeconds
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+// ArchivedRetention 返回归档失败任务在 Asynq 中的保留时长。
+func (m *Manager) ArchivedRetention() time.Duration {
+	return m.archivedRetention()
 }
 
 // defaultWorkflowQueue 返回工作流默认执行队列。

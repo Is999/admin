@@ -51,7 +51,7 @@ func init() {
 			TaskType:       TypeWorkflowTrigger,
 			DescriptionKey: i18n.MsgKeyTaskRegistryTypeWorkflowTriggerDesc,
 			UsageHintKey:   i18n.MsgKeyTaskRegistryTypeWorkflowTriggerHint,
-			PayloadExample: fmt.Sprintf("{\n  \"workflowId\": \"wf-demo-001\",\n  \"workflowName\": \"cache.refresh\",\n  \"targets\": [\"%s\"]\n}", fmt.Sprintf(keys.AdminProfile, 1)),
+			PayloadExample: fmt.Sprintf("{\n  \"workflowId\": \"wf-demo-001\",\n  \"workflowName\": \"cache.refresh\",\n  \"targets\": [\"%s\"]\n}", fmt.Sprintf(keys.AdminRoleIDs, 1)),
 		},
 		TaskTypeDisplaySpec{
 			TaskType:       TypeWorkflowNoop,
@@ -63,21 +63,21 @@ func init() {
 			TaskType:          TypeCacheRefreshRequest,
 			DescriptionKey:    i18n.MsgKeyTaskRegistryTypeCacheRefreshRequestDesc,
 			UsageHintKey:      i18n.MsgKeyTaskRegistryTypeCacheRefreshRequestHint,
-			PayloadExample:    fmt.Sprintf("{\n  \"operation\": \"manual_refresh\",\n  \"targets\": [\"%s\", \"%s\"]\n}", fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)),
+			PayloadExample:    fmt.Sprintf("{\n  \"operation\": \"manual_refresh\",\n  \"targets\": [\"%s\", \"%s\"]\n}", fmt.Sprintf(keys.AdminRoleIDs, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)),
 			ManualRecommended: true,
 		},
 		TaskTypeDisplaySpec{
 			TaskType:       TypeCacheRefreshBatch,
 			DescriptionKey: i18n.MsgKeyTaskRegistryTypeCacheRefreshBatchDesc,
 			UsageHintKey:   i18n.MsgKeyTaskRegistryTypeCacheRefreshBatchHint,
-			PayloadExample: fmt.Sprintf("{\n  \"operation\": \"manual_refresh\",\n  \"targets\": [\"%s\", \"%s\"]\n}", fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)),
+			PayloadExample: fmt.Sprintf("{\n  \"operation\": \"manual_refresh\",\n  \"targets\": [\"%s\", \"%s\"]\n}", fmt.Sprintf(keys.AdminRoleIDs, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)),
 		},
 	)
 	RegisterWorkflowDisplaySpecs(WorkflowDisplaySpec{
 		Name:           WorkflowNameCacheRefresh,
 		DescriptionKey: i18n.MsgKeyTaskRegistryWorkflowCacheRefreshDesc,
 		UsageHintKey:   i18n.MsgKeyTaskRegistryWorkflowCacheRefreshHint,
-		TargetsExample: strings.Join([]string{fmt.Sprintf(keys.AdminProfile, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)}, ", "),
+		TargetsExample: strings.Join([]string{fmt.Sprintf(keys.AdminRoleIDs, 1), fmt.Sprintf(keys.AdminRolesDetail, 1)}, ", "),
 	})
 }
 

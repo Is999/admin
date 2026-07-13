@@ -6,9 +6,23 @@
 
 > **AI 开发必读**：使用 AI 生成代码、重构、补测试或补文档前，必须先阅读 [AGENTS.md](AGENTS.md)、[AI开发规范](docs/site/角色文档/后端开发/AI开发规范.md) 和 [AI开发提示词](docs/site/角色文档/后端开发/AI开发提示词.md)。
 
+## 分支定位
+
+`admin` 与 `api` 的表路由方案必须成对选择同名分支，不能混用两套路由配置或迁移流程。三个长期分支的职责如下：
+
+| 分支 | 功能定位 | 表路由与扩容职责 |
+| --- | --- | --- |
+| `main` | 日常开发、集成和交付基线；默认直连 MySQL 并以单表运行，同时提供可复用的固定桶物理表路由。 | `user.route_shard_count` 默认 1，运行时支持 `1/2/4/.../1024`；生产拆分仍必须选择下面对应分支的迁移流程。 |
+| `table-sharding/shardingsphere-proxy-alternative` | ShardingSphere-Proxy 候选方案，Admin/API 始终访问逻辑表。 | Proxy 管理物理表、存储单元和路由；Admin 提供 `deploy/shardingsphere`、`cmd/shardbackfill` 和 `cmd/shardingctl` 迁移与规则资产。 |
+| `table-sharding/app-table-sharding` | 应用内分表候选方案，适用于同一 MySQL 内按固定桶水平拆表。 | Admin/API 按当前物理表数量计算表名；Admin 使用 `cmd/tableshard` 完成在线复制、短暂停写校验和配置切换，不部署常驻分表代理。 |
+
+两个候选分支是互斥方案，不是可叠加功能；切换方案前必须同时核对 Admin/API 分支、配置和数据迁移状态。
+
+`main` 是唯一公共开发基线。Proxy 分支除 README 的分支定位和目录说明外，代码、配置、测试及专题文档必须与 `main` 完全一致；部署时保持 `user.route_shard_count=1`，应用访问逻辑表，由 Proxy 负责物理路由。应用分表分支只保留迁移方式所需的路由配置、迁移资产、测试和文档差异。合并后运行 `make branch-drift-check`，功能分支可通过 `BRANCH_VARIANT=proxy` 或 `BRANCH_VARIANT=app` 指定目标方案。
+
 ## 技术栈
 
-- Go `1.26.4`
+- Go `1.26.5`
 - go-zero HTTP 服务框架
 - GORM + MySQL，支持主从读写路由和命名扩展库
 - Redis + redsync，支撑缓存、分布式锁、任务调度锁和运行期状态
@@ -27,7 +41,7 @@ cmd/admin
   -> 创建 ServiceContext
   -> 注册 collector、task_runtime、http_server 启动组件
   -> 按 mode 启动 API、Worker、Scheduler
-  -> handler.RegisterHandlersWithModules
+  -> handler.RegisterPublicHandlersWithModules / RegisterInternalHandlersWithModules
   -> recover -> trace -> access log -> recover
   -> handler/shared 解析请求、鉴权、审计和统一响应
   -> logic 编排业务、事务、缓存和任务投递
@@ -41,9 +55,13 @@ cmd/admin
   "status": true,
   "code": 1000,
   "message": "成功",
-  "data": {}
+  "data": {},
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "spanId": "00f067aa0ba902b7"
 }
 ```
+
+`traceId` 用于串联一次请求的完整链路，`spanId` 用于定位当前服务的处理片段；标准 HTTP 中间件还会通过 `X-Trace-Id`、`X-Span-Id` 响应头回传相同标识，便于前端报错与日志、审计和 Trace 平台对齐。
 
 ## 运行模式
 
@@ -72,7 +90,9 @@ cmd/admin
 admin
 ├── cmd                       # 二进制入口
 │   ├── admin                 # HTTP / Worker / Scheduler 组合启动入口
-│   └── migrate               # 数据库迁移命令入口
+│   ├── migrate               # 数据库迁移命令入口
+│   ├── shardbackfill         # 固定 shard_no 分批回填、断点续跑和全量校验工具
+│   └── shardingctl           # 生成可审查的 ShardingSphere DistSQL 规则
 ├── common                    # 跨包公共契约：业务码、常量、i18n、Redis Key、嵌入资产、运行态配置
 ├── docs                      # 文档站、接口文档、运维手册、监控资产
 │   ├── site
@@ -85,7 +105,11 @@ admin
 │   ├── prometheus            # Prometheus 告警规则
 │   ├── grafana               # Grafana 面板
 │   └── handler.go            # 文档站资源读取入口
-├── deploy                    # Docker、systemd 和本地集成依赖
+├── deploy                    # 发布、集成环境和候选分表部署资产
+│   ├── docker                # Admin 容器镜像
+│   ├── integration           # 本地集成依赖编排
+│   ├── shardingsphere        # Proxy 候选方案镜像、配置模板、DistSQL 和迁移 SQL
+│   └── systemd               # 控制面和 Worker 服务单元
 ├── etc                       # 配置模板和运行期配置拆分
 │   └── config.d              # runtime.yaml 等运行期大列表配置
 ├── helper                    # HTTP JSON 响应和轻量通用函数
@@ -103,6 +127,7 @@ admin
 │   ├── requestctx            # 链路字段、调用方、任务和 trace 元数据
 │   ├── routealias            # 路由别名常量
 │   ├── security              # 路由字段级签名、加密、大小限制和测试向量
+│   ├── sharding              # 固定桶物理表数量校验和稳定表名映射
 │   ├── svc                   # ServiceContext 与基础设施依赖聚合
 │   ├── task                  # Asynq 队列、工作流、任务插件运行时和进度统计
 │   └── types                 # API 请求、响应、列表项和参数校验
@@ -252,7 +277,7 @@ git diff --check
 make ci
 ```
 
-`make ci` 会执行格式检查、全量测试、主服务构建、迁移工具构建、秘钥扫描、Prometheus 规则检查和 `git diff --check`。如果本机没有 `promtool`，规则检查会优先尝试 Docker 镜像。
+`make ci` 会执行格式检查、全量测试、主服务构建、迁移工具构建、秘钥扫描、Prometheus 规则检查、分支差异门禁和 `git diff --check`。如果本机没有 `promtool`，规则检查会优先尝试 Docker 镜像。
 
 ## 发布与观测
 
@@ -276,7 +301,7 @@ make ci
 
 完整流程见 [部署发布指南](docs/site/角色文档/运维/部署发布指南.md)。
 
-> **首次上线重点**：如果后台无法登录，先确认数据库里已有超级管理员账号，再通过内网接口 `POST /internal/auth/init-admin-bootstrap` 重置该账号为首次登录状态。该接口只允许内网访问，不创建新账号，不提升角色。详细步骤见 [内网初始化管理员接口](docs/site/接口文档/后台系统/内网初始化管理员接口.md)。
+> **首次上线重点**：如果后台无法登录，先确认数据库里已有超级管理员账号，再通过独立内网监听器的 `POST /internal/auth/init-admin-bootstrap` 重置该账号。请求必须通过 Ops HMAC、一次性 nonce 和 Redis 防重放校验；跨主机使用 mTLS。该接口不创建账号、不提升角色，详见[内网初始化管理员接口](docs/site/接口文档/后台系统/内网初始化管理员接口.md)。
 
 ## 开发约束
 

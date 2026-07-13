@@ -1,6 +1,7 @@
 package secretkey
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -10,9 +11,200 @@ import (
 	"testing"
 	"time"
 
+	"admin/internal/config"
 	"admin/internal/model"
+	"admin/internal/svc"
 	"admin/internal/types"
 )
+
+// TestCheckSecretKeyPayloadKeepsValidationSemantics 验证拆分后的校验流程保持字段清洗、分项顺序和启用判断。
+func TestCheckSecretKeyPayloadKeepsValidationSemantics(t *testing.T) {
+	logicObj := NewSecretKeyLogic(context.Background(), svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+	result := logicObj.checkSecretKeyPayload(&types.SaveSecretKeyReq{
+		UUID:          " app.demo ",
+		Title:         " 演示秘钥 ",
+		KeyVersion:    " v1 ",
+		StableVersion: "v1",
+	}, nil, false, false)
+	if result.UUID != "app.demo" || result.Title != "演示秘钥" || result.KeyVersion != "v1" {
+		t.Fatalf("sanitized result = %+v", result)
+	}
+	if !result.AllPassed || !result.CanSave || result.CanEnable {
+		t.Fatalf("disabled validation result = %+v", result)
+	}
+	wantKeys := []string{"route.version", "crypto_status", "sign_status"}
+	if len(result.Items) != len(wantKeys) {
+		t.Fatalf("validation items = %+v", result.Items)
+	}
+	for index, wantKey := range wantKeys {
+		if result.Items[index].Key != wantKey {
+			t.Fatalf("validation item[%d] = %q, want %q", index, result.Items[index].Key, wantKey)
+		}
+	}
+}
+
+// TestCheckSecretKeyPayloadRejectsMissingFields 验证空请求仍返回可展示的完整失败结果而不会继续启用。
+func TestCheckSecretKeyPayloadRejectsMissingFields(t *testing.T) {
+	logicObj := NewSecretKeyLogic(context.Background(), svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+	result := logicObj.checkSecretKeyPayload(nil, nil, false, true)
+	if result.Mode != "self_check" || !result.RuntimeChecked {
+		t.Fatalf("runtime flags = %+v", result)
+	}
+	if result.AllPassed || result.CanSave || result.CanEnable || len(result.Items) == 0 {
+		t.Fatalf("missing field result = %+v", result)
+	}
+}
+
+// TestSecretKeySignFailureFieldsExcludeSensitiveValues 验证签名失败日志只保留非敏感定位字段。
+func TestSecretKeySignFailureFieldsExcludeSensitiveValues(t *testing.T) {
+	fields := secretKeySignFailureFields(" app.demo ", " v1 ", " runtime.rsa.verify ", " server_public_key ")
+	want := map[string]string{
+		"uuid":        "app.demo",
+		"key_version": "v1",
+		"stage":       "runtime.rsa.verify",
+		"secret_type": "server_public_key",
+	}
+	if len(fields) != len(want) {
+		t.Fatalf("log fields = %+v", fields)
+	}
+	for _, field := range fields {
+		value, ok := field.Value.(string)
+		if !ok || want[field.Key] != value {
+			t.Fatalf("log field %q = %#v, want %q", field.Key, field.Value, want[field.Key])
+		}
+		delete(want, field.Key)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing log fields = %+v", want)
+	}
+}
+
+// TestCheckSecretKeyPayloadRuntimeModes 验证签名、加解密及组合模式的真实 AES/RSA 自检链路。
+func TestCheckSecretKeyPayloadRuntimeModes(t *testing.T) {
+	tempDir := t.TempDir()
+	serverPrivatePEM, serverPublicPEM := generateTestRSAPEMPair(t)
+	_, userPublicPEM := generateTestRSAPEMPair(t)
+	paths := map[string]string{
+		"aes_key":            "12345678901234567890123456789012",
+		"aes_iv":             "1234567890123456",
+		"server_private.pem": serverPrivatePEM,
+		"server_public.pem":  serverPublicPEM,
+		"user_public.pem":    userPublicPEM,
+	}
+	for name, value := range paths {
+		filePath := filepath.Join(tempDir, name)
+		if err := os.WriteFile(filePath, []byte(value), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", filePath, err)
+		}
+		paths[name] = filePath
+	}
+
+	tests := []struct {
+		name         string   // name 表示运行态校验场景。
+		signStatus   int      // signStatus 表示是否启用签名验签。
+		cryptoStatus int      // cryptoStatus 表示是否启用加密解密。
+		wantItems    []string // wantItems 表示必须通过的关键运行态校验项。
+	}{
+		{
+			name:         "签名与加解密同时启用",
+			signStatus:   1,
+			cryptoStatus: 1,
+			wantItems:    []string{"rsa_server_pair.match", "runtime.aes.decrypt", "runtime.rsa.verify", "runtime.rsa.decrypt"},
+		},
+		{
+			name:       "仅启用签名验签",
+			signStatus: 1,
+			wantItems:  []string{"rsa_server_pair.match", "runtime.rsa.verify"},
+		},
+		{
+			name:         "仅启用加密解密",
+			cryptoStatus: 1,
+			wantItems:    []string{"runtime.aes.decrypt", "runtime.rsa.decrypt"},
+		},
+	}
+
+	logicObj := NewSecretKeyLogic(context.Background(), svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := logicObj.checkSecretKeyPayload(&types.SaveSecretKeyReq{
+				UUID:                   "app.demo",
+				Title:                  "演示秘钥",
+				KeyVersion:             "v1",
+				AESKeyRef:              paths["aes_key"],
+				AESIVRef:               paths["aes_iv"],
+				RSAPublicKeyUserRef:    paths["user_public.pem"],
+				RSAPublicKeyServerRef:  paths["server_public.pem"],
+				RSAPrivateKeyServerRef: paths["server_private.pem"],
+				Status:                 1,
+				SignStatus:             tt.signStatus,
+				CryptoStatus:           tt.cryptoStatus,
+				VersionStatus:          1,
+				StableVersion:          "v1",
+			}, nil, false, true)
+			if !result.AllPassed || !result.CanSave || !result.CanEnable || !result.RuntimeChecked {
+				t.Fatalf("runtime result = %+v", result)
+			}
+			for _, wantKey := range tt.wantItems {
+				found := false
+				for _, item := range result.Items {
+					if item.Key == wantKey {
+						found = item.Passed
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("runtime item %q did not pass: %+v", wantKey, result.Items)
+				}
+			}
+		})
+	}
+}
+
+// TestCheckSecretKeyPayloadRejectsMismatchedServerPair 验证不配对的服务端公私钥无法启用。
+func TestCheckSecretKeyPayloadRejectsMismatchedServerPair(t *testing.T) {
+	tempDir := t.TempDir()
+	serverPrivatePEM, _ := generateTestRSAPEMPair(t)
+	_, mismatchedServerPublicPEM := generateTestRSAPEMPair(t)
+	_, userPublicPEM := generateTestRSAPEMPair(t)
+	paths := map[string]string{
+		"server_private.pem": serverPrivatePEM,
+		"server_public.pem":  mismatchedServerPublicPEM,
+		"user_public.pem":    userPublicPEM,
+	}
+	for name, value := range paths {
+		filePath := filepath.Join(tempDir, name)
+		if err := os.WriteFile(filePath, []byte(value), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", filePath, err)
+		}
+		paths[name] = filePath
+	}
+
+	logicObj := NewSecretKeyLogic(context.Background(), svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+	result := logicObj.checkSecretKeyPayload(&types.SaveSecretKeyReq{
+		UUID:                   "app.demo",
+		Title:                  "演示秘钥",
+		KeyVersion:             "v1",
+		RSAPublicKeyUserRef:    paths["user_public.pem"],
+		RSAPublicKeyServerRef:  paths["server_public.pem"],
+		RSAPrivateKeyServerRef: paths["server_private.pem"],
+		Status:                 1,
+		SignStatus:             1,
+		VersionStatus:          1,
+		StableVersion:          "v1",
+	}, nil, false, true)
+	if result.AllPassed || result.CanEnable {
+		t.Fatalf("mismatched RSA pair should not be enabled: %+v", result)
+	}
+	if !result.CanSave {
+		t.Fatalf("structurally valid draft should remain savable: %+v", result)
+	}
+	for _, item := range result.Items {
+		if item.Key == "rsa_server_pair.match" && !item.Passed {
+			return
+		}
+	}
+	t.Fatalf("missing failed rsa pair item: %+v", result.Items)
+}
 
 // TestMaskSecretKeyValue 验证秘钥列表脱敏规则，避免敏感字段明文暴露。
 func TestMaskSecretKeyValue(t *testing.T) {

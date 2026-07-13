@@ -101,6 +101,18 @@ func TestValidateBootstrapConfigRejectsInvalidCollectorIdempotencyTTL(t *testing
 	}
 
 	cfg = validEnabledCollectorConfig()
+	cfg.Collector.Idempotency.ProcessingTTLSeconds = config.DefaultCollectorIdempotencyTTLSeconds + 1
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望显式 processing TTL 大于默认终态 TTL 返回错误，实际为 nil")
+	}
+
+	cfg = validEnabledCollectorConfig()
+	cfg.Collector.Idempotency.TTLSeconds = config.DefaultCollectorIdempotencyProcessingTTLSeconds - 1
+	if err := ValidateCollector(cfg); err == nil {
+		t.Fatal("期望默认 processing TTL 大于显式终态 TTL 返回错误，实际为 nil")
+	}
+
+	cfg = validEnabledCollectorConfig()
 	cfg.Collector.Idempotency.PipelineBatchSize = -1
 	if err := ValidateCollector(cfg); err == nil {
 		t.Fatal("期望 pipeline_batch_size 为负数返回错误，实际为 nil")
@@ -135,6 +147,54 @@ func TestValidateBootstrapConfigRejectsInvalidCollectorTaskPolicy(t *testing.T) 
 	}
 	if err := ValidateCollector(cfg); err == nil {
 		t.Fatal("期望 task batch_wait_milliseconds 超限返回错误，实际为 nil")
+	}
+}
+
+// TestValidateBootstrapConfigRejectsUnsafeCollectorRuntimeLimits 确保 Processor、租约和批次硬上限不能被配置绕过。
+func TestValidateBootstrapConfigRejectsUnsafeCollectorRuntimeLimits(t *testing.T) {
+	tests := []struct {
+		name   string               // 测试场景名称
+		mutate func(*config.Config) // 当前场景的非法配置变更
+	}{
+		{
+			name: "processor timeout",
+			mutate: func(cfg *config.Config) {
+				cfg.Collector.DefaultTask.ProcessorTimeoutSeconds = maxCollectorTimeoutSeconds + 1
+			},
+		},
+		{
+			name: "failure lease too short",
+			mutate: func(cfg *config.Config) {
+				cfg.Collector.FailureRetry.RunningLeaseSeconds = minCollectorLeaseSeconds - 1
+			},
+		},
+		{
+			name: "failure batch too large",
+			mutate: func(cfg *config.Config) {
+				cfg.Collector.FailureRetry.RunnerBatchSize = maxCollectorBatchSize + 1
+			},
+		},
+		{
+			name: "processing lease too short",
+			mutate: func(cfg *config.Config) {
+				cfg.Collector.Idempotency.ProcessingTTLSeconds = minCollectorLeaseSeconds - 1
+			},
+		},
+		{
+			name: "retry times too large",
+			mutate: func(cfg *config.Config) {
+				cfg.Collector.FailureRetry.MaxRetryTimes = maxCollectorRetryTimes + 1
+			},
+		},
+	}
+	for _, item := range tests {
+		t.Run(item.name, func(t *testing.T) {
+			cfg := validEnabledCollectorConfig()
+			item.mutate(&cfg)
+			if err := ValidateCollector(cfg); err == nil {
+				t.Fatal("期望不安全 Collector 配置返回错误")
+			}
+		})
 	}
 }
 

@@ -15,7 +15,7 @@ type LoginReq struct {
 	Captcha    string `json:"captcha,optional"`    // 图形验证码内容
 	Key        string `json:"key,optional"`        // 图形验证码 key
 	SecureCode string `json:"secureCode,optional"` // 安全验证码，参与登录签名与加密
-	IP         string `json:"ip,optional"`         // 登录 IP，允许由前端或网关注入
+	IP         string `json:"ip,optional"`         // 登录 IP，由 handler 使用可信代理规则覆盖客户端输入
 }
 
 // Validate 校验登录参数。
@@ -59,11 +59,16 @@ func (r *AddAdminReq) Validate() error {
 	if err := validateAdminPasswordRequired(r.Password, "密码"); err != nil {
 		return errors.Tag(err)
 	}
+	for _, roleID := range r.RoleIDs {
+		if roleID <= 0 {
+			return errors.Errorf("角色 ID不合法")
+		}
+	}
 	return nil
 }
 
-// AdminInfo 表示当前管理员的登录态与基础资料缓存结构。
-type AdminInfo struct {
+// AdminSession 表示当前管理员的会话与基础资料缓存结构。
+type AdminSession struct {
 	ID                int    `json:"id"`                // 管理员 ID
 	UserName          string `json:"username"`          // 登录用户名
 	RealName          string `json:"realName"`          // 真实姓名
@@ -80,51 +85,8 @@ type AdminInfo struct {
 	Token             string `json:"token"`             // 当前登录态 JWT 令牌
 }
 
-// AdminProfile 表示管理员公开资料缓存结构。
-// 该结构只保留登录后初始化、个人中心展示和会话重建所需字段，不缓存密码和 MFA 秘钥等敏感信息。
-type AdminProfile struct {
-	ID                int    `json:"id"`                // 管理员 ID
-	UserName          string `json:"username"`          // 登录用户名
-	RealName          string `json:"realName"`          // 真实姓名
-	NeedResetPassword int    `json:"needResetPassword"` // 是否必须修改登录密码：0 否，1 是
-	Email             string `json:"email"`             // 邮箱
-	Phone             string `json:"phone"`             // 电话
-	MfaStatus         int    `json:"mfaStatus"`         // MFA 状态：0 未启用，1 已启用
-	Status            int    `json:"status"`            // 账户状态：1 正常，0 禁用
-	Avatar            string `json:"avatar"`            // 头像地址
-	Description       string `json:"description"`       // 备注说明
-	LastLoginTime     string `json:"lastLoginTime"`     // 最近登录时间
-	LastLoginIP       string `json:"lastLoginIP"`       // 最近登录 IP
-	LastLoginIPAddr   string `json:"lastLoginIpaddr"`   // 最近登录 IP 归属地
-	CreatedAt         string `json:"createdAt"`         // 创建时间
-	UpdatedAt         string `json:"updatedAt"`         // 更新时间
-}
-
-// ToAdminInfo 把管理员公开资料转换成登录态缓存结构。
-func (a *AdminProfile) ToAdminInfo(token string) *AdminInfo {
-	if a == nil {
-		return &AdminInfo{Token: token}
-	}
-	return &AdminInfo{
-		ID:                a.ID,
-		UserName:          a.UserName,
-		RealName:          a.RealName,
-		NeedResetPassword: a.NeedResetPassword,
-		Email:             a.Email,
-		Phone:             a.Phone,
-		MfaStatus:         a.MfaStatus,
-		Status:            a.Status,
-		Avatar:            a.Avatar,
-		Description:       a.Description,
-		LastLoginTime:     a.LastLoginTime,
-		LastLoginIP:       a.LastLoginIP,
-		LastLoginIPAddr:   a.LastLoginIPAddr,
-		Token:             token,
-	}
-}
-
-// ToMap 将管理员信息转换为适合缓存写入的键值结构。
-func (a *AdminInfo) ToMap() map[string]any {
+// ToMap 将管理员会话转换为适合缓存写入的键值结构。
+func (a *AdminSession) ToMap() map[string]any {
 	return map[string]any{
 		"id":                a.ID,
 		"username":          a.UserName,
@@ -143,11 +105,11 @@ func (a *AdminInfo) ToMap() map[string]any {
 	}
 }
 
-// FromMap 从缓存读取结果中恢复管理员信息结构。
-func (a *AdminInfo) FromMap(m map[string]string) error {
+// FromMap 从缓存读取结果中恢复管理员会话结构。
+func (a *AdminSession) FromMap(m map[string]string) error {
 	if v, ok := m["id"]; ok {
 		if _, err := fmt.Sscanf(v, "%d", &a.ID); err != nil {
-			return errors.Wrap(err, "解析 AdminInfo ID 失败")
+			return errors.Wrap(err, "解析 AdminSession ID 失败")
 		}
 	}
 	if v, ok := m["username"]; ok {
@@ -158,7 +120,7 @@ func (a *AdminInfo) FromMap(m map[string]string) error {
 	}
 	if v, ok := m["needResetPassword"]; ok {
 		if _, err := fmt.Sscanf(v, "%d", &a.NeedResetPassword); err != nil {
-			return errors.Wrap(err, "解析 AdminInfo NeedResetPassword 失败")
+			return errors.Wrap(err, "解析 AdminSession NeedResetPassword 失败")
 		}
 	}
 	if v, ok := m["email"]; ok {
@@ -169,12 +131,12 @@ func (a *AdminInfo) FromMap(m map[string]string) error {
 	}
 	if v, ok := m["mfaStatus"]; ok {
 		if _, err := fmt.Sscanf(v, "%d", &a.MfaStatus); err != nil {
-			return errors.Wrap(err, "解析 AdminInfo MfaStatus 失败")
+			return errors.Wrap(err, "解析 AdminSession MfaStatus 失败")
 		}
 	}
 	if v, ok := m["status"]; ok {
 		if _, err := fmt.Sscanf(v, "%d", &a.Status); err != nil {
-			return errors.Wrap(err, "解析 AdminInfo Status 失败")
+			return errors.Wrap(err, "解析 AdminSession Status 失败")
 		}
 	}
 	if v, ok := m["avatar"]; ok {

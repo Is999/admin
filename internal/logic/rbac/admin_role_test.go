@@ -3,9 +3,9 @@ package rbac
 import (
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
-	"admin/internal/routealias"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +18,23 @@ import (
 	"admin/internal/types"
 
 	"github.com/alicebob/miniredis/v2"
+	miniredisserver "github.com/alicebob/miniredis/v2/server"
 	"github.com/redis/go-redis/v9"
 )
+
+// runRBACStandaloneRedis 模拟真实单机 Redis 的拓扑探测响应。
+func runRBACStandaloneRedis(t *testing.T) *miniredis.Miniredis {
+	t.Helper()
+	server := miniredis.RunT(t)
+	server.Server().SetPreHook(func(peer *miniredisserver.Peer, command string, args ...string) bool {
+		if !strings.EqualFold(command, "cluster") || len(args) != 1 || !strings.EqualFold(args[0], "info") {
+			return false
+		}
+		peer.WriteError("ERR This instance has cluster support disabled")
+		return true
+	})
+	return server
+}
 
 // TestRetainAssignablePermissionIDs 验证权限收敛时只保留父级允许范围内的权限。
 func TestRetainAssignablePermissionIDs(t *testing.T) {
@@ -57,6 +72,104 @@ func TestParentRoleUsesFullPermissionScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := parentRoleUsesFullPermissionScope(tt.parentRoleID, tt.isSuperRole); got != tt.want {
 				t.Fatalf("parentRoleUsesFullPermissionScope(%d, %t) = %v, want %v", tt.parentRoleID, tt.isSuperRole, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRolePidsFromHierarchy 验证角色族谱只按真实 pid 链计算，不依赖可能滞后的 pids。
+func TestRolePidsFromHierarchy(t *testing.T) {
+	roles := []model.AdminRole{
+		{ID: 1, Pid: 0, Pids: ""},
+		{ID: 5, Pid: 1, Pids: "stale"},
+		{ID: 6, Pid: 5, Pids: "stale"},
+	}
+	got, err := rolePidsFromHierarchy(roles, 6, 9)
+	if err != nil {
+		t.Fatalf("rolePidsFromHierarchy() error = %v", err)
+	}
+	if got != "1,5,6" {
+		t.Fatalf("rolePidsFromHierarchy() = %q, want %q", got, "1,5,6")
+	}
+}
+
+// TestRolePidsFromHierarchyRejectsDescendant 验证角色不能移动到自己的子级下面。
+func TestRolePidsFromHierarchyRejectsDescendant(t *testing.T) {
+	roles := []model.AdminRole{
+		{ID: 1, Pid: 0},
+		{ID: 2, Pid: 1},
+		{ID: 3, Pid: 2},
+	}
+	if _, err := rolePidsFromHierarchy(roles, 3, 2); err == nil {
+		t.Fatal("rolePidsFromHierarchy() should reject descendant parent")
+	}
+}
+
+// TestDisabledRolePathID 校验启用角色时会识别真实父级链上的禁用节点。
+func TestDisabledRolePathID(t *testing.T) {
+	roles := []model.AdminRole{
+		{ID: 1, Pid: 0, Status: 1},
+		{ID: 2, Pid: 1, Status: 0},
+		{ID: 3, Pid: 2, Status: 1},
+	}
+	if got, err := disabledRolePathID(roles, 3); err != nil || got != 2 {
+		t.Fatalf("disabledRolePathID() = (%d, %v), want (2, nil)", got, err)
+	}
+	if got, err := disabledRolePathID(roles, 1); err != nil || got != 0 {
+		t.Fatalf("disabledRolePathID(root) = (%d, %v), want (0, nil)", got, err)
+	}
+}
+
+// TestDescendantRolePidsRebuildsMovedSubtree 验证角色换父级后全部子孙族谱同步切换到新祖先链。
+func TestDescendantRolePidsRebuildsMovedSubtree(t *testing.T) {
+	roles := []model.AdminRole{
+		{ID: 1, Pid: 0, Pids: ""},
+		{ID: 5, Pid: 1, Pids: "1"},
+		{ID: 2, Pid: 5, Pids: "1,5"},
+		{ID: 3, Pid: 2, Pids: "1,2"},
+		{ID: 4, Pid: 3, Pids: "1,2,3"},
+		{ID: 8, Pid: 1, Pids: "1"},
+	}
+	got, err := descendantRolePids(roles, 2)
+	if err != nil {
+		t.Fatalf("descendantRolePids() error = %v", err)
+	}
+	if got[3] != "1,5,2" || got[4] != "1,5,2,3" {
+		t.Fatalf("descendantRolePids() = %v", got)
+	}
+	if _, ok := got[8]; ok {
+		t.Fatalf("descendantRolePids() should not include sibling role: %v", got)
+	}
+}
+
+// TestEffectiveRolePermissionIDs 验证超级角色自身按隐式全权限展示。
+func TestEffectiveRolePermissionIDs(t *testing.T) {
+	assertIntSetEqual(t, effectiveRolePermissionIDs(corelogic.AdminSuperRoleID, nil, []int{1, 2}), []int{1, 2})
+	assertIntSetEqual(t, effectiveRolePermissionIDs(2, []int{2}, []int{1, 2}), []int{2})
+}
+
+// TestRoleParentIDForUpdate 验证普通角色采用明确父级，超级角色始终固定在根节点。
+func TestRoleParentIDForUpdate(t *testing.T) {
+	tests := []struct {
+		name         string // 测试场景
+		roleID       int    // 目标角色 ID
+		requestedPid int    // 请求父角色 ID
+		want         int    // 期望父角色 ID
+		wantErr      bool   // 是否期望错误
+	}{
+		{name: "normal moves to root", roleID: 2, requestedPid: 0, want: 0},
+		{name: "normal changes parent", roleID: 2, requestedPid: 3, want: 3},
+		{name: "super stays root", roleID: corelogic.AdminSuperRoleID, requestedPid: 0, want: 0},
+		{name: "super rejects parent", roleID: corelogic.AdminSuperRoleID, requestedPid: 3, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := roleParentIDForUpdate(tt.roleID, tt.requestedPid)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("roleParentIDForUpdate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("roleParentIDForUpdate() = %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -165,31 +278,66 @@ func TestParentRoleSetFromIncludesOperatorRoles(t *testing.T) {
 	}
 }
 
-// TestDocumentPermissionEntryNormalization 验证文档子权限保存时会补齐入口权限，并清理缺少入口的半截授权。
+// TestRoleItemScopeSetFromUsesCachedTree 验证角色树展示范围可直接基于缓存节点计算。
+func TestRoleItemScopeSetFromUsesCachedTree(t *testing.T) {
+	items := []types.AdminRoleItem{
+		{
+			ID:   1,
+			Pids: "",
+			Children: []types.AdminRoleItem{
+				{
+					ID:   2,
+					Pids: "1",
+					Children: []types.AdminRoleItem{
+						{ID: 3, Pids: "1,2"},
+					},
+				},
+				{ID: 4, Pids: "1"},
+			},
+		},
+	}
+	manageable := roleItemScopeSetFrom(items, []int{2}, false, false)
+	if _, ok := manageable[3]; !ok || len(manageable) != 1 {
+		t.Fatalf("roleItemScopeSetFrom(manageable) = %v, want only role 3", manageable)
+	}
+	parentOptions := roleItemScopeSetFrom(items, []int{2}, false, true)
+	for _, roleID := range []int{2, 3} {
+		if _, ok := parentOptions[roleID]; !ok {
+			t.Fatalf("roleItemScopeSetFrom(parent) missing role %d: %v", roleID, parentOptions)
+		}
+	}
+}
+
+// TestRoleDocPermissionIDsUsesCache 验证角色文档权限命中 Redis 时不依赖数据库。
+func TestRoleDocPermissionIDsUsesCache(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	logicObj := &AdminRoleLogic{
+		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})),
+	}
+	cacheKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.RoleDocPermission, 3))
+	if err := client.SAdd(context.Background(), cacheKey, "10", "11").Err(); err != nil {
+		t.Fatalf("写入角色文档权限缓存失败: %v", err)
+	}
+	permissionIDs, err := logicObj.roleDocPermissionRelationIDsWithCache(3)
+	if err != nil {
+		t.Fatalf("roleDocPermissionRelationIDsWithCache(3) error=%v", err)
+	}
+	assertIntSetEqual(t, permissionIDs, []int{10, 11})
+}
+
+// TestDocumentPermissionEntryNormalization 验证文档权限必须同时拥有对应站点入口路由。
 func TestDocumentPermissionEntryNormalization(t *testing.T) {
-	idAlias := map[int]routealias.Alias{
-		99:  routealias.DocsIndex,
-		160: routealias.DocsAPIIndex,
-		164: routealias.DocsAPIServiceIndex,
-		165: routealias.DocsAPIServiceFront,
-		210: routealias.Alias("docs.file.角色文档/后端开发/AI开发提示词.md"),
-		222: routealias.Alias("docs.file.api/接口文档/前台系统/系统接口.md"),
+	docSites := map[int]string{
+		210: "admin",
+		222: "api",
 	}
-	aliasID := map[routealias.Alias]int{
-		routealias.DocsIndex:           99,
-		routealias.DocsAPIIndex:        160,
-		routealias.DocsAPIServiceIndex: 164,
-		routealias.DocsAPIServiceFront: 165,
-		routealias.Alias("docs.file.角色文档/后端开发/AI开发提示词.md"):  210,
-		routealias.Alias("docs.file.api/接口文档/前台系统/系统接口.md"): 222,
+	entryPermissionIDs := map[string]int{
+		"admin": 99,
+		"api":   164,
 	}
-
-	expanded := expandDocumentEntryPermissionIDs([]int{160, 165, 210, 222}, idAlias, aliasID)
-	assertIntSetEqual(t, expanded, []int{99, 160, 164, 165, 210, 222})
-
-	retained := retainAssignablePermissionIDs(expanded, []int{99, 160, 165, 210, 222})
-	complete := retainCompleteDocumentPermissionIDs(retained, idAlias, aliasID)
-	assertIntSetEqual(t, complete, []int{99, 160, 210})
+	retained := retainDocPermissionsWithEntries([]int{210, 222}, docSites, entryPermissionIDs, []int{99})
+	assertIntSetEqual(t, retained, []int{210})
 }
 
 // TestPermissionAncestorNormalization 验证角色授权保存时补齐菜单祖先，避免子菜单有权限但父菜单不可见。
@@ -240,8 +388,8 @@ func TestWithRolePermissionWriteLockReturnsServiceBusyWhenLocked(t *testing.T) {
 	logicObj := &AdminRoleLogic{
 		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})),
 	}
-	lock := redislock.NewLock(client, logicObj.AppRedisKey(keys.RolePermissionWriteLock))
-	if err := lock.TryLock(context.Background(), rolePermissionWriteLockTTL); err != nil {
+	lock := redislock.NewLock(client, logicObj.AppRedisKey(keys.RBACWriteLock))
+	if err := lock.TryLock(context.Background(), rbacWriteLockTTL); err != nil {
 		t.Fatalf("TryLock() error = %v", err)
 	}
 	defer func() {
@@ -288,7 +436,7 @@ func TestWithRolePermissionWriteLockExecutesWhenUnlocked(t *testing.T) {
 
 // TestRefreshRoleRelatedCacheByScopeDeletesExactAdminCaches 验证角色缓存刷新只精确删除受影响管理员的高基数缓存。
 func TestRefreshRoleRelatedCacheByScopeDeletesExactAdminCaches(t *testing.T) {
-	server := miniredis.RunT(t)
+	server := runRBACStandaloneRedis(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	logicObj := &AdminRoleLogic{
 		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})),
@@ -298,18 +446,15 @@ func TestRefreshRoleRelatedCacheByScopeDeletesExactAdminCaches(t *testing.T) {
 		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RoleTree),
 		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RoleStatus),
 		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.RolePermission, 3)),
+		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.RoleDocPermission, 3)),
 	}
 	targetAdminKeys := []string{
-		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminRoleIDs, 7)),
 		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminRolesDetail, 7)),
-		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminPermissionIDs, 7)),
-		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminPermissionUUIDs, 7)),
 	}
 	untouchedAdminKeys := []string{
+		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminRoleIDs, 7)),
 		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminRoleIDs, 8)),
 		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminRolesDetail, 8)),
-		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminPermissionIDs, 8)),
-		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminPermissionUUIDs, 8)),
 	}
 	for _, key := range append(append(roleCacheKeys, targetAdminKeys...), untouchedAdminKeys...) {
 		if err := client.SAdd(ctx, key, "value").Err(); err != nil {
@@ -317,7 +462,9 @@ func TestRefreshRoleRelatedCacheByScopeDeletesExactAdminCaches(t *testing.T) {
 		}
 	}
 
-	logicObj.refreshRoleRelatedCacheByScope([]int{3}, []int{7})
+	if err := logicObj.refreshRoleRelatedCacheByScope([]int{3}, []int{7}); err != nil {
+		t.Fatalf("refreshRoleRelatedCacheByScope() error=%v", err)
+	}
 
 	for _, key := range append(roleCacheKeys, targetAdminKeys...) {
 		if server.Exists(key) {
@@ -328,6 +475,36 @@ func TestRefreshRoleRelatedCacheByScopeDeletesExactAdminCaches(t *testing.T) {
 		if !server.Exists(key) {
 			t.Fatalf("refreshRoleRelatedCacheByScope() unrelated key %s should be kept", key)
 		}
+	}
+}
+
+// TestRefreshRolePermissionCacheKeepsAdminRoleCache 验证权限关系变更不再扇出清理管理员角色缓存。
+func TestRefreshRolePermissionCacheKeepsAdminRoleCache(t *testing.T) {
+	server := runRBACStandaloneRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	logicObj := &AdminRoleLogic{
+		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})),
+	}
+	ctx := context.Background()
+	rolePermissionKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.RolePermission, 3))
+	roleDocPermissionKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.RoleDocPermission, 3))
+	adminRoleKey := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, fmt.Sprintf(keys.AdminRoleIDs, 7))
+	for _, key := range []string{rolePermissionKey, roleDocPermissionKey, adminRoleKey} {
+		if err := client.SAdd(ctx, key, "1").Err(); err != nil {
+			t.Fatalf("SAdd(%s) error=%v", key, err)
+		}
+	}
+
+	if err := logicObj.refreshRolePermissionCache(3); err != nil {
+		t.Fatalf("refreshRolePermissionCache() error=%v", err)
+	}
+	for _, key := range []string{rolePermissionKey, roleDocPermissionKey} {
+		if server.Exists(key) {
+			t.Fatalf("refreshRolePermissionCache() key %s should be deleted", key)
+		}
+	}
+	if !server.Exists(adminRoleKey) {
+		t.Fatalf("refreshRolePermissionCache() admin role key %s should be kept", adminRoleKey)
 	}
 }
 
@@ -399,16 +576,18 @@ func TestMarkRoleTreeScopeDisablesOutOfManageNodes(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("markRoleTreeScope() len = %d, want 2", len(got))
 	}
-	if got[0].Disabled || got[0].DisableCheckbox || !got[0].Selectable {
+	if got[0].Disabled || got[0].DisableCheckbox || !got[0].Selectable || !got[0].Manageable {
 		t.Fatalf("父角色状态不符合预期: %+v", got[0])
 	}
-	if got[0].Children[0].Disabled || got[0].Children[0].DisableCheckbox || !got[0].Children[0].Selectable {
+	if got[0].Children[0].Disabled || got[0].Children[0].DisableCheckbox ||
+		!got[0].Children[0].Selectable || !got[0].Children[0].Manageable {
 		t.Fatalf("可管理子角色状态不符合预期: %+v", got[0].Children[0])
 	}
-	if !got[0].Children[1].Disabled || !got[0].Children[1].DisableCheckbox || got[0].Children[1].Selectable {
+	if !got[0].Children[1].Disabled || !got[0].Children[1].DisableCheckbox ||
+		got[0].Children[1].Selectable || got[0].Children[1].Manageable {
 		t.Fatalf("越权子角色应被锁定: %+v", got[0].Children[1])
 	}
-	if !got[1].Disabled || !got[1].DisableCheckbox || got[1].Selectable {
+	if !got[1].Disabled || !got[1].DisableCheckbox || got[1].Selectable || got[1].Manageable {
 		t.Fatalf("禁用角色应保持不可选: %+v", got[1])
 	}
 }
@@ -456,18 +635,55 @@ func TestMarkRoleTreeParentScopeAllowsOperatorRole(t *testing.T) {
 		},
 	}
 
-	got := markRoleTreeScope(items, parentRoleSetFrom(roles, []int{2}, false))
+	parentRoleSet := parentRoleSetFrom(roles, []int{2}, false)
+	got := markRoleTreeParentScope(items, parentRoleSet, true)
 
 	adminNode := got[0].Children[0]
-	if adminNode.Disabled || adminNode.DisableCheckbox || !adminNode.Selectable {
+	if adminNode.Disabled || adminNode.DisableCheckbox || !adminNode.Selectable || !adminNode.CanCreateChild {
 		t.Fatalf("自身角色应允许作为新增下级父级: %+v", adminNode)
 	}
 	childNode := adminNode.Children[0]
-	if childNode.Disabled || childNode.DisableCheckbox || !childNode.Selectable {
+	if childNode.Disabled || childNode.DisableCheckbox || !childNode.Selectable || !childNode.CanCreateChild {
 		t.Fatalf("自身后代角色应允许继续作为父级: %+v", childNode)
 	}
 	siblingNode := got[0].Children[1]
-	if !siblingNode.Disabled || !siblingNode.DisableCheckbox || siblingNode.Selectable {
+	if !siblingNode.Disabled || !siblingNode.DisableCheckbox || siblingNode.Selectable || siblingNode.CanCreateChild {
 		t.Fatalf("同级角色不应允许作为父级: %+v", siblingNode)
+	}
+}
+
+// TestMarkRoleTreeCreateScopeDisablesCreateBelowDisabledAncestor 验证禁用角色路径下不能新增子角色。
+func TestMarkRoleTreeCreateScopeDisablesCreateBelowDisabledAncestor(t *testing.T) {
+	items := []types.AdminRoleItem{{
+		ID:       2,
+		Status:   0,
+		IsDelete: 0,
+		Children: []types.AdminRoleItem{{
+			ID:       3,
+			Status:   1,
+			IsDelete: 0,
+		}},
+	}}
+	got := markRoleTreeCreateScope(items, map[int]struct{}{2: {}, 3: {}}, true)
+	if got[0].CanCreateChild || got[0].Children[0].CanCreateChild {
+		t.Fatalf("disabled role path must not allow child creation: %+v", got)
+	}
+}
+
+// TestMarkRoleTreeParentScopeDisablesSelectionBelowDisabledAncestor 验证父级下拉不会暴露后端必然拒绝的禁用路径。
+func TestMarkRoleTreeParentScopeDisablesSelectionBelowDisabledAncestor(t *testing.T) {
+	items := []types.AdminRoleItem{{
+		ID:       2,
+		Status:   0,
+		IsDelete: 0,
+		Children: []types.AdminRoleItem{{
+			ID:       3,
+			Status:   1,
+			IsDelete: 0,
+		}},
+	}}
+	got := markRoleTreeParentScope(items, map[int]struct{}{2: {}, 3: {}}, true)
+	if !got[0].Disabled || got[0].Selectable || !got[0].Children[0].Disabled || got[0].Children[0].Selectable {
+		t.Fatalf("禁用角色路径不应出现在可选父级中: %+v", got)
 	}
 }

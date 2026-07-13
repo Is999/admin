@@ -34,10 +34,10 @@ func Normalize(c *config.Config) {
 	inheritCollectorKafkaCommon(c)
 	inheritCDCKafkaCommon(c)
 	c.Observability.Environment = strings.TrimSpace(c.Mode)
-	if c.User.RouteShardCount <= 0 {
+	if c.User.RouteShardCount == 0 {
 		c.User.RouteShardCount = defaultUserRouteShardCount
 	}
-	if c.User.ExportSplitRows <= 0 {
+	if c.User.ExportSplitRows == 0 {
 		c.User.ExportSplitRows = defaultUserExportSplitRows
 	}
 }

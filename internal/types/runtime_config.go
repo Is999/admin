@@ -3,8 +3,11 @@
 package types
 
 import (
-	"admin/helper"
 	"strings"
+	"time"
+
+	"admin/helper"
+	tasklimits "admin/internal/task/limits"
 
 	"github.com/Is999/go-utils/errors"
 )
@@ -98,11 +101,28 @@ func (r *SaveRuntimeTaskPeriodicReq) Validate() error {
 	if r.Cron != "" && r.EverySeconds > 0 {
 		return errors.Errorf("cron 和 everySeconds 不能同时配置")
 	}
+	if r.EverySeconds > 0 && r.EverySeconds < tasklimits.MinPeriodicEverySeconds {
+		return errors.Errorf("everySeconds 不能小于 %d", tasklimits.MinPeriodicEverySeconds)
+	}
 	if r.GrayPercent < 0 || r.GrayPercent > 100 {
 		return errors.Errorf("grayPercent 必须在 0 到 100 之间")
 	}
 	if r.Retry < 0 || r.TimeoutSeconds < 0 || r.UniqueTTLSeconds < 0 || r.ShardTotal < 0 {
 		return errors.Errorf("retry、timeoutSeconds、uniqueTtlSeconds、shardTotal 不能小于 0")
+	}
+	if r.Retry > tasklimits.MaxRetry {
+		return errors.Errorf("retry 不能超过 %d", tasklimits.MaxRetry)
+	}
+	if r.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
+		return errors.Errorf("timeoutSeconds 不能超过 %d", tasklimits.MaxTimeoutSeconds)
+	}
+	if r.ShardTotal > tasklimits.MaxShardTotal {
+		return errors.Errorf("shardTotal 不能超过 %d", tasklimits.MaxShardTotal)
+	}
+	if r.Deadline != "" {
+		if _, err := time.Parse(time.RFC3339, r.Deadline); err != nil {
+			return errors.Errorf("deadline 必须为 RFC3339 时间格式")
+		}
 	}
 	r.Targets = helper.UniqueNonEmptyStrings(r.Targets)
 	if len(r.Targets) == 0 {
@@ -283,6 +303,7 @@ type RuntimeConfigPublishResp struct {
 	ReleaseID       uint64 `json:"releaseId"`       // 新发布 ID
 	VersionNo       uint64 `json:"versionNo"`       // 新版本号
 	Checksum        string `json:"checksum"`        // 快照 SHA256
+	Applied         bool   `json:"applied"`         // 当前实例是否已完成运行态应用
 	RestartRequired bool   `json:"restartRequired"` // 是否需要重启才能完全生效
 	RestartReason   string `json:"restartReason"`   // 重启原因
 }
@@ -380,6 +401,54 @@ type RuntimeArchiveJobItem struct {
 	Remark                  string `json:"remark"`                  // 备注
 	CreatedAt               string `json:"createdAt"`               // 创建时间
 	UpdatedAt               string `json:"updatedAt"`               // 更新时间
+}
+
+// RuntimeArchiveProgressResp 表示归档任务执行详情。
+type RuntimeArchiveProgressResp struct {
+	JobID              uint64                       `json:"jobId"`              // 归档任务草稿 ID
+	JobName            string                       `json:"jobName"`            // 归档任务名
+	RuntimeMatched     bool                         `json:"runtimeMatched"`     // 当前运行态是否存在同名任务
+	RuntimeEnabled     bool                         `json:"runtimeEnabled"`     // 当前运行态归档模块和同名任务是否均已启用
+	SchemaReady        bool                         `json:"schemaReady"`        // 归档水位表和区间表是否均已创建
+	Phase              string                       `json:"phase"`              // 当前执行阶段
+	WatermarkTime      string                       `json:"watermarkTime"`      // 已完整复制到历史表的排他上界；无水位时为空
+	WatermarkUpdatedAt string                       `json:"watermarkUpdatedAt"` // 水位最近更新时间；无水位时为空
+	EligibleUntil      string                       `json:"eligibleUntil"`      // 当前允许归档到的排他上界；任务未启用时为空
+	PlannedUntil       string                       `json:"plannedUntil"`       // 已规划区间的最远排他上界；无区间时为空
+	LagSeconds         *int64                       `json:"lagSeconds"`         // 有可靠水位或区间基线时的滞后秒数；无法计算时为空
+	Counts             RuntimeArchiveProgressCounts `json:"counts"`             // 各区间状态数量
+	CurrentSegment     *RuntimeArchiveSegmentItem   `json:"currentSegment"`     // 当前活动或最近租约过期的执行区间；无执行记录时为空
+	RecentSegments     []RuntimeArchiveSegmentItem  `json:"recentSegments"`     // 最近区间按起点倒序排列，最多 20 条
+	FetchedAt          string                       `json:"fetchedAt"`          // 本次运行态快照生成时间
+}
+
+// RuntimeArchiveProgressCounts 表示归档区间状态数量。
+type RuntimeArchiveProgressCounts struct {
+	Total    int64 `json:"total"`    // 区间总数
+	Pending  int64 `json:"pending"`  // 待领取区间数
+	Running  int64 `json:"running"`  // 正在归档区间数
+	Done     int64 `json:"done"`     // 已归档待删除区间数
+	Deleting int64 `json:"deleting"` // 正在删除区间数
+	Deleted  int64 `json:"deleted"`  // 已完成热表删除区间数
+	Failed   int64 `json:"failed"`   // 归档失败待重试区间数
+}
+
+// RuntimeArchiveSegmentItem 表示单个归档区间的执行详情。
+type RuntimeArchiveSegmentItem struct {
+	ID                       uint64   `json:"id"`                       // 区间 ID
+	HistoryTableName         string   `json:"historyTableName"`         // 历史表名
+	RangeStart               string   `json:"rangeStart"`               // 区间起点（含）
+	RangeEnd                 string   `json:"rangeEnd"`                 // 区间终点（不含）
+	Status                   string   `json:"status"`                   // 区间状态
+	WorkerID                 string   `json:"workerId"`                 // 当前持有 worker；非执行态为空
+	LeaseExpiresAt           string   `json:"leaseExpiresAt"`           // 当前租约过期时间；非执行态为空
+	LastArchivedID           string   `json:"lastArchivedId"`           // 最近归档主键游标；字符串避免前端整数精度丢失
+	LastArchivedTime         string   `json:"lastArchivedTime"`         // 最近归档时间游标；尚未推进时为空
+	RowsArchived             int64    `json:"rowsArchived"`             // 累计归档行数
+	AttemptCount             int      `json:"attemptCount"`             // 领取次数
+	UpdatedAt                string   `json:"updatedAt"`                // 最近更新时间
+	CompletedAt              string   `json:"completedAt"`              // 归档完成时间；未完成时为空
+	EstimatedProgressPercent *float64 `json:"estimatedProgressPercent"` // 复制阶段按时间游标估算的区间进度百分比；非复制阶段为空
 }
 
 // runtimeArchiveNegative 判断归档请求中是否存在负数运行参数。

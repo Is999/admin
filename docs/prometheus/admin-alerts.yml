@@ -1,6 +1,15 @@
 groups:
   - name: admin
     rules:
+      - alert: AdminCollectorLeaseRenewFailed
+        expr: sum by (lease) (rate(admin_collector_lease_renew_total{result="failed"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "admin Collector lease renewal failed"
+          description: "Collector {{ $labels.lease }} ownership renewal is failing; processors are cancelled and wait for safe replay."
+
       - alert: AdminCollectorProcessorFailed
         expr: sum by (biz_type) (rate(admin_collector_processor_events_total{result!="success"}[5m])) > 0
         for: 10m

@@ -36,6 +36,7 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 	notifier.now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
 
 	err = notifier.SendTaskDailyReport(context.Background(), TaskDailyReport{
+		ReportID:              "report-1",
 		ServiceName:           "admin",
 		Environment:           "prod",
 		AppID:                 "203",
@@ -65,6 +66,7 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 			NodeTasks:      8,
 			Pending:        1,
 			Active:         2,
+			Scheduled:      3,
 			Retry:          0,
 			Archived:       1,
 		}},
@@ -136,7 +138,7 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 			TraceErrors:  7,
 			TraceDetails: []string{"kafka_outbox 7"},
 		}},
-		RetentionWarning: "completed_retention_seconds 不大于统计窗口",
+		IntegrityWarnings: []string{"窗口最早数据已达到终态任务保留期"},
 	})
 	if err != nil {
 		t.Fatalf("send task daily report failed: %v", err)
@@ -161,10 +163,11 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 		"P3 任务运行日报 | 存在失败",
 		"**状态**：存在终态失败",
 		"**窗口**：2026-06-29 10:00 ~ 2026-06-30 10:00",
-		"**队列积压**\npending 1 / active 2 / retry 0 / archived 1",
+		"**日报 ID**\nreport-1",
+		"**队列积压**\npending 1 / active 2 / scheduled 3 / retry 0 / archived 1",
 		"**总览**",
 		"- 周期触发：4 次，成功 3，失败 1",
-		"- 工作流：4 个，成功 3，失败 1",
+		"- 涉及工作流：4 个，成功 3，失败 1",
 		"- 处理量：总 10，读 0，写 0，删 0，错 7",
 		"**重点关注**",
 		"- 失败：任务 1，工作流 1",
@@ -185,7 +188,7 @@ func TestSendTaskDailyReportBuildsReadableCard(t *testing.T) {
 		"user_tag.delta.refresh/sync_kafka；错 7；时间 2026-06-30 09:57",
 		"明细 kafka_outbox 7",
 		"**处理建议**",
-		"- 数据完整性：completed_retention_seconds 不大于统计窗口",
+		"- 数据完整性：窗口最早数据已达到终态任务保留期",
 		"处理量存在隔离错误",
 		`<at id=all></at>`,
 	} {
@@ -259,5 +262,44 @@ func TestTaskDailyReportTraceErrorsNeedAttention(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("card text missing %q:\n%s", want, text)
 		}
+	}
+}
+
+// TestTaskDailyReportIntegrityWarningAvoidsFalseHealthyAdvice 验证数据不完整时不会宣称窗口内确定无失败。
+func TestTaskDailyReportIntegrityWarningAvoidsFalseHealthyAdvice(t *testing.T) {
+	notifier := &Notifier{maxErrorByte: defaultMaxErrorBytes, now: time.Now}
+	warning := "archived 任务达到实际裁剪阈值，失败统计可能不完整"
+	card := notifier.formatTaskDailyReportCard(TaskDailyReport{
+		ServiceName:       "admin",
+		IntegrityWarnings: []string{warning},
+	})
+	if card.Header == nil || card.Header.Template != "orange" || card.Header.Title.Content != "P3 任务运行日报 | 需关注" {
+		t.Fatalf("完整性风险卡片等级异常: %+v", card.Header)
+	}
+	text := cardTextContent(card)
+	if !strings.Contains(text, "**状态**：统计完整性存在风险，当前可见数据不能证明窗口运行正常") {
+		t.Fatalf("完整性风险状态摘要缺失:\n%s", text)
+	}
+	if !strings.Contains(text, "当前可见数据未发现终态失败，但存在数据完整性风险") {
+		t.Fatalf("完整性风险处理建议缺失:\n%s", text)
+	}
+	if strings.Contains(text, "当前窗口无终态失败；继续观察") {
+		t.Fatalf("完整性风险下不应输出确定无失败结论:\n%s", text)
+	}
+	if count := strings.Count(text, warning); count != 2 {
+		t.Fatalf("完整性提示应分别在重点关注和处理建议出现一次，实际=%d:\n%s", count, text)
+	}
+}
+
+// TestTaskDailyReportUnknownWorkflowDoesNotClaimHealthy 验证未知工作流状态不会输出正常结论。
+func TestTaskDailyReportUnknownWorkflowDoesNotClaimHealthy(t *testing.T) {
+	notifier := &Notifier{maxErrorByte: defaultMaxErrorBytes, now: time.Now}
+	card := notifier.formatTaskDailyReportCard(TaskDailyReport{ServiceName: "admin", WorkflowTotal: 1, WorkflowUnknown: 1})
+	text := cardTextContent(card)
+	if !strings.Contains(text, "**状态**：存在无法确认状态的工作流，当前不能判定窗口运行正常") {
+		t.Fatalf("未知工作流状态摘要缺失:\n%s", text)
+	}
+	if strings.Contains(text, "**状态**：周期任务与工作流运行正常") {
+		t.Fatalf("未知工作流不应输出正常结论:\n%s", text)
 	}
 }

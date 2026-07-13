@@ -57,6 +57,19 @@ func TestCorePluginsNoDefaultCacheTargets(t *testing.T) {
 	}
 }
 
+// TestWorkflowTriggerIDUsesStableAsynqTaskID 验证周期触发重试复用同一个 Asynq 任务 ID。
+func TestWorkflowTriggerIDUsesStableAsynqTaskID(t *testing.T) {
+	if got, err := workflowTriggerID("", "periodic-trigger-1"); err != nil || got != "periodic-trigger-1" {
+		t.Fatalf("周期触发 ID 解析失败 got=%s err=%v", got, err)
+	}
+	if got, err := workflowTriggerID("manual-workflow-1", "trigger-task-1"); err != nil || got != "manual-workflow-1" {
+		t.Fatalf("手动触发应优先保留载荷 ID got=%s err=%v", got, err)
+	}
+	if _, err := workflowTriggerID("", ""); err == nil {
+		t.Fatal("缺少载荷 ID 和 Asynq 任务 ID 时应拒绝启动")
+	}
+}
+
 // TestCorePluginSpecsValid 确保核心插件规格字段完整且名称唯一。
 func TestCorePluginSpecsValid(t *testing.T) {
 	specs := CorePluginSpecs()
@@ -161,9 +174,8 @@ func TestAggregateCacheRefreshTasksKeepsCompletedRetention(t *testing.T) {
 	defer func() { _ = client.Close() }()
 
 	manager := taskqueue.New(config.TaskQueueConfig{
-		Enabled:                   true,
-		AppID:                     "1",
-		CompletedRetentionSeconds: 45,
+		Enabled: true,
+		AppID:   "1",
 	}, client)
 	runtime := NewRuntime(&svc.ServiceContext{}, manager)
 	task := runtime.aggregateCacheRefreshTasks([]*asynq.Task{
@@ -183,8 +195,8 @@ func TestAggregateCacheRefreshTasksKeepsCompletedRetention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取聚合缓存刷新任务失败: %v", err)
 	}
-	if taskInfo.Retention != 45*time.Second {
-		t.Fatalf("聚合缓存刷新任务 retention = %s，期望 %s", taskInfo.Retention, 45*time.Second)
+	if taskInfo.Retention != 48*time.Hour {
+		t.Fatalf("聚合缓存刷新任务 retention = %s，期望 %s", taskInfo.Retention, 48*time.Hour)
 	}
 }
 

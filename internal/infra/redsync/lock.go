@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Is999/go-utils"
 	"github.com/Is999/go-utils/errors"
 	redsyncv4 "github.com/go-redsync/redsync/v4"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
@@ -23,6 +22,8 @@ var (
 )
 
 const (
+	// maxLockAcquireTimeout 限制整段加锁等待，避免 Redis 故障时等待时间随锁 TTL 放大。
+	maxLockAcquireTimeout = time.Second
 	// minLockOperationTimeout 是单次 Redis 锁操作的最短超时时间，避免小 TTL 场景下超时过短导致正常网络抖动被误判。
 	minLockOperationTimeout = 50 * time.Millisecond
 	// maxLockOperationTimeout 是单次 Redis 锁操作的最长超时时间，避免 Redis 异常时续期或释放动作长时间阻塞业务返回。
@@ -30,12 +31,11 @@ const (
 )
 
 // Lock 封装基于 Redis 的分布式互斥锁，并支持后台自动续期。
-// 单个 Lock 实例只建议用于一次加锁/释放生命周期。
+// 单个 Lock 实例只用于一次加锁/释放生命周期。
 type Lock struct {
 	rs       *redsyncv4.Redsync // redsync 管理器，负责创建底层分布式互斥锁
 	mutex    *redsyncv4.Mutex   // 当前生命周期内持有的底层互斥锁实例
 	key      string             // Redis 锁 key，所有实例通过同一个 key 竞争锁
-	token    string             // 当前持锁实例的唯一 token，用于安全续期和释放锁
 	ttl      time.Duration      // 当前锁生命周期的过期时间，用于计算续期和释放操作的短超时
 	cancel   context.CancelFunc // 当前锁生命周期的取消函数，用于加锁失败、续期失败或释放时停止内部上下文
 	done     chan struct{}      // 通知续期 goroutine 停止的信号通道
@@ -49,10 +49,9 @@ type Lock struct {
 func NewLock(redisClient redis.UniversalClient, key string) *Lock {
 	// lock 保存一次分布式锁生命周期所需的固定配置和内部状态。
 	lock := &Lock{
-		key:   strings.TrimSpace(key),
-		token: utils.RandomLetters(16, utils.RandSource),
-		done:  make(chan struct{}),
-		lost:  make(chan error, 1),
+		key:  strings.TrimSpace(key),
+		done: make(chan struct{}),
+		lost: make(chan error, 1),
 	}
 	if redisClient != nil {
 		// pool 将 go-redis 客户端适配为 redsync 可使用的 Redis 连接池。
@@ -97,17 +96,22 @@ func (l *Lock) TryLock(ctx context.Context, ttl time.Duration) error {
 			}
 			return delay
 		}),
-		redsyncv4.WithGenValueFunc(func() (string, error) {
-			return l.token, nil
-		}),
 	)
 
-	if err := l.mutex.LockContext(lockCtx); err != nil {
+	// acquireCtx 限制包含重试和退避在内的整段加锁等待，调用方更短的 deadline 仍优先生效。
+	acquireCtx, acquireCancel := context.WithTimeout(lockCtx, maxLockAcquireTimeout)
+	lockErr := l.mutex.LockContext(acquireCtx)
+	acquireErr := acquireCtx.Err()
+	acquireCancel()
+	if lockErr != nil {
 		cancel()
-		if isLockTakenError(err) {
-			return stderrors.Join(errors.Wrap(err, "获取 Redis 锁失败"), ErrLockTaken)
+		if acquireErr != nil {
+			return errors.Wrap(acquireErr, "获取 Redis 锁失败")
 		}
-		return errors.Wrap(err, "获取 Redis 锁失败")
+		if isLockTakenError(lockErr) {
+			return stderrors.Join(errors.Wrap(lockErr, "获取 Redis 锁失败"), ErrLockTaken)
+		}
+		return errors.Wrap(lockErr, "获取 Redis 锁失败")
 	}
 
 	// 加锁成功后再启动续期，避免未持锁时出现无意义的续期 goroutine。
@@ -124,13 +128,13 @@ func IsLockTaken(err error) bool {
 	return errors.Is(err, ErrLockTaken) || isLockTakenError(err)
 }
 
-// isLockTakenError 识别 go-redsync 锁竞争错误文本。
+// isLockTakenError 通过 go-redsync 稳定错误类型识别锁竞争。
 func isLockTakenError(err error) bool {
 	if err == nil {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "lock already taken")
+	var takenErr *redsyncv4.ErrTaken
+	return stderrors.As(err, &takenErr)
 }
 
 // startRenewal 周期性续期当前锁；一旦续期失败，会通知锁丢失并停止续期。
@@ -149,6 +153,12 @@ func (l *Lock) startRenewal(ttl time.Duration) {
 		case <-ticker.C:
 			// 续期和释放都要访问底层 mutex，这里串行化可以避免两个 Redis 命令交叉执行。
 			l.opMu.Lock()
+			select {
+			case <-l.done:
+				l.opMu.Unlock()
+				return
+			default:
+			}
 			if l.mutex == nil || !l.mutex.Until().After(time.Now()) {
 				// 先通知锁丢失，再释放 opMu，避免并发 Unlock 抢先把 lost 通道按正常释放关闭。
 				l.reportLoss(ErrLockLost)
@@ -181,7 +191,7 @@ func (l *Lock) Unlock() error {
 	if l == nil {
 		return nil
 	}
-	// once 确保停止信号和内部 context 只触发一次，支持调用方重复 Unlock 时保持幂等。
+	// once 确保停止信号和内部 context 只触发一次，避免重复关闭通道触发 panic。
 	l.once.Do(func() {
 		if l.done != nil {
 			close(l.done)
@@ -239,6 +249,9 @@ func (l *Lock) Lost() <-chan error {
 func (l *Lock) reportLoss(err error) {
 	if err == nil {
 		err = ErrLockLost
+	} else if !errors.Is(err, ErrLockLost) {
+		// 丢锁哨兵和真实原因同时保留，调用方既可稳定分类，也能看到 Redis 原始故障。
+		err = stderrors.Join(ErrLockLost, err)
 	}
 	if l.cancel != nil {
 		l.cancel()
@@ -300,22 +313,21 @@ func WithLock(ctx context.Context, redisClient redis.UniversalClient, key string
 		}
 	}()
 
-	if fn == nil {
-		unlockErr := lock.Unlock()
+	// 统一收尾保证正常返回、业务错误和 panic 都会停止续期并释放锁；panic 保持原语义继续向上抛出。
+	defer func() {
+		if unlockErr := lock.Unlock(); unlockErr != nil {
+			err = stderrors.Join(err, unlockErr)
+		}
 		<-watcherDone
-		return errors.Tag(unlockErr)
-	}
+		if lostErr := drainError(renewalErrCh); lostErr != nil {
+			err = stderrors.Join(err, lostErr)
+		}
+		err = errors.Tag(err)
+	}()
 
-	// fn 接收 runCtx；如果续期失败，runCtx 会被取消，业务逻辑可以据此尽快退出。
-	err = fn(runCtx)
-
-	// 停止监听协程，并把业务错误、续期错误、释放错误合并返回给调用方。
-	if unlockErr := lock.Unlock(); unlockErr != nil {
-		err = stderrors.Join(err, unlockErr)
+	if fn != nil {
+		// fn 接收 runCtx；如果续期失败，runCtx 会被取消，业务逻辑可以据此尽快退出。
+		err = fn(runCtx)
 	}
-	<-watcherDone
-	if lostErr := drainError(renewalErrCh); lostErr != nil {
-		err = stderrors.Join(err, lostErr)
-	}
-	return errors.Tag(err)
+	return err
 }

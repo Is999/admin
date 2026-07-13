@@ -4,21 +4,128 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"admin/helper"
 	"admin/internal/config"
 	"admin/internal/infra/collectorx"
 	"admin/internal/infra/larkx"
+	"admin/internal/infra/loggerx"
 	"admin/internal/requestctx"
 	"admin/internal/svc"
 	taskqueue "admin/internal/task/queue"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
+	"github.com/zeromicro/go-zero/core/logx"
 )
 
-const collectorTaskQueue = "collector" // collectorTaskQueue 是 Collector 告警归属的虚拟任务队列。
+const (
+	collectorTaskQueue = "collector"     // collectorTaskQueue 是 Collector 告警归属的虚拟任务队列。
+	runtimeAlertTTL    = 5 * time.Minute // runtimeAlertTTL 是独立运行告警的限频窗口。
+)
+
+// LarkRuntimeAlerter 独立承接非任务组件运行告警，不依赖 Asynq 开关。
+type LarkRuntimeAlerter struct {
+	cfg      config.Config                // 告警卡片使用的服务配置
+	notifier *larkx.Notifier              // Lark 通知器
+	mu       sync.Mutex                   // 保护限频记录
+	alerted  map[string]runtimeAlertState // 告警指纹对应的限频状态
+}
+
+// runtimeAlertState 保存独立运行告警的最近发送时间和压制次数。
+type runtimeAlertState struct {
+	lastSentAt      time.Time // 最近一次发送时间
+	suppressedCount int       // 当前窗口内压制次数
+}
+
+// NewLarkRuntimeAlerter 创建独立运行告警器；Lark 未启用时返回 nil。
+func NewLarkRuntimeAlerter(cfg config.Config) (*LarkRuntimeAlerter, error) {
+	notifier, err := larkx.New(cfg.Alert.Lark)
+	if err != nil {
+		return nil, errors.Wrap(err, "初始化 Lark 运行告警失败")
+	}
+	if notifier == nil {
+		return nil, nil
+	}
+	return &LarkRuntimeAlerter{
+		cfg:      cfg,
+		notifier: notifier,
+		alerted:  make(map[string]runtimeAlertState),
+	}, nil
+}
+
+// NotifyRuntimeAlert 按稳定指纹限频发送非任务组件运行告警。
+func (a *LarkRuntimeAlerter) NotifyRuntimeAlert(ctx context.Context, alert svc.TaskRuntimeAlert) {
+	if a == nil || a.notifier == nil {
+		return
+	}
+	report := taskqueue.TaskRuntimeAlert{
+		Kind: alert.Kind, Title: alert.Title, Status: alert.Status, Component: alert.Component,
+		Operation: alert.Operation, TaskName: alert.TaskName, TaskType: alert.TaskType,
+		WorkflowName: alert.WorkflowName, Cron: alert.Cron, TaskQueue: alert.TaskQueue,
+		UniqueKey: alert.UniqueKey, Reason: alert.Reason, Advice: alert.Advice, OccurredAt: alert.OccurredAt,
+	}
+	key := runtimeAlertKey(report)
+	if key == "" {
+		return
+	}
+	now := time.Now()
+	a.mu.Lock()
+	state := a.alerted[key]
+	if !state.lastSentAt.IsZero() && now.Sub(state.lastSentAt) < runtimeAlertTTL {
+		state.suppressedCount++
+		a.alerted[key] = state
+		a.mu.Unlock()
+		return
+	}
+	report.TriggerCount = state.suppressedCount + 1
+	a.alerted[key] = runtimeAlertState{lastSentAt: now}
+	a.mu.Unlock()
+
+	if err := a.notifier.SendTaskRuntimeAlert(alertSendContext(ctx), buildTaskRuntimeAlert(a.cfg, report)); err != nil {
+		a.restoreRuntimeAlertAfterFailure(key, now, state)
+		loggerx.Errorw(context.Background(), "发送独立运行 Lark 告警失败", err,
+			logx.Field("alert_kind", strings.TrimSpace(report.Kind)),
+			logx.Field("component", strings.TrimSpace(report.Component)),
+			logx.Field("operation", strings.TrimSpace(report.Operation)),
+		)
+	}
+}
+
+// restoreRuntimeAlertAfterFailure 回滚本次发送占位，让相同告警可立即重试。
+func (a *LarkRuntimeAlerter) restoreRuntimeAlertAfterFailure(key string, sentAt time.Time, previous runtimeAlertState) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	current, ok := a.alerted[key]
+	if !ok || !current.lastSentAt.Equal(sentAt) {
+		return
+	}
+	previous.suppressedCount += current.suppressedCount
+	if previous.lastSentAt.IsZero() && previous.suppressedCount == 0 {
+		delete(a.alerted, key)
+		return
+	}
+	a.alerted[key] = previous
+}
+
+// runtimeAlertKey 返回独立运行告警的低基数限频指纹。
+func runtimeAlertKey(alert taskqueue.TaskRuntimeAlert) string {
+	parts := []string{
+		alert.Kind, alert.Component, alert.Operation, alert.TaskName, alert.TaskType,
+		alert.WorkflowName, alert.Cron, alert.TaskQueue, alert.UniqueKey,
+	}
+	hasValue := false
+	for index := range parts {
+		parts[index] = strings.TrimSpace(parts[index])
+		hasValue = hasValue || parts[index] != ""
+	}
+	if !hasValue && strings.TrimSpace(alert.Reason) == "" {
+		return ""
+	}
+	return strings.Join(parts, "\x00")
+}
 
 // RegisterLark 注册任务系统 Lark 告警钩子。
 func RegisterLark(cfg config.Config, manager *taskqueue.Manager) error {

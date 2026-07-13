@@ -8,6 +8,7 @@ import (
 
 	"admin/internal/types"
 
+	"github.com/zeromicro/go-zero/rest/httpx"
 	"github.com/zeromicro/go-zero/rest/pathvar"
 )
 
@@ -39,5 +40,19 @@ func TestParseSysConfigJSONRequestAcceptsScalarValue(t *testing.T) {
 	}
 	if string(exampleRaw) != "1" {
 		t.Fatalf("example raw = %s, want 1", string(exampleRaw))
+	}
+}
+
+// TestParseSysConfigBackupDownloadRequestKeepsPathAndQuery 校验下载请求会分别保留路径和签名 query。
+func TestParseSysConfigBackupDownloadRequestKeepsPathAndQuery(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/dicts/import/backup/backup-1?backupId=backup-1", nil)
+	req = pathvar.WithVars(req, map[string]string{"backupId": "backup-1"})
+
+	var parsed types.SysConfigExcelBackupDownloadReq
+	if err := httpx.Parse(req, &parsed); err != nil {
+		t.Fatalf("expected parse success, got %v", err)
+	}
+	if parsed.BackupID != "backup-1" || parsed.PathBackupID != "backup-1" {
+		t.Fatalf("parsed request = %+v", parsed)
 	}
 }

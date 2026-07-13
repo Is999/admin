@@ -16,19 +16,6 @@ import (
 	"admin/internal/config"
 )
 
-// testVirusScanner 表示测试使用的辅助结构。
-type testVirusScanner struct {
-	called *bool // 是否已调用
-}
-
-// ScanFile 记录测试扫描调用。
-func (s testVirusScanner) ScanFile(context.Context, string, string) error {
-	if s.called != nil {
-		*s.called = true
-	}
-	return nil
-}
-
 // TestRuntimeRegistrySpecsValid 确保 storage 运行时注册入口规格完整且名称唯一。
 func TestRuntimeRegistrySpecsValid(t *testing.T) {
 	specs := RuntimeRegistrySpecs()
@@ -194,26 +181,5 @@ func TestRegisterObjectStorage(t *testing.T) {
 	}
 	if store.Type() != TypeLocal {
 		t.Fatalf("期望注册对象存储返回本地实现，实际为 %s", store.Type())
-	}
-}
-
-// TestRegisterVirusScanner 确保病毒扫描器可以通过注册表扩展。
-func TestRegisterVirusScanner(t *testing.T) {
-	called := false
-	name := fmt.Sprintf("test_scanner_registry_%d", time.Now().UnixNano())
-	if err := RegisterVirusScanner(name, func() VirusScanner {
-		return testVirusScanner{called: &called}
-	}); err != nil {
-		t.Fatalf("注册病毒扫描器失败: %v", err)
-	}
-	scanner, err := NewNamedVirusScanner(name)
-	if err != nil {
-		t.Fatalf("创建病毒扫描器失败: %v", err)
-	}
-	if err := scanner.ScanFile(context.Background(), "/tmp/demo.txt", "demo"); err != nil {
-		t.Fatalf("执行病毒扫描失败: %v", err)
-	}
-	if !called {
-		t.Fatal("期望病毒扫描器已被调用")
 	}
 }

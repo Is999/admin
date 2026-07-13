@@ -1,0 +1,6 @@
+-- 代码资产：清理 shardbackfill 真实 MySQL 集成测试 checkpoint。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：任务名通过预编译参数传入。
+-- 安全边界：任务名主键点删，仅用于隔离测试库。
+DELETE FROM `shard_backfill_checkpoint` WHERE `job_name` = ?

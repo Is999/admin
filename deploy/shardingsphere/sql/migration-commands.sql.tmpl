@@ -1,0 +1,36 @@
+-- 以下阶段必须逐段执行并检查结果，禁止把整个文件一次性送入生产。
+-- 源 MySQL 要求 ROW binlog、binlog_row_image=FULL，并给迁移账号复制权限。
+USE `__LOGICAL_DATABASE__`;
+
+REGISTER MIGRATION SOURCE STORAGE UNIT legacy (
+  URL="jdbc:mysql://__SOURCE_HOST__:__SOURCE_PORT__/__SOURCE_DATABASE__?serverTimezone=Asia%2FShanghai&sslMode=VERIFY_IDENTITY&allowPublicKeyRetrieval=false",
+  USER="__SOURCE_USER__",
+  PASSWORD="__SOURCE_PASSWORD__",
+  PROPERTIES("minPoolSize"="1","maxPoolSize"="20","idleTimeout"="60000")
+);
+
+SHOW MIGRATION SOURCE STORAGE UNITS;
+
+-- 阶段 A：每张表单独渲染和执行一份文件；user_tag_0 的目标表替换为 user_tag。
+-- 身份目录、系统表和运行期表也必须逐表迁移到 ds_0；执行前以源库 SHOW TABLES 审核清单为准。
+-- 迁移不支持源/目标结构不同；启动前保存两端 SHOW CREATE TABLE，除允许的表名差异外逐项比对。
+MIGRATE TABLE legacy.`__SOURCE_TABLE__` INTO `__LOGICAL_DATABASE__`.`__TARGET_TABLE__`;
+
+-- 阶段 B：记录 job_id，持续观察 inventory_finished_percentage=100 且 incremental_idle_seconds 收敛。
+SHOW MIGRATION LIST;
+SHOW MIGRATION STATUS '__JOB_ID__';
+
+-- 阶段 C：先做一致性检查；检查未通过禁止切流。
+CHECK MIGRATION '__JOB_ID__' BY TYPE (NAME='DATA_MATCH');
+SHOW MIGRATION CHECK STATUS '__JOB_ID__';
+
+-- 阶段 D：仅在切流栅栏已生效、旧连接已排空、所有表任务增量追平且检查通过后逐个提交。
+COMMIT MIGRATION '__JOB_ID__';
+
+-- 所有迁移任务提交后刷新并核对 Proxy 元数据，未出现预期逻辑表禁止切换应用 DSN。
+REFRESH TABLE METADATA;
+SHOW SHARDING TABLE NODES;
+SHOW SINGLE TABLES;
+
+-- 切流前失败使用下面命令回退任务；切流后回退必须按操作手册处理反向增量，不能直接切旧库。
+-- ROLLBACK MIGRATION '__JOB_ID__';

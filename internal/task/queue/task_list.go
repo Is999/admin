@@ -63,8 +63,13 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 		}
 		resp.Total = total
 		resp.Tasks = make([]types.TaskItem, 0, len(items))
+		runtimeRecords := m.readTaskRuntimeBatch(ctx, items)
 		for _, item := range items {
-			resp.Tasks = append(resp.Tasks, m.toTaskItemWithPeriodicNextRuns(ctx, item, periodicNextRuns))
+			resp.Tasks = append(resp.Tasks, m.toTaskItemWithRuntime(
+				item,
+				periodicNextRuns,
+				runtimeRecords[taskRuntimeIdentity(item.Queue, item.ID)],
+			))
 		}
 		return resp, nil
 	}
@@ -150,7 +155,7 @@ func (m *Manager) listDescZSetTaskInfoPage(ctx context.Context, internalQueue st
 		ids   []string
 		total int64
 	)
-	if minScore, maxScore, ok := descZSetScoreRange(state, timeRange, m.completedRetention()); ok {
+	if minScore, maxScore, ok := descZSetScoreRange(state, timeRange, taskCompletedRetention); ok {
 		total, err = m.redis.ZCount(ctx, key, minScore, maxScore).Result()
 		if err != nil {
 			return nil, 0, errors.Tag(err)
@@ -192,7 +197,7 @@ func (m *Manager) listDescZSetTaskInfoPage(ctx context.Context, internalQueue st
 }
 
 // descZSetScoreRange 返回可直接用 zset 分数过滤的任务时间范围。
-// archived 分数就是失败时间；completed 分数是完成时间加保留时长，按当前统一保留配置反推查询范围。
+// archived 分数就是失败时间；completed 分数是完成时间加固定保留时长，按该时长反推查询范围。
 func descZSetScoreRange(state string, timeRange taskListTimeRange, retention time.Duration) (string, string, bool) {
 	if !timeRange.hasRange {
 		return "", "", false
@@ -312,16 +317,25 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 	taskID = strings.TrimSpace(taskID)
 	workflowID = strings.TrimSpace(workflowID)
 	taskName = strings.TrimSpace(taskName)
+	inspector := m.newContextInspector(ctx)
+	// reachedScanLimit 标记是否完整读满受控扫描窗口；读满后必须确认没有下一页，禁止返回截断总数。
+	reachedScanLimit := true
 	for currentPage := 1; currentPage <= taskListFilterMaxPages; currentPage++ {
-		items, _, err := m.listTaskInfoPage(ctx, internalQueue, internalGroup, state, currentPage, taskListFilterPageSize, timeRange)
+		items, err := m.listFilterTaskInfoPage(ctx, inspector, internalQueue, internalGroup, state, currentPage, taskListFilterPageSize, timeRange)
 		if err != nil {
 			return nil, 0, errors.Tag(err)
 		}
 		if len(items) == 0 {
+			reachedScanLimit = false
 			break
 		}
+		runtimeRecords := m.readTaskRuntimeBatch(ctx, items)
 		for _, item := range items {
-			taskItem := m.toTaskItemWithPeriodicNextRuns(ctx, item, periodicNextRuns)
+			taskItem := m.toTaskItemWithRuntime(
+				item,
+				periodicNextRuns,
+				runtimeRecords[taskRuntimeIdentity(item.Queue, item.ID)],
+			)
 			if !taskItemMatchesListFilters(taskItem, taskID, workflowID, taskName) {
 				continue
 			}
@@ -331,7 +345,18 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 			matchedTasks = append(matchedTasks, taskItem)
 		}
 		if len(items) < taskListFilterPageSize {
+			reachedScanLimit = false
 			break
+		}
+	}
+	if reachedScanLimit {
+		nextItems, err := m.listFilterTaskInfoPage(ctx, inspector, internalQueue, internalGroup, state, taskListFilterMaxPages+1, 1, timeRange)
+		if err != nil {
+			return nil, 0, errors.Tag(err)
+		}
+		if len(nextItems) > 0 {
+			return nil, 0, errors.Wrapf(ErrTaskListScanLimitExceeded,
+				"队列[%s]状态[%s]最多扫描%d条任务，请缩小筛选范围", internalQueue, state, taskListFilterPageSize*taskListFilterMaxPages)
 		}
 	}
 	sortTaskItemsByTimeDesc(matchedTasks)
@@ -345,6 +370,33 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 	}
 	end := min(start+pageSize, len(matchedTasks))
 	return matchedTasks[start:end], total, nil
+}
+
+// listFilterTaskInfoPage 批量读取筛选扫描页；带时间范围时保留现有索引范围读取。
+func (m *Manager) listFilterTaskInfoPage(ctx context.Context, inspector *asynq.Inspector, internalQueue string, internalGroup string, state string, page int, pageSize int, timeRange taskListTimeRange) ([]*asynq.TaskInfo, error) {
+	if timeRange.hasRange {
+		items, _, err := m.listTaskInfoPage(ctx, internalQueue, internalGroup, state, page, pageSize, timeRange)
+		return items, err
+	}
+	opts := []asynq.ListOption{asynq.Page(page), asynq.PageSize(pageSize)}
+	switch state {
+	case "pending":
+		return inspector.ListPendingTasks(internalQueue, opts...)
+	case "active":
+		return inspector.ListActiveTasks(internalQueue, opts...)
+	case "scheduled":
+		return inspector.ListScheduledTasks(internalQueue, opts...)
+	case "retry":
+		return inspector.ListRetryTasks(internalQueue, opts...)
+	case "archived":
+		return inspector.ListArchivedTasks(internalQueue, opts...)
+	case "completed":
+		return inspector.ListCompletedTasks(internalQueue, opts...)
+	case "aggregating":
+		return inspector.ListAggregatingTasks(internalQueue, internalGroup, opts...)
+	default:
+		return nil, errors.Errorf("不支持的任务状态: %s", state)
+	}
 }
 
 // GetTaskInfo 查询单个任务的详情。

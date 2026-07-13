@@ -1,0 +1,18 @@
+-- 代码资产：定义 shardbackfill 接受的完整源表更新保护触发器体。
+-- SQL 方言：MySQL 8.0 trigger body。
+-- 调用方：cmd/shardbackfill.validGuardStatement，仅用于规范化比对，不直接执行。
+-- 参数来源：主键和 UID 列名仅由已校验标识符替换。
+-- 安全边界：任何额外、缺失或重排语句都会导致回填失败关闭。
+BEGIN
+  IF NOT (NEW.__PRIMARY_KEY__ <=> OLD.__PRIMARY_KEY__) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'backfill cursor primary key is immutable';
+  END IF;
+  IF (NOT (NEW.__UID_COLUMN__ <=> OLD.__UID_COLUMN__)
+      OR NOT (NEW.`shard_no` <=> OLD.`shard_no`))
+     AND (NEW.`shard_no` IS NULL
+       OR NEW.__UID_COLUMN__ IS NULL
+       OR NEW.__UID_COLUMN__ <= 0
+       OR NEW.`shard_no` <> MOD(CRC32(CAST(NEW.__UID_COLUMN__ AS CHAR)), 1024)) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'shard_no does not match fixed user bucket';
+  END IF;
+END

@@ -492,7 +492,7 @@
         }
         var search = document.createElement('div');
         search.className = 'search lazy-search';
-        search.innerHTML = '<div class="input-wrap"><input type="search" aria-label="搜索文档" placeholder="输入关键词搜索文档..." /><button type="button" class="clear-button" aria-label="清空搜索">×</button></div><div class="search-status">输入关键词后开始建立索引</div><div class="results-panel"></div>';
+        search.innerHTML = '<div class="input-wrap"><input id="docs-search" name="docs-search" type="search" aria-label="搜索文档" placeholder="输入关键词搜索文档..." /><button type="button" class="clear-button" aria-label="清空搜索">×</button></div><div class="search-status">输入关键词后开始建立索引</div><div class="results-panel"></div>';
         var input = search.querySelector('input');
         var clear = search.querySelector('.clear-button');
         input.addEventListener('focus', startSearchIndex);

@@ -13,7 +13,7 @@ func TestBuildAdminRoleTree(t *testing.T) {
 	tree := BuildAdminRoleTree([]model.AdminRole{
 		{ID: 1, Title: "父角色", Status: 1, IsDelete: 0, CreatedAt: now, UpdatedAt: now},
 		{ID: 2, Title: "子角色", Pid: 1, Pids: "1", Status: 0, IsDelete: 0, CreatedAt: now, UpdatedAt: now},
-	}, map[int][]int{1: {10, 11}})
+	})
 
 	if len(tree) != 1 {
 		t.Fatalf("角色树根节点数量 = %d, want 1", len(tree))
@@ -21,9 +21,6 @@ func TestBuildAdminRoleTree(t *testing.T) {
 	root := tree[0]
 	if root.ID != 1 || root.Title != "父角色" || root.Disabled || !root.Selectable {
 		t.Fatalf("根角色映射异常: %+v", root)
-	}
-	if len(root.Permissions) != 2 || root.Permissions[0] != 10 || root.Permissions[1] != 11 {
-		t.Fatalf("根角色权限映射异常: %+v", root.Permissions)
 	}
 	if len(root.Children) != 1 {
 		t.Fatalf("子角色数量 = %d, want 1", len(root.Children))

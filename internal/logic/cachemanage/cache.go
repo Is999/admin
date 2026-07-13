@@ -49,7 +49,7 @@ const (
 
 // sensitiveCacheKeyPatterns 定义缓存管理页面必须隐藏值内容的 Redis key 模板。
 var sensitiveCacheKeyPatterns = []string{
-	keys.AdminMFATwoStepTicketPattern,
+	keys.AdminMFATwoStepPattern,
 }
 
 // cacheSearchStats 记录一次缓存搜索的关键过程指标，便于日志排查慢点到底在候选枚举还是 Exists 校验。
@@ -437,8 +437,8 @@ func (l *SystemCacheLogic) RefreshCacheByKey(key string) error {
 			return errors.Wrapf(err, "SystemCacheLogic.RefreshCacheByKey 自动刷新表缓存失败 key=%s", key)
 		}
 	}
-	if keys.IsAdminInfoRedisKey(key) {
-		rebuildErr := cachelogic.NewCacheLogic(l.Ctx, l.Svc).RebuildAdminInfoByKey(key)
+	if keys.IsAdminSessionRedisKey(key) {
+		rebuildErr := cachelogic.NewCacheLogic(l.Ctx, l.Svc).RebuildAdminSessionByKey(key)
 		if rebuildErr == nil {
 			logCacheInfo(l.Ctx, "cache.refresh.success",
 				logx.Field("key", key),
@@ -446,7 +446,7 @@ func (l *SystemCacheLogic) RefreshCacheByKey(key string) error {
 			)
 			return nil
 		}
-		return errors.Wrapf(rebuildErr, "SystemCacheLogic.RefreshCacheByKey 自动重建登录态缓存失败 key=%s", key)
+		return errors.Wrapf(rebuildErr, "SystemCacheLogic.RefreshCacheByKey 自动重建会话缓存失败 key=%s", key)
 	}
 	deleteErr := l.RdsDelKeys(key)
 	if deleteErr == nil {
@@ -465,17 +465,20 @@ func (l *SystemCacheLogic) cacheItems() []types.CacheItem {
 	items := make([]types.CacheItem, 0, len(tableItems)+1)
 	items = append(items, tableItems...)
 	items = append(items, types.CacheItem{
-		Index:        "admin_info",
-		Key:          keys.AdminInfoPatternRedisKey(),
-		KeyTitle:     keys.AdminInfoPatternRedisKey(),
+		Index:        "admin_session",
+		Key:          keys.AdminSessionPatternRedisKey(),
+		KeyTitle:     keys.AdminSessionPatternRedisKey(),
 		Type:         "hash",
-		Remark:       "管理员登录态缓存",
+		Remark:       "管理员会话缓存",
 		Category:     "session",
 		IsTemplate:   true,
-		ExampleKey:   keys.AdminInfoRedisKey(1),
+		ExampleKey:   keys.AdminSessionRedisKey(1),
 		AutoRebuild:  true,
 		RefreshScope: "single",
 	})
+	for i := range items {
+		items[i].WarmupSupported = l.matchWarmupTemplateTarget(items[i].Key) != nil
+	}
 	return items
 }
 
@@ -1010,12 +1013,12 @@ func (l *SystemCacheLogic) validateSearchPattern(pattern string) error {
 
 // maskCacheValue 按缓存 key 和字段名脱敏敏感信息，避免缓存管理页暴露 token 与秘钥。
 func maskCacheValue(key string, value any) any {
-	if isAdminInfoCacheKey(key) {
+	if isAdminSessionCacheKey(key) {
 		switch typed := value.(type) {
 		case map[string]string:
-			return maskAdminInfoStringMap(typed)
+			return maskAdminSessionStringMap(typed)
 		case map[string]any:
-			return maskAdminInfoAnyMap(typed)
+			return maskAdminSessionAnyMap(typed)
 		default:
 			return value
 		}
@@ -1033,17 +1036,17 @@ func maskCacheValue(key string, value any) any {
 	}
 }
 
-// isAdminInfoCacheKey 判断当前缓存 key 是否为管理员登录态缓存。
-func isAdminInfoCacheKey(key string) bool {
-	return keys.IsAdminInfoRedisKey(key)
+// isAdminSessionCacheKey 判断当前缓存 key 是否为管理员会话缓存。
+func isAdminSessionCacheKey(key string) bool {
+	return keys.IsAdminSessionRedisKey(key)
 }
 
-// maskAdminInfoStringMap 对管理员登录态缓存做字段级脱敏。
+// maskAdminSessionStringMap 对管理员会话缓存做字段级脱敏。
 // 缓存管理页需要保留管理员资料字段用于排障，仅保留通用敏感字段规则。
-func maskAdminInfoStringMap(value map[string]string) map[string]string {
+func maskAdminSessionStringMap(value map[string]string) map[string]string {
 	result := make(map[string]string, len(value))
 	for field, item := range value {
-		if !isAdminInfoAllowedPlainField(field) && isSensitiveCacheField(field) {
+		if !isAdminSessionAllowedPlainField(field) && isSensitiveCacheField(field) {
 			result[field] = cacheMaskedValue
 			continue
 		}
@@ -1052,11 +1055,11 @@ func maskAdminInfoStringMap(value map[string]string) map[string]string {
 	return result
 }
 
-// maskAdminInfoAnyMap 对管理员登录态缓存的通用 map 做字段级脱敏。
-func maskAdminInfoAnyMap(value map[string]any) map[string]any {
+// maskAdminSessionAnyMap 对管理员会话缓存的通用 map 做字段级脱敏。
+func maskAdminSessionAnyMap(value map[string]any) map[string]any {
 	result := make(map[string]any, len(value))
 	for field, item := range value {
-		if !isAdminInfoAllowedPlainField(field) && isSensitiveCacheField(field) {
+		if !isAdminSessionAllowedPlainField(field) && isSensitiveCacheField(field) {
 			result[field] = cacheMaskedValue
 			continue
 		}
@@ -1123,9 +1126,9 @@ func isSensitiveCacheKey(key string) bool {
 	return false
 }
 
-// isAdminInfoAllowedPlainField 判断管理员登录态缓存中允许明文展示的字段。
+// isAdminSessionAllowedPlainField 判断管理员会话缓存中允许明文展示的字段。
 // `needResetPassword` 虽命中通用 password 关键词，但属于状态位，不应在缓存管理页被误遮罩。
-func isAdminInfoAllowedPlainField(field string) bool {
+func isAdminSessionAllowedPlainField(field string) bool {
 	switch strings.ToLower(strings.TrimSpace(field)) {
 	case "needresetpassword":
 		return true

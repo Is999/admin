@@ -57,7 +57,7 @@ func routeSecurityManifestAlias(alias string) (string, bool) {
 
 // cloneSecurityFields 复制字段级安全策略，避免调用方修改全局策略切片。
 func cloneSecurityFields(fields []string) []string {
-	if len(fields) == 0 {
+	if fields == nil {
 		return nil
 	}
 	result := make([]string, len(fields))

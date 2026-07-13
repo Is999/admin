@@ -103,7 +103,7 @@ func registerTaskRuntimeLifecycle(state *core.State, manager *taskqueue.Manager)
 		return errors.Tag(err)
 	}
 	// 任务后台生命周期只在 Worker 或 Scheduler 模式启动；API-only 仅保留任务投递和查询能力。
-	return state.AddLifecycleHooks(NameTaskRuntime, func(context.Context) error {
+	return state.AddLifecycleHooks(NameTaskRuntime, func(ctx context.Context) error {
 		if runmode.Has(state.Mode, runmode.Worker) {
 			if err := manager.StartWorker(); err != nil {
 				return errors.Wrap(err, "启动任务 worker 失败")
@@ -111,6 +111,9 @@ func registerTaskRuntimeLifecycle(state *core.State, manager *taskqueue.Manager)
 		}
 		if runmode.Has(state.Mode, runmode.Scheduler) {
 			if err := manager.StartScheduler(); err != nil {
+				if stopErr := manager.Stop(ctx); stopErr != nil {
+					return errors.Wrapf(err, "启动任务调度器失败; 回滚任务运行时失败: %v", stopErr)
+				}
 				return errors.Wrap(err, "启动任务调度器失败")
 			}
 		}

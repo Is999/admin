@@ -24,7 +24,7 @@ func TestIsTableCacheKey(t *testing.T) {
 	}{
 		{name: "table cache key", appID: "site-a", key: "app:site-a:table:role_tree", want: true},
 		{name: "other app table cache key", appID: "site-a", key: "app:site-b:table:role_tree", want: false},
-		{name: "direct app key", appID: "site-a", key: "app:site-a:admin:info:1", want: false},
+		{name: "direct app key", appID: "site-a", key: "app:site-a:admin:session:1", want: false},
 		{name: "logical table segment", appID: "site-a", key: "table:role_tree", want: false},
 		{name: "incomplete table prefix", appID: "site-a", key: "app:site-a:table", want: false},
 		{name: "empty app id", appID: "", key: "app:site-a:table:role_tree", want: false},
@@ -63,8 +63,8 @@ func TestTrimTableCachePrefix(t *testing.T) {
 		{
 			name:  "keeps direct app key",
 			appID: "site-a",
-			key:   "app:site-a:admin:info:7",
-			want:  "app:site-a:admin:info:7",
+			key:   "app:site-a:admin:session:7",
+			want:  "app:site-a:admin:session:7",
 		},
 		{
 			name:  "keeps logical key",

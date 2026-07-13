@@ -1,0 +1,13 @@
+-- uid=user.id 表单批执行模板：一次只替换并处理一张已审核的业务表。
+-- __PRIMARY_KEY__ 必须是可稳定推进的唯一单调键，禁止直接按 uid%1024 回填。
+-- 表名、主键名只允许从发布白名单选择；__BATCH_SIZE__ 必须替换为经过压测的正整数。
+SET @cursor_start = __CURSOR_START__;
+SET @cursor_end = __CURSOR_END__;
+
+UPDATE `__UID_TABLE__`
+SET `shard_no` = MOD(CRC32(CAST(`uid` AS CHAR)), 1024)
+WHERE `__PRIMARY_KEY__` > @cursor_start
+  AND `__PRIMARY_KEY__` <= @cursor_end
+  AND (`shard_no` IS NULL OR `shard_no` <> MOD(CRC32(CAST(`uid` AS CHAR)), 1024))
+ORDER BY `__PRIMARY_KEY__`
+LIMIT __BATCH_SIZE__;

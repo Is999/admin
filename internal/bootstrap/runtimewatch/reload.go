@@ -44,17 +44,17 @@ type WatchScope struct {
 	NotifyFailure  FailureNotifier     // watcher 重载失败告警
 }
 
-// ApplyStartup 在组件注册前应用 DB active release。
-func ApplyStartup(ctx context.Context, svcCtx *svc.ServiceContext, cfg *config.Config, publish func(config.Config)) error {
+// ApplyStartup 在组件注册前应用 DB active release，并返回 watcher 初始水位。
+func ApplyStartup(ctx context.Context, svcCtx *svc.ServiceContext, cfg *config.Config, publish func(config.Config)) (svc.RuntimeConfigReloadResult, error) {
 	if cfg == nil || !runtimeconfig.IsDatabaseSource(*cfg) {
-		return nil
+		return svc.RuntimeConfigReloadResult{}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	active, err := runtimeconfig.EnsureInitialRelease(ctx, svcCtx)
 	if err != nil {
-		return errors.Wrap(err, "加载或初始化数据库运行配置 active release 失败")
+		return svc.RuntimeConfigReloadResult{}, errors.Wrap(err, "加载或初始化数据库运行配置 active release 失败")
 	}
 	runtimeconfig.ApplySnapshot(cfg, active.Snapshot)
 	if svcCtx != nil {
@@ -63,7 +63,11 @@ func ApplyStartup(ctx context.Context, svcCtx *svc.ServiceContext, cfg *config.C
 	if publish != nil {
 		publish(*cfg)
 	}
-	return nil
+	return svc.RuntimeConfigReloadResult{
+		ReleaseID: active.Release.ID,
+		VersionNo: active.Release.VersionNo,
+		Checksum:  active.Release.Checksum,
+	}, nil
 }
 
 // ApplyActiveSnapshot 在配置文件热加载时叠加当前 DB active release 快照。

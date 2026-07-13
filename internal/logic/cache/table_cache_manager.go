@@ -6,6 +6,7 @@ import (
 	"time"
 
 	keys "admin/common/rediskeys"
+	"admin/common/runtimecfg"
 	corelogic "admin/internal/logic"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -16,6 +17,10 @@ import (
 )
 
 const (
+	// TableCacheMetricsSubsystem 表示表缓存 Prometheus 指标子系统。
+	TableCacheMetricsSubsystem = "tcache"
+	// TableCacheMetricPrefix 表示表缓存 Prometheus 指标完整前缀。
+	TableCacheMetricPrefix = TableCacheMetricsSubsystem + "_"
 	// tableCacheRebuildLockTTL 表示 table-cache 回源锁默认持有时长。
 	tableCacheRebuildLockTTL = 10 * time.Second
 	// tableCacheWaitStep 表示等待其他实例回源完成的单次等待时间。
@@ -25,22 +30,27 @@ const (
 // TableCacheManager 创建 admin 的表数据缓存管理器。
 func TableCacheManager(base *corelogic.BaseLogic) (*tablecache.Manager, error) {
 	if base == nil || base.Redis() == nil {
-		return nil, errors.Errorf("Redis未初始化")
+		return nil, WrapRedisUnavailable(nil, "表缓存管理器初始化失败")
+	}
+	keyPrefix := tableCacheKeyPrefix(base)
+	if keyPrefix == "" {
+		return nil, WrapRedisUnavailable(nil, "表缓存管理器初始化失败：app_id 缓存命名空间未初始化")
 	}
 	return tablecache.NewManager(
 		tablecache.NewRedisStore(base.Redis()),
 		tableCacheTargets(base),
-		tablecache.WithKeyPrefix(tableCacheKeyPrefix(base)),
+		tablecache.WithKeyPrefix(keyPrefix),
 		tablecache.WithEmptyMarker(keys.EmptyValueMarker, corelogic.EmptyCacheTTL()),
 		tablecache.WithLockTTL(tableCacheRebuildLockTTL),
 		tablecache.WithWait(tableCacheWaitStep, 3),
+		tablecache.WithMetrics(base.Svc.TableCacheMetrics),
 	)
 }
 
 // tableCacheKeyPrefix 返回当前站点 table-cache 托管缓存使用的 Redis Key 前缀。
 // 前缀来源于运行期 app_id，确保多站点共用 Redis 时权限、配置和秘钥缓存不会相互覆盖。
 func tableCacheKeyPrefix(base *corelogic.BaseLogic) string {
-	if base == nil || base.AppID() == "" {
+	if base == nil || base.AppID() == "" || base.AppID() != runtimecfg.AppID() {
 		return ""
 	}
 	return keys.TableCachePrefix()
@@ -51,7 +61,10 @@ func tableCacheKeyPrefix(base *corelogic.BaseLogic) string {
 func TableCachePhysicalKey(base *corelogic.BaseLogic, key string) string {
 	key = strings.TrimSpace(key)
 	prefix := tableCacheKeyPrefix(base)
-	if key == "" || prefix == "" || strings.HasPrefix(key, prefix) {
+	if key == "" || prefix == "" {
+		return ""
+	}
+	if strings.HasPrefix(key, prefix) {
 		return key
 	}
 	if keys.IsForeignKey(key) {
@@ -139,8 +152,6 @@ func TableCacheItems(base *corelogic.BaseLogic) []types.CacheItem {
 // tableCacheCategory 根据缓存目标索引和 key 模板归类缓存用途，供管理页分组展示。
 func tableCacheCategory(index string, key string) string {
 	switch {
-	case strings.HasPrefix(key, keys.KeyTemplatePrefix(keys.AdminInfoLogicalPattern())):
-		return "session"
 	case strings.HasPrefix(key, "secret_key_"):
 		return "secret"
 	case strings.HasPrefix(key, "config_uuid:"), strings.HasPrefix(key, "runtime_config:"):

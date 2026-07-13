@@ -1,0 +1,8 @@
+-- 代码资产：读取源表保护触发器定义。
+-- SQL 方言：MySQL 8.0 information_schema。
+-- 调用方：cmd/shardbackfill.validateSourceGuard。
+-- 参数来源：表名和触发器名通过预编译参数传入。
+-- 安全边界：只读指定源表和触发器元数据，不扫描业务数据。
+SELECT `ACTION_TIMING`, `EVENT_MANIPULATION`, `ACTION_STATEMENT`
+FROM `information_schema`.`TRIGGERS`
+WHERE `TRIGGER_SCHEMA` = DATABASE() AND `EVENT_OBJECT_TABLE` = ? AND `TRIGGER_NAME` = ?

@@ -21,6 +21,8 @@ const (
 	UserExportStatusFailed = excel.StatusFailed
 	// UserExportTaskType 表示前台用户列表导出的后台任务类型。
 	UserExportTaskType = "user:export"
+	// UserExportCleanupTaskType 表示前台用户导出文件的延迟清理任务类型。
+	UserExportCleanupTaskType = "user:export:cleanup"
 )
 
 // UserExportReq 表示前台用户列表导出请求；筛选条件与列表页保持一致，但不携带分页参数。
@@ -48,25 +50,6 @@ func (r *UserExportReq) Validate() error {
 		return errors.Errorf("用户分片号必须在0-%d之间", userShardNoMod-1)
 	}
 	return nil
-}
-
-// ToUserListReq 把导出请求转换成用户列表筛选请求，便于复用分表边界校验。
-func (r *UserExportReq) ToUserListReq() *UserListReq {
-	if r == nil {
-		return &UserListReq{}
-	}
-	return &UserListReq{
-		ID:       r.ID,
-		ShardNo:  r.ShardNo,
-		Username: r.Username,
-		Email:    r.Email,
-		Phone:    r.Phone,
-		Status:   r.Status,
-		GetPageReq: GetPageReq{
-			Page:     1,
-			PageSize: 1,
-		},
-	}
 }
 
 // UserExportJobReq 表示前台用户导出任务状态/下载请求。
@@ -101,6 +84,12 @@ type UserExportTaskPayload struct {
 	OperatorID   int           `json:"operatorId"`             // 发起导出的管理员 ID
 	OperatorName string        `json:"operatorName,omitempty"` // 发起导出的管理员账号
 	Request      UserExportReq `json:"request"`                // 导出筛选条件快照
+}
+
+// UserExportCleanupTaskPayload 表示前台用户导出文件延迟清理任务负载。
+type UserExportCleanupTaskPayload struct {
+	JobID      string   `json:"jobId"`      // 导出任务 ID
+	ObjectKeys []string `json:"objectKeys"` // 需要删除的统一存储对象 key
 }
 
 // UserExportFileItem 表示前台用户导出的单个文件分片。

@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +39,8 @@ const (
 	apiRuntimeOpsTokenHeader = "X-Ops-Token"
 	// apiRuntimeOpsTimestampHeader 表示 API 运维请求签名时间戳。
 	apiRuntimeOpsTimestampHeader = "X-Ops-Timestamp"
+	// apiRuntimeOpsNonceHeader 表示 API 运维请求的单次随机数。
+	apiRuntimeOpsNonceHeader = "X-Ops-Nonce"
 	// apiRuntimeOpsBodySHA256Header 表示 API 运维请求体 SHA256 摘要。
 	apiRuntimeOpsBodySHA256Header = "X-Ops-Body-SHA256"
 	// apiRuntimeOpsSignatureHeader 表示 API 运维请求 HMAC-SHA256 签名。
@@ -43,6 +49,8 @@ const (
 	apiDocsMaxResponseBytes = 4 << 20
 	// apiRuntimeMaxResponseBytes 限制 API 运维接口 JSON 响应，配置快照允许超过 1MiB。
 	apiRuntimeMaxResponseBytes = 8 << 20
+	// apiRuntimeMaxErrorResponseBytes 限制下游非成功响应读取量，错误链不回显原始响应体。
+	apiRuntimeMaxErrorResponseBytes = 4 << 10
 )
 
 // Logic 负责调用必须落在 API 进程内的运行态能力。
@@ -90,9 +98,10 @@ type apiResponse[T any] struct {
 
 // userRuntimeSyncPayload 表示发给 API 的用户运行态同步载荷。
 type userRuntimeSyncPayload struct {
-	Profile  bool   `json:"profile"`  // 是否失效资料缓存
-	Sessions bool   `json:"sessions"` // 是否失效登录态
-	Reason   string `json:"reason"`   // 同步原因
+	Profile     bool   `json:"profile"`     // 是否失效资料缓存
+	Sessions    bool   `json:"sessions"`    // 是否失效登录态
+	AuthVersion uint64 `json:"authVersion"` // admin 已提交到用户表的新认证版本
+	Reason      string `json:"reason"`      // 同步原因
 }
 
 // apiUserRuntimeSyncResp 表示 API 内网用户运行态同步响应。
@@ -100,6 +109,7 @@ type apiUserRuntimeSyncResp struct {
 	UserID                  int64  `json:"userId,string"`           // 用户雪花 ID，API 固定以字符串返回，避免前端精度丢失
 	ProfileCacheInvalidated bool   `json:"profileCacheInvalidated"` // 是否已处理用户资料缓存
 	SessionsInvalidated     bool   `json:"sessionsInvalidated"`     // 是否已处理登录态
+	AuthVersion             uint64 `json:"authVersion"`             // API 已用于登录态失效的认证版本
 	Message                 string `json:"message"`                 // 同步结果说明
 }
 
@@ -119,6 +129,19 @@ func NewClient(cfg config.APIServiceConfig) (*Client, error) {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, errors.Errorf("api_service.internal_base_url 配置不合法")
 	}
+	httpClient, err := newAPIHTTPClient(parsed, cfg)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return &Client{
+		baseURL: baseURL,
+		token:   token,
+		client:  httpClient,
+	}, nil
+}
+
+// newAPIHTTPClient 创建 API 内网 HTTP 客户端；HTTPS 必须提供完整 mTLS 材料。
+func newAPIHTTPClient(baseURL *url.URL, cfg config.APIServiceConfig) (*http.Client, error) {
 	timeoutSeconds := cfg.TimeoutSeconds
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = apiRuntimeDefaultTimeoutSeconds
@@ -126,11 +149,39 @@ func NewClient(cfg config.APIServiceConfig) (*Client, error) {
 	if timeoutSeconds > apiRuntimeMaxTimeoutSeconds {
 		timeoutSeconds = apiRuntimeMaxTimeoutSeconds
 	}
-	return &Client{
-		baseURL: baseURL,
-		token:   token,
-		client:  &http.Client{Timeout: time.Duration(timeoutSeconds) * time.Second},
-	}, nil
+	client := &http.Client{
+		Timeout: time.Duration(timeoutSeconds) * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	if baseURL.Scheme != "https" {
+		if strings.TrimSpace(cfg.CAFile) != "" || strings.TrimSpace(cfg.CertFile) != "" || strings.TrimSpace(cfg.KeyFile) != "" {
+			return nil, errors.New("API 内网 HTTP 地址不能配置 mTLS 文件")
+		}
+		return client, nil
+	}
+	caPEM, err := os.ReadFile(strings.TrimSpace(cfg.CAFile))
+	if err != nil {
+		return nil, errors.Wrap(err, "读取 API 内网 CA 文件失败")
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		return nil, errors.New("API 内网 CA 文件不包含有效证书")
+	}
+	certificate, err := tls.LoadX509KeyPair(strings.TrimSpace(cfg.CertFile), strings.TrimSpace(cfg.KeyFile))
+	if err != nil {
+		return nil, errors.Wrap(err, "加载 API 内网客户端证书失败")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		RootCAs:      roots,
+		Certificates: []tls.Certificate{certificate},
+		ServerName:   strings.TrimSpace(cfg.ServerName),
+	}
+	client.Transport = transport
+	return client, nil
 }
 
 // Configured 判断 API 内网客户端是否具备基础调用配置。
@@ -233,24 +284,37 @@ func (c *Client) RunConfigReload(ctx context.Context) (*types.TaskConfigReloadSt
 }
 
 // SyncUserRuntime 同步前台用户在 API 进程内的资料缓存或登录态。
-func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool, sessions bool, reason string) (*types.UserRuntimeSyncResp, error) {
+func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool, sessions bool, authVersion uint64, reason string) (*types.UserRuntimeSyncResp, error) {
 	if userID <= 0 {
 		return nil, errors.New("用户 ID 不能为空")
 	}
 	if !profile && !sessions {
 		profile = true
 	}
+	if sessions && authVersion == 0 {
+		return nil, errors.New("失效登录态时认证版本不能为空")
+	}
 	path := "/internal/users/" + strconv.FormatInt(userID, 10) + "/runtime-sync"
 	data, err := requestAPI[apiUserRuntimeSyncResp](ctx, c, http.MethodPost, path, userRuntimeSyncPayload{
-		Profile:  profile,
-		Sessions: sessions,
-		Reason:   strings.TrimSpace(reason),
+		Profile:     profile,
+		Sessions:    sessions,
+		AuthVersion: authVersion,
+		Reason:      strings.TrimSpace(reason),
 	})
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	if data.UserID != userID {
 		return nil, errors.Errorf("API 内网同步响应用户 ID不一致 expected=%d actual=%d", userID, data.UserID)
+	}
+	if sessions && data.AuthVersion != authVersion {
+		return nil, errors.Errorf("API 内网同步响应认证版本不一致 expected=%d actual=%d", authVersion, data.AuthVersion)
+	}
+	if profile && !data.ProfileCacheInvalidated {
+		return nil, errors.New("API 内网同步响应未确认资料缓存已处理")
+	}
+	if sessions && !data.SessionsInvalidated {
+		return nil, errors.New("API 内网同步响应未确认登录态已处理")
 	}
 	message := data.Message
 	if message == "" {
@@ -262,6 +326,7 @@ func (c *Client) SyncUserRuntime(ctx context.Context, userID int64, profile bool
 		UserID:                  data.UserID,
 		ProfileCacheInvalidated: data.ProfileCacheInvalidated,
 		SessionsInvalidated:     data.SessionsInvalidated,
+		AuthVersion:             data.AuthVersion,
 		Message:                 message,
 	}, nil
 }
@@ -321,22 +386,30 @@ func requestAPI[T any](ctx context.Context, c *Client, method string, path strin
 		return nil, errors.Wrap(err, "请求 API 内网接口失败")
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, apiRuntimeMaxResponseBytes+1))
+	responseLimit := apiRuntimeMaxResponseBytes
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		responseLimit = apiRuntimeMaxErrorResponseBytes
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(responseLimit)+1))
 	if err != nil {
 		return nil, errors.Wrap(err, "读取 API 内网响应失败")
 	}
-	if len(body) > apiRuntimeMaxResponseBytes {
-		return nil, errors.Errorf("API 内网响应超过大小限制 max_bytes=%d", apiRuntimeMaxResponseBytes)
+	if len(body) > responseLimit {
+		return nil, errors.Errorf("API 内网响应超过大小限制 max_bytes=%d", responseLimit)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, errors.Errorf("API 内网接口 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		var failed apiResponse[json.RawMessage]
+		if json.Unmarshal(body, &failed) == nil && (failed.Code != 0 || failed.TraceID != "") {
+			return nil, errors.Errorf("API 内网接口 HTTP %d code=%d traceId=%s", resp.StatusCode, failed.Code, strings.TrimSpace(failed.TraceID))
+		}
+		return nil, errors.Errorf("API 内网接口 HTTP %d", resp.StatusCode)
 	}
 	var decoded apiResponse[T]
 	if err = json.Unmarshal(body, &decoded); err != nil {
 		return nil, errors.Wrap(err, "解析 API 内网响应失败")
 	}
 	if !decoded.Status {
-		return nil, errors.Errorf("API 内网接口返回失败 code=%d message=%s traceId=%s", decoded.Code, decoded.Message, decoded.TraceID)
+		return nil, errors.Errorf("API 内网接口返回失败 code=%d traceId=%s", decoded.Code, decoded.TraceID)
 	}
 	return &decoded.Data, nil
 }
@@ -358,7 +431,9 @@ func buildAPIRequest(ctx context.Context, c *Client, method string, path string,
 		return nil, errors.Wrap(err, "创建 API 内网请求失败")
 	}
 	req.Header.Set(apiRuntimeOpsTokenHeader, c.token)
-	signAPIRequest(req, c.token, bodyBytes)
+	if err := signAPIRequest(req, c.token, bodyBytes); err != nil {
+		return nil, errors.Tag(err)
+	}
 	if locale := localeFromContext(ctx); locale != "" {
 		req.Header.Set("Accept-Language", locale)
 	}
@@ -369,12 +444,27 @@ func buildAPIRequest(ctx context.Context, c *Client, method string, path string,
 }
 
 // signAPIRequest 为 API 内网请求追加 HMAC 签名头。
-func signAPIRequest(req *http.Request, token string, body []byte) {
+func signAPIRequest(req *http.Request, token string, body []byte) error {
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	nonce, err := newOpsNonce()
+	if err != nil {
+		return errors.Tag(err)
+	}
 	bodyHash := apiRequestBodySHA256(body)
 	req.Header.Set(apiRuntimeOpsTimestampHeader, timestamp)
+	req.Header.Set(apiRuntimeOpsNonceHeader, nonce)
 	req.Header.Set(apiRuntimeOpsBodySHA256Header, bodyHash)
-	req.Header.Set(apiRuntimeOpsSignatureHeader, signAPIRequestText(token, req.Method, req.URL.RequestURI(), timestamp, bodyHash))
+	req.Header.Set(apiRuntimeOpsSignatureHeader, signAPIRequestText(token, req.Method, req.URL.RequestURI(), timestamp, nonce, bodyHash))
+	return nil
+}
+
+// newOpsNonce 返回 16 字节密码学随机数的小写十六进制编码。
+func newOpsNonce() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", errors.Wrap(err, "生成 API 运维请求 nonce 失败")
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 // apiRequestBodySHA256 返回 API 内网请求体 SHA256 十六进制摘要。
@@ -384,12 +474,13 @@ func apiRequestBodySHA256(body []byte) string {
 }
 
 // signAPIRequestText 按 API 运维接口约定生成 HMAC-SHA256 签名。
-func signAPIRequestText(secret string, method string, requestURI string, timestamp string, bodyHash string) string {
+func signAPIRequestText(secret string, method string, requestURI string, timestamp string, nonce string, bodyHash string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(strings.Join([]string{
 		strings.ToUpper(strings.TrimSpace(method)),
 		requestURI,
 		timestamp,
+		nonce,
 		bodyHash,
 	}, "\n")))
 	return hex.EncodeToString(mac.Sum(nil))

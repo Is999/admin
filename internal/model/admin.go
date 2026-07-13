@@ -1,12 +1,10 @@
 package model
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/Is999/go-utils/errors"
 
-	"github.com/Is999/go-utils"
 	"gorm.io/gorm"
 )
 
@@ -25,10 +23,10 @@ type Admin struct {
 	MfaSecureKey      string    `gorm:"column:mfa_secure_key;type:varchar(255);not null;comment:基于时间的一次性密码密钥" json:"mfa_secure_key"`                               // 基于时间的一次性密码密钥
 	MfaStatus         int       `gorm:"column:mfa_status;type:tinyint unsigned;not null;comment:MFA 状态：0 未启用，1 已启用" json:"mfa_status"`                             // MFA 状态：0 未启用，1 已启用
 	Status            int       `gorm:"column:status;type:tinyint;not null;default:1;comment:账户状态：1 正常，0 禁用" json:"status"`                                        // 账户状态：1 正常，0 禁用
-	Avatar            string    `gorm:"column:avatar;type:varchar(255);not null;comment:头像" json:"avatar"`                                                         // 头像
+	Avatar            string    `gorm:"column:avatar;type:varchar(255);not null;index:idx_avatar,priority:1;comment:头像" json:"avatar"`                             // 头像访问地址，公开读取按该索引确认已保存引用
 	Description       string    `gorm:"column:description;type:varchar(255);not null;comment:简介描述" json:"description"`                                             // 简介描述
 	LastLoginTime     time.Time `gorm:"column:last_login_time;type:datetime;not null;comment:最后登录时间" json:"last_login_time"`                                       // 最后登录时间
-	LastLoginIP       string    `gorm:"column:last_login_ip;type:varchar(32);not null;comment:最后登录 IP" json:"last_login_ip"`                                       // 最后登录 IP
+	LastLoginIP       string    `gorm:"column:last_login_ip;type:varchar(45);not null;comment:最后登录 IP" json:"last_login_ip"`                                       // 最后登录 IP
 	LastLoginIPAddr   string    `gorm:"column:last_login_ipaddr;type:varchar(255);not null;comment:最后登录 IP 归属地" json:"last_login_ipaddr"`                          // 最后登录 IP 归属地
 	CreatedAt         time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:添加时间" json:"created_at"`                         // 添加时间
 	UpdatedAt         time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP;comment:修改时间" json:"updated_at"`                         // 修改时间
@@ -37,11 +35,6 @@ type Admin struct {
 // TableName 返回管理员表名。
 func (*Admin) TableName() string {
 	return TableNameAdmin
-}
-
-// PasswordWithSalt 基于管理员 ID 与用户名派生盐值，生成当前密码摘要。
-func (m *Admin) PasswordWithSalt(password string) string {
-	return utils.MD5(fmt.Sprintf("%d%s%s", m.ID, utils.Substr(utils.MD5(m.Name), 10, 20), password))
 }
 
 // FindUserByName 根据用户名查询管理员；未命中时返回 `nil, nil`。

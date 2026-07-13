@@ -22,19 +22,19 @@ func TestWithPrefix(t *testing.T) {
 		{
 			name:  "scopes logical key",
 			appID: "site-a",
-			key:   keys.AdminInfoLogicalKey(1),
-			want:  scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)),
+			key:   keys.AdminSessionLogicalKey(1),
+			want:  scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)),
 		},
 		{
 			name:  "keeps current app scoped key unchanged",
 			appID: "site-a",
-			key:   scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)),
-			want:  scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)),
+			key:   scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)),
+			want:  scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)),
 		},
 		{
 			name:  "rejects other app scoped key",
 			appID: "site-b",
-			key:   scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)),
+			key:   scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)),
 			want:  "",
 		},
 		{
@@ -68,11 +68,11 @@ func TestHasPrefix(t *testing.T) {
 		key  string // key 表示待验证 key。
 		want bool   // want 表示期望结果。
 	}{
-		{name: "scoped key", key: scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)), want: true},
+		{name: "scoped key", key: scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)), want: true},
 		{name: "empty logical key", key: "app:site-a:", want: false},
 		{name: "missing logical separator", key: "app:site-a", want: false},
-		{name: "missing app id", key: keys.ScopeRoot + ":" + keys.AdminInfoLogicalKey(1), want: false},
-		{name: "logical key", key: keys.AdminInfoLogicalKey(1), want: false},
+		{name: "missing app id", key: keys.ScopeRoot + ":" + keys.AdminSessionLogicalKey(1), want: false},
+		{name: "logical key", key: keys.AdminSessionLogicalKey(1), want: false},
 	}
 
 	for _, tt := range tests {
@@ -92,12 +92,12 @@ func TestOwner(t *testing.T) {
 		want   string // want 表示期望结果。
 		wantOK bool   // wantOK 表示期望是否成功。
 	}{
-		{name: "scoped key", key: scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)), want: "site-a", wantOK: true},
+		{name: "scoped key", key: scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)), want: "site-a", wantOK: true},
 		{name: "table cache key", key: "app:site-a:table:role_tree", want: "site-a", wantOK: true},
 		{name: "empty logical key", key: "app:site-a:", want: "", wantOK: false},
 		{name: "missing logical separator", key: "app:site-a", want: "", wantOK: false},
-		{name: "missing app id", key: keys.ScopeRoot + ":" + keys.AdminInfoLogicalKey(1), want: "", wantOK: false},
-		{name: "logical key", key: keys.AdminInfoLogicalKey(1), want: "", wantOK: false},
+		{name: "missing app id", key: keys.ScopeRoot + ":" + keys.AdminSessionLogicalKey(1), want: "", wantOK: false},
+		{name: "logical key", key: keys.AdminSessionLogicalKey(1), want: "", wantOK: false},
 	}
 
 	for _, tt := range tests {
@@ -118,11 +118,11 @@ func TestIsForeignKey(t *testing.T) {
 		key   string // key 表示待验证 key。
 		want  bool   // want 表示期望结果。
 	}{
-		{name: "current app key", appID: "site-a", key: scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)), want: false},
-		{name: "other app key", appID: "site-a", key: scopedTestKey("site-b", keys.AdminInfoLogicalKey(1)), want: true},
+		{name: "current app key", appID: "site-a", key: scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)), want: false},
+		{name: "other app key", appID: "site-a", key: scopedTestKey("site-b", keys.AdminSessionLogicalKey(1)), want: true},
 		{name: "other app table key", appID: "site-a", key: "app:site-b:table:role_tree", want: true},
-		{name: "logical key", appID: "site-a", key: keys.AdminInfoLogicalKey(1), want: false},
-		{name: "empty app id", appID: "", key: scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)), want: true},
+		{name: "logical key", appID: "site-a", key: keys.AdminSessionLogicalKey(1), want: false},
+		{name: "empty app id", appID: "", key: scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)), want: true},
 		{name: "incomplete prefix", appID: "site-a", key: "app:site-b", want: false},
 	}
 
@@ -159,13 +159,13 @@ func TestTrimPrefix(t *testing.T) {
 	}{
 		{
 			name: "trims scoped key",
-			key:  scopedTestKey("site-a", keys.AdminInfoLogicalKey(1)),
-			want: keys.AdminInfoLogicalKey(1),
+			key:  scopedTestKey("site-a", keys.AdminSessionLogicalKey(1)),
+			want: keys.AdminSessionLogicalKey(1),
 		},
 		{
 			name: "keeps logical key",
-			key:  keys.AdminInfoLogicalKey(1),
-			want: keys.AdminInfoLogicalKey(1),
+			key:  keys.AdminSessionLogicalKey(1),
+			want: keys.AdminSessionLogicalKey(1),
 		},
 		{
 			name: "keeps incomplete prefix",
@@ -174,8 +174,8 @@ func TestTrimPrefix(t *testing.T) {
 		},
 		{
 			name: "keeps missing app id prefix",
-			key:  keys.ScopeRoot + ":" + keys.AdminInfoLogicalKey(1),
-			want: keys.ScopeRoot + ":" + keys.AdminInfoLogicalKey(1),
+			key:  keys.ScopeRoot + ":" + keys.AdminSessionLogicalKey(1),
+			want: keys.ScopeRoot + ":" + keys.AdminSessionLogicalKey(1),
 		},
 	}
 

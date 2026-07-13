@@ -7,13 +7,16 @@ import (
 
 // State 保存 DB 运行配置轻量轮询资源，零值可用。
 type State struct {
-	cancel       context.CancelFunc // 后台轮询取消函数
-	stateMu      sync.Mutex         // 保护 watcher 生命周期
-	wg           sync.WaitGroup     // 等待 watcher 退出
-	watcherSeq   uint64             // watcher 启动序号，避免旧协程退出时清掉新协程状态
-	activeSeq    uint64             // 当前运行中的 watcher 序号
-	lastVersion  uint64             // 最近一次已应用版本号
-	lastChecksum string             // 最近一次已应用快照校验和
+	watcher      *watcherRun // 当前 watcher；停止完成前保持占位，阻止并发重启
+	stateMu      sync.Mutex  // 保护 watcher 生命周期
+	lastVersion  uint64      // 最近一次已应用版本号
+	lastChecksum string      // 最近一次已应用快照校验和
+}
+
+// watcherRun 保存单个 watcher 的取消与退出信号，避免 WaitGroup 的 Add/Wait 并发竞态。
+type watcherRun struct {
+	cancel context.CancelFunc // 取消当前 watcher
+	done   chan struct{}      // watcher 完全退出后关闭
 }
 
 // Start 启动 watcher，并保证同一时间只有一个后台轮询。
@@ -22,50 +25,52 @@ func (s *State) Start(run func(context.Context)) bool {
 		return false
 	}
 	s.stateMu.Lock()
-	if s.cancel != nil {
+	if s.watcher != nil {
 		s.stateMu.Unlock()
 		return false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s.watcherSeq++
-	seq := s.watcherSeq
-	s.cancel = cancel
-	s.activeSeq = seq
+	watcher := &watcherRun{cancel: cancel, done: make(chan struct{})}
+	s.watcher = watcher
 	s.stateMu.Unlock()
-	s.wg.Add(1)
 	go func() {
-		defer s.clearWatcher(seq)
-		defer s.wg.Done()
+		defer s.clearWatcher(watcher)
 		run(ctx)
 	}()
 	return true
 }
 
-// Stop 停止 watcher 并等待退出。
-func (s *State) Stop() {
+// Stop 停止 watcher，并受应用统一停止期限约束。
+func (s *State) Stop(ctx context.Context) error {
 	if s == nil {
-		return
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	s.stateMu.Lock()
-	if s.cancel == nil {
+	watcher := s.watcher
+	if watcher == nil {
 		s.stateMu.Unlock()
-		return
+		return nil
 	}
-	cancel := s.cancel
-	s.cancel = nil
-	s.activeSeq = 0
+	watcher.cancel()
 	s.stateMu.Unlock()
-	cancel()
-	s.wg.Wait()
+	select {
+	case <-watcher.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // clearWatcher 在 watcher 自然退出后清理运行标记，允许后续重新启动。
-func (s *State) clearWatcher(seq uint64) {
+func (s *State) clearWatcher(watcher *watcherRun) {
 	s.stateMu.Lock()
-	if s.activeSeq == seq {
-		s.cancel = nil
-		s.activeSeq = 0
+	if s.watcher == watcher {
+		s.watcher = nil
 	}
+	close(watcher.done)
 	s.stateMu.Unlock()
 }
 

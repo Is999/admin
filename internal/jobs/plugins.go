@@ -30,8 +30,15 @@ func PluginSpecs() []taskruntime.PluginSpec {
 			Name:        exportjob.PluginName,
 			File:        "internal/jobs/export/plugin.go",
 			Method:      "jobs.ExcelExportPlugin / exportjob.Setup",
-			Description: "注册列表异步导出 handler",
+			Description: "注册列表异步导出和字典备份清理 handler",
 			Build:       ExcelExportPlugin,
+		},
+		{
+			Name:        FileUploadCleanupPluginName,
+			File:        "internal/jobs/file_cleanup.go",
+			Method:      "jobs.FileUploadCleanupPlugin",
+			Description: "注册上传对象延迟清理 handler",
+			Build:       FileUploadCleanupPlugin,
 		},
 		{
 			Name:        taskreporttask.PluginName,
@@ -72,7 +79,7 @@ func ArchivePlugin() taskruntime.Plugin {
 	})
 }
 
-// ExcelExportPlugin 创建列表异步导出任务插件。
+// ExcelExportPlugin 创建列表异步导出和字典备份清理任务插件。
 func ExcelExportPlugin() taskruntime.Plugin {
 	return taskruntime.NewPluginFunc(exportjob.PluginName, func(runtime *taskruntime.Runtime) error {
 		return exportjob.Setup(runtime)

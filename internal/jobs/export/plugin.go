@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	adminlogic "admin/internal/logic/admin"
+	configlogic "admin/internal/logic/config"
 	userlogic "admin/internal/logic/user"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -26,7 +27,7 @@ type Runtime interface {
 	RegisterHandler(pattern string, handler asynq.Handler) error
 }
 
-// Setup 注册列表异步导出任务处理器。
+// Setup 注册列表异步导出和字典备份清理任务处理器。
 func Setup(runtime Runtime) error {
 	if runtime == nil || runtime.ServiceContext() == nil {
 		return nil
@@ -41,11 +42,38 @@ func Setup(runtime Runtime) error {
 	})); err != nil {
 		return errors.Tag(err)
 	}
-	return runtime.RegisterHandler(types.UserExportTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+	if err := runtime.RegisterHandler(types.UserExportTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 		var payload types.UserExportTaskPayload
 		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 			return errors.Wrap(err, "解析前台用户导出任务载荷失败")
 		}
 		return userlogic.NewLogicWithContext(ctx, svcCtx).RunExportTask(&payload)
+	})); err != nil {
+		return errors.Tag(err)
+	}
+	if err := runtime.RegisterHandler(types.AdminExportCleanupTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+		var payload types.AdminExportCleanupTaskPayload
+		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+			return errors.Wrap(err, "解析管理员导出文件清理任务载荷失败")
+		}
+		return adminlogic.NewAdminExportLogicWithContext(ctx, svcCtx).CleanupExportFile(&payload)
+	})); err != nil {
+		return errors.Tag(err)
+	}
+	if err := runtime.RegisterHandler(types.UserExportCleanupTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+		var payload types.UserExportCleanupTaskPayload
+		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+			return errors.Wrap(err, "解析前台用户导出文件清理任务载荷失败")
+		}
+		return userlogic.NewLogicWithContext(ctx, svcCtx).CleanupExportFiles(&payload)
+	})); err != nil {
+		return errors.Tag(err)
+	}
+	return runtime.RegisterHandler(types.SysConfigExcelBackupCleanupTaskType, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+		var payload types.SysConfigExcelBackupCleanupTaskPayload
+		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+			return errors.Wrap(err, "解析字典导入前备份清理任务载荷失败")
+		}
+		return configlogic.NewSysConfigLogicWithContext(ctx, svcCtx).CleanupImportBackup(&payload)
 	}))
 }

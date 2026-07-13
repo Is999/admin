@@ -1,0 +1,9 @@
+-- 代码资产：显式重置回填与校验进度。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.restartStage。
+-- 参数来源：状态和任务名通过预编译参数传入。
+-- 安全边界：调用前锁定并校验同一任务不可变参数。
+UPDATE `shard_backfill_checkpoint`
+SET `cursor_value` = `range_start`, `verify_cursor` = `range_start`,
+    `updated_rows` = 0, `verified_rows` = 0, `mismatch_rows` = 0, `status` = ?
+WHERE `job_name` = ?

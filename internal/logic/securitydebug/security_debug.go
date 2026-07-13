@@ -45,7 +45,7 @@ func (l *SecurityDebugLogic) Sign(req *types.SecurityDebugSignReq) *types.BizRes
 	}
 	traceID := normalizedDebugTraceID(req.RequestID)
 	timestamp := normalizedDebugTimestamp(req.Timestamp)
-	signFields := normalizeSecurityFields(req.NormalizedSignFields())
+	signFields := normalizeSecurityFields(req.SignFields)
 	signer, err := l.buildSigner(req.AppID, req.NormalizedSignatureType(), false)
 	if err != nil {
 		return types.ServerError(i18n.MsgKeyQueryFail, err, "SecurityDebugLogic.Sign 初始化签名器失败").ToBizResult()
@@ -85,7 +85,7 @@ func (l *SecurityDebugLogic) Verify(req *types.SecurityDebugVerifyReq) *types.Bi
 	}
 	traceID := normalizedDebugTraceID(req.RequestID)
 	timestamp := normalizedDebugTimestamp(req.Timestamp)
-	signFields := normalizeSecurityFields(req.NormalizedSignFields())
+	signFields := normalizeSecurityFields(req.SignFields)
 	signer, err := l.buildSigner(req.AppID, req.NormalizedSignatureType(), true)
 	if err != nil {
 		return types.ServerError(i18n.MsgKeyQueryFail, err, "SecurityDebugLogic.Verify 初始化验签器失败").ToBizResult()
@@ -186,8 +186,6 @@ func (l *SecurityDebugLogic) Decrypt(req *types.SecurityDebugCipherReq) *types.B
 // buildSigner 根据 AppID 和签名方式初始化签名器或验签器。
 func (l *SecurityDebugLogic) buildSigner(appID string, signatureType string, isVerify bool) (security.Signer, error) {
 	switch signatureType {
-	case security.SignatureTypeMD5:
-		return security.MD5Signer{}, nil
 	case security.SignatureTypeAES:
 		aesKey, _, err := secretkeylogic.NewSecretKeyLogic(l.Ctx, l.Svc).GetAESKey(appID, "", "")
 		if err != nil {

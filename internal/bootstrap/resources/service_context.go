@@ -7,14 +7,17 @@ import (
 	"admin/internal/audit"
 	"admin/internal/bootstrap/configload"
 	"admin/internal/config"
+	"admin/internal/infra/ipregion"
 	"admin/internal/infra/kafkax"
 	"admin/internal/infra/loggerx"
 	mysqlx "admin/internal/infra/mysql"
 	"admin/internal/infra/redisx"
 	"admin/internal/infra/tracing"
+	cachelogic "admin/internal/logic/cache"
 	"admin/internal/svc"
 
 	"github.com/Is999/go-utils/errors"
+	tablecache "github.com/Is999/table-cache"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -28,7 +31,9 @@ type buildResources struct {
 
 // BuildServiceContext 统一完成基础设施初始化，避免 main 和 debug 入口各自拼装依赖导致行为漂移。
 func BuildServiceContext(ctx context.Context, c config.Config) (*svc.ServiceContext, func(context.Context) error, error) {
-	loggerx.Setup(c)
+	if err := loggerx.Setup(c); err != nil {
+		return nil, nil, errors.Tag(err)
+	}
 
 	shutdown, err := tracing.Setup(ctx, c.Observability)
 	if err != nil {
@@ -50,6 +55,15 @@ func BuildServiceContext(ctx context.Context, c config.Config) (*svc.ServiceCont
 	}
 	resources.Rds = rdb
 
+	tableCacheMetrics, err := tablecache.NewPrometheusMetrics(
+		tablecache.WithPrometheusSubsystem(cachelogic.TableCacheMetricsSubsystem),
+	)
+	if err != nil {
+		_ = closeBuildResources(context.Background(), resources)
+		return nil, nil, errors.Wrap(err, "初始化表缓存运行指标失败")
+	}
+	resources.TableCacheMetrics = tableCacheMetrics
+
 	snowflakeLease, err := configload.ConfigureSnowflakeWorker(ctx, c.Snowflake, rdb)
 	if err != nil {
 		_ = closeBuildResources(context.Background(), resources)
@@ -64,9 +78,30 @@ func BuildServiceContext(ctx context.Context, c config.Config) (*svc.ServiceCont
 	}
 	resources.Kafka = kafkaProducer
 
+	ipRegion, err := ipregion.New(c.IPRegion)
+	if err != nil {
+		_ = closeBuildResources(context.Background(), resources)
+		return nil, nil, errors.Wrap(err, "初始化本地 IP 归属地查询器失败")
+	}
+	resources.IPRegion = ipRegion
+
 	svcCtx := svc.NewServiceContext(c, resources.Dependencies)
+	if _, err = svcCtx.ObjectStorage(); err != nil {
+		_ = closeBuildResources(context.Background(), resources)
+		return nil, nil, errors.Wrap(err, "初始化文件存储失败")
+	}
+	virusScanner, err := svcCtx.VirusScanner()
+	if err != nil {
+		_ = closeBuildResources(context.Background(), resources)
+		return nil, nil, errors.Wrap(err, "初始化病毒扫描器失败")
+	}
+	if err = virusScanner.Ready(ctx); err != nil {
+		_ = closeBuildResources(context.Background(), resources)
+		return nil, nil, errors.Wrap(err, "病毒扫描器未就绪")
+	}
 	// 审计日志使用主库写连接。
-	resources.Audit = audit.NewRecorder(svcCtx.WriteDB(svc.DatabaseMain), c.Observability.LogBodyMaxBytes)
+	resources.Audit = audit.NewRecorder(c.Observability.LogBodyMaxBytes)
+	resources.Audit.SetIPLocator(ipRegion)
 	svcCtx.Audit = resources.Audit
 	return svcCtx, shutdown, nil
 }
@@ -84,7 +119,10 @@ func closeBuildResources(ctx context.Context, resources buildResources) error {
 		recordErr(resources.SnowflakeLease.Close(ctx))
 	}
 	if resources.Kafka != nil {
-		recordErr(resources.Kafka.Close())
+		recordErr(resources.Kafka.Close(ctx))
+	}
+	if resources.IPRegion != nil {
+		resources.IPRegion.Close()
 	}
 	if resources.Rds != nil {
 		recordErr(resources.Rds.Close())
@@ -98,7 +136,10 @@ func closeBuildResources(ctx context.Context, resources buildResources) error {
 
 // CloseServiceContextResources 释放 ServiceContext 托管的外部资源。
 // 任务 Redis 可能复用业务主 Redis，关闭时通过 owned 标记避免重复关闭共享连接。
-func CloseServiceContextResources(svcCtx *svc.ServiceContext, taskRedis redis.UniversalClient, taskRedisOwned bool) error {
+func CloseServiceContextResources(ctx context.Context, svcCtx *svc.ServiceContext, taskRedis redis.UniversalClient, taskRedisOwned bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var firstErr error
 	recordErr := func(err error) {
 		if err != nil && firstErr == nil {
@@ -112,7 +153,7 @@ func CloseServiceContextResources(svcCtx *svc.ServiceContext, taskRedis redis.Un
 		return errors.Tag(firstErr)
 	}
 	if svcCtx.SnowflakeLease != nil {
-		recordErr(svcCtx.SnowflakeLease.Close(context.Background()))
+		recordErr(svcCtx.SnowflakeLease.Close(ctx))
 	}
 	if taskRedisOwned && taskRedis != nil {
 		recordErr(taskRedis.Close())
@@ -121,7 +162,10 @@ func CloseServiceContextResources(svcCtx *svc.ServiceContext, taskRedis redis.Un
 		recordErr(svcCtx.Rds.Close())
 	}
 	if svcCtx.Kafka != nil {
-		recordErr(svcCtx.Kafka.Close())
+		recordErr(svcCtx.Kafka.Close(ctx))
+	}
+	if svcCtx.IPRegion != nil {
+		svcCtx.IPRegion.Close()
 	}
 	recordErr(closeSiteDatabases(svcCtx.SiteDBs))
 	return errors.Tag(firstErr)

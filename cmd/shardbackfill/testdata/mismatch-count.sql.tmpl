@@ -1,0 +1,8 @@
+-- 代码资产：统计 shardbackfill 集成测试表固定桶不一致数量。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.assertMismatchCount。
+-- 参数来源：无动态参数，仅使用固定测试对象名。
+-- 安全边界：测试表仅六行，不代表生产查询路径。
+SELECT COUNT(*)
+FROM `shard_backfill_case`
+WHERE `shard_no` IS NULL OR `shard_no` <> MOD(CRC32(CAST(`uid` AS CHAR)), 1024)

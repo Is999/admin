@@ -1,12 +1,18 @@
 package runtimeconfig
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"admin/internal/config"
+	"admin/internal/jobs/archive"
+	"admin/internal/model"
+	"admin/internal/svc"
+	tasklimits "admin/internal/task/limits"
 	"admin/internal/types"
 
 	"gorm.io/gorm"
@@ -46,6 +52,98 @@ func TestRuntimeConfigSnapshotEmpty(t *testing.T) {
 	}
 	if runtimeConfigSnapshotEmpty(ReleaseSnapshot{ArchiveJobs: []config.ArchiveJobConfig{{Name: "archive"}}}) {
 		t.Fatal("包含归档任务的快照不应判定为空")
+	}
+}
+
+// TestArchiveProgressToRespPreservesWatermarkAndEstimate 验证执行详情映射保留水位、滞后和区间估算进度。
+func TestArchiveProgressToRespPreservesWatermarkAndEstimate(t *testing.T) {
+	now := time.Date(2026, time.August, 1, 9, 30, 0, 0, time.Local)
+	estimate := 50.0
+	resp := archiveProgressToResp(5, archive.Progress{
+		JobName:        "admin_log",
+		RuntimeMatched: true,
+		RuntimeEnabled: true,
+		SchemaReady:    true,
+		Phase:          archive.ProgressPhaseRunning,
+		WatermarkTime:  sql.NullTime{Time: now.Add(-24 * time.Hour), Valid: true},
+		LagSeconds:     sql.NullInt64{Int64: 86_400, Valid: true},
+		CurrentSegment: &archive.ProgressSegment{
+			ID:                       18,
+			Status:                   "running",
+			RangeStart:               now.Add(-24 * time.Hour),
+			RangeEnd:                 now,
+			LastArchivedID:           9_007_199_254_740_993,
+			EstimatedProgressPercent: &estimate,
+		},
+		FetchedAt: now,
+	})
+	if resp.JobID != 5 || resp.JobName != "admin_log" || resp.WatermarkTime == "" {
+		t.Fatalf("执行详情基础字段映射异常: %+v", resp)
+	}
+	if resp.LagSeconds == nil || *resp.LagSeconds != 86_400 {
+		t.Fatalf("LagSeconds=%v want 86400", resp.LagSeconds)
+	}
+	if resp.CurrentSegment == nil || resp.CurrentSegment.EstimatedProgressPercent == nil || *resp.CurrentSegment.EstimatedProgressPercent != 50 {
+		t.Fatalf("CurrentSegment=%+v want estimate 50", resp.CurrentSegment)
+	}
+	if resp.CurrentSegment.LastArchivedID != "9007199254740993" {
+		t.Fatalf("LastArchivedID=%q want exact bigint string", resp.CurrentSegment.LastArchivedID)
+	}
+	if resp.RecentSegments == nil {
+		t.Fatal("RecentSegments 应返回空数组而不是 null")
+	}
+	segmentJSON, err := json.Marshal(archiveSegmentToItem(archive.ProgressSegment{}))
+	if err != nil {
+		t.Fatalf("序列化空归档区间失败: %v", err)
+	}
+	if !strings.Contains(string(segmentJSON), `"estimatedProgressPercent":null`) {
+		t.Fatalf("非复制阶段应显式返回 null 估算进度: %s", segmentJSON)
+	}
+}
+
+// TestValidateSnapshotRejectsPeriodicResourceOverridesAboveHardLimits 校验发布预检不会接受无界周期任务参数。
+func TestValidateSnapshotRejectsPeriodicResourceOverridesAboveHardLimits(t *testing.T) {
+	base := config.TaskPeriodicConfig{
+		Name:     "oversized-resource",
+		Cron:     "0 * * * *",
+		Workflow: "demo.workflow",
+	}
+	tests := []struct {
+		name    string                           // 测试场景
+		update  func(*config.TaskPeriodicConfig) // 设置越界参数
+		wantErr string                           // 期望错误片段
+	}{
+		{
+			name: "retry",
+			update: func(item *config.TaskPeriodicConfig) {
+				item.Retry = tasklimits.MaxRetry + 1
+			},
+			wantErr: "retry",
+		},
+		{
+			name: "timeout",
+			update: func(item *config.TaskPeriodicConfig) {
+				item.TimeoutSeconds = tasklimits.MaxTimeoutSeconds + 1
+			},
+			wantErr: "timeout_seconds",
+		},
+		{
+			name: "shard total",
+			update: func(item *config.TaskPeriodicConfig) {
+				item.ShardTotal = tasklimits.MaxShardTotal + 1
+			},
+			wantErr: "shard_total",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := base
+			tt.update(&item)
+			_, err := ValidateSnapshot(ReleaseSnapshot{TaskPeriodic: []config.TaskPeriodicConfig{item}})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateSnapshot() error = %v, want %q limit", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -230,5 +328,31 @@ func TestArchiveReqToModelDefaultsDelayDays(t *testing.T) {
 	}
 	if row.DeleteDelayDays != 45 {
 		t.Fatalf("DeleteDelayDays=%d want 45", row.DeleteDelayDays)
+	}
+}
+
+// TestRuntimeConfigReloadMatchesRelease 验证只有完整匹配本次发布的重载回执才能标记已应用。
+func TestRuntimeConfigReloadMatchesRelease(t *testing.T) {
+	// release 表示本次已持久化的发布记录。
+	release := model.RuntimeConfigRelease{ID: 13, VersionNo: 7, Checksum: "checksum-7"}
+	// tests 覆盖无回执和各个字段不匹配的场景。
+	tests := []struct {
+		name   string                        // name 表示测试场景。
+		reload svc.RuntimeConfigReloadResult // reload 表示运行态重载回执。
+		want   bool                          // want 表示是否应标记已应用。
+	}{
+		{name: "missing receipt"},
+		{name: "release mismatch", reload: svc.RuntimeConfigReloadResult{ReleaseID: 12, VersionNo: 7, Checksum: "checksum-7"}},
+		{name: "version mismatch", reload: svc.RuntimeConfigReloadResult{ReleaseID: 13, VersionNo: 6, Checksum: "checksum-7"}},
+		{name: "checksum mismatch", reload: svc.RuntimeConfigReloadResult{ReleaseID: 13, VersionNo: 7, Checksum: "checksum-6"}},
+		{name: "exact match", reload: svc.RuntimeConfigReloadResult{ReleaseID: 13, VersionNo: 7, Checksum: "checksum-7"}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runtimeConfigReloadMatchesRelease(release, tt.reload); got != tt.want {
+				t.Fatalf("runtimeConfigReloadMatchesRelease() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

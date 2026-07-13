@@ -1,0 +1,29 @@
+-- 代码资产：创建 shard_no 回填进度表；只允许通过 shardbackfill init 在已确认的源库执行。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.initCheckpointTable 通过 go:embed 加载并剥离本说明后执行。
+-- 参数来源：无动态参数；表名和列定义是固定运维契约。
+-- 安全边界：仅显式 init 动作执行；业务运行账号不需要该表 DDL 权限。
+CREATE TABLE IF NOT EXISTS `shard_backfill_checkpoint` (
+  `job_name` varchar(64) NOT NULL COMMENT '回填任务唯一名称',
+  `table_name` varchar(64) NOT NULL COMMENT '业务表名',
+  `primary_key` varchar(64) NOT NULL COMMENT '单调唯一游标列',
+  `uid_column` varchar(64) NOT NULL COMMENT '业务用户ID列',
+  `insert_trigger` varchar(64) NOT NULL COMMENT '源表插入保护触发器',
+  `update_trigger` varchar(64) NOT NULL COMMENT '源表更新保护触发器',
+  `range_start` bigint unsigned NOT NULL COMMENT '回填起点，不包含',
+  `range_end` bigint unsigned NOT NULL COMMENT '回填终点，包含',
+  `cursor_value` bigint unsigned NOT NULL COMMENT '已提交回填游标',
+  `verify_cursor` bigint unsigned NOT NULL COMMENT '已提交校验游标',
+  `updated_rows` bigint unsigned NOT NULL DEFAULT 0 COMMENT '累计修正行数',
+  `verified_rows` bigint unsigned NOT NULL DEFAULT 0 COMMENT '累计校验行数',
+  `mismatch_rows` bigint unsigned NOT NULL DEFAULT 0 COMMENT '校验不一致行数',
+  `status` varchar(16) NOT NULL COMMENT 'running/backfilled/verifying/verified/mismatch',
+  `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+  `updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+  PRIMARY KEY (`job_name`),
+  KEY `idx_shard_backfill_table_status` (`table_name`, `status`),
+  CONSTRAINT `chk_shard_backfill_range` CHECK (`range_start` < `range_end`),
+  CONSTRAINT `chk_shard_backfill_cursor` CHECK (`cursor_value` BETWEEN `range_start` AND `range_end`),
+  CONSTRAINT `chk_shard_verify_cursor` CHECK (`verify_cursor` BETWEEN `range_start` AND `range_end`),
+  CONSTRAINT `chk_shard_backfill_status` CHECK (`status` IN ('running','backfilled','verifying','verified','mismatch'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='shard_no回填进度';

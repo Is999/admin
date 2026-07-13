@@ -1,0 +1,6 @@
+-- 每张表必须返回 0 行；抽样不能代替全量不变量校验。
+SELECT `id`, `shard_no`, MOD(CRC32(CAST(`id` AS CHAR)), 1024) AS `expected_shard_no`
+FROM `user`
+WHERE `shard_no` IS NULL
+   OR `shard_no` <> MOD(CRC32(CAST(`id` AS CHAR)), 1024)
+LIMIT 100;

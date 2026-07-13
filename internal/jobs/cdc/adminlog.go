@@ -377,7 +377,7 @@ type adminLogRow struct {
 	UserName   string  `json:"user_name"`   // 操作人账号
 	Action     string  `json:"action"`      // 操作动作
 	Route      string  `json:"route"`       // 路由名称
-	TraceID    string  `json:"trace_id"`    // Trace ID
+	TraceID    string  `json:"trace_id"`    // 链路追踪 ID
 	HTTPStatus int     `json:"http_status"` // HTTP 状态码
 	BizCode    int     `json:"biz_code"`    // 业务码
 	LatencyMS  int64   `json:"latency_ms"`  // 请求耗时毫秒
@@ -392,14 +392,14 @@ type adminLogCollectorPayload struct {
 	UserName   string `json:"user_name"`   // 操作人账号
 	Action     string `json:"action"`      // 操作动作
 	Route      string `json:"route"`       // 路由名称
-	TraceID    string `json:"trace_id"`    // Trace ID
+	TraceID    string `json:"trace_id"`    // 链路追踪 ID
 	HTTPStatus int    `json:"http_status"` // HTTP 状态码
 	BizCode    int    `json:"biz_code"`    // 业务码
 	LatencyMS  int64  `json:"latency_ms"`  // 请求耗时毫秒
 	Success    bool   `json:"success"`     // 是否成功
 	Op         string `json:"op"`          // CDC 操作类型
 	SourceFile string `json:"source_file"` // binlog 文件
-	SourcePos  int64  `json:"source_pos"`  // binlog position
+	SourcePos  int64  `json:"source_pos"`  // binlog 文件偏移量
 }
 
 // adminLogRowFromEvent 根据 op 选择 after/before 数据并解析成统计字段。

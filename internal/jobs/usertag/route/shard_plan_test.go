@@ -1,104 +1,82 @@
 package route
 
-import "testing"
+import (
+	"testing"
+
+	"admin/common/idgen"
+)
 
 // TestShardPlanRoutesUID 验证同一 UID 的分片路由稳定可复现。
 func TestShardPlanRoutesUID(t *testing.T) {
-	plan := NewShardPlan(10, 10)
-	if shard := plan.UIDShard(12345, 10); shard != 5 {
+	plan := NewShardPlan(10)
+	if shard := plan.UIDShard(12345, 10); shard != idgen.ShardNo(12345)*10/idgen.ShardMod {
 		t.Fatalf("unexpected uid shard: %d", shard)
 	}
 }
 
-// TestPhysicalShardsForWorkflowLowerWorkflowTotal 验证工作流分片少于物理分表时不会漏扫同余分表。
-func TestPhysicalShardsForWorkflowLowerWorkflowTotal(t *testing.T) {
-	plan := NewShardPlan(5, 10)
-	shards := plan.physicalShardsForWorkflow(2, 5, plan.RuntimeShardTotal)
-	if len(shards) != 2 || shards[0] != 2 || shards[1] != 7 {
-		t.Fatalf("unexpected runtime shards: %#v", shards)
+// TestResultTableUsesCurrentRoute 验证标签结果表由当前分表策略统一解析。
+func TestResultTableUsesCurrentRoute(t *testing.T) {
+	plan := NewShardPlanWithResult(8, 1024)
+	table, err := plan.ResultTable(12345)
+	if err != nil {
+		t.Fatalf("ResultTable() error = %v", err)
 	}
-}
-
-// TestPhysicalShardsForWorkflowHigherWorkflowTotal 验证工作流分片多于物理分表时仍能定位唯一物理分表。
-func TestPhysicalShardsForWorkflowHigherWorkflowTotal(t *testing.T) {
-	plan := NewShardPlan(20, 10)
-	shards := plan.physicalShardsForWorkflow(13, 20, plan.RuntimeShardTotal)
-	if len(shards) != 1 || shards[0] != 3 {
-		t.Fatalf("unexpected runtime shards: %#v", shards)
-	}
-}
-
-// TestPhysicalShardsForWorkflowCoprime 验证互质分片配置下每个工作流分片需要覆盖全部物理分表。
-func TestPhysicalShardsForWorkflowCoprime(t *testing.T) {
-	plan := NewShardPlan(3, 10)
-	shards := plan.physicalShardsForWorkflow(1, 3, plan.RuntimeShardTotal)
-	if len(shards) != 10 {
-		t.Fatalf("unexpected coprime runtime shards: %#v", shards)
-	}
-}
-
-// TestTagShardsForWorkflowCoprime 验证标签结果分片也使用同一套物理分表覆盖规则。
-func TestTagShardsForWorkflowCoprime(t *testing.T) {
-	plan := NewShardPlanWithResult(10, 10, 1024)
-	shards := plan.TagShardsForWorkflow(1, 3)
-	if len(shards) != 1024 {
-		t.Fatalf("unexpected coprime tag shards: %#v", shards)
-	}
-}
-
-// TestTagShardsForWorkflowDefaultsSinglePhysicalShard 验证默认标签结果表从单物理分表起步。
-func TestTagShardsForWorkflowDefaultsSinglePhysicalShard(t *testing.T) {
-	plan := NewShardPlan(0, 0)
-	shards := plan.TagShardsForWorkflow(3, 10)
-	if len(shards) != 1 || shards[0] != 0 {
-		t.Fatalf("unexpected default tag shards: %#v", shards)
+	if table != "user_tag" {
+		t.Fatalf("ResultTable() = %q, want user_tag", table)
 	}
 }
 
 // TestIndexedUIDConditionPrefersShardNo 验证中转索引表在分片一致时优先走 shard_no。
 func TestIndexedUIDConditionPrefersShardNo(t *testing.T) {
-	plan := NewShardPlan(10, 10)
-	condition, err := plan.IndexedUIDCondition("uid", "shard_no", Shard{Index: 3, Total: 10})
-	if err != nil {
-		t.Fatalf("indexed condition failed: %v", err)
-	}
+	plan := NewShardPlan(1024)
+	condition := plan.IndexedUIDCondition(Shard{Index: 3, Total: 1024})
 	if condition.Expr != "shard_no = ?" || len(condition.Args) != 1 || condition.Args[0] != 3 {
 		t.Fatalf("unexpected condition: %#v", condition)
 	}
 }
 
-// TestIndexedUIDConditionUsesShardNoSet 验证工作流分片可映射到 1024 分片索引集合。
-func TestIndexedUIDConditionUsesShardNoSet(t *testing.T) {
-	plan := NewShardPlanWithResult(8, 1024, 1024)
-	condition, err := plan.IndexedUIDCondition("uid", "shard_no", Shard{Index: 3, Total: 8})
-	if err != nil {
-		t.Fatalf("indexed condition failed: %v", err)
-	}
-	if condition.Expr != "shard_no IN ?" || len(condition.Args) != 1 {
+// TestIndexedUIDConditionUsesShardNoRange 验证工作流分片映射为连续固定桶范围。
+func TestIndexedUIDConditionUsesShardNoRange(t *testing.T) {
+	plan := NewShardPlanWithResult(8, 1024)
+	condition := plan.IndexedUIDCondition(Shard{Index: 3, Total: 8})
+	if condition.Expr != "shard_no BETWEEN ? AND ?" || len(condition.Args) != 2 {
 		t.Fatalf("unexpected condition: %#v", condition)
 	}
-	values, ok := condition.Args[0].([]int)
-	if !ok || len(values) != 128 || values[0] != 3 || values[127] != 1019 {
+	if condition.Args[0] != 384 || condition.Args[1] != 511 {
 		t.Fatalf("unexpected shard values: %#v", condition.Args)
 	}
 }
 
-// TestIndexedUIDConditionFallbackModulo 验证分片不一致时回退 UID 取模兼容。
-func TestIndexedUIDConditionFallbackModulo(t *testing.T) {
-	plan := NewShardPlan(20, 10)
-	condition, err := plan.IndexedUIDCondition("uid", "shard_no", Shard{Index: 13, Total: 20})
-	if err != nil {
-		t.Fatalf("indexed condition failed: %v", err)
-	}
-	if condition.Expr != "MOD(uid, ?) = ?" || len(condition.Args) != 2 || condition.Args[0] != 20 || condition.Args[1] != 13 {
+// TestIndexedUIDConditionSplitsNonDivisibleBuckets 验证分片不整除时仍连续且完整覆盖固定桶。
+func TestIndexedUIDConditionSplitsNonDivisibleBuckets(t *testing.T) {
+	plan := NewShardPlan(20)
+	condition := plan.IndexedUIDCondition(Shard{Index: 13, Total: 20})
+	if condition.Expr != "shard_no BETWEEN ? AND ?" || len(condition.Args) != 2 || condition.Args[0] != 666 || condition.Args[1] != 716 {
 		t.Fatalf("unexpected condition: %#v", condition)
 	}
 }
 
-// TestShardConditionRejectsUnsafeColumn 验证分片条件拒绝危险列名。
-func TestShardConditionRejectsUnsafeColumn(t *testing.T) {
-	plan := NewShardPlan(10, 10)
-	if _, err := plan.UIDModuloCondition("uid;drop table", Shard{Index: 0, Total: 10}); err == nil {
-		t.Fatal("expected unsafe column error")
+// TestShardBucketRangesCoverAllBuckets 验证任意允许的工作分片数都连续且无重叠覆盖固定桶。
+func TestShardBucketRangesCoverAllBuckets(t *testing.T) {
+	plan := NewShardPlan(1024)
+	for total := 1; total <= idgen.ShardMod; total++ {
+		next := 0
+		for index := 0; index < total; index++ {
+			start, end := plan.shardBucketRange(Shard{Index: index, Total: total})
+			if start != next || end < start || end >= idgen.ShardMod {
+				t.Fatalf("total=%d index=%d range=%d-%d next=%d", total, index, start, end, next)
+			}
+			next = end + 1
+		}
+		if next != idgen.ShardMod {
+			t.Fatalf("total=%d covered=%d buckets, want=%d", total, next, idgen.ShardMod)
+		}
+		for bucket := 0; bucket < idgen.ShardMod; bucket++ {
+			index := bucket * total / idgen.ShardMod
+			start, end := plan.shardBucketRange(Shard{Index: index, Total: total})
+			if bucket < start || bucket > end {
+				t.Fatalf("total=%d bucket=%d routed=%d range=%d-%d", total, bucket, index, start, end)
+			}
+		}
 	}
 }

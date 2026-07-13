@@ -244,17 +244,59 @@ func quoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
-// tableExists 检查当前数据库内指定表是否存在。
-func tableExists(ctx context.Context, db *gorm.DB, table string) bool {
-	if db == nil || strings.TrimSpace(table) == "" {
-		return false
-	}
-	var count int64
-	err := db.WithContext(ctx).
+// tableNameRow 承接 information_schema 返回的当前数据库表名。
+type tableNameRow struct {
+	TableName string `gorm:"column:table_name"` // 当前数据库中实际存在的表名
+}
+
+// buildExistingTablesQuery 构造一次查询多个表是否存在的 GORM 链式表达式。
+func buildExistingTablesQuery(ctx context.Context, db *gorm.DB, tables []string) *gorm.DB {
+	return db.WithContext(ctx).
 		Table("information_schema.TABLES").
-		Where("TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", table).
-		Count(&count).Error
-	return err == nil && count > 0
+		Select("TABLE_NAME AS table_name").
+		Where("TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ?", tables)
+}
+
+// existingTables 一次返回当前数据库内实际存在的目标表，查询失败时保留错误语义。
+func existingTables(ctx context.Context, db *gorm.DB, tables []string) (map[string]struct{}, error) {
+	if db == nil {
+		return nil, errors.New("数据库连接为空，无法检查表状态")
+	}
+	tableNames := make([]string, 0, len(tables))
+	seen := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		table = strings.TrimSpace(table)
+		if table == "" {
+			continue
+		}
+		if _, ok := seen[table]; ok {
+			continue
+		}
+		seen[table] = struct{}{}
+		tableNames = append(tableNames, table)
+	}
+	existing := make(map[string]struct{}, len(tableNames))
+	if len(tableNames) == 0 {
+		return existing, nil
+	}
+	var rows []tableNameRow
+	if err := buildExistingTablesQuery(ctx, db, tableNames).Scan(&rows).Error; err != nil {
+		return nil, errors.Tag(err)
+	}
+	for _, row := range rows {
+		existing[row.TableName] = struct{}{}
+	}
+	return existing, nil
+}
+
+// tableExists 检查当前数据库内指定表是否存在，查询失败时由调用方决定是否中止。
+func tableExists(ctx context.Context, db *gorm.DB, table string) (bool, error) {
+	tables, err := existingTables(ctx, db, []string{table})
+	if err != nil {
+		return false, errors.Tag(err)
+	}
+	_, ok := tables[strings.TrimSpace(table)]
+	return ok, nil
 }
 
 // withWriteResolver 为 GORM 连接显式附加主库路由。

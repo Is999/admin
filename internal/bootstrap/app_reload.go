@@ -11,7 +11,6 @@ import (
 	"admin/internal/bootstrap/runtimewatch"
 	"admin/internal/config"
 	"admin/internal/infra/loggerx"
-	"admin/internal/svc"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -30,11 +29,24 @@ func (a *App) reloadConfigFile(ctx context.Context, source string, configFile st
 		return "", errors.Errorf("未绑定配置文件路径")
 	}
 	a.hotReload.LockExec()
-	defer a.hotReload.UnlockExec()
+	reconcileWatcher := false
+	reconcileEnabled := false
+	defer func() {
+		a.hotReload.UnlockExec()
+		if !reconcileWatcher {
+			return
+		}
+		if reconcileEnabled && !a.isConfigHotReloadRunning() {
+			a.startConfigHotReload()
+		}
+		if !reconcileEnabled && hotreload.Source(source) != "watcher" {
+			_ = a.stopConfigHotReload(context.Background())
+		}
+	}()
 	select {
 	case <-ctx.Done():
 		err := errors.Tag(ctx.Err())
-		a.markHotReloadFailure(i18n.MsgKeyHotReloadCancelled, "配置热加载已取消", err, "", source, "cancelled", configFile)
+		a.hotReloadRecorder().Failure(i18n.MsgKeyHotReloadCancelled, "配置热加载已取消", err, "", source, "cancelled", configFile)
 		return "", err
 	default:
 	}
@@ -47,7 +59,9 @@ func (a *App) reloadConfigFile(ctx context.Context, source string, configFile st
 		return loaded.PreviousFingerprint, nil
 	}
 	applied := a.applyReloadedConfig(loaded.Before, loaded.Requested)
-	a.markHotReloadSuccess(ctx, source, configFile, loaded, applied)
+	a.hotReloadRecorder().Success(ctx, source, configFile, loaded, applied)
+	reconcileWatcher = true
+	reconcileEnabled = applied.Effective.HotReload.Enabled
 	return loaded.PreviousFingerprint, nil
 }
 
@@ -56,12 +70,12 @@ func (a *App) loadReloadConfig(ctx context.Context, source, configFile string) (
 	beforeCfg := a.CurrentConfig()
 	currentFingerprint, err := configload.BundleFingerprint(configFile)
 	if err != nil {
-		a.markHotReloadFailure(i18n.MsgKeyHotReloadFingerprintReadFailed, "读取配置文件指纹失败", err, "", source, "fingerprint", configFile)
+		a.hotReloadRecorder().Failure(i18n.MsgKeyHotReloadFingerprintReadFailed, "读取配置文件指纹失败", err, "", source, "fingerprint", configFile)
 		return hotreload.LoadedFile{}, errors.Tag(err)
 	}
 	previousFingerprint := a.hotReloadRecorder().CurrentVersion()
 	if previousFingerprint != "" && currentFingerprint == previousFingerprint {
-		a.markHotReloadUnchanged(configFile, source, currentFingerprint)
+		a.hotReloadRecorder().Unchanged(configFile, source, currentFingerprint)
 		return hotreload.LoadedFile{
 			Before:              beforeCfg,
 			CurrentFingerprint:  currentFingerprint,
@@ -71,11 +85,11 @@ func (a *App) loadReloadConfig(ctx context.Context, source, configFile string) (
 	}
 	cfg, err := LoadConfig(configFile)
 	if err != nil {
-		a.markHotReloadFailure(i18n.MsgKeyHotReloadFailed, "配置热加载失败", err, currentFingerprint, source, "load", configFile)
+		a.hotReloadRecorder().Failure(i18n.MsgKeyHotReloadFailed, "配置热加载失败", err, currentFingerprint, source, "load", configFile)
 		return hotreload.LoadedFile{}, errors.Tag(err)
 	}
 	if loadErr := runtimewatch.ApplyActiveSnapshot(ctx, a.ServiceContext, beforeCfg, &cfg); loadErr != nil {
-		a.markHotReloadFailure(i18n.MsgKeyHotReloadRuntimeConfigLoadFailed, "加载数据库运行配置失败", loadErr, currentFingerprint, source, "load_runtime_config", configFile)
+		a.hotReloadRecorder().Failure(i18n.MsgKeyHotReloadRuntimeConfigLoadFailed, "加载数据库运行配置失败", loadErr, currentFingerprint, source, "load_runtime_config", configFile)
 		return hotreload.LoadedFile{}, errors.Tag(loadErr)
 	}
 	return hotreload.LoadedFile{
@@ -103,11 +117,11 @@ func (a *App) applyReloadedConfig(before, after config.Config) hotreload.Applied
 }
 
 // stopConfigHotReload 停止配置热加载后台协程。
-func (a *App) stopConfigHotReload() {
+func (a *App) stopConfigHotReload(ctx context.Context) error {
 	if a == nil {
-		return
+		return nil
 	}
-	a.hotReload.StopWatcher()
+	return errors.Tag(a.hotReload.StopWatcher(ctx))
 }
 
 // startConfigHotReload 在启用时启动后台配置轮询协程。
@@ -119,7 +133,7 @@ func (a *App) startConfigHotReload() {
 	cfg := a.CurrentConfig()
 	interval := hotreload.CheckInterval(cfg.HotReload.CheckIntervalSeconds)
 	configFile := a.boundConfigFile()
-	a.markHotReloadWatcherStarting(cfg, configFile, interval)
+	a.hotReloadRecorder().WatcherStarting(cfg, configFile, interval)
 	if configFile == "" || !cfg.HotReload.Enabled {
 		return
 	}
@@ -139,27 +153,28 @@ func (a *App) watchConfigFile(ctx context.Context, configFile string) {
 	interval := hotreload.CheckInterval(a.CurrentConfig().HotReload.CheckIntervalSeconds)
 	lastFingerprint, err := configload.BundleFingerprint(configFile)
 	if err != nil {
-		a.markHotReloadFailure(i18n.MsgKeyHotReloadFingerprintInitFailed, "初始化配置文件指纹失败", err, "", "startup", "fingerprint", configFile)
-		a.markHotReloadWatcherInitFailed(configFile, interval)
+		recorder := a.hotReloadRecorder()
+		recorder.Failure(i18n.MsgKeyHotReloadFingerprintInitFailed, "初始化配置文件指纹失败", err, "", "startup", "fingerprint", configFile)
+		recorder.WatcherInitFailed(configFile, interval)
 		return
 	}
-	a.markHotReloadWatcherRunning(configFile, lastFingerprint, interval)
+	a.hotReloadRecorder().WatcherRunning(configFile, lastFingerprint, interval)
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	for {
 		if !a.CurrentConfig().HotReload.Enabled {
-			a.markHotReloadWatcherDisabled(false)
+			a.hotReloadRecorder().WatcherDisabled(false)
 			return
 		}
 		select {
 		case <-ctx.Done():
-			a.markHotReloadWatcherStopped()
+			a.hotReloadRecorder().WatcherStopped()
 			return
 		case <-timer.C:
-			a.markHotReloadChecked(time.Now())
+			a.hotReloadRecorder().Checked(time.Now())
 			currentFingerprint, statErr := configload.BundleFingerprint(configFile)
 			if statErr != nil {
-				a.markHotReloadFailure(i18n.MsgKeyHotReloadFileStatusReadFailed, "读取配置文件状态失败", statErr, "", "watcher", "fingerprint", configFile)
+				a.hotReloadRecorder().Failure(i18n.MsgKeyHotReloadFileStatusReadFailed, "读取配置文件状态失败", statErr, "", "watcher", "fingerprint", configFile)
 				timer.Reset(hotreload.CheckInterval(a.CurrentConfig().HotReload.CheckIntervalSeconds))
 				continue
 			}
@@ -171,7 +186,7 @@ func (a *App) watchConfigFile(ctx context.Context, configFile string) {
 				}
 			}
 			if !a.CurrentConfig().HotReload.Enabled {
-				a.markHotReloadWatcherDisabled(true)
+				a.hotReloadRecorder().WatcherDisabled(true)
 				return
 			}
 			timer.Reset(hotreload.CheckInterval(a.CurrentConfig().HotReload.CheckIntervalSeconds))
@@ -206,61 +221,4 @@ func (a *App) hotReloadRecorder() hotreload.Recorder {
 		CurrentConfig:  a.CurrentConfig,
 		NotifyFailure:  a.notifyConfigReloadFailure,
 	}
-}
-
-// refreshHotReloadStatus 在当前状态基础上执行原子更新，确保 watcher 和管理接口看到同一份快照。
-func (a *App) refreshHotReloadStatus(mutator func(svc.HotReloadStatus) svc.HotReloadStatus) {
-	a.hotReloadRecorder().UpdateStatus(mutator)
-}
-
-// markHotReloadFailure 记录最近一次热加载失败状态，并对重复错误做简单限频，避免日志刷屏。
-func (a *App) markHotReloadFailure(messageKey, message string, err error, fingerprint, source, category, configFile string) {
-	a.hotReloadRecorder().Failure(messageKey, message, err, fingerprint, source, category, configFile)
-}
-
-// markHotReloadSuccess 记录一次成功重载后的状态、日志和 watcher 后续动作。
-func (a *App) markHotReloadSuccess(ctx context.Context, source, configFile string, loaded hotreload.LoadedFile, applied hotreload.AppliedConfig) {
-	a.hotReloadRecorder().Success(ctx, source, configFile, loaded, applied)
-	effectiveCfg := applied.Effective
-	if effectiveCfg.HotReload.Enabled && !a.isConfigHotReloadRunning() {
-		a.startConfigHotReload()
-	}
-	if !effectiveCfg.HotReload.Enabled && hotreload.Source(source) != "watcher" {
-		a.stopConfigHotReload()
-	}
-}
-
-// markHotReloadUnchanged 记录一次无配置变更的热加载检查，不刷新运行配置快照。
-func (a *App) markHotReloadUnchanged(configFile, source, fingerprint string) {
-	a.hotReloadRecorder().Unchanged(configFile, source, fingerprint)
-}
-
-// markHotReloadWatcherStarting 记录 watcher 启动前的基础监听状态。
-func (a *App) markHotReloadWatcherStarting(cfg config.Config, configFile string, interval time.Duration) {
-	a.hotReloadRecorder().WatcherStarting(cfg, configFile, interval)
-}
-
-// markHotReloadWatcherInitFailed 标记 watcher 初始化失败后的监听状态。
-func (a *App) markHotReloadWatcherInitFailed(configFile string, interval time.Duration) {
-	a.hotReloadRecorder().WatcherInitFailed(configFile, interval)
-}
-
-// markHotReloadWatcherRunning 标记配置文件 watcher 已进入轮询状态。
-func (a *App) markHotReloadWatcherRunning(configFile, fingerprint string, interval time.Duration) {
-	a.hotReloadRecorder().WatcherRunning(configFile, fingerprint, interval)
-}
-
-// markHotReloadWatcherDisabled 标记 watcher 已因配置关闭退出。
-func (a *App) markHotReloadWatcherDisabled(forceMessage bool) {
-	a.hotReloadRecorder().WatcherDisabled(forceMessage)
-}
-
-// markHotReloadWatcherStopped 标记 watcher 已收到退出信号。
-func (a *App) markHotReloadWatcherStopped() {
-	a.hotReloadRecorder().WatcherStopped()
-}
-
-// markHotReloadChecked 记录 watcher 最近一次配置指纹检查时间。
-func (a *App) markHotReloadChecked(now time.Time) {
-	a.hotReloadRecorder().Checked(now)
 }

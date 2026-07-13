@@ -1,0 +1,17 @@
+.git
+.agents
+.idea
+.DS_Store
+bin
+data
+dist
+logs
+.env
+.env.*
+*.log
+etc/config.yaml
+etc/config.*.local.yaml
+etc/config.*.runtime.yaml
+etc/config.d/runtime.yaml
+etc/keys
+etc/values.*.local.yaml

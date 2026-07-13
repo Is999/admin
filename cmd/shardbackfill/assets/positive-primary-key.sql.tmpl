@@ -1,0 +1,8 @@
+-- 代码资产：确认游标列全部为正整数。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.validateTableSchema。
+-- 参数来源：表名和游标列名仅由已校验标识符替换。
+-- 安全边界：依赖游标列单列唯一索引，最多读取首个非正值。
+SELECT EXISTS(
+  SELECT 1 FROM __TABLE__ WHERE __PRIMARY_KEY__ <= 0 LIMIT 1
+)

@@ -49,6 +49,14 @@ func ListArchiveJobsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	})(sCtx)
 }
 
+// GetArchiveJobProgressHandler 查询归档任务执行详情。
+func GetArchiveJobProgressHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.RespHandler[types.RuntimeConfigIDReq](func(r *http.Request, sCtx *svc.ServiceContext, req *types.RuntimeConfigIDReq) (shared.LogicObj, *types.BizResult) {
+		logicObj := runtimeconfiglogic.NewRuntimeConfigLogic(r, sCtx)
+		return logicObj, logicObj.GetArchiveJobProgress(req)
+	})(sCtx)
+}
+
 // SaveArchiveJobHandler 保存归档任务草稿。
 func SaveArchiveJobHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionHandler[types.SaveRuntimeArchiveJobReq](shared.RuntimeConfigSave, func(r *http.Request, sCtx *svc.ServiceContext, req *types.SaveRuntimeArchiveJobReq) (shared.LogicObj, *types.BizResult) {

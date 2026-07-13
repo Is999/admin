@@ -23,6 +23,7 @@ type schedulerRuntimeStatus struct {
 	RenewIntervalSeconds       int       // leader 锁续租间隔（秒）
 	SyncIntervalSeconds        int       // 周期任务配置同步间隔（秒）
 	HeartbeatIntervalSeconds   int       // 调度器心跳间隔（秒）
+	MaxQueueBacklog            int       // 周期任务投递前允许的队列积压上限，0 表示关闭背压
 	PeriodicTaskCount          int       // 当前有效周期任务数量
 	LastStatus                 string    // 最近一次调度器总体状态
 	LastMessage                string    // 最近一次调度器总体状态说明
@@ -78,6 +79,7 @@ func (m *Manager) syncSchedulerConfigStatus(cfg config.TaskQueueConfig) {
 		status.RenewIntervalSeconds = int(m.schedulerRenewIntervalByConfig(cfg) / time.Second)
 		status.SyncIntervalSeconds = int(m.schedulerSyncIntervalByConfig(cfg) / time.Second)
 		status.HeartbeatIntervalSeconds = int(m.schedulerHeartbeatIntervalByConfig(cfg) / time.Second)
+		status.MaxQueueBacklog = cfg.Scheduler.MaxQueueBacklog
 		status.PeriodicTaskCount = len(dedupePeriodicTasks(enabledPeriodicTasks(append([]config.TaskPeriodicConfig(nil), cfg.Periodic...))))
 		if strings.TrimSpace(status.LastStatus) != "" {
 			return status
@@ -256,6 +258,7 @@ func (m *Manager) schedulerStatusSnapshot(ctx context.Context) *types.TaskSchedu
 		RenewIntervalSeconds:     status.RenewIntervalSeconds,
 		SyncIntervalSeconds:      status.SyncIntervalSeconds,
 		HeartbeatIntervalSeconds: status.HeartbeatIntervalSeconds,
+		MaxQueueBacklog:          status.MaxQueueBacklog,
 		PeriodicTaskCount:        status.PeriodicTaskCount,
 		LastStatus:               status.LastStatus,
 		LastMessage:              schedulerStatusMessage(ctx, status.LastMessageKey, status.LastMessage),

@@ -1,9 +1,9 @@
 package rbac
 
 import (
-	corelogic "admin/internal/logic"
-	cachelogic "admin/internal/logic/cache"
+	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"time"
 
@@ -11,26 +11,25 @@ import (
 	i18n "admin/common/i18n"
 	keys "admin/common/rediskeys"
 	redislock "admin/internal/infra/redsync"
+	corelogic "admin/internal/logic"
+	cachelogic "admin/internal/logic/cache"
 	"admin/internal/model"
 	"admin/internal/svc"
 	"admin/internal/types"
-	"net/http"
 
 	"github.com/Is999/go-utils/errors"
-
 	tablecache "github.com/Is999/table-cache"
-
 	"gorm.io/gorm"
 )
 
-// AdminRoleLogic 预留角色领域逻辑入口，后续扩展角色管理能力时统一从这里收口。
+// AdminRoleLogic 处理角色层级、授权关系和角色缓存。
 type AdminRoleLogic struct {
 	*corelogic.BaseLogic // 复用上下文、数据库和日志能力
 }
 
 const (
-	// rolePermissionWriteLockTTL 是角色权限写锁默认持有时长。
-	rolePermissionWriteLockTTL = 20 * time.Second
+	// rbacWriteLockTTL 是 RBAC 写锁默认持有时长。
+	rbacWriteLockTTL = 20 * time.Second
 )
 
 var (
@@ -84,20 +83,22 @@ func (l *AdminRoleLogic) List(req *types.RoleListReq) *types.BizResult {
 			"AdminRoleLogic.List 查询角色列表失败").ToBizResult()
 	}
 
-	roleIDs := make([]int, 0, len(list))
-	for _, role := range list {
-		roleIDs = append(roleIDs, role.ID)
-	}
-	permissionMap, err := l.rolePermissionMap(roleIDs)
-	if err != nil {
-		return types.DBError(i18n.MsgKeyDBError, err,
-			"AdminRoleLogic.List 查询角色权限失败").ToBizResult()
-	}
-
 	items := make([]types.AdminRoleItem, 0, len(list))
 	for _, role := range list {
-		items = append(items, corelogic.AdminRoleModelToItem(role, permissionMap[role.ID], nil))
+		items = append(items, corelogic.AdminRoleModelToItem(role, nil))
 	}
+	roleTree, err := l.LoadRoleTreeWithCache()
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminRoleLogic.List 查询角色树缓存失败").ToBizResult()
+	}
+	manageableRoleSet, parentRoleSet, err := l.roleItemScopeSets(roleTree)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminRoleLogic.List 计算角色可操作范围失败").ToBizResult()
+	}
+	items = markRoleTreeScope(items, manageableRoleSet)
+	items = markRoleTreeCreateScope(items, parentRoleSet, true)
 
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
@@ -138,19 +139,23 @@ func (l *AdminRoleLogic) ParentTreeOptions() *types.BizResult {
 		WithData(items)
 }
 
-// Create 新增角色，并在同一事务内绑定权限。
-func (l *AdminRoleLogic) Create(req *types.SaveRoleReq) *types.BizResult {
+// Create 新增角色；角色权限统一由专用授权接口维护。
+func (l *AdminRoleLogic) Create(req *types.CreateRoleReq) *types.BizResult {
 	return l.withRolePermissionWriteLock("AdminRoleLogic.Create", func() *types.BizResult {
 		if err := l.ensureRoleParentWithinManageScope(req.Pid); err != nil {
 			return types.Forbidden(i18n.MsgKeyForbidden).
 				ToBizResult().
 				WithError(errors.Wrapf(err, "AdminRoleLogic.Create 父级角色 ID[%d]超出可操作范围", req.Pid))
 		}
-		// 创建角色时如果提交了越权权限，按父角色边界自动过滤，仅保留合法权限继续保存。
-		filteredPermissionIDs, err := l.retainRolePermissionsWithinParentScope(req.Pid, req.Permissions)
+		disabledRoleID, err := l.disabledRolePathID(req.Pid)
 		if err != nil {
 			return types.DBError(i18n.MsgKeyDBError, err,
-				"AdminRoleLogic.Create 计算父级角色 ID[%d]可分配权限失败", req.Pid).ToBizResult()
+				"AdminRoleLogic.Create 校验父级角色 ID[%d]状态失败", req.Pid).ToBizResult()
+		}
+		if disabledRoleID > 0 {
+			return types.NewBizResult(codes.Fail).
+				SetI18nMessage(i18n.MsgKeyStatusChangeFail).
+				WithError(errors.Errorf("AdminRoleLogic.Create 父级路径包含禁用角色 ID[%d]", disabledRoleID))
 		}
 		role := model.AdminRole{
 			Title:     req.Title,
@@ -174,9 +179,6 @@ func (l *AdminRoleLogic) Create(req *types.SaveRoleReq) *types.BizResult {
 			if err := tx.Create(&role).Error; err != nil {
 				return errors.Wrap(err, "创建角色失败")
 			}
-			if err := l.replaceRolePermissionsTx(tx, role.ID, filteredPermissionIDs); err != nil {
-				return errors.Tag(err)
-			}
 			return nil
 		}); err != nil {
 			if errors.Is(err, ErrRoleTitleAlreadyExists) || corelogic.IsMySQLDuplicateEntryError(err) {
@@ -186,14 +188,17 @@ func (l *AdminRoleLogic) Create(req *types.SaveRoleReq) *types.BizResult {
 				"AdminRoleLogic.Create 创建角色[%s]失败", req.Title).ToBizResult()
 		}
 
-		l.refreshRoleRelatedCache(role.ID)
+		if err := l.refreshRoleRelatedCache(role.ID); err != nil {
+			return corelogic.CacheSyncPendingResult(l.Logger, codes.AddSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+				"AdminRoleLogic.Create RBAC缓存同步失败")
+		}
 		return types.NewBizResult(codes.AddSuccess).
 			SetI18nMessage(i18n.MsgKeyAddSuccess)
 	})
 }
 
-// Update 编辑角色基础信息，并按需覆盖角色权限。
-func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
+// Update 编辑角色基础信息；换父级时同步收敛整棵角色子树的权限边界。
+func (l *AdminRoleLogic) Update(req *types.UpdateRoleReq) *types.BizResult {
 	return l.withRolePermissionWriteLock("AdminRoleLogic.Update", func() *types.BizResult {
 		affectedRoleSet := map[int]struct{}{req.ID: {}}
 		var role model.AdminRole
@@ -206,22 +211,13 @@ func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
 				"AdminRoleLogic.Update 查询角色 ID[%d]失败", req.ID).ToBizResult()
 		}
 
-		// 编辑接口沿用 laravel-admin：未提交 pid 时保留原父级，避免误把角色移动到根节点。
-		nextPid := role.Pid
-		if req.Pid > 0 || role.Pid == 0 {
-			nextPid = req.Pid
-		}
-		pidChanged := nextPid != role.Pid
-		nextStatus := role.Status
-		if req.Status != nil {
-			nextStatus = *req.Status
-		}
-		if req.ID == corelogic.AdminSuperRoleID && nextStatus == 0 {
-			forbidErr := errors.Errorf("超级管理员角色状态不允许禁用")
+		nextPid, err := roleParentIDForUpdate(req.ID, req.ParentID())
+		if err != nil {
 			return types.Forbidden(i18n.MsgKeyForbidden).
 				ToBizResult().
-				WithError(errors.Wrapf(forbidErr, "AdminRoleLogic.Update 角色 ID[%d]不允许禁用", req.ID))
+				WithError(errors.Wrapf(err, "AdminRoleLogic.Update 角色 ID[%d]父级不允许修改", req.ID))
 		}
+		pidChanged := nextPid != role.Pid
 		if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
 			return types.Forbidden(i18n.MsgKeyForbidden).
 				ToBizResult().
@@ -232,17 +228,18 @@ func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
 				ToBizResult().
 				WithError(errors.Wrapf(err, "AdminRoleLogic.Update 父级角色 ID[%d]超出可操作范围", nextPid))
 		}
-		filteredPermissionIDs := req.Permissions
-		if req.Permissions != nil {
-			// 编辑角色时自动过滤超出父角色边界的权限，避免单个越权节点导致整次保存失败。
-			filtered, filterErr := l.retainRolePermissionsWithinParentScope(nextPid, req.Permissions)
-			if filterErr != nil {
-				return types.DBError(i18n.MsgKeyDBError, filterErr,
-					"AdminRoleLogic.Update 计算角色 ID[%d]可分配权限失败", req.ID).ToBizResult()
+		if pidChanged {
+			disabledRoleID, err := l.disabledRolePathID(nextPid)
+			if err != nil {
+				return types.DBError(i18n.MsgKeyDBError, err,
+					"AdminRoleLogic.Update 校验父级角色 ID[%d]状态失败", nextPid).ToBizResult()
 			}
-			filteredPermissionIDs = filtered
+			if disabledRoleID > 0 {
+				return types.NewBizResult(codes.Fail).
+					SetI18nMessage(i18n.MsgKeyStatusChangeFail).
+					WithError(errors.Errorf("AdminRoleLogic.Update 父级路径包含禁用角色 ID[%d]", disabledRoleID))
+			}
 		}
-
 		if err := l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
 			pids, err := l.rolePidsTx(tx, nextPid, req.ID)
 			if err != nil {
@@ -255,20 +252,23 @@ func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
 				"title":      req.Title,
 				"pid":        nextPid,
 				"pids":       pids,
-				"status":     nextStatus,
-				"describe":   req.Description,
+				"describe":   *req.Description,
 				"updated_at": time.Now(),
 			}).Error; err != nil {
 				return errors.Wrap(err, "更新角色基础信息失败")
 			}
-			if filteredPermissionIDs != nil {
-				err := l.syncRolePermissionDelta(tx, req.ID, filteredPermissionIDs, affectedRoleSet)
+			if pidChanged {
+				if err := l.syncRoleDescendantPidsTx(tx, req.ID, affectedRoleSet); err != nil {
+					return errors.Tag(err)
+				}
+				isSuperRole, err := l.currentOperatorIsSuperRoleTx(tx)
 				if err != nil {
 					return errors.Tag(err)
 				}
-			}
-			if pidChanged && req.Permissions == nil {
-				return l.reconcileRolePermissionScopeTreeTx(tx, req.ID, affectedRoleSet)
+				if err := l.reconcileRolePermissionScopeTreeTx(tx, req.ID, isSuperRole, affectedRoleSet); err != nil {
+					return errors.Tag(err)
+				}
+				return l.reconcileRoleDocPermissionScopeTreeTx(tx, req.ID, isSuperRole, affectedRoleSet)
 			}
 			return nil
 		}); err != nil {
@@ -283,14 +283,35 @@ func (l *AdminRoleLogic) Update(req *types.SaveRoleReq) *types.BizResult {
 				"AdminRoleLogic.Update 更新角色 ID[%d]失败", req.ID).ToBizResult()
 		}
 
-		l.refreshRoleRelatedCache(roleIDSetToSlice(affectedRoleSet)...)
+		if err := l.refreshRoleRelatedCache(roleIDSetToSlice(affectedRoleSet)...); err != nil {
+			return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+				"AdminRoleLogic.Update RBAC缓存同步失败")
+		}
 		return types.NewBizResult(codes.UpdateSuccess).
 			SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 	})
 }
 
+// roleParentIDForUpdate 采用请求中的明确父级；超级管理员角色固定为根角色。
+func roleParentIDForUpdate(roleID int, requestedPid int) (int, error) {
+	if roleID == corelogic.AdminSuperRoleID {
+		if requestedPid > 0 {
+			return 0, errors.Errorf("超级管理员角色必须保持为根角色")
+		}
+		return 0, nil
+	}
+	return requestedPid, nil
+}
+
 // Delete 软删除角色；删除时级联软删除全部子孙角色，并清理管理员绑定关系与角色权限关系。
 func (l *AdminRoleLogic) Delete(req *types.IDPathReq) *types.BizResult {
+	return l.withRolePermissionWriteLock("AdminRoleLogic.Delete", func() *types.BizResult {
+		return l.delete(req)
+	})
+}
+
+// delete 在角色写锁内执行角色子树删除。
+func (l *AdminRoleLogic) delete(req *types.IDPathReq) *types.BizResult {
 	if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).
 			ToBizResult().
@@ -339,6 +360,9 @@ func (l *AdminRoleLogic) Delete(req *types.IDPathReq) *types.BizResult {
 		if err := tx.Where("role_id IN ?", roleIDs).Delete(&model.AdminRolePermissionRel{}).Error; err != nil {
 			return errors.Wrap(err, "清理角色权限关系失败")
 		}
+		if err := tx.Where("role_id IN ?", roleIDs).Delete(&model.AdminRoleDocPermissionRel{}).Error; err != nil {
+			return errors.Wrap(err, "清理角色文档权限关系失败")
+		}
 		// 删除角色关系前先捕获受影响管理员，后续缓存失效才能精确删除对应 admin_* key。
 		adminIDs, err := l.adminIDsByRoleIDsTx(tx, roleIDs)
 		if err != nil {
@@ -362,13 +386,38 @@ func (l *AdminRoleLogic) Delete(req *types.IDPathReq) *types.BizResult {
 	if len(deletedRoleIDs) == 0 {
 		deletedRoleIDs = []int{req.ID}
 	}
-	l.refreshRoleRelatedCacheByScope(deletedRoleIDs, affectedAdminIDs)
+	cacheErr := l.refreshRoleRelatedCacheByScope(deletedRoleIDs, nil)
+	adminCacheErr := cachelogic.InvalidateAdminRoleCacheByAdminIDs(l.BaseLogic, affectedAdminIDs...)
+	cacheErr = errors.Join(cacheErr, adminCacheErr)
+	if cacheErr != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.DeleteSuccess, i18n.MsgKeyAdminCacheInvalidationPending, cacheErr,
+			"AdminRoleLogic.Delete RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.DeleteSuccess).
 		SetI18nMessage(i18n.MsgKeyDeleteSuccess)
 }
 
 // UpdateStatus 修改角色启用/禁用状态；禁用时级联禁用全部子孙角色。
 func (l *AdminRoleLogic) UpdateStatus(req *types.RoleStatusReq) *types.BizResult {
+	return l.withRolePermissionWriteLock("AdminRoleLogic.UpdateStatus", func() *types.BizResult {
+		return l.updateStatus(req)
+	})
+}
+
+// updateStatus 在角色写锁内执行状态修改与子树禁用。
+func (l *AdminRoleLogic) updateStatus(req *types.RoleStatusReq) *types.BizResult {
+	var role model.AdminRole
+	if err := l.Svc.WriteDB(svc.DatabaseMain).
+		Select("id, pid").
+		Where("id = ? AND is_delete = 0", req.ID).
+		First(&role).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return types.NotFound(i18n.MsgKeyNotFound, err,
+				"AdminRoleLogic.UpdateStatus 角色 ID[%d]不存在", req.ID).ToBizResult()
+		}
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminRoleLogic.UpdateStatus 查询角色 ID[%d]失败", req.ID).ToBizResult()
+	}
 	if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).
 			ToBizResult().
@@ -380,6 +429,18 @@ func (l *AdminRoleLogic) UpdateStatus(req *types.RoleStatusReq) *types.BizResult
 		return types.Forbidden(i18n.MsgKeyForbidden).
 			ToBizResult().
 			WithError(errors.Wrapf(forbidErr, "AdminRoleLogic.UpdateStatus 角色 ID[%d]不允许禁用", req.ID))
+	}
+	if status == 1 {
+		disabledRoleID, err := l.disabledRolePathID(role.Pid)
+		if err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err,
+				"AdminRoleLogic.UpdateStatus 校验角色 ID[%d]父级状态失败", req.ID).ToBizResult()
+		}
+		if disabledRoleID > 0 {
+			return types.NewBizResult(codes.Fail).
+				SetI18nMessage(i18n.MsgKeyStatusChangeFail).
+				WithError(errors.Errorf("AdminRoleLogic.UpdateStatus 父级路径包含禁用角色 ID[%d]", disabledRoleID))
+		}
 	}
 
 	roleIDs := []int{req.ID}
@@ -412,18 +473,16 @@ func (l *AdminRoleLogic) UpdateStatus(req *types.RoleStatusReq) *types.BizResult
 		return types.DBError(i18n.MsgKeyDBError, result.Error,
 			"AdminRoleLogic.UpdateStatus 修改角色 ID[%d]状态失败", req.ID).ToBizResult()
 	}
-	if result.RowsAffected == 0 {
-		return types.NotFound(i18n.MsgKeyNotFound, gorm.ErrRecordNotFound,
-			"AdminRoleLogic.UpdateStatus 角色 ID[%d]不存在", req.ID).ToBizResult()
+	if err := l.refreshRoleRelatedCache(roleIDs...); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminRoleLogic.UpdateStatus RBAC缓存同步失败")
 	}
-
-	l.refreshRoleRelatedCache(roleIDs...)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyStatusChangeOK)
 }
 
 // PermissionTree 查询角色权限树，节点 checked 表示当前角色已拥有权限。
-func (l *AdminRoleLogic) PermissionTree(req *types.RolePermissionReq) *types.BizResult {
+func (l *AdminRoleLogic) PermissionTree(req *types.IDPathReq) *types.BizResult {
 	rolePermissionIDs, err := l.RolePermissionIDsWithCache(req.ID)
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err,
@@ -435,34 +494,55 @@ func (l *AdminRoleLogic) PermissionTree(req *types.RolePermissionReq) *types.Biz
 			"AdminRoleLogic.PermissionTree 查询权限树失败").ToBizResult()
 	}
 
-	checked := make(map[int]struct{}, len(rolePermissionIDs))
-	for _, permissionID := range rolePermissionIDs {
-		checked[permissionID] = struct{}{}
-	}
-
-	assignableIDs, lockAll, err := l.permissionTreeAssignScope(req)
+	assignableIDs, lockAll, err := l.permissionTreeAssignScope(req.ID)
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminRoleLogic.PermissionTree 计算角色 ID[%d]权限可分配范围失败", req.ID).ToBizResult()
+	}
+	rolePermissionIDs = effectiveRolePermissionIDs(req.ID, rolePermissionIDs, assignableIDs)
+	checked := make(map[int]struct{}, len(rolePermissionIDs))
+	for _, permissionID := range rolePermissionIDs {
+		checked[permissionID] = struct{}{}
 	}
 	assignable := make(map[int]struct{}, len(assignableIDs))
 	for _, permissionID := range assignableIDs {
 		assignable[permissionID] = struct{}{}
 	}
+	docPermissionIDs, err := l.roleDocPermissionIDs(req.ID)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminRoleLogic.PermissionTree 查询角色 ID[%d]文档权限失败", req.ID).ToBizResult()
+	}
+	docAssignableIDs, docLockAll, err := l.docPermissionTreeAssignScope(req.ID)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminRoleLogic.PermissionTree 计算角色 ID[%d]文档权限可分配范围失败", req.ID).ToBizResult()
+	}
+	docPermissionIDs = effectiveRolePermissionIDs(req.ID, docPermissionIDs, docAssignableIDs)
+	docItems, err := l.loadDocPermissionItems(docPermissionIDs, docAssignableIDs, docLockAll)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminRoleLogic.PermissionTree 查询文档权限列表失败").ToBizResult()
+	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(markPermissionTreeChecked(items, checked, assignable, lockAll))
+		WithData(types.RolePermissionTreeResp{
+			RoutePermissions: markPermissionTreeChecked(items, checked, assignable, lockAll),
+			DocPermissions:   docItems,
+			Writable:         !lockAll && !docLockAll,
+		})
+}
+
+// effectiveRolePermissionIDs 返回角色权限树应展示的授权集合；超级角色自身按隐式全权限展示。
+func effectiveRolePermissionIDs(roleID int, assignedPermissionIDs []int, assignablePermissionIDs []int) []int {
+	if roleID == corelogic.AdminSuperRoleID {
+		return types.UniquePositiveInts(assignablePermissionIDs)
+	}
+	return types.UniquePositiveInts(assignedPermissionIDs)
 }
 
 // LoadPermissionTreeWithCache 优先读取权限树缓存，未命中时自动回源。
 func (l *AdminRoleLogic) LoadPermissionTreeWithCache() ([]types.AdminPermissionItem, error) {
-	if l.Redis() == nil {
-		var permissions []model.AdminPermission
-		if err := l.Svc.ReadDB(svc.DatabaseMain).Order("id ASC").Find(&permissions).Error; err != nil {
-			return nil, errors.Tag(err)
-		}
-		return corelogic.BuildAdminPermissionTree(permissions, nil, nil), nil
-	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -487,15 +567,16 @@ func (l *AdminRoleLogic) SavePermissions(req *types.RolePermissionSaveReq) *type
 				ToBizResult().
 				WithError(errors.Wrapf(forbidErr, "AdminRoleLogic.SavePermissions 角色 ID[%d]不允许在当前入口修改权限", req.ID))
 		}
-		// 角色权限配置保存时自动裁剪越权权限，只保留当前角色允许分配的部分继续后续写链路。
-		filteredPermissionIDs, err := l.retainRolePermissionsInScope(req.ID, req.Permissions)
-		if err != nil {
-			return types.DBError(i18n.MsgKeyDBError, err,
-				"AdminRoleLogic.SavePermissions 计算角色 ID[%d]可分配权限失败", req.ID).ToBizResult()
-		}
-
-		err = l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
-			return l.syncRolePermissionDelta(tx, req.ID, filteredPermissionIDs, affectedRoleSet)
+		err := l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
+			// 权限配置保存时在主库事务内裁剪越权权限，避免读取副本延迟后回写旧授权。
+			selection, err := l.retainRolePermissionSelectionInScopeTx(tx, req.ID, req.RoutePermissionIDs, req.DocPermissionIDs)
+			if err != nil {
+				return errors.Wrapf(err, "计算角色 ID[%d]可分配权限失败", req.ID)
+			}
+			if err := l.syncRolePermissionDelta(tx, req.ID, selection.RoutePermissionIDs, affectedRoleSet); err != nil {
+				return errors.Tag(err)
+			}
+			return l.syncRoleDocPermissionDelta(tx, req.ID, selection.DocPermissionIDs, affectedRoleSet)
 		})
 		if err != nil {
 			if errors.Is(err, errRolePermissionUnusable) {
@@ -506,53 +587,63 @@ func (l *AdminRoleLogic) SavePermissions(req *types.RolePermissionSaveReq) *type
 				"AdminRoleLogic.SavePermissions 保存角色 ID[%d]权限失败", req.ID).ToBizResult()
 		}
 
-		l.refreshRoleRelatedCache(roleIDSetToSlice(affectedRoleSet)...)
+		if err := l.refreshRolePermissionCache(roleIDSetToSlice(affectedRoleSet)...); err != nil {
+			return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+				"AdminRoleLogic.SavePermissions RBAC缓存同步失败")
+		}
 		return types.NewBizResult(codes.UpdateSuccess).
 			SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 	})
 }
 
-// withRolePermissionWriteLock 用全局分布式锁保护角色权限写链路，避免多人并发修改导致权限范围校验与落库交叉。
+// withRolePermissionWriteLock 用全局分布式锁保护角色层级与权限写链路。
+// 锁丢失会取消派生上下文，事务和缓存操作都通过该上下文尽快停止。
 func (l *AdminRoleLogic) withRolePermissionWriteLock(operation string, fn func() *types.BizResult) *types.BizResult {
-	if fn == nil {
-		return types.ServerError(i18n.MsgKeyServerError, errors.New("角色权限写操作为空"),
-			"%s 角色权限写操作为空", operation).ToBizResult()
+	if l == nil {
+		return WithRBACWriteLock(nil, operation, nil)
 	}
-	if l == nil || l.Redis() == nil {
+	return WithRBACWriteLock(l.BaseLogic, operation, func(lockedBaseLogic *corelogic.BaseLogic) *types.BizResult {
+		// AdminRoleLogic 是单请求对象，临界区内临时切换到锁生命周期上下文，退出后恢复原上下文。
+		originalBaseLogic := l.BaseLogic
+		l.BaseLogic = lockedBaseLogic
+		defer func() {
+			l.BaseLogic = originalBaseLogic
+		}()
+		return fn()
+	})
+}
+
+// WithRBACWriteLock 用全局分布式锁串行化角色层级、权限定义和授权关系写入。
+func WithRBACWriteLock(baseLogic *corelogic.BaseLogic, operation string, fn func(*corelogic.BaseLogic) *types.BizResult) *types.BizResult {
+	if fn == nil {
+		return types.ServerError(i18n.MsgKeyServerError, errors.New("RBAC写操作为空"),
+			"%s RBAC写操作为空", operation).ToBizResult()
+	}
+	if baseLogic == nil || baseLogic.Redis() == nil {
 		redisErr := errors.New("Redis 客户端未初始化")
 		return types.NewBizResult(codes.ServiceBusy).
 			SetI18nMessage(i18n.MsgKeyServiceBusy).
-			WithError(corelogic.WrapLogicError(redisErr, "%s 角色权限分布式锁未初始化", operation))
+			WithError(corelogic.WrapLogicError(redisErr, "%s RBAC分布式锁未初始化", operation))
 	}
 
-	lock := redislock.NewLock(l.Redis(), l.AppRedisKey(keys.RolePermissionWriteLock))
-	if err := lock.TryLock(l.Ctx, rolePermissionWriteLockTTL); err != nil {
+	var result *types.BizResult
+	err := redislock.WithLock(baseLogic.Ctx, baseLogic.Redis(), baseLogic.AppRedisKey(keys.RBACWriteLock), rbacWriteLockTTL, func(lockCtx context.Context) error {
+		result = fn(corelogic.NewBaseLogicWithContext(lockCtx, baseLogic.Svc))
+		return nil
+	})
+	if err != nil {
+		// 业务已经返回明确结果时保留真实结果，避免数据库已提交却因释放锁失败误报可重试。
+		if result != nil {
+			corelogic.LogWrappedError(baseLogic, err, "%s RBAC分布式锁执行异常", operation)
+			return result
+		}
 		return types.NewBizResult(codes.ServiceBusy).
 			SetI18nMessage(i18n.MsgKeyServiceBusy).
-			WithError(corelogic.WrapLogicError(err, "%s 获取角色权限分布式锁失败", operation))
-	}
-
-	result := fn()
-
-	select {
-	case lostErr, ok := <-lock.Lost():
-		if ok && lostErr != nil {
-			if unlockErr := lock.Unlock(); unlockErr != nil {
-				corelogic.LogWrappedError(l, unlockErr, "%s 角色权限分布式锁丢失后释放失败", operation)
-			}
-			return types.NewBizResult(codes.ServiceBusy).
-				SetI18nMessage(i18n.MsgKeyServiceBusy).
-				WithError(corelogic.WrapLogicError(lostErr, "%s 执行期间角色权限分布式锁丢失", operation))
-		}
-	default:
-	}
-
-	if err := lock.Unlock(); err != nil {
-		corelogic.LogWrappedError(l, err, "%s 释放角色权限分布式锁失败", operation)
+			WithError(corelogic.WrapLogicError(err, "%s 获取或持有RBAC分布式锁失败", operation))
 	}
 	if result == nil {
-		return types.ServerError(i18n.MsgKeyServerError, errors.New("角色权限写操作未返回结果"),
-			"%s 角色权限写操作未返回结果", operation).ToBizResult()
+		return types.ServerError(i18n.MsgKeyServerError, errors.New("RBAC写操作未返回结果"),
+			"%s RBAC写操作未返回结果", operation).ToBizResult()
 	}
 	return result
 }
@@ -560,7 +651,7 @@ func (l *AdminRoleLogic) withRolePermissionWriteLock(operation string, fn func()
 // loadAllRoles 加载全部未删除角色，统一用于树结构和缓存重建。
 func (l *AdminRoleLogic) loadAllRoles() ([]model.AdminRole, error) {
 	var roles []model.AdminRole
-	err := l.Svc.ReadDB(svc.DatabaseMain).Where("is_delete = 0").Order("id ASC").Find(&roles).Error
+	err := l.Svc.WriteDB(svc.DatabaseMain).Where("is_delete = 0").Order("id ASC").Find(&roles).Error
 	if err != nil {
 		return nil, errors.Wrap(err, "AdminRoleLogic.loadAllRoles 查询全部角色失败")
 	}
@@ -573,7 +664,7 @@ func (l *AdminRoleLogic) UserRoleIDs(userID int) ([]int, error) {
 		return []int{}, nil
 	}
 	var roleIDs []int
-	err := l.Svc.ReadDB(svc.DatabaseMain).Table(model.TableNameAdminRoleRel).
+	err := l.Svc.WriteDB(svc.DatabaseMain).Table(model.TableNameAdminRoleRel).
 		Where("user_id = ?", userID).
 		Order("role_id ASC").
 		Pluck("role_id", &roleIDs).Error
@@ -583,14 +674,14 @@ func (l *AdminRoleLogic) UserRoleIDs(userID int) ([]int, error) {
 	return types.UniquePositiveInts(roleIDs), nil
 }
 
-// adminIDsByRoleIDs 查询绑定了指定角色集合的管理员 ID，用于角色变更后精确失效管理员权限缓存。
+// adminIDsByRoleIDs 从主库查询绑定指定角色的管理员，避免副本延迟导致漏删鉴权缓存。
 func (l *AdminRoleLogic) adminIDsByRoleIDs(roleIDs []int) ([]int, error) {
 	roleIDs = types.UniquePositiveInts(roleIDs)
 	if len(roleIDs) == 0 {
 		return []int{}, nil
 	}
 	var adminIDs []int
-	err := l.Svc.ReadDB(svc.DatabaseMain).
+	err := l.Svc.WriteDB(svc.DatabaseMain).
 		Model(&model.AdminRoleRel{}).
 		Where("role_id IN ?", roleIDs).
 		Order("user_id ASC").
@@ -621,13 +712,6 @@ func (l *AdminRoleLogic) adminIDsByRoleIDsTx(tx *gorm.DB, roleIDs []int) ([]int,
 
 // LoadRoleTreeWithCache 优先从 Redis 读取角色树缓存，未命中时自动回源数据库并重建。
 func (l *AdminRoleLogic) LoadRoleTreeWithCache() ([]types.AdminRoleItem, error) {
-	if l.Redis() == nil {
-		roles, err := l.loadAllRoles()
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		return corelogic.BuildAdminRoleTree(roles, nil), nil
-	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -637,17 +721,10 @@ func (l *AdminRoleLogic) LoadRoleTreeWithCache() ([]types.AdminRoleItem, error) 
 	return items, errors.Tag(err)
 }
 
-// EnabledRoleIDsByUserWithCache 查询管理员绑定的启用角色 ID，优先使用角色状态缓存做过滤。
+// EnabledRoleIDsByUserWithCache 查询管理员绑定的启用角色 ID。
 func (l *AdminRoleLogic) EnabledRoleIDsByUserWithCache(userID int) ([]int, error) {
 	if userID <= 0 {
 		return []int{}, nil
-	}
-	if l.Redis() == nil {
-		roleIDs, err := l.UserRoleIDs(userID)
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		return l.filterEnabledRoleIDsWithCache(roleIDs)
 	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
@@ -662,7 +739,11 @@ func (l *AdminRoleLogic) EnabledRoleIDsByUserWithCache(userID int) ([]int, error
 	if result.State == tablecache.LookupStateEmpty {
 		return []int{}, nil
 	}
-	return cachelogic.ParsePositiveIntStrings(values, "管理员角色 ID缓存")
+	roleIDs, err := cachelogic.ParsePositiveIntStrings(values, "管理员角色关系缓存")
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return l.filterEnabledRoleIDsWithCache(roleIDs)
 }
 
 // CurrentOperatorEnabledRoleIDs 查询当前登录管理员拥有的全部启用角色 ID。
@@ -688,22 +769,57 @@ func (l *AdminRoleLogic) CurrentOperatorIsSuperRole() (bool, error) {
 	return false, nil
 }
 
+// currentOperatorIsSuperRoleTx 在事务主库中确认当前管理员是否拥有启用的超级管理员角色。
+func (l *AdminRoleLogic) currentOperatorIsSuperRoleTx(tx *gorm.DB) (bool, error) {
+	ctxAdmin := l.GetCtxAdmin()
+	if ctxAdmin == nil || ctxAdmin.ID <= 0 {
+		return false, errors.Errorf("未获取到当前登录管理员信息")
+	}
+	var matchedRoleID int
+	if err := freshTxStatement(tx).
+		Table(model.TableNameAdminRoleRel+" AS rel").
+		Select("rel.role_id").
+		Joins("JOIN "+model.TableNameAdminRole+" AS role ON role.id = rel.role_id AND role.status = 1 AND role.is_delete = 0").
+		Where("rel.user_id = ? AND rel.role_id = ?", ctxAdmin.ID, corelogic.AdminSuperRoleID).
+		Limit(1).
+		Scan(&matchedRoleID).Error; err != nil {
+		return false, errors.Wrapf(err, "AdminRoleLogic.currentOperatorIsSuperRoleTx 查询管理员 ID[%d]超级角色失败", ctxAdmin.ID)
+	}
+	return matchedRoleID == corelogic.AdminSuperRoleID, nil
+}
+
 // manageableRoleIDSet 计算当前登录管理员可管理的角色集合。
 // 超级管理员可管理全部未删除角色；普通管理员只能管理自己角色的后代角色。
 func (l *AdminRoleLogic) manageableRoleIDSet() (map[int]struct{}, error) {
+	manageableRoleSet, _, err := l.roleScopeIDSets()
+	return manageableRoleSet, errors.Tag(err)
+}
+
+// roleScopeIDSets 一次计算角色管理范围和可作为父级的范围。
+func (l *AdminRoleLogic) roleScopeIDSets() (map[int]struct{}, map[int]struct{}, error) {
 	roles, err := l.loadAllRoles()
 	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	isSuperRole, err := l.CurrentOperatorIsSuperRole()
-	if err != nil {
-		return nil, errors.Tag(err)
+		return nil, nil, errors.Tag(err)
 	}
 	roleIDs, err := l.CurrentOperatorEnabledRoleIDs()
 	if err != nil {
+		return nil, nil, errors.Tag(err)
+	}
+	isSuperRole := roleIDsContainSuper(roleIDs)
+	return manageableRoleSetFrom(roles, roleIDs, isSuperRole), parentRoleSetFrom(roles, roleIDs, isSuperRole), nil
+}
+
+// ManageableRoleIDs 返回当前登录管理员可管理的角色 ID，供管理员列表批量标记操作范围。
+func (l *AdminRoleLogic) ManageableRoleIDs() ([]int, error) {
+	items, err := l.LoadRoleTreeWithCache()
+	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	return manageableRoleSetFrom(roles, roleIDs, isSuperRole), nil
+	roleIDSet, _, err := l.roleItemScopeSets(items)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	return roleIDSetToSlice(roleIDSet), nil
 }
 
 // manageableRoleSetFrom 基于角色树计算可管理范围；普通管理员不能管理自身角色。
@@ -764,32 +880,6 @@ func (l *AdminRoleLogic) EnsureRolesWithinManageScope(roleIDs []int) error {
 	return nil
 }
 
-// retainRolePermissionsInScope 过滤当前角色权限配置请求中的越权权限，仅保留允许继续写入的部分。
-func (l *AdminRoleLogic) retainRolePermissionsInScope(roleID int, permissionIDs []int) ([]int, error) {
-	permissionIDs = types.UniquePositiveInts(permissionIDs)
-	if len(permissionIDs) == 0 {
-		return []int{}, nil
-	}
-	allowedPermissionIDs, err := l.allowedPermissionIDsForRole(roleID)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	return l.normalizeAssignablePermissionIDs(l.Svc.ReadDB(svc.DatabaseMain), permissionIDs, allowedPermissionIDs)
-}
-
-// retainRolePermissionsWithinParentScope 过滤父角色边界外的权限，供新增/编辑角色时复用。
-func (l *AdminRoleLogic) retainRolePermissionsWithinParentScope(parentRoleID int, permissionIDs []int) ([]int, error) {
-	permissionIDs = types.UniquePositiveInts(permissionIDs)
-	if len(permissionIDs) == 0 {
-		return []int{}, nil
-	}
-	allowedPermissionIDs, err := l.allowedPermissionIDsForParentRole(parentRoleID)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	return l.normalizeAssignablePermissionIDs(l.Svc.ReadDB(svc.DatabaseMain), permissionIDs, allowedPermissionIDs)
-}
-
 // allowedPermissionIDsForRole 计算当前登录管理员给目标角色可分配的权限集合。
 // 超级管理员可分配全部启用权限；普通角色只能分配父级角色已拥有的权限。
 func (l *AdminRoleLogic) allowedPermissionIDsForRole(roleID int) ([]int, error) {
@@ -819,56 +909,28 @@ func parentRoleUsesFullPermissionScope(parentRoleID int, isSuperRole bool) bool 
 	return isSuperRole && (parentRoleID <= 0 || parentRoleID == corelogic.AdminSuperRoleID)
 }
 
-// permissionTreeAssignScope 计算角色权限树的可操作范围，并支持 isPid 参数语义。
-func (l *AdminRoleLogic) permissionTreeAssignScope(req *types.RolePermissionReq) ([]int, bool, error) {
-	// 沿用 laravel-admin 的父级权限查询语义：isPid=y 时展示当前角色已有权限，供子角色继承参考。
-	if req.IsPid == "y" {
-		if err := l.ensureRoleParentWithinManageScope(req.ID); err != nil {
-			if errors.Is(err, ErrRoleManageScopeExceeded) {
-				return []int{}, true, nil
-			}
-			return nil, false, errors.Tag(err)
-		}
-		isSuperRole, err := l.CurrentOperatorIsSuperRole()
-		if err != nil {
-			return nil, false, errors.Tag(err)
-		}
-		if parentRoleUsesFullPermissionScope(req.ID, isSuperRole) {
-			assignableIDs, err := l.allEnabledPermissionIDs()
-			return assignableIDs, false, errors.Tag(err)
-		}
-		assignableIDs, err := l.RolePermissionIDsWithCache(req.ID)
-		return assignableIDs, false, errors.Tag(err)
-	}
-
+// permissionTreeAssignScope 计算目标角色权限树的可操作范围。
+func (l *AdminRoleLogic) permissionTreeAssignScope(roleID int) ([]int, bool, error) {
 	// 超级管理员角色自身不允许在此入口修改，前后端统一整树锁定。
-	if req.ID == corelogic.AdminSuperRoleID {
+	if roleID == corelogic.AdminSuperRoleID {
 		assignableIDs, err := l.allEnabledPermissionIDs()
 		return assignableIDs, true, errors.Tag(err)
 	}
 
-	if err := l.EnsureRolesWithinManageScope([]int{req.ID}); err != nil {
+	if err := l.EnsureRolesWithinManageScope([]int{roleID}); err != nil {
 		if errors.Is(err, ErrRoleManageScopeExceeded) {
 			return []int{}, true, nil
 		}
 		return nil, false, errors.Tag(err)
 	}
 
-	assignableIDs, err := l.allowedPermissionIDsForRole(req.ID)
+	assignableIDs, err := l.allowedPermissionIDsForRole(roleID)
 	return assignableIDs, false, errors.Tag(err)
 }
 
 // allEnabledPermissionIDs 查询全部启用权限 ID，供超级管理员角色权限树只读展示复用。
 func (l *AdminRoleLogic) allEnabledPermissionIDs() ([]int, error) {
-	var permissionIDs []int
-	err := l.Svc.ReadDB(svc.DatabaseMain).Model(&model.AdminPermission{}).
-		Where("status = 1").
-		Order("id ASC").
-		Pluck("id", &permissionIDs).Error
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	return types.UniquePositiveInts(permissionIDs), nil
+	return (&AdminPermissionLogic{BaseLogic: l.BaseLogic}).AllEnabledPermissionIDsWithCache()
 }
 
 // ensureRoleParentWithinManageScope 校验目标父级角色是否在当前登录管理员可管理范围内。
@@ -947,37 +1009,80 @@ func roleIDSetToSlice(roleIDSet map[int]struct{}) []int {
 
 // decorateRoleTreeScope 在角色树上补充当前登录管理员可操作范围，便于前端直接按后端裁剪后的语义展示。
 func (l *AdminRoleLogic) decorateRoleTreeScope(items []types.AdminRoleItem) ([]types.AdminRoleItem, error) {
-	manageableRoleSet, err := l.manageableRoleIDSet()
+	manageableRoleSet, parentRoleSet, err := l.roleItemScopeSets(items)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	return markRoleTreeScope(items, manageableRoleSet), nil
+	items = markRoleTreeScope(items, manageableRoleSet)
+	return markRoleTreeCreateScope(items, parentRoleSet, true), nil
 }
 
 // decorateRoleTreeParentScope 在角色树上补充新增/编辑角色时允许选择的父级范围。
 func (l *AdminRoleLogic) decorateRoleTreeParentScope(items []types.AdminRoleItem) ([]types.AdminRoleItem, error) {
-	roles, err := l.loadAllRoles()
+	_, parentRoleSet, err := l.roleItemScopeSets(items)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	isSuperRole, err := l.CurrentOperatorIsSuperRole()
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	roleIDs, err := l.CurrentOperatorEnabledRoleIDs()
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	return markRoleTreeScope(items, parentRoleSetFrom(roles, roleIDs, isSuperRole)), nil
+	return markRoleTreeParentScope(items, parentRoleSet, true), nil
 }
 
-// markRoleTreeScope 递归写入角色树节点的 disabled/selectable 语义。
+// roleItemScopeSets 基于缓存角色树一次计算管理范围和可作为父级的范围。
+func (l *AdminRoleLogic) roleItemScopeSets(items []types.AdminRoleItem) (map[int]struct{}, map[int]struct{}, error) {
+	roleIDs, err := l.CurrentOperatorEnabledRoleIDs()
+	if err != nil {
+		return nil, nil, errors.Tag(err)
+	}
+	isSuperRole := roleIDsContainSuper(roleIDs)
+	return roleItemScopeSetFrom(items, roleIDs, isSuperRole, false),
+		roleItemScopeSetFrom(items, roleIDs, isSuperRole, true),
+		nil
+}
+
+// roleIDsContainSuper 判断角色集合是否包含超级管理员角色。
+func roleIDsContainSuper(roleIDs []int) bool {
+	for _, roleID := range roleIDs {
+		if roleID == corelogic.AdminSuperRoleID {
+			return true
+		}
+	}
+	return false
+}
+
+// roleItemScopeSetFrom 基于已缓存角色树计算可操作范围，includeOperator 控制是否包含操作者自身角色。
+func roleItemScopeSetFrom(items []types.AdminRoleItem, operatorRoleIDs []int, isSuperRole bool, includeOperator bool) map[int]struct{} {
+	result := make(map[int]struct{})
+	operatorRoleSet := make(map[int]struct{}, len(operatorRoleIDs))
+	for _, roleID := range types.UniquePositiveInts(operatorRoleIDs) {
+		operatorRoleSet[roleID] = struct{}{}
+	}
+	var walk func([]types.AdminRoleItem)
+	walk = func(nodes []types.AdminRoleItem) {
+		for _, item := range nodes {
+			if isSuperRole {
+				result[item.ID] = struct{}{}
+			} else {
+				for roleID := range operatorRoleSet {
+					if (includeOperator && item.ID == roleID) || corelogic.ContainsTreeID(item.Pids, roleID) {
+						result[item.ID] = struct{}{}
+						break
+					}
+				}
+			}
+			walk(item.Children)
+		}
+	}
+	walk(items)
+	return result
+}
+
+// markRoleTreeScope 递归写入角色树节点的管理范围和选择语义。
 func markRoleTreeScope(items []types.AdminRoleItem, roleScopeSet map[int]struct{}) []types.AdminRoleItem {
 	result := make([]types.AdminRoleItem, 0, len(items))
 	for _, item := range items {
 		nextItem := item
 		_, inScope := roleScopeSet[item.ID]
 		nodeUsable := inScope && item.Status == 1 && item.IsDelete == 0
+		nextItem.Manageable = inScope
 		nextItem.Disabled = !nodeUsable
 		nextItem.DisableCheckbox = !nodeUsable
 		nextItem.Selectable = nodeUsable
@@ -987,40 +1092,37 @@ func markRoleTreeScope(items []types.AdminRoleItem, roleScopeSet map[int]struct{
 	return result
 }
 
-// rolePermissionMap 批量查询角色权限关系。
-func (l *AdminRoleLogic) rolePermissionMap(roleIDs []int) (map[int][]int, error) {
-	result := make(map[int][]int, len(roleIDs))
-	roleIDs = types.UniquePositiveInts(roleIDs)
-	if len(roleIDs) == 0 {
-		return result, nil
+// markRoleTreeCreateScope 递归标记可新增子角色的节点，并要求整条父级路径启用。
+func markRoleTreeCreateScope(items []types.AdminRoleItem, parentRoleSet map[int]struct{}, parentPathEnabled bool) []types.AdminRoleItem {
+	result := make([]types.AdminRoleItem, 0, len(items))
+	for _, item := range items {
+		nextItem := item
+		pathEnabled := parentPathEnabled && item.Status == 1 && item.IsDelete == 0
+		_, inParentScope := parentRoleSet[item.ID]
+		nextItem.CanCreateChild = inParentScope && pathEnabled
+		nextItem.Children = markRoleTreeCreateScope(item.Children, parentRoleSet, pathEnabled)
+		result = append(result, nextItem)
 	}
-	type rolePermissionRow struct {
-		RoleID       int `gorm:"column:role_id"`       // 角色 ID
-		PermissionID int `gorm:"column:permission_id"` // 权限 ID
-	}
-	var rows []rolePermissionRow
-	if err := l.Svc.ReadDB(svc.DatabaseMain).
-		Table(model.TableNameAdminRolePermissionRel+" AS rel").
-		Select("rel.role_id, rel.permission_id").
-		Joins("JOIN "+model.TableNameAdminPermission+" AS permission ON permission.id = rel.permission_id AND permission.status = 1").
-		Where("rel.role_id IN ?", roleIDs).
-		Order("rel.permission_id ASC").
-		Scan(&rows).Error; err != nil {
-		return nil, errors.Tag(err)
-	}
-	for _, row := range rows {
-		result[row.RoleID] = append(result[row.RoleID], row.PermissionID)
-	}
-	return result, nil
+	return result
 }
 
-// rolePermissionIDs 查询单个角色绑定的权限 ID。
-func (l *AdminRoleLogic) rolePermissionIDs(roleID int) ([]int, error) {
-	permissionMap, err := l.rolePermissionMap([]int{roleID})
-	if err != nil {
-		return nil, errors.Tag(err)
+// markRoleTreeParentScope 按可新增范围和整条启用路径标记父级下拉节点。
+func markRoleTreeParentScope(items []types.AdminRoleItem, parentRoleSet map[int]struct{}, parentPathEnabled bool) []types.AdminRoleItem {
+	result := make([]types.AdminRoleItem, 0, len(items))
+	for _, item := range items {
+		nextItem := item
+		pathEnabled := parentPathEnabled && item.Status == 1 && item.IsDelete == 0
+		_, inParentScope := parentRoleSet[item.ID]
+		selectable := inParentScope && pathEnabled
+		nextItem.Manageable = inParentScope
+		nextItem.CanCreateChild = selectable
+		nextItem.Disabled = !selectable
+		nextItem.DisableCheckbox = !selectable
+		nextItem.Selectable = selectable
+		nextItem.Children = markRoleTreeParentScope(item.Children, parentRoleSet, pathEnabled)
+		result = append(result, nextItem)
 	}
-	return permissionMap[roleID], nil
+	return result
 }
 
 // rolePermissionIDsTx 在事务内读取单个角色当前已绑定的权限 ID。
@@ -1039,20 +1141,24 @@ func (l *AdminRoleLogic) rolePermissionIDsTx(tx *gorm.DB, roleID int) ([]int, er
 }
 
 // allowedPermissionIDsForParentRoleTx 按角色继承关系计算父角色允许子角色保留的权限范围。
-func (l *AdminRoleLogic) allowedPermissionIDsForParentRoleTx(tx *gorm.DB, parentRoleID int) ([]int, error) {
-	isSuperRole, err := l.CurrentOperatorIsSuperRole()
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
+func (l *AdminRoleLogic) allowedPermissionIDsForParentRoleTx(tx *gorm.DB, parentRoleID int, isSuperRole bool) ([]int, error) {
 	if parentRoleUsesFullPermissionScope(parentRoleID, isSuperRole) {
-		return l.allEnabledPermissionIDs()
+		var permissionIDs []int
+		if err := freshTxStatement(tx).
+			Model(&model.AdminPermission{}).
+			Where("status = ?", 1).
+			Order("id ASC").
+			Pluck("id", &permissionIDs).Error; err != nil {
+			return nil, errors.Tag(err)
+		}
+		return types.UniquePositiveInts(permissionIDs), nil
 	}
 	return l.enabledRolePermissionIDsTx(tx, parentRoleID)
 }
 
 // reconcileRolePermissionScopeTreeTx 递归收敛目标角色及其全部子孙角色的权限范围。
 // 为避免深层角色树出现 N+1 查询，这里会先在事务内批量加载整棵子树和权限关系，再在内存中完成收敛。
-func (l *AdminRoleLogic) reconcileRolePermissionScopeTreeTx(tx *gorm.DB, roleID int, affectedRoleSet map[int]struct{}) error {
+func (l *AdminRoleLogic) reconcileRolePermissionScopeTreeTx(tx *gorm.DB, roleID int, isSuperRole bool, affectedRoleSet map[int]struct{}) error {
 	if roleID <= 0 {
 		return nil
 	}
@@ -1068,7 +1174,7 @@ func (l *AdminRoleLogic) reconcileRolePermissionScopeTreeTx(tx *gorm.DB, roleID 
 	if err != nil {
 		return errors.Tag(err)
 	}
-	rootAllowedPermissionIDs, err := l.allowedPermissionIDsForParentRoleTx(tx, rootRole.Pid)
+	rootAllowedPermissionIDs, err := l.allowedPermissionIDsForParentRoleTx(tx, rootRole.Pid, isSuperRole)
 	if err != nil {
 		return errors.Tag(err)
 	}

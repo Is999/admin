@@ -1,14 +1,17 @@
 package user
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	i18n "admin/common/i18n"
+	"admin/common/idgen"
 	"admin/internal/config"
 	"admin/internal/model"
 	"admin/internal/svc"
@@ -16,6 +19,8 @@ import (
 	"admin/pkg/excel"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+	"gorm.io/plugin/dbresolver"
 )
 
 // TestBuildUserProfileUpdatesKeepsExplicitEmptyValue 验证空字符串是显式清空资料，不应被忽略。
@@ -55,98 +60,95 @@ func TestUserModelUsesUserTable(t *testing.T) {
 	}
 }
 
-// TestValidateUserIdentityListReq 验证分表阶段后台列表不会退化为扫描用户分表。
+// TestValidateUserIdentityListReq 验证身份目录列表不会退化为扫描全部用户物理表。
 func TestValidateUserIdentityListReq(t *testing.T) {
-	req := &types.UserListReq{
-		Username:    "demo",
-		GetOrderReq: types.GetOrderReq{OrderBy: "username"},
-	}
+	req := &types.UserListReq{Username: "demo"}
 	if err := validateUserIdentityListReq(req); err != nil {
 		t.Fatalf("validateUserIdentityListReq() error = %v", err)
 	}
-
 	req.Email = "demo@example.com"
 	if err := validateUserIdentityListReq(req); err != nil {
 		t.Fatalf("validateUserIdentityListReq(email) error = %v", err)
 	}
-
 	req.Phone = "13800000000"
 	if err := validateUserIdentityListReq(req); err == nil {
-		t.Fatal("expected email and phone combined filter to be rejected in identity-index list")
+		t.Fatal("expected email and phone combined filter to be rejected")
 	}
-
 	req.Email = ""
 	req.Phone = ""
+	req.Status = new(int)
+	if err := validateUserIdentityListReq(req); err == nil {
+		t.Fatal("expected status filter to be rejected")
+	}
+	req.Status = nil
 	req.OrderBy = "lastLoginAt"
 	if err := validateUserIdentityListReq(req); err == nil {
-		t.Fatal("expected unsupported order field to be rejected in identity-index list")
+		t.Fatal("expected unsupported order field to be rejected")
+	}
+	req.OrderBy = "id"
+	req.Page = 2
+	if err := validateUserIdentityListReq(req); err == nil {
+		t.Fatal("expected page after first to require cursor")
+	}
+	req.CursorID = 100
+	if err := validateUserIdentityListReq(req); err != nil {
+		t.Fatalf("cursor page should pass validation: %v", err)
 	}
 }
 
-// TestUserIdentityOrderField 验证分表阶段排序字段只映射身份索引可承载列。
-func TestUserIdentityOrderField(t *testing.T) {
-	if got := userOrderField("shardNo"); got != "shard_no" {
-		t.Fatalf("userOrderField(shardNo) = %q, want shard_no", got)
+// TestListByUserIdentityDoesNotLeakIdentityOrder 验证身份目录排序不会污染用户主表批量查询。
+func TestListByUserIdentityDoesNotLeakIdentityOrder(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	db := newUserLogicDryRunDB(t).Session(&gorm.Session{
+		Logger: logger.New(log.New(buffer, "", 0), logger.Config{LogLevel: logger.Info}),
+	})
+	userID := int64(1)
+	shardNo := idgen.ShardNo(userID)
+	if err := db.Callback().Query().Before("gorm:query").Register("test:inject_user_list_rows", func(tx *gorm.DB) {
+		switch rows := tx.Statement.Dest.(type) {
+		case *[]model.UserIdentity:
+			*rows = []model.UserIdentity{{
+				IdentityValue: "demo",
+				UserID:        userID,
+				UserShardNo:   shardNo,
+			}}
+		case *[]model.User:
+			*rows = []model.User{{ID: userID, ShardNo: shardNo, Username: "demo"}}
+		}
+	}); err != nil {
+		t.Fatalf("注册用户列表测试查询回调失败: %v", err)
 	}
-	if got := userIdentityOrderField("id", model.UserIdentityTypeUsername); got != "user_id" {
-		t.Fatalf("userIdentityOrderField(id) = %q, want user_id", got)
+	logicObj := NewLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{}, svc.Dependencies{
+		SiteDBs: svc.SiteDatabases{MainDB: db},
+	}))
+	resp := logicObj.listByUserIdentity(db.Clauses(dbresolver.Read), &types.UserListReq{
+		Username: "demo",
+		GetOrderReq: types.GetOrderReq{
+			Order: "desc",
+		},
+		GetPageReq: types.GetPageReq{
+			Page:     1,
+			PageSize: 20,
+		},
+	})
+	if resp.IsFailure() {
+		t.Fatalf("用户列表查询失败: %+v", resp)
 	}
-	if got := userIdentityOrderField("username", model.UserIdentityTypeUsername); got != "identity_value" {
-		t.Fatalf("userIdentityOrderField(username, username) = %q, want identity_value", got)
+	identityOrdered := false
+	userQueried := false
+	for _, line := range strings.Split(buffer.String(), "\n") {
+		if strings.Contains(line, "FROM `user_identity_username`") && strings.Contains(line, "ORDER BY user_id desc") {
+			identityOrdered = true
+		}
+		if strings.Contains(line, "FROM `user` ") {
+			userQueried = true
+			if strings.Contains(line, "ORDER BY user_id") {
+				t.Fatalf("用户主表查询继承了身份目录排序: %s", line)
+			}
+		}
 	}
-	if got := userIdentityOrderField("username", model.UserIdentityTypeEmail); got != "user_id" {
-		t.Fatalf("userIdentityOrderField(username, email) = %q, want user_id", got)
-	}
-	if got := userIdentityOrderField("shardNo", model.UserIdentityTypeUsername); got != "user_shard_no" {
-		t.Fatalf("userIdentityOrderField(shardNo) = %q, want user_shard_no", got)
-	}
-}
-
-// TestUserIdentityListTableName 验证用户名身份前缀查询固定使用唯一索引提示。
-func TestUserIdentityListTableName(t *testing.T) {
-	got := userIdentityListTableName(model.TableNameUserIdentityUsername, model.UserIdentityTypeUsername, "demo")
-	want := "user_identity_username FORCE INDEX (uk_user_identity_value)"
-	if got != want {
-		t.Fatalf("userIdentityListTableName(username) = %q, want %q", got, want)
-	}
-	got = userIdentityListTableName(model.TableNameUserIdentityEmail, model.UserIdentityTypeEmail, "demo")
-	if got != model.TableNameUserIdentityEmail {
-		t.Fatalf("userIdentityListTableName(email) = %q, want table without hint", got)
-	}
-}
-
-// TestUserIdentityListSQLUsesForcedIndex 验证 GORM 生成的用户名身份列表 SQL 保留固定索引提示。
-func TestUserIdentityListSQLUsesForcedIndex(t *testing.T) {
-	db := newUserLogicDryRunDB(t)
-	tableName := userIdentityListTableName(model.TableNameUserIdentityUsername, model.UserIdentityTypeUsername, "demo")
-	var rows []model.UserIdentity
-	stmt := db.Model(&model.UserIdentity{}).
-		Table(tableName).
-		Where("identity_value LIKE ?", "demo%").
-		Order("identity_value ASC").
-		Limit(20).
-		Find(&rows).Statement
-	sqlText := stmt.SQL.String()
-	if !strings.Contains(sqlText, "FROM user_identity_username FORCE INDEX (uk_user_identity_value)") {
-		t.Fatalf("generated sql = %q, want FORCE INDEX hint", sqlText)
-	}
-	if strings.Contains(sqlText, "`user_identity_username FORCE INDEX") {
-		t.Fatalf("generated sql = %q, table hint should not be quoted as table name", sqlText)
-	}
-}
-
-// TestUseUserIdentityListHonorsSplitWriteConfig 验证写入路由切分后列表直接走身份索引。
-func TestUseUserIdentityListHonorsSplitWriteConfig(t *testing.T) {
-	svcCtx := svc.NewServiceContext(config.Config{
-		User: config.UserConfig{RouteShardCount: 2},
-	}, svc.Dependencies{})
-	logicObj := NewLogic(nil, svcCtx)
-	got, err := logicObj.useUserIdentityList(nil)
-	if err != nil {
-		t.Fatalf("useUserIdentityList() error = %v", err)
-	}
-	if !got {
-		t.Fatal("useUserIdentityList() = false, want true for split write config")
+	if !identityOrdered || !userQueried {
+		t.Fatalf("用户列表 SQL 未完整覆盖身份目录排序和用户主表读取: %s", buffer.String())
 	}
 }
 
@@ -177,6 +179,74 @@ func TestUserExportSplitHelpers(t *testing.T) {
 	}
 	if got := userExportSheetRowLimit(userExportMaxSplitRows + 1); got != excel.MaxExcelSheetRows {
 		t.Fatalf("sheet row limit = %d, want excel max rows", got)
+	}
+}
+
+// TestApplyUserExportProgress 验证多文件导出按全局处理量更新百分比、速度和预计剩余时间。
+func TestApplyUserExportProgress(t *testing.T) {
+	startedAt := time.Date(2026, 7, 16, 12, 0, 0, 0, time.Local)
+	status := &types.UserExportStatusResp{Total: 1000000}
+	applyUserExportProgress(status, 500000, startedAt, excel.ExportProgress{
+		Processed:       100000,
+		LastProcessedAt: startedAt.Add(10 * time.Second),
+	})
+	if status.Processed != 600000 || status.Progress != 60 {
+		t.Fatalf("progress = %d processed = %d, want 60/600000", status.Progress, status.Processed)
+	}
+	if status.AverageRowsPerSec != 60000 || status.EstimatedSeconds != 7 {
+		t.Fatalf("speed = %d eta = %d, want 60000/7", status.AverageRowsPerSec, status.EstimatedSeconds)
+	}
+
+	applyUserExportProgress(status, 500000, startedAt, excel.ExportProgress{
+		Processed:       500000,
+		LastProcessedAt: startedAt.Add(20 * time.Second),
+	})
+	if status.Progress != userExportRunningMaxProgress || status.EstimatedSeconds != 0 {
+		t.Fatalf("finished running progress = %d eta = %d, want 99/0", status.Progress, status.EstimatedSeconds)
+	}
+
+	unknown := &types.UserExportStatusResp{}
+	applyUserExportProgress(unknown, 0, startedAt, excel.ExportProgress{
+		Processed:       200,
+		LastProcessedAt: startedAt.Add(2 * time.Second),
+	})
+	if unknown.Progress != 0 || unknown.AverageRowsPerSec != 100 || unknown.EstimatedSeconds != 0 {
+		t.Fatalf("unknown total progress = %+v, want progress 0 speed 100 eta 0", unknown)
+	}
+}
+
+// TestResetUserExportFilesClearsRetryProgress 验证首个文件生成前失败也会清空旧进度和预计时间。
+func TestResetUserExportFilesClearsRetryProgress(t *testing.T) {
+	status := &types.UserExportStatusResp{
+		Processed:         100,
+		Total:             1000,
+		Progress:          10,
+		EstimatedSeconds:  9,
+		AverageRowsPerSec: 100,
+		StartedAt:         "2026-07-16 12:00:00",
+		LastProcessedAt:   "2026-07-16 12:00:01",
+	}
+	resetUserExportFiles(status)
+	if status.Processed != 0 || status.Total != 0 || status.Progress != 0 || status.EstimatedSeconds != 0 || status.AverageRowsPerSec != 0 {
+		t.Fatalf("重试进度未清空: %+v", status)
+	}
+	if status.StartedAt != "" || status.LastProcessedAt != "" {
+		t.Fatalf("重试时间未清空: %+v", status)
+	}
+}
+
+// TestCountUserExportRowsUsesIdentityDirectory 验证总量统计固定使用有界身份目录查询。
+func TestCountUserExportRowsUsesIdentityDirectory(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	db := newUserLogicDryRunDB(t).Session(&gorm.Session{Logger: logger.New(log.New(buffer, "", 0), logger.Config{LogLevel: logger.Info})})
+	logicObj := NewLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{}, svc.Dependencies{
+		SiteDBs: svc.SiteDatabases{MainDB: db},
+	}))
+	if _, err := logicObj.countUserExportRows(context.Background(), &types.UserExportReq{Username: "demo"}); err != nil {
+		t.Fatalf("count identity rows: %v", err)
+	}
+	if sqlText := buffer.String(); !strings.Contains(sqlText, "FROM `user_identity_username` WHERE identity_value LIKE 'demo%'") || strings.Contains(sqlText, "FORCE INDEX") {
+		t.Fatalf("identity count sql = %q, want optimizer-selected username identity query", sqlText)
 	}
 }
 
@@ -305,8 +375,8 @@ func TestAPIRuntimeSyncWarningPreservesDBSuccessSemantics(t *testing.T) {
 	if !resp.Enabled || resp.UserID != 7 {
 		t.Fatalf("sync warning response = %+v, want enabled user 7", resp)
 	}
-	if !strings.Contains(resp.Message, "资料已更新") || !strings.Contains(resp.Message, "timeout") {
-		t.Fatalf("sync warning message = %q, want fallback and cause", resp.Message)
+	if !strings.Contains(resp.Message, "资料已更新") || strings.Contains(resp.Message, "timeout") {
+		t.Fatalf("sync warning message = %q, want safe fallback without internal cause", resp.Message)
 	}
 }
 

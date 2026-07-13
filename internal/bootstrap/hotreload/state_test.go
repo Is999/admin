@@ -38,7 +38,9 @@ func TestStateStartStopWatcher(t *testing.T) {
 	if ok := state.StartWatcher(func(context.Context) {}); ok {
 		t.Fatal("期望重复启动 watcher 被拒绝")
 	}
-	state.StopWatcher()
+	if err := state.StopWatcher(context.Background()); err != nil {
+		t.Fatalf("StopWatcher() error = %v", err)
+	}
 	<-stopped
 	if state.WatcherRunning() {
 		t.Fatal("期望停止后 watcher 标记为未运行")
@@ -69,8 +71,50 @@ func TestStateStartWatcherClearsAfterRunReturns(t *testing.T) {
 		t.Fatal("期望自然退出后可以重新启动 watcher")
 	}
 	<-started
-	state.StopWatcher()
+	if err := state.StopWatcher(context.Background()); err != nil {
+		t.Fatalf("StopWatcher() error = %v", err)
+	}
 	<-stopped
+}
+
+// TestStateStopBlocksConcurrentRestartUntilPreviousWatcherExits 确保停止完成前不会启动新的 watcher。
+func TestStateStopBlocksConcurrentRestartUntilPreviousWatcherExits(t *testing.T) {
+	var state State
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	if ok := state.StartWatcher(func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+	}); !ok {
+		t.Fatal("期望首次启动 watcher 成功")
+	}
+	<-started
+
+	stopDone := make(chan struct{})
+	go func() {
+		_ = state.StopWatcher(context.Background())
+		close(stopDone)
+	}()
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("等待 watcher 收到停止信号超时")
+	}
+	if ok := state.StartWatcher(func(context.Context) {}); ok {
+		t.Fatal("停止完成前不应启动新的 watcher")
+	}
+	close(release)
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("等待 watcher 停止超时")
+	}
+	if state.WatcherRunning() {
+		t.Fatal("停止完成后 watcher 应为未运行")
+	}
 }
 
 // TestStateSuppressFailureWindow 确保重复失败日志在限频窗口内会被抑制。

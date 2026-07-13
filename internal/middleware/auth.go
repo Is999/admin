@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/Is999/go-utils/errors"
@@ -14,8 +15,6 @@ import (
 	"admin/internal/requestctx"
 	"admin/internal/routealias"
 	"admin/internal/svc"
-
-	"github.com/Is999/go-utils"
 )
 
 // RouteAlias 是路由在权限/审计体系中的稳定标识，避免直接依赖 URL。
@@ -53,21 +52,59 @@ func (m *AuthMiddleware) PublicHandle(next http.HandlerFunc, alias RouteAlias) h
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 公开路由必须在进入最外层加密/签名中间件前写入 route alias，否则登录等接口的响应策略无法命中。
-		handler(w, bindPublicRequestMeta(r, alias))
+		handler(w, bindPublicRequestMeta(r, alias, m.svc))
 	}
 }
 
 // bindPublicRequestMeta 为公开路由预先写入请求元数据，避免最外层加密中间件读取不到 route alias。
-func bindPublicRequestMeta(r *http.Request, alias RouteAlias) *http.Request {
+func bindPublicRequestMeta(r *http.Request, alias RouteAlias, svcCtx *svc.ServiceContext) *http.Request {
 	if r == nil {
 		return r
 	}
 	ctx, _ := requestctx.New(r.Context())
-	requestctx.SetRequest(ctx, r.Method, r.URL.Path, utils.ClientIP(r))
+	requestctx.SetRequest(ctx, r.Method, r.URL.Path, requestClientIP(svcCtx, r))
 	if alias != "" && alias != Ignore {
 		requestctx.SetRoute(ctx, string(alias))
 	}
 	return r.WithContext(ctx)
+}
+
+// failAuthDependency 返回不暴露内部错误的鉴权依赖故障响应。
+func failAuthDependency(ctx context.Context, w http.ResponseWriter, err error) {
+	code := codes.DependencyUnavailable
+	message := i18n.MsgKeyDependencyUnavailable
+	if errors.Is(err, cachelogic.ErrRedisUnavailable) {
+		code = codes.RedisUnavailable
+		message = i18n.MsgKeyRedisUnavailable
+	}
+	helper.NewJSONResp(ctx, w).
+		SetHTTPStatus(http.StatusServiceUnavailable).
+		SetCode(code).
+		SetError(err).
+		Fail(message)
+}
+
+// failAdminAccess 把账号状态、IP、改密、MFA 和权限错误映射为统一响应。
+func failAdminAccess(ctx context.Context, w http.ResponseWriter, err error) {
+	resp := helper.NewJSONResp(ctx, w).SetError(err)
+	switch {
+	case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
+		resp.SetHTTPStatus(http.StatusForbidden).SetCode(codes.Forbidden).Fail(i18n.MsgKeyForbidden)
+	case errors.Is(err, securitylogic.ErrAdminDisabled):
+		resp.SetHTTPStatus(http.StatusUnauthorized).SetCode(codes.Unauthorized).Fail(i18n.MsgKeyUserDisabled)
+	case errors.Is(err, securitylogic.ErrAdminIPChanged):
+		resp.SetHTTPStatus(http.StatusUnauthorized).SetCode(codes.Unauthorized).Fail(i18n.MsgKeyAdminLoginIPChanged)
+	case errors.Is(err, securitylogic.ErrAdminIPNotAllowed):
+		resp.SetHTTPStatus(http.StatusUnauthorized).SetCode(codes.Unauthorized).Fail(i18n.MsgKeyAdminIPNotAllowed)
+	case errors.Is(err, securitylogic.ErrAdminPasswordResetRequired):
+		resp.SetHTTPStatus(http.StatusOK).SetCode(codes.CheckPasswordReset).Fail(i18n.MsgKeyCheckPasswordReset)
+	case errors.Is(err, securitylogic.ErrAdminMFABindRequired):
+		resp.SetHTTPStatus(http.StatusOK).SetCode(codes.CheckMFABind).Fail(i18n.MsgKeyCheckMFABind)
+	case errors.Is(err, securitylogic.ErrAdminMFARequired):
+		resp.SetHTTPStatus(http.StatusOK).SetCode(codes.CheckMFACode).Fail(i18n.MsgKeyCheckMFA)
+	default:
+		failAuthDependency(ctx, w, err)
+	}
 }
 
 // Handle 负责鉴权并补齐当前请求的操作者信息，后续 access log、logic、审计都从同一份 meta 取值。
@@ -75,7 +112,8 @@ func bindPublicRequestMeta(r *http.Request, alias RouteAlias) *http.Request {
 func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.HandlerFunc {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		ctx, _ := requestctx.New(r.Context())
-		requestctx.SetRequest(ctx, r.Method, r.URL.Path, utils.ClientIP(r))
+		clientIP := requestClientIP(m.svc, r)
+		requestctx.SetRequest(ctx, r.Method, r.URL.Path, clientIP)
 		if alias != "" && alias != Ignore {
 			requestctx.SetRoute(ctx, string(alias))
 		}
@@ -86,14 +124,7 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 				SetCode(codes.Unauthorized).
 				Fail(messageKey)
 		}
-		failForbidden := func(messageKey string) {
-			helper.NewJSONResp(ctx, w).
-				SetHTTPStatus(http.StatusForbidden).
-				SetCode(codes.Forbidden).
-				Fail(messageKey)
-		}
-
-		identity, err := verifyAdminTokenFromRequest(ctx, m.svc, r, true)
+		identity, err := verifyAdminTokenFromRequestForRoute(ctx, m.svc, r, true, alias)
 		switch {
 		case errors.Is(err, errMissingBearerToken):
 			failUnauthorized(i18n.MsgKeyUnauthorizedText)
@@ -101,61 +132,28 @@ func (m *AuthMiddleware) Handle(next http.HandlerFunc, alias RouteAlias) http.Ha
 		case errors.Is(err, errTokenExpired):
 			failUnauthorized(i18n.MsgKeyTokenExpired)
 			return
+		case errors.Is(err, cachelogic.ErrRedisUnavailable):
+			failAuthDependency(ctx, w, err)
+			return
+		case errors.Is(err, cachelogic.ErrSecurityCacheSyncPending):
+			failAuthDependency(ctx, w, err)
+			return
 		case err != nil:
 			failUnauthorized(i18n.MsgKeyTokenInvalid)
 			return
 		}
 
-		ip := utils.ClientIP(r)
-		if err = securitylogic.NewSecurityLogic(ctx, m.svc).CheckAdminAccess(identity.UserID, string(alias), ip, identity.LoginIP); err != nil {
-			switch {
-			case errors.Is(err, securitylogic.ErrAdminPermissionDenied):
-				failForbidden(i18n.MsgKeyForbidden)
-			case errors.Is(err, securitylogic.ErrAdminDisabled):
-				failUnauthorized(i18n.MsgKeyUserDisabled)
-			case errors.Is(err, securitylogic.ErrAdminIPChanged):
-				helper.NewJSONResp(ctx, w).
-					SetHTTPStatus(http.StatusUnauthorized).
-					SetCode(codes.Unauthorized).
-					SetError(err).
-					Fail(i18n.MsgKeyAdminLoginIPChanged)
-			case errors.Is(err, securitylogic.ErrAdminIPNotAllowed):
-				helper.NewJSONResp(ctx, w).
-					SetHTTPStatus(http.StatusUnauthorized).
-					SetCode(codes.Unauthorized).
-					SetError(err).
-					Fail(i18n.MsgKeyAdminIPNotAllowed)
-			case errors.Is(err, securitylogic.ErrAdminPasswordResetRequired):
-				helper.NewJSONResp(ctx, w).
-					SetHTTPStatus(http.StatusOK).
-					SetCode(codes.CheckPasswordReset).
-					SetError(err).
-					Fail(i18n.MsgKeyCheckPasswordReset)
-			case errors.Is(err, securitylogic.ErrAdminMFABindRequired):
-				helper.NewJSONResp(ctx, w).
-					SetHTTPStatus(http.StatusOK).
-					SetCode(codes.CheckMFABind).
-					SetError(err).
-					Fail(i18n.MsgKeyCheckMFABind)
-			case errors.Is(err, securitylogic.ErrAdminMFARequired):
-				helper.NewJSONResp(ctx, w).
-					SetHTTPStatus(http.StatusOK).
-					SetCode(codes.CheckMFACode).
-					SetError(err).
-					Fail(i18n.MsgKeyCheckMFA)
-			default:
-				failUnauthorized(i18n.MsgKeyTokenInvalid)
-			}
+		ip := clientIP
+		if err = securitylogic.NewSecurityLogic(ctx, m.svc).CheckAdminAccess(identity.Session, string(alias), ip, identity.LoginIP); err != nil {
+			failAdminAccess(ctx, w, err)
 			return
 		}
 
-		// 鉴权通过后，把后续链路要用到的核心信息一次性写入请求元数据。
+		// 鉴权通过后，把后续链路要用到的核心信息和已校验会话一次性写入请求上下文。
 		requestctx.SetAccessToken(ctx, identity.Token)
 		requestctx.SetUser(ctx, identity.UserID, identity.UserName, ip)
+		ctx = cachelogic.WithAdminSession(ctx, identity.Session)
 		ctx = loggerx.BindContext(ctx)
-
-		// 活跃会话滑动续期，减少管理员持续操作期间的 Redis 回源抖动。
-		_ = cachelogic.NewCacheLogic(ctx, m.svc).TouchAdminInfo(identity.UserID)
 
 		next(w, r.WithContext(ctx))
 	}

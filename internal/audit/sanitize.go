@@ -8,35 +8,15 @@ import (
 	jsoniter "github.com/json-iterator/go"
 )
 
-// sensitiveKeys 维护常见敏感字段名，序列化审计数据时会统一脱敏。
-var sensitiveKeys = map[string]struct{}{
-	"password":                   {}, // 登录密码
-	"token":                      {}, // 访问令牌
-	"authorization":              {}, // 认证请求头
-	"jwt":                        {}, // JWT 令牌正文
-	"jwt_secret":                 {}, // JWT 签名密钥
-	"mfa_secure_key":             {}, // MFA 绑定密钥
-	"mfasecurekey":               {}, // MFA 绑定密钥兼容写法
-	"aes_key":                    {}, // AES 对称密钥
-	"aeskey":                     {}, // AES 对称密钥兼容写法
-	"aes_key_ref":                {}, // AES 密钥引用
-	"aeskeyref":                  {}, // AES 密钥引用兼容写法
-	"aes_iv":                     {}, // AES 初始向量
-	"aesiv":                      {}, // AES 初始向量兼容写法
-	"aes_iv_ref":                 {}, // AES 初始向量引用
-	"aesivref":                   {}, // AES 初始向量引用兼容写法
-	"rsa_private_key":            {}, // RSA 私钥正文
-	"rsaprivatekey":              {}, // RSA 私钥正文兼容写法
-	"rsa_private_key_server_ref": {}, // 服务端 RSA 私钥引用
-	"rsaprivatekeyserverref":     {}, // 服务端 RSA 私钥引用兼容写法
-	"rsa_public_key":             {}, // RSA 公钥正文
-	"rsapublickey":               {}, // RSA 公钥正文兼容写法
-	"rsa_public_key_user_ref":    {}, // 用户侧 RSA 公钥引用
-	"rsapublickeyuserref":        {}, // 用户侧 RSA 公钥引用兼容写法
-	"rsa_public_key_server_ref":  {}, // 服务端 RSA 公钥引用
-	"rsapublickeyserverref":      {}, // 服务端 RSA 公钥引用兼容写法
-	"secret":                     {}, // 通用密钥字段
-	"securekey":                  {}, // 通用安全密钥兼容写法
+// exactSensitiveKeys 只列出无法通过敏感关键词识别的真实契约字段，不维护推测别名。
+var exactSensitiveKeys = map[string]struct{}{
+	"mfaSecureKey":   {}, // API 的 MFA 绑定秘钥
+	"mfa_secure_key": {}, // 数据模型的 MFA 绑定秘钥
+	"secure":         {}, // 登录密码或 MFA 动态码
+	"secureCode":     {}, // 登录安全验证码
+	"captcha":        {}, // 登录图形验证码
+	"twoStepKey":     {}, // MFA 二次票据 key
+	"twoStepValue":   {}, // MFA 二次票据 value
 }
 
 // Serialize 把任意数据转成适合落审计日志的字符串，同时完成脱敏和长度截断。
@@ -195,22 +175,20 @@ func isEscapedJSONQuote(data []byte, quoteIndex int) bool {
 	return slashCount%2 == 1
 }
 
-// isSensitiveKey 除显式名单外，也对 password/token/secret 关键字做模糊拦截。
+// isSensitiveKey 对真实契约字段和携带敏感材料关键词的字段统一脱敏。
 func isSensitiveKey(key string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
-	if _, ok := sensitiveKeys[normalized]; ok {
+	if _, ok := exactSensitiveKeys[key]; ok {
 		return true
 	}
-	compact := strings.ReplaceAll(normalized, "_", "")
-	return strings.Contains(normalized, "password") ||
-		strings.Contains(normalized, "token") ||
-		strings.Contains(normalized, "secret") ||
+	// 这里只压缩命名分隔符以识别敏感材料关键词，不扩展接口契约。
+	compact := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(key))
+	return strings.Contains(compact, "password") ||
+		strings.Contains(compact, "token") ||
+		strings.Contains(compact, "secret") ||
 		strings.Contains(compact, "privatekey") ||
 		strings.Contains(compact, "publickey") ||
 		strings.Contains(compact, "aeskey") ||
-		strings.Contains(compact, "aesiv") ||
-		strings.Contains(compact, "rsaprivatekey") ||
-		strings.Contains(compact, "rsapublickey")
+		strings.Contains(compact, "aesiv")
 }
 
 // truncate 控制审计负载体积，避免超长请求体或错误信息把日志撑爆。

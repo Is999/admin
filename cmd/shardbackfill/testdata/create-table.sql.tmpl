@@ -1,0 +1,11 @@
+-- 代码资产：创建 shardbackfill 真实 MySQL 集成测试表。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：无动态参数，仅使用固定测试对象名。
+-- 安全边界：只允许在 SHARD_BACKFILL_TEST_DSN 指向的隔离测试库执行。
+CREATE TABLE `shard_backfill_case` (
+  `id` bigint unsigned NOT NULL,
+  `uid` bigint unsigned NOT NULL,
+  `shard_no` int NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB

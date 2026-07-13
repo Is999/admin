@@ -29,22 +29,14 @@ import (
 
 // RouteModule 描述一个可插拔 HTTP 路由模块。
 type RouteModule interface {
-	Name() string         // Name 返回路由模块名称
-	Register(*RouteScope) // Register 注册路由模块
-}
-
-// RouteScope 表示路由模块注册时共享的上下文。
-type RouteScope struct {
-	Server             *rest.Server                       // HTTP 服务实例
-	ServiceContext     *svc.ServiceContext                // 全局服务上下文
-	AuthMiddleware     *middleware.AuthMiddleware         // 后台鉴权中间件
-	InternalMiddleware *middleware.InternalOnlyMiddleware // 内网鉴权中间件
+	Name() string               // Name 返回路由模块名称
+	Routes() []shared.RouteSpec // Routes 返回模块路由规格
 }
 
 // RouteModuleFunc 允许通过函数快速声明路由模块。
 type RouteModuleFunc struct {
-	name     string            // 路由模块名称
-	register func(*RouteScope) // 路由注册逻辑
+	name   string                    // 路由模块名称
+	routes func() []shared.RouteSpec // 路由规格函数
 }
 
 // RouteModuleSpec 描述内置 HTTP 路由模块的装配和注册清单信息。
@@ -57,8 +49,8 @@ type RouteModuleSpec struct {
 }
 
 // NewRouteModuleFunc 创建函数式路由模块。
-func NewRouteModuleFunc(name string, register func(*RouteScope)) RouteModule {
-	return RouteModuleFunc{name: strings.TrimSpace(name), register: register}
+func NewRouteModuleFunc(name string, routes func() []shared.RouteSpec) RouteModule {
+	return RouteModuleFunc{name: strings.TrimSpace(name), routes: routes}
 }
 
 // Name 返回路由模块名称。
@@ -66,12 +58,12 @@ func (m RouteModuleFunc) Name() string {
 	return m.name
 }
 
-// Register 执行路由注册逻辑。
-func (m RouteModuleFunc) Register(scope *RouteScope) {
-	if m.register == nil {
-		return
+// Routes 返回当前模块的路由规格。
+func (m RouteModuleFunc) Routes() []shared.RouteSpec {
+	if m.routes == nil {
+		return nil
 	}
-	m.register(scope)
+	return m.routes()
 }
 
 // ComposeRouteModules 合并多组路由模块，保持注册顺序。
@@ -110,11 +102,11 @@ func BuiltinRouteModuleSpecs() []RouteModuleSpec {
 
 // newRouteModule 从内置模块规格派生真实路由模块。
 func newRouteModule(spec RouteModuleSpec) RouteModule {
-	return NewRouteModuleFunc(spec.Name, func(scope *RouteScope) {
+	return NewRouteModuleFunc(spec.Name, func() []shared.RouteSpec {
 		if spec.Routes == nil {
-			return
+			return nil
 		}
-		shared.AddRouteSpecs(scope.Server, scope.ServiceContext, scope.AuthMiddleware, scope.InternalMiddleware, routeSpecsWithModule(spec.Name, spec.Routes()))
+		return spec.Routes()
 	})
 }
 
@@ -150,47 +142,63 @@ func routeSpecsWithModule(module string, specs []shared.RouteSpec) []shared.Rout
 	return out
 }
 
-// RegisterHandlers 统一注册全局中间件和各领域路由模块。
-// 自动组合内置路由和额外模块；启动链使用 bootstrap 统一清单调用 RegisterHandlersWithModules。
+// routeSpecsForServer 按监听器边界筛选路由，公网与内网路由不在同一 Server 注册。
+func routeSpecsForServer(specs []shared.RouteSpec, internal bool) []shared.RouteSpec {
+	filtered := make([]shared.RouteSpec, 0, len(specs))
+	for _, spec := range specs {
+		if (spec.Access == shared.RouteAccessInternal) != internal {
+			continue
+		}
+		filtered = append(filtered, spec)
+	}
+	return filtered
+}
+
+// RegisterPublicHandlers 统一注册公网监听器的全局中间件和各领域路由模块。
+// 自动组合内置路由和额外模块；启动链使用 bootstrap 统一清单调用 RegisterPublicHandlersWithModules。
 // 中间件顺序固定为 outer recover -> trace -> access log -> inner recover：
 // 1. outer recover 兜底保护入口中间件自身异常；
 // 2. trace 创建上下文和 span；
 // 3. access log 使用 defer 在请求结束时统一收口；
 // 4. inner recover 最靠近业务 handler，把 panic 转成标准响应后交回上层记录。
-func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext, modules ...RouteModule) {
+func RegisterPublicHandlers(server *rest.Server, serverCtx *svc.ServiceContext, modules ...RouteModule) {
 	moduleGroups := [][]RouteModule{BuiltinRouteModules(), modules}
-	RegisterHandlersWithModules(server, serverCtx, ComposeRouteModules(moduleGroups...)...)
+	RegisterPublicHandlersWithModules(server, serverCtx, ComposeRouteModules(moduleGroups...)...)
 }
 
-// RegisterHandlersWithModules 按调用方传入的完整模块清单注册全局中间件和 HTTP 路由。
-// bootstrap 统一注册中心会调用该入口，避免 handler 包再次隐式追加内置路由造成重复注册。
-func RegisterHandlersWithModules(server *rest.Server, serverCtx *svc.ServiceContext, modules ...RouteModule) {
+// RegisterInternalHandlers 统一注册内网监听器的全局中间件和各领域路由模块。
+func RegisterInternalHandlers(server *rest.Server, serverCtx *svc.ServiceContext, modules ...RouteModule) {
+	moduleGroups := [][]RouteModule{BuiltinRouteModules(), modules}
+	RegisterInternalHandlersWithModules(server, serverCtx, ComposeRouteModules(moduleGroups...)...)
+}
+
+// RegisterPublicHandlersWithModules 按完整模块清单注册公网路由。
+func RegisterPublicHandlersWithModules(server *rest.Server, serverCtx *svc.ServiceContext, modules ...RouteModule) {
+	registerHandlersWithModules(server, serverCtx, false, modules...)
+}
+
+// RegisterInternalHandlersWithModules 按完整模块清单注册内网路由。
+func RegisterInternalHandlersWithModules(server *rest.Server, serverCtx *svc.ServiceContext, modules ...RouteModule) {
+	registerHandlersWithModules(server, serverCtx, true, modules...)
+}
+
+// registerHandlersWithModules 注册公共中间件，并按监听器边界筛选所有模块路由。
+func registerHandlersWithModules(server *rest.Server, serverCtx *svc.ServiceContext, internal bool, modules ...RouteModule) {
 	server.Use(middleware.NewRecoverMiddleware().Handle)
-	server.Use(middleware.NewTraceMiddleware().Handle)
+	server.Use(middleware.NewTraceMiddleware(serverCtx).Handle)
 	server.Use(middleware.NewAccessLogMiddleware().Handle)
 	server.Use(middleware.NewRecoverMiddleware().Handle)
 
 	// 统一在这里构造领域级中间件，避免各模块重复创建。
 	authMw := middleware.NewAuthMiddleware(serverCtx)
-	// 内网服务中间件
-	internalMw := middleware.NewInternalOnlyMiddleware()
-	scope := &RouteScope{
-		Server:             server,
-		ServiceContext:     serverCtx,
-		AuthMiddleware:     authMw,
-		InternalMiddleware: internalMw,
-	}
-	// 路由模块顺序由调用方传入的完整清单决定，便于 bootstrap 统一管理默认模块和外部模块。
-	registerRouteModules(scope, modules...)
-}
-
-// registerRouteModules 按声明顺序注册路由模块。
-func registerRouteModules(scope *RouteScope, modules ...RouteModule) {
+	opsMw := middleware.NewOpsMiddleware(serverCtx)
 	for _, module := range modules {
 		if module == nil {
 			continue
 		}
-		module.Register(scope)
+		routes := routeSpecsWithModule(module.Name(), module.Routes())
+		routes = routeSpecsForServer(routes, internal)
+		shared.AddRouteSpecs(server, serverCtx, authMw, opsMw, routes)
 	}
 }
 

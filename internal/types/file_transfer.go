@@ -6,6 +6,18 @@ import (
 	"github.com/Is999/go-utils/errors"
 )
 
+const (
+	// FileUploadCleanupTaskType 表示上传对象的延迟清理任务类型。
+	FileUploadCleanupTaskType = "file:upload:cleanup"
+)
+
+// FileUploadCleanupTaskPayload 表示上传对象延迟清理任务负载。
+type FileUploadCleanupTaskPayload struct {
+	UploadID  string `json:"uploadId,omitempty"` // 上传会话 ID；头像替换清理时为空
+	BizType   string `json:"bizType"`            // 上传业务类型，用于校验对象目录和引用规则
+	ObjectKey string `json:"objectKey"`          // 需要清理的统一存储对象 key
+}
+
 // FileUploadInitReq 表示初始化断点续传上传会话请求。
 type FileUploadInitReq struct {
 	BizType     string `json:"bizType,optional"`     // 业务类型
@@ -39,6 +51,19 @@ type FileUploadStatusReq struct {
 func (r *FileUploadStatusReq) Validate() error {
 	if strings.TrimSpace(r.UploadID) == "" {
 		return errors.Errorf("uploadId 不能为空")
+	}
+	return nil
+}
+
+// FilePublicAccessReq 表示匿名访问公开上传对象的请求。
+type FilePublicAccessReq struct {
+	ObjectKey string `form:"objectKey"` // 公开对象 key
+}
+
+// Validate 校验公开对象访问请求。
+func (r *FilePublicAccessReq) Validate() error {
+	if strings.TrimSpace(r.ObjectKey) == "" {
+		return errors.Errorf("objectKey 不能为空")
 	}
 	return nil
 }

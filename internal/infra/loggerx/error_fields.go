@@ -1,0 +1,206 @@
+package loggerx
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+
+	"github.com/Is999/go-utils/errors"
+	"github.com/zeromicro/go-zero/core/logx"
+)
+
+// ErrorChain 把错误链渲染为单行 JSON 字符串，便于日志完整保留 wrap 链与 trace 信息。
+func ErrorChain(err error) string {
+	if err == nil {
+		return ""
+	}
+	traceJSON := strings.TrimSpace(errors.TraceJSON(err))
+	if traceJSON != "" {
+		return traceJSON
+	}
+	summary := strings.TrimSpace(err.Error())
+	return summary
+}
+
+// ErrorTrace 把错误链渲染为便于人眼检索的单行文本。
+func ErrorTrace(err error) string {
+	if err == nil {
+		return ""
+	}
+	trace := strings.TrimSpace(errors.TraceString(err))
+	if trace != "" {
+		return trace
+	}
+	return ErrorChain(err)
+}
+
+// ErrorCaller 返回错误链中最早的业务栈帧。
+func ErrorCaller(err error) string {
+	if err == nil {
+		return ""
+	}
+	if caller := firstTraceCallerFromJSON(ErrorChain(err)); caller != "" {
+		return caller
+	}
+	return firstTraceCallerFromText(ErrorTrace(err))
+}
+
+// ErrorFields 返回统一错误日志字段，确保所有错误日志同时输出错误信息和错误追踪链路。
+func ErrorFields(err error) []logx.LogField {
+	if err == nil {
+		return nil
+	}
+	summary := strings.TrimSpace(err.Error())
+	chain := ErrorChain(err)
+	fields := []logx.LogField{
+		logx.Field(fieldError, summary),
+		logx.Field(fieldErrorChain, chain),
+	}
+	if trace := ErrorTrace(err); trace != "" && trace != summary {
+		fields = append(fields, logx.Field(fieldErrorTrace, trace))
+	}
+	if caller := ErrorCaller(err); caller != "" {
+		fields = append(fields, logx.Field(fieldErrorCaller, caller))
+	}
+	return fields
+}
+
+// ErrorTextFields 返回纯文本错误对应的统一日志字段，适用于尚未封装成 error 对象的失败原因。
+func ErrorTextFields(message string) []logx.LogField {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+	return []logx.LogField{
+		logx.Field(fieldError, message),
+		logx.Field(fieldErrorChain, message),
+	}
+}
+
+// errorTraceNode 表示 go-utils errors.TraceJSON 中的错误链节点。
+type errorTraceNode struct {
+	Trace []string          `json:"trace"` // Trace 保存当前错误节点的栈帧文本。
+	Err   json.RawMessage   `json:"err"`   // Err 保存单个下级错误节点。
+	Errs  []json.RawMessage `json:"errs"`  // Errs 保存多个下级错误节点。
+}
+
+// firstTraceCallerFromJSON 从错误链 JSON 中提取最早的业务栈帧。
+func firstTraceCallerFromJSON(traceJSON string) string {
+	traceJSON = strings.TrimSpace(traceJSON)
+	if traceJSON == "" || traceJSON == "null" {
+		return ""
+	}
+	var node errorTraceNode
+	if err := json.Unmarshal([]byte(traceJSON), &node); err != nil {
+		return ""
+	}
+	return firstTraceCallerFromNode(node)
+}
+
+// firstTraceCallerFromNode 按当前节点、单错误、多错误顺序查找业务栈帧。
+func firstTraceCallerFromNode(node errorTraceNode) string {
+	for _, frame := range node.Trace {
+		if caller := traceFrameLocation(frame); caller != "" {
+			return caller
+		}
+	}
+	if caller := firstTraceCallerFromRaw(node.Err); caller != "" {
+		return caller
+	}
+	for _, raw := range node.Errs {
+		if caller := firstTraceCallerFromRaw(raw); caller != "" {
+			return caller
+		}
+	}
+	return ""
+}
+
+// firstTraceCallerFromRaw 解析原始错误节点并提取业务栈帧。
+func firstTraceCallerFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var node errorTraceNode
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return ""
+	}
+	return firstTraceCallerFromNode(node)
+}
+
+// firstTraceCallerFromText 从文本错误链中提取业务栈帧。
+func firstTraceCallerFromText(traceText string) string {
+	traceText = strings.TrimSpace(traceText)
+	if traceText == "" {
+		return ""
+	}
+	return traceFrameLocation(traceText)
+}
+
+// traceFrameLocation 从单个栈帧文本中截取短文件名和行号。
+func traceFrameLocation(frame string) string {
+	frame = strings.TrimSpace(frame)
+	if frame == "" {
+		return ""
+	}
+	if start := strings.LastIndex(frame, " ("); start >= 0 && strings.HasSuffix(frame, ")") {
+		frame = strings.TrimSuffix(frame[start+2:], ")")
+	}
+	idx := strings.LastIndex(frame, ".go:")
+	if idx < 0 {
+		return ""
+	}
+	end := idx + len(".go:")
+	for end < len(frame) && frame[end] >= '0' && frame[end] <= '9' {
+		end++
+	}
+	start := strings.LastIndexAny(frame[:idx], " \t(")
+	if start >= 0 {
+		return frame[start+1 : end]
+	}
+	return frame[:end]
+}
+
+// callerLocation 返回 runtime.Caller 对应的短文件名和行号。
+func callerLocation(skip int) string {
+	if skip < 0 {
+		skip = 0
+	}
+	_, file, line, ok := runtime.Caller(skip)
+	if !ok {
+		return ""
+	}
+	return shortCaller(file, line)
+}
+
+// shortCaller 保留最后两段路径，避免日志 caller 过长。
+func shortCaller(file string, line int) string {
+	file = filepath.ToSlash(file)
+	idx := strings.LastIndexByte(file, '/')
+	if idx >= 0 {
+		if prev := strings.LastIndexByte(file[:idx], '/'); prev >= 0 {
+			file = file[prev+1:]
+		}
+	}
+	return file + ":" + strconv.Itoa(line)
+}
+
+// shouldMoveBuiltinCaller 判断是否需要把 go-zero 内置 caller 改名为 log_caller。
+func shouldMoveBuiltinCaller(callerKey string) bool {
+	callerKey = strings.TrimSpace(callerKey)
+	return callerKey == "" || callerKey == fieldCaller
+}
+
+// positiveSkip 把负数 skip 归零，避免调用点向错误方向偏移。
+func positiveSkip(skip int) int {
+	if skip < 0 {
+		return 0
+	}
+	return skip
+}
+
+// normalizeCallerSkip 归一化调用方传入的额外 skip，并补上 loggerx 自身封装层。
+func normalizeCallerSkip(skip int) int {
+	return loggerxCallerSkip + positiveSkip(skip)
+}

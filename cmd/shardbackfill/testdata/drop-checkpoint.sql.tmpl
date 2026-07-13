@@ -1,0 +1,6 @@
+-- 代码资产：清理集成测试本轮创建的 shardbackfill checkpoint 表。
+-- SQL 方言：MySQL 8.0。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：无动态参数，仅使用固定运维表名。
+-- 安全边界：仅在测试确认该表原先不存在时执行。
+DROP TABLE `shard_backfill_checkpoint`

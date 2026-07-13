@@ -1,0 +1,10 @@
+-- 代码资产：读取待回填表的主键、UID 和固定桶列定义。
+-- SQL 方言：MySQL 8.0 information_schema。
+-- 调用方：cmd/shardbackfill.validateTableSchema。
+-- 参数来源：表名和三个列名通过预编译参数传入。
+-- 安全边界：只读指定列元数据，不扫描业务数据。
+SELECT `COLUMN_NAME`, `DATA_TYPE`, `COLUMN_TYPE`, `IS_NULLABLE`
+FROM `information_schema`.`COLUMNS`
+WHERE `TABLE_SCHEMA` = DATABASE()
+  AND `TABLE_NAME` = ?
+  AND `COLUMN_NAME` IN (?, ?, ?)

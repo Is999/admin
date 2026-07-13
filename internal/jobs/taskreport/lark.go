@@ -2,7 +2,10 @@ package taskreport
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
+	"time"
 
 	"admin/internal/config"
 	"admin/internal/infra/larkx"
@@ -27,17 +30,20 @@ func SendLarkReport(ctx context.Context, svcCtx *svc.ServiceContext, report Repo
 		logx.WithContext(ctx).Info("Lark 日报通知未启用，跳过任务运行日报发送")
 		return nil
 	}
+	larkReport := ToLarkReport(cfg, report)
 	// 发送外部通知使用独立背景上下文，避免任务收尾 deadline 截断 HTTP 请求。
-	if err := notifier.SendTaskDailyReport(context.Background(), ToLarkReport(cfg, report)); err != nil {
+	if err := notifier.SendTaskDailyReport(context.Background(), larkReport); err != nil {
 		RecordLarkError(ctx)
-		return errors.Wrap(err, "发送任务运行日报 Lark 通知失败")
+		return errors.Wrapf(err, "发送任务运行日报 Lark 通知失败 report_id=%s", larkReport.ReportID)
 	}
+	logx.WithContext(ctx).Infof("任务运行日报 Lark 通知已发送 report_id=%s", larkReport.ReportID)
 	return nil
 }
 
 // ToLarkReport 将任务运行日报领域对象转换为 Lark 卡片契约。
 func ToLarkReport(cfg config.Config, report Report) larkx.TaskDailyReport {
 	result := larkx.TaskDailyReport{
+		ReportID:              taskDailyReportID(cfg.AppID, report.WindowStart, report.WindowEnd),
 		ServiceName:           strings.TrimSpace(cfg.Observability.ServiceName),
 		Environment:           strings.TrimSpace(cfg.Mode),
 		AppID:                 strings.TrimSpace(cfg.AppID),
@@ -63,8 +69,7 @@ func ToLarkReport(cfg config.Config, report Report) larkx.TaskDailyReport {
 		TraceErrorCount:       report.TraceErrorCount,
 		AverageDurationMS:     report.AverageDurationMS,
 		MaxDurationMS:         report.MaxDurationMS,
-		Truncated:             report.Truncated,
-		RetentionWarning:      strings.TrimSpace(report.RetentionWarning),
+		IntegrityWarnings:     append([]string(nil), report.IntegrityWarnings...),
 	}
 	if result.ServiceName == "" {
 		result.ServiceName = strings.TrimSpace(cfg.Name)
@@ -77,6 +82,17 @@ func ToLarkReport(cfg config.Config, report Report) larkx.TaskDailyReport {
 	result.SlowTasks = toLarkTasks(report.SlowTasks)
 	result.TraceErrorTasks = toLarkTasks(report.TraceErrorTasks)
 	return result
+}
+
+// taskDailyReportID 生成按站点和左闭右开窗口稳定的投递标识，便于识别 webhook 至少一次投递产生的重复消息。
+func taskDailyReportID(appID string, start, end time.Time) string {
+	appID = strings.TrimSpace(appID)
+	if appID == "" || start.IsZero() || end.IsZero() {
+		return ""
+	}
+	payload := appID + "\x00" + start.UTC().Format(time.RFC3339) + "\x00" + end.UTC().Format(time.RFC3339)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:16])
 }
 
 // toLarkQueues 转换队列摘要为 Lark 日报队列字段。

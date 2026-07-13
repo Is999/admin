@@ -1,0 +1,49 @@
+mode:
+  type: Cluster
+  repository:
+    type: ZooKeeper
+    props:
+      namespace: __PROXY_NAMESPACE__
+      server-lists: __ZOOKEEPER_SERVERS__
+      digest: __ZOOKEEPER_DIGEST__
+      retryIntervalMilliseconds: 500
+      timeToLiveSeconds: 60
+      maxRetries: 3
+      operationTimeoutMilliseconds: 5000
+
+authority:
+  users:
+    - user: __PROXY_ADMIN_USER__@%
+      password: __PROXY_ADMIN_PASSWORD__
+      admin: true
+    - user: __PROXY_APP_USER__@%
+      password: __PROXY_APP_PASSWORD__
+      admin: false
+  privilege:
+    type: DATABASE_PERMITTED
+    props:
+      user-database-mappings: __PROXY_ADMIN_USER__@%=*, __PROXY_APP_USER__@%=__PROXY_DATABASE__
+
+transaction:
+  defaultType: XA
+  providerType: Atomikos
+
+sqlParser:
+  sqlStatementCache:
+    initialCapacity: 2000
+    maximumSize: 65535
+  parseTreeCache:
+    initialCapacity: 128
+    maximumSize: 1024
+
+props:
+  max-connections-size-per-query: 1
+  kernel-executor-size: __PROXY_KERNEL_EXECUTOR_SIZE__
+  proxy-frontend-flush-threshold: 128
+  sql-show: false
+  check-table-metadata-enabled: true
+  proxy-backend-query-fetch-size: -1
+  proxy-frontend-executor-size: 0
+  proxy-frontend-max-connections: __PROXY_FRONTEND_MAX_CONNECTIONS__
+  proxy-default-port: 3307
+  proxy-netty-backlog: 1024

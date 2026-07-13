@@ -1,0 +1,6 @@
+-- 每张 uid=user.id 表分别执行并必须返回 0 行；抽样不能代替全量不变量校验。
+SELECT `__PRIMARY_KEY__`, `uid`, `shard_no`, MOD(CRC32(CAST(`uid` AS CHAR)), 1024) AS `expected_shard_no`
+FROM `__UID_TABLE__`
+WHERE `shard_no` IS NULL
+   OR `shard_no` <> MOD(CRC32(CAST(`uid` AS CHAR)), 1024)
+LIMIT 100;

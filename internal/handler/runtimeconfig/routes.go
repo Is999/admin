@@ -50,6 +50,15 @@ func RouteSpecs() []shared.RouteSpec {
 			Handler:     ListArchiveJobsHandler,
 		},
 		{
+			Method:        http.MethodGet,
+			Path:          "/api/runtime-config/archive-jobs/:id/progress", // 查询归档任务执行详情。
+			Access:        shared.RouteAccessAuth,
+			Alias:         shared.RuntimeConfigList.Alias,
+			Description:   "查询归档任务执行详情",
+			SkipAccessLog: true,
+			Handler:       GetArchiveJobProgressHandler,
+		},
+		{
 			Method:      http.MethodPost,
 			Path:        "/api/runtime-config/archive-jobs", // 保存归档任务草稿。
 			Access:      shared.RouteAccessAuth,

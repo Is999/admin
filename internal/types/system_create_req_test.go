@@ -26,20 +26,20 @@ func TestCreateRoleReqValidateKeepsNormalizedFields(t *testing.T) {
 	if err := req.Validate(); err != nil {
 		t.Fatalf("expected create role validate success, got %v", err)
 	}
-	saveReq := req.ToSaveRoleReq()
-	if req.Title != "财务" || saveReq.Title != "财务" {
-		t.Fatalf("expected normalized role title, got req=%q save=%q", req.Title, saveReq.Title)
+	if req.Title != "财务" {
+		t.Fatalf("expected normalized role title, got %q", req.Title)
 	}
-	if req.Description != "财务角色" || saveReq.Description != "财务角色" {
-		t.Fatalf("expected normalized role description, got req=%q save=%q", req.Description, saveReq.Description)
+	if req.Description != "财务角色" {
+		t.Fatalf("expected normalized role description, got %q", req.Description)
 	}
 }
 
 // TestCreatePermissionReqValidateDoesNotRequirePathID 确保新增权限请求不再依赖路径 ID。
 func TestCreatePermissionReqValidateDoesNotRequirePathID(t *testing.T) {
+	permissionType := 1
 	req := &CreatePermissionReq{
 		Title: "查看报表",
-		Type:  1,
+		Type:  &permissionType,
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("expected create permission validate success, got %v", err)
@@ -48,28 +48,28 @@ func TestCreatePermissionReqValidateDoesNotRequirePathID(t *testing.T) {
 
 // TestCreatePermissionReqValidateKeepsNormalizedFields 确保新增权限校验会把字段清洗结果回写到原请求。
 func TestCreatePermissionReqValidateKeepsNormalizedFields(t *testing.T) {
+	permissionType := 1
 	req := &CreatePermissionReq{
 		UUID:        "  system.role.add  ",
 		Title:       "  新增角色  ",
 		Module:      "  system.role.add  ",
-		Type:        1,
+		Type:        &permissionType,
 		Description: "  新增角色权限  ",
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("expected create permission validate success, got %v", err)
 	}
-	saveReq := req.ToSavePermissionReq()
-	if req.UUID != "system.role.add" || saveReq.UUID != "system.role.add" {
-		t.Fatalf("expected normalized permission uuid, got req=%q save=%q", req.UUID, saveReq.UUID)
+	if req.UUID != "system.role.add" {
+		t.Fatalf("expected normalized permission uuid, got %q", req.UUID)
 	}
-	if req.Title != "新增角色" || saveReq.Title != "新增角色" {
-		t.Fatalf("expected normalized permission title, got req=%q save=%q", req.Title, saveReq.Title)
+	if req.Title != "新增角色" {
+		t.Fatalf("expected normalized permission title, got %q", req.Title)
 	}
-	if req.Module != "system.role.add" || saveReq.Module != "system.role.add" {
-		t.Fatalf("expected normalized permission module, got req=%q save=%q", req.Module, saveReq.Module)
+	if req.Module != "system.role.add" {
+		t.Fatalf("expected normalized permission module, got %q", req.Module)
 	}
-	if req.Description != "新增角色权限" || saveReq.Description != "新增角色权限" {
-		t.Fatalf("expected normalized permission description, got req=%q save=%q", req.Description, saveReq.Description)
+	if req.Description != "新增角色权限" {
+		t.Fatalf("expected normalized permission description, got %q", req.Description)
 	}
 }
 
@@ -216,6 +216,20 @@ func TestCreateSecretKeyReqValidateDoesNotRequirePathID(t *testing.T) {
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("expected create secret key validate success, got %v", err)
+	}
+}
+
+// TestSaveSecretKeyReqValidateAllowsCryptoOnly 确保管理接口允许独立启用加密解密。
+func TestSaveSecretKeyReqValidateAllowsCryptoOnly(t *testing.T) {
+	req := &SaveSecretKeyReq{
+		UUID:          "finance-app",
+		Title:         "财务系统",
+		KeyVersion:    "v1",
+		CryptoStatus:  1,
+		VersionStatus: 0,
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("expected crypto-only secret key to pass validation, got %v", err)
 	}
 }
 

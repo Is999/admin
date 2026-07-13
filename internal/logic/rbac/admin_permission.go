@@ -4,6 +4,7 @@ import (
 	corelogic "admin/internal/logic"
 	cachelogic "admin/internal/logic/cache"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// AdminPermissionLogic 预留权限领域逻辑入口，后续扩展权限维护能力时从这里收口。
+// AdminPermissionLogic 处理路由权限定义、树结构和共享缓存。
 type AdminPermissionLogic struct {
 	*corelogic.BaseLogic // 复用上下文、数据库和日志能力
 }
@@ -38,7 +39,7 @@ func NewAdminPermissionLogic(r *http.Request, svcCtx *svc.ServiceContext) *Admin
 
 // List 分页查询权限列表，支持按 UUID、名称、模块、类型和父级筛选。
 func (l *AdminPermissionLogic) List(req *types.PermissionListReq) *types.BizResult {
-	// 权限表数据量通常不大，但仍保持分页接口，方便后续扩展搜索和审计。
+	// 权限管理列表保持有界分页，避免一次读取整张权限表。
 	dbq := l.Svc.ReadDB(svc.DatabaseMain).Model(&model.AdminPermission{})
 	if req.UUID != "" {
 		dbq = dbq.Where("uuid = ?", req.UUID)
@@ -75,6 +76,17 @@ func (l *AdminPermissionLogic) List(req *types.PermissionListReq) *types.BizResu
 	for _, permission := range list {
 		items = append(items, permissionModelToItem(permission, false, false, nil))
 	}
+	permissionTree, err := l.LoadPermissionTreeWithCache()
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminPermissionLogic.List 查询权限树缓存失败").ToBizResult()
+	}
+	manageablePermissionSet, err := l.manageablePermissionItemIDSet(permissionTree)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminPermissionLogic.List 计算权限可操作范围失败").ToBizResult()
+	}
+	items = markPermissionTreeManageScope(items, manageablePermissionSet)
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
 		WithData(types.ListResp[types.AdminPermissionItem]{List: items, Total: total})
@@ -87,7 +99,7 @@ func (l *AdminPermissionLogic) TreeList() *types.BizResult {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminPermissionLogic.TreeList 查询权限树失败").ToBizResult()
 	}
-	manageablePermissionSet, err := l.manageablePermissionIDSet()
+	manageablePermissionSet, err := l.manageablePermissionItemIDSet(items)
 	if err != nil {
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminPermissionLogic.TreeList 计算权限可操作范围失败").ToBizResult()
@@ -99,23 +111,44 @@ func (l *AdminPermissionLogic) TreeList() *types.BizResult {
 }
 
 // Create 新增权限节点。
-func (l *AdminPermissionLogic) Create(req *types.SavePermissionReq) *types.BizResult {
+func (l *AdminPermissionLogic) Create(req *types.CreatePermissionReq) *types.BizResult {
+	return l.withPermissionWriteLock("AdminPermissionLogic.Create", func() *types.BizResult {
+		return l.create(req)
+	})
+}
+
+// create 在 RBAC 写锁内新增权限节点。
+func (l *AdminPermissionLogic) create(req *types.CreatePermissionReq) *types.BizResult {
 	if req.UUID == "" {
-		req.UUID = l.nextPermissionUUID()
+		nextUUID, err := l.nextPermissionUUID()
+		if err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err,
+				"AdminPermissionLogic.Create 生成权限UUID失败").ToBizResult()
+		}
+		req.UUID = nextUUID
 	}
 	if err := l.ensurePermissionParentWithinManageScope(req.Pid); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).
 			ToBizResult().
 			WithError(errors.Wrapf(err, "AdminPermissionLogic.Create 父级权限ID[%d]超出可操作范围", req.Pid))
 	}
-	description := req.Description
+	disabledPermissionID, err := l.disabledPermissionPathID(req.Pid)
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminPermissionLogic.Create 校验父级权限ID[%d]状态失败", req.Pid).ToBizResult()
+	}
+	if disabledPermissionID > 0 {
+		return types.NewBizResult(codes.Fail).
+			SetI18nMessage(i18n.MsgKeyStatusChangeFail).
+			WithError(errors.Errorf("AdminPermissionLogic.Create 父级路径包含禁用权限ID[%d]", disabledPermissionID))
+	}
 	permission := model.AdminPermission{
 		UUID:        req.UUID,
 		Title:       req.Title,
 		Module:      req.Module,
 		Pid:         req.Pid,
-		Type:        req.Type,
-		Description: description,
+		Type:        req.TypeValue(),
+		Description: req.Description,
 		Status:      corelogic.IntPtrDefault(req.Status, 1),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
@@ -142,13 +175,23 @@ func (l *AdminPermissionLogic) Create(req *types.SavePermissionReq) *types.BizRe
 			"AdminPermissionLogic.Create 创建权限[%s]失败", req.Title).ToBizResult()
 	}
 
-	l.refreshPermissionRelatedCache(req.Module)
+	if err := l.refreshPermissionRelatedCache(); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.AddSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminPermissionLogic.Create RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.AddSuccess).
 		SetI18nMessage(i18n.MsgKeyAddSuccess)
 }
 
 // Update 编辑权限节点。
-func (l *AdminPermissionLogic) Update(req *types.SavePermissionReq) *types.BizResult {
+func (l *AdminPermissionLogic) Update(req *types.UpdatePermissionReq) *types.BizResult {
+	return l.withPermissionWriteLock("AdminPermissionLogic.Update", func() *types.BizResult {
+		return l.update(req)
+	})
+}
+
+// update 在 RBAC 写锁内编辑权限节点。
+func (l *AdminPermissionLogic) update(req *types.UpdatePermissionReq) *types.BizResult {
 	var permission model.AdminPermission
 	if err := l.Svc.WriteDB(svc.DatabaseMain).Where("id = ?", req.ID).First(&permission).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -159,14 +202,11 @@ func (l *AdminPermissionLogic) Update(req *types.SavePermissionReq) *types.BizRe
 			"AdminPermissionLogic.Update 查询权限ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	nextPid := resolvePermissionUpdateParentID(permission.Pid, req.Pid)
+	nextPid := req.ParentID()
+	pidChanged := permissionParentChanged(permission.Pid, nextPid)
 	nextUUID := permission.UUID
 	if req.UUID != "" {
 		nextUUID = req.UUID
-	}
-	nextStatus := permission.Status
-	if req.Status != nil {
-		nextStatus = *req.Status
 	}
 	if err := l.ensurePermissionsWithinManageScope([]int{req.ID}); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).
@@ -175,18 +215,23 @@ func (l *AdminPermissionLogic) Update(req *types.SavePermissionReq) *types.BizRe
 	}
 	// 仅在父级真实变化时校验目标父级范围。
 	// 已有顶级目录保持 pid=0 编辑时，不按创建顶级权限处理。
-	if permissionParentChanged(permission.Pid, nextPid) {
+	if pidChanged {
 		if err := l.ensurePermissionParentWithinManageScope(nextPid); err != nil {
 			return types.Forbidden(i18n.MsgKeyForbidden).
 				ToBizResult().
 				WithError(errors.Wrapf(err, "AdminPermissionLogic.Update 父级权限ID[%d]超出可操作范围", nextPid))
 		}
+		disabledPermissionID, err := l.disabledPermissionPathID(nextPid)
+		if err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err,
+				"AdminPermissionLogic.Update 校验父级权限ID[%d]状态失败", nextPid).ToBizResult()
+		}
+		if disabledPermissionID > 0 {
+			return types.NewBizResult(codes.Fail).
+				SetI18nMessage(i18n.MsgKeyStatusChangeFail).
+				WithError(errors.Errorf("AdminPermissionLogic.Update 父级路径包含禁用权限ID[%d]", disabledPermissionID))
+		}
 	}
-	description := req.Description
-	if description == "" {
-		description = permission.Description
-	}
-
 	if err := l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
 		pids, err := l.permissionPidsTx(tx, nextPid, req.ID)
 		if err != nil {
@@ -198,15 +243,19 @@ func (l *AdminPermissionLogic) Update(req *types.SavePermissionReq) *types.BizRe
 		if err := tx.Model(&model.AdminPermission{}).Where("id = ?", req.ID).Updates(map[string]any{
 			"uuid":        nextUUID,
 			"title":       req.Title,
-			"module":      req.Module,
+			"module":      *req.Module,
 			"pid":         nextPid,
 			"pids":        pids,
-			"type":        req.Type,
-			"description": description,
-			"status":      nextStatus,
+			"type":        req.TypeValue(),
+			"description": *req.Description,
 			"updated_at":  time.Now(),
 		}).Error; err != nil {
 			return errors.Wrap(err, "更新权限失败")
+		}
+		if pidChanged {
+			if err := l.syncPermissionDescendantPidsTx(tx, req.ID); err != nil {
+				return errors.Tag(err)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -217,21 +266,26 @@ func (l *AdminPermissionLogic) Update(req *types.SavePermissionReq) *types.BizRe
 			"AdminPermissionLogic.Update 更新权限ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	l.refreshPermissionRelatedCache(permission.Module, req.Module)
+	if err := l.refreshPermissionRelatedCache(); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminPermissionLogic.Update RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyUpdateSuccess)
 }
 
-// UpdateStatus 修改权限启用/禁用状态。
+// UpdateStatus 修改权限启用/禁用状态；禁用时同步禁用全部子孙权限。
 func (l *AdminPermissionLogic) UpdateStatus(req *types.PermissionStatusReq) *types.BizResult {
-	if err := l.ensurePermissionsWithinManageScope([]int{req.ID}); err != nil {
-		return types.Forbidden(i18n.MsgKeyForbidden).
-			ToBizResult().
-			WithError(errors.Wrapf(err, "AdminPermissionLogic.UpdateStatus 权限ID[%d]超出可操作范围", req.ID))
-	}
+	return l.withPermissionWriteLock("AdminPermissionLogic.UpdateStatus", func() *types.BizResult {
+		return l.updateStatus(req)
+	})
+}
+
+// updateStatus 在 RBAC 写锁内修改权限状态。
+func (l *AdminPermissionLogic) updateStatus(req *types.PermissionStatusReq) *types.BizResult {
 	var permission model.AdminPermission
 	if err := l.Svc.WriteDB(svc.DatabaseMain).
-		Select("id", "module").
+		Select("id, pid").
 		Where("id = ?", req.ID).
 		First(&permission).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -241,32 +295,68 @@ func (l *AdminPermissionLogic) UpdateStatus(req *types.PermissionStatusReq) *typ
 		return types.DBError(i18n.MsgKeyDBError, err,
 			"AdminPermissionLogic.UpdateStatus 查询权限ID[%d]失败", req.ID).ToBizResult()
 	}
+	if err := l.ensurePermissionsWithinManageScope([]int{req.ID}); err != nil {
+		return types.Forbidden(i18n.MsgKeyForbidden).
+			ToBizResult().
+			WithError(errors.Wrapf(err, "AdminPermissionLogic.UpdateStatus 权限ID[%d]超出可操作范围", req.ID))
+	}
 	status := req.StatusValue()
+	if status == 1 {
+		disabledPermissionID, err := l.disabledPermissionPathID(permission.Pid)
+		if err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err,
+				"AdminPermissionLogic.UpdateStatus 校验权限ID[%d]父级状态失败", req.ID).ToBizResult()
+		}
+		if disabledPermissionID > 0 {
+			return types.NewBizResult(codes.Fail).
+				SetI18nMessage(i18n.MsgKeyStatusChangeFail).
+				WithError(errors.Errorf("AdminPermissionLogic.UpdateStatus 父级路径包含禁用权限ID[%d]", disabledPermissionID))
+		}
+	}
+	permissionIDs := []int{req.ID}
+	if status == 0 {
+		subtreeIDs, err := l.permissionSubtreeIDs(req.ID)
+		if err != nil {
+			return types.DBError(i18n.MsgKeyDBError, err,
+				"AdminPermissionLogic.UpdateStatus 查询权限ID[%d]子树失败", req.ID).ToBizResult()
+		}
+		permissionIDs = subtreeIDs
+		if err := l.ensurePermissionsWithinManageScope(permissionIDs); err != nil {
+			return types.Forbidden(i18n.MsgKeyForbidden).
+				ToBizResult().
+				WithError(errors.Wrapf(err, "AdminPermissionLogic.UpdateStatus 权限ID[%d]级联权限超出可操作范围", req.ID))
+		}
+	}
 	result := l.Svc.WriteDB(svc.DatabaseMain).Model(&model.AdminPermission{}).
-		Where("id = ?", req.ID).
+		Where("id IN ?", permissionIDs).
 		Updates(map[string]any{"status": status, "updated_at": time.Now()})
 	if result.Error != nil {
 		return types.DBError(i18n.MsgKeyDBError, result.Error,
 			"AdminPermissionLogic.UpdateStatus 修改权限ID[%d]状态失败", req.ID).ToBizResult()
 	}
-	if result.RowsAffected == 0 {
-		return types.NotFound(i18n.MsgKeyNotFound, gorm.ErrRecordNotFound,
-			"AdminPermissionLogic.UpdateStatus 权限ID[%d]不存在", req.ID).ToBizResult()
+	if err := l.refreshPermissionRelatedCache(); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.UpdateSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminPermissionLogic.UpdateStatus RBAC缓存同步失败")
 	}
-
-	l.refreshPermissionRelatedCache(permission.Module)
 	return types.NewBizResult(codes.UpdateSuccess).
 		SetI18nMessage(i18n.MsgKeyStatusChangeOK)
 }
 
 // Delete 删除权限节点；删除时级联删除全部子孙权限，并清理角色权限关系。
 func (l *AdminPermissionLogic) Delete(req *types.IDPathReq) *types.BizResult {
+	return l.withPermissionWriteLock("AdminPermissionLogic.Delete", func() *types.BizResult {
+		return l.delete(req)
+	})
+}
+
+// delete 在 RBAC 写锁内删除权限子树。
+func (l *AdminPermissionLogic) delete(req *types.IDPathReq) *types.BizResult {
 	if err := l.ensurePermissionsWithinManageScope([]int{req.ID}); err != nil {
 		return types.Forbidden(i18n.MsgKeyForbidden).
 			ToBizResult().
 			WithError(errors.Wrapf(err, "AdminPermissionLogic.Delete 权限ID[%d]超出可操作范围", req.ID))
 	}
-	routeAliases := make([]string, 0)
+	var affectedRoleIDs []int
 	if err := l.Svc.WriteDB(svc.DatabaseMain).Transaction(func(tx *gorm.DB) error {
 		var permissionIDs []int
 		if err := freshTxStatement(tx).Model(&model.AdminPermission{}).
@@ -282,11 +372,14 @@ func (l *AdminPermissionLogic) Delete(req *types.IDPathReq) *types.BizResult {
 		if err := l.ensurePermissionsWithinManageScope(permissionIDs); err != nil {
 			return errors.Tag(err)
 		}
-		if err := freshTxStatement(tx).Model(&model.AdminPermission{}).
-			Where("id IN ?", permissionIDs).
-			Pluck("module", &routeAliases).Error; err != nil {
-			return errors.Wrapf(err, "查询权限ID[%d]子树模块失败", req.ID)
+		// 删除关系前记录受影响角色，事务提交后精确清理对应角色权限缓存。
+		if err := freshTxStatement(tx).Model(&model.AdminRolePermissionRel{}).
+			Where("permission_id IN ?", permissionIDs).
+			Distinct("role_id").
+			Pluck("role_id", &affectedRoleIDs).Error; err != nil {
+			return errors.Wrap(err, "查询受影响角色失败")
 		}
+		affectedRoleIDs = types.UniquePositiveInts(affectedRoleIDs)
 		if err := tx.Where("permission_id IN ?", permissionIDs).Delete(&model.AdminRolePermissionRel{}).Error; err != nil {
 			return errors.Wrap(err, "清理角色权限关系失败")
 		}
@@ -307,22 +400,45 @@ func (l *AdminPermissionLogic) Delete(req *types.IDPathReq) *types.BizResult {
 			"AdminPermissionLogic.Delete 删除权限ID[%d]失败", req.ID).ToBizResult()
 	}
 
-	l.refreshPermissionRelatedCache(routeAliases...)
+	if err := l.refreshPermissionRelatedCache(affectedRoleIDs...); err != nil {
+		return corelogic.CacheSyncPendingResult(l.Logger, codes.DeleteSuccess, i18n.MsgKeyAdminCacheInvalidationPending, err,
+			"AdminPermissionLogic.Delete RBAC缓存同步失败")
+	}
 	return types.NewBizResult(codes.DeleteSuccess).
 		SetI18nMessage(i18n.MsgKeyDeleteSuccess)
 }
 
+// withPermissionWriteLock 把权限写链路切换到 RBAC 分布式锁生命周期上下文。
+func (l *AdminPermissionLogic) withPermissionWriteLock(operation string, fn func() *types.BizResult) *types.BizResult {
+	if l == nil {
+		return WithRBACWriteLock(nil, operation, nil)
+	}
+	return WithRBACWriteLock(l.BaseLogic, operation, func(lockedBaseLogic *corelogic.BaseLogic) *types.BizResult {
+		originalBaseLogic := l.BaseLogic
+		l.BaseLogic = lockedBaseLogic
+		defer func() {
+			l.BaseLogic = originalBaseLogic
+		}()
+		return fn()
+	})
+}
+
 // MaxUUID 返回下一个可用权限 UUID。
 func (l *AdminPermissionLogic) MaxUUID() *types.BizResult {
+	uuid, err := l.nextPermissionUUID()
+	if err != nil {
+		return types.DBError(i18n.MsgKeyDBError, err,
+			"AdminPermissionLogic.MaxUUID 生成权限UUID失败").ToBizResult()
+	}
 	return types.NewBizResult(codes.Success).
 		SetI18nMessage(i18n.MsgKeyQuerySuccess).
-		WithData(types.PermissionMaxUUIDResp{UUID: l.nextPermissionUUID()})
+		WithData(types.PermissionMaxUUIDResp{UUID: uuid})
 }
 
 // loadAllPermissions 加载全部权限，统一用于权限树和缓存重建。
 func (l *AdminPermissionLogic) loadAllPermissions() ([]model.AdminPermission, error) {
 	var permissions []model.AdminPermission
-	err := l.Svc.ReadDB(svc.DatabaseMain).Order("id ASC").Find(&permissions).Error
+	err := l.Svc.WriteDB(svc.DatabaseMain).Order("id ASC").Find(&permissions).Error
 	if err != nil {
 		return nil, errors.Wrap(err, "AdminPermissionLogic.loadAllPermissions 查询全部权限失败")
 	}
@@ -331,13 +447,6 @@ func (l *AdminPermissionLogic) loadAllPermissions() ([]model.AdminPermission, er
 
 // LoadPermissionTreeWithCache 优先读取权限树缓存，未命中时自动回源并重建。
 func (l *AdminPermissionLogic) LoadPermissionTreeWithCache() ([]types.AdminPermissionItem, error) {
-	if l.Redis() == nil {
-		permissions, err := l.loadAllPermissions()
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
-		return buildPermissionTree(permissions, nil, nil), nil
-	}
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -353,10 +462,11 @@ func (l *AdminPermissionLogic) PermissionUUIDsByIDsWithCache(permissionIDs []int
 	if len(permissionIDs) == 0 {
 		return []string{}, nil
 	}
-	if l.Redis() == nil {
-		return l.permissionUUIDsByIDs(permissionIDs)
+	fields := make([]string, 0, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		fields = append(fields, strconv.Itoa(permissionID))
 	}
-	cache, err := l.permissionFieldMapWithCache(keys.PermissionUUID)
+	cache, err := cachelogic.StringHashFieldsWithCache(l.BaseLogic, keys.PermissionUUID, fields)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -371,58 +481,81 @@ func (l *AdminPermissionLogic) PermissionUUIDsByIDsWithCache(permissionIDs []int
 	return helper.UniqueNonEmptyStrings(codesArr), nil
 }
 
-// permissionUUIDsByIDs 直接从数据库读取启用权限码，作为缓存 miss 后的最终兜底。
-func (l *AdminPermissionLogic) permissionUUIDsByIDs(permissionIDs []int) ([]string, error) {
+// EnabledPermissionIDsWithCache 通过启用权限 UUID 索引过滤有效权限 ID。
+func (l *AdminPermissionLogic) EnabledPermissionIDsWithCache(permissionIDs []int) ([]int, error) {
 	permissionIDs = types.UniquePositiveInts(permissionIDs)
 	if len(permissionIDs) == 0 {
-		return []string{}, nil
+		return []int{}, nil
 	}
-	var codesArr []string
-	err := l.Svc.WriteDB(svc.DatabaseMain).Session(&gorm.Session{NewDB: true}).
-		Model(&model.AdminPermission{}).
-		Distinct("uuid").
-		Where("id IN ? AND status = 1", permissionIDs).
-		Pluck("uuid", &codesArr).Error
+	fields := make([]string, 0, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		fields = append(fields, strconv.Itoa(permissionID))
+	}
+	cache, err := cachelogic.StringHashFieldsWithCache(l.BaseLogic, keys.PermissionUUID, fields)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	return helper.UniqueNonEmptyStrings(codesArr), nil
+	result := make([]int, 0, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		if strings.TrimSpace(cache[strconv.Itoa(permissionID)]) != "" {
+			result = append(result, permissionID)
+		}
+	}
+	return types.UniquePositiveInts(result), nil
 }
 
-// permissionFieldMapWithCache 读取指定权限字段缓存，未命中时自动回源重建。
-func (l *AdminPermissionLogic) permissionFieldMapWithCache(cacheKey string) (map[string]string, error) {
-	if l.Redis() == nil {
-		return l.permissionFieldMap(cacheKey)
+// AllEnabledPermissionIDsWithCache 返回全部启用权限 ID。
+func (l *AdminPermissionLogic) AllEnabledPermissionIDsWithCache() ([]int, error) {
+	cache, err := l.permissionUUIDMapWithCache()
+	if err != nil {
+		return nil, errors.Tag(err)
 	}
+	permissionIDs := make([]int, 0, len(cache))
+	for field := range cache {
+		permissionID, convErr := strconv.Atoi(strings.TrimSpace(field))
+		if convErr == nil && permissionID > 0 {
+			permissionIDs = append(permissionIDs, permissionID)
+		}
+	}
+	return types.UniquePositiveInts(permissionIDs), nil
+}
+
+// AllEnabledPermissionUUIDsWithCache 返回全部启用权限码，供超级管理员初始化前端权限。
+func (l *AdminPermissionLogic) AllEnabledPermissionUUIDsWithCache() ([]string, error) {
+	cache, err := l.permissionUUIDMapWithCache()
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	permissionIDs := make([]int, 0, len(cache))
+	for field := range cache {
+		permissionID, convErr := strconv.Atoi(strings.TrimSpace(field))
+		if convErr == nil && permissionID > 0 {
+			permissionIDs = append(permissionIDs, permissionID)
+		}
+	}
+	sort.Ints(permissionIDs)
+	result := make([]string, 0, len(permissionIDs))
+	for _, permissionID := range permissionIDs {
+		if uuid := strings.TrimSpace(cache[strconv.Itoa(permissionID)]); uuid != "" {
+			result = append(result, uuid)
+		}
+	}
+	return helper.UniqueNonEmptyStrings(result), nil
+}
+
+// permissionUUIDMapWithCache 读取全部启用权限 UUID 缓存，未命中时自动回源重建。
+func (l *AdminPermissionLogic) permissionUUIDMapWithCache() (map[string]string, error) {
 	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	cache := make(map[string]string)
-	result, err := manager.LoadThrough(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, cacheKey), &cache, nil)
+	result, err := manager.LoadThrough(l.Ctx, cachelogic.TableCachePhysicalKey(l.BaseLogic, keys.PermissionUUID), &cache, nil)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	if result.State == tablecache.LookupStateEmpty {
 		return map[string]string{}, nil
-	}
-	return cache, nil
-}
-
-// permissionFieldMap 直接从数据库构造权限字段缓存，作为 Redis 不可用时的兜底读取。
-func (l *AdminPermissionLogic) permissionFieldMap(cacheKey string) (map[string]string, error) {
-	var permissions []model.AdminPermission
-	if err := l.Svc.ReadDB(svc.DatabaseMain).Where("status = 1").Find(&permissions).Error; err != nil {
-		return nil, errors.Tag(err)
-	}
-	cache := make(map[string]string, len(permissions))
-	for _, permission := range permissions {
-		switch cacheKey {
-		case keys.PermissionModule:
-			cache[strconv.Itoa(permission.ID)] = permission.Module
-		default:
-			cache[strconv.Itoa(permission.ID)] = permission.UUID
-		}
 	}
 	return cache, nil
 }
@@ -450,36 +583,24 @@ func permissionModelToItem(permission model.AdminPermission, checked bool, disab
 	}
 }
 
-// buildPermissionTree 把平铺权限列表转换成树结构。
-func buildPermissionTree(permissions []model.AdminPermission, checked map[int]struct{}, disabled map[int]struct{}) []types.AdminPermissionItem {
-	children := make(map[int][]model.AdminPermission, len(permissions))
-	for _, permission := range permissions {
-		children[permission.Pid] = append(children[permission.Pid], permission)
-	}
-	var walk func(pid int) []types.AdminPermissionItem
-	walk = func(pid int) []types.AdminPermissionItem {
-		nodes := children[pid]
-		result := make([]types.AdminPermissionItem, 0, len(nodes))
-		for _, permission := range nodes {
-			_, isChecked := checked[permission.ID]
-			_, isDisabled := disabled[permission.ID]
-			result = append(result, permissionModelToItem(permission, isChecked, isDisabled, walk(permission.ID)))
-		}
-		return result
-	}
-	return walk(0)
-}
-
 // markPermissionTreeManageScope 按当前登录管理员可管理范围标记权限树节点可操作状态。
 func markPermissionTreeManageScope(items []types.AdminPermissionItem, manageable map[int]struct{}) []types.AdminPermissionItem {
+	return markPermissionTreeManageScopeWithPath(items, manageable, true)
+}
+
+// markPermissionTreeManageScopeWithPath 递归标记权限管理范围和父级路径可用状态。
+func markPermissionTreeManageScopeWithPath(items []types.AdminPermissionItem, manageable map[int]struct{}, parentPathEnabled bool) []types.AdminPermissionItem {
 	result := make([]types.AdminPermissionItem, 0, len(items))
 	for _, item := range items {
 		nextItem := item
 		_, canManage := manageable[item.ID]
+		pathEnabled := parentPathEnabled && nextItem.Status == 1
+		nextItem.Manageable = canManage
+		nextItem.CanCreateChild = canManage && pathEnabled
 		nextItem.Disabled = nextItem.Status != 1 || !canManage
 		nextItem.DisableCheckbox = nextItem.Disabled
 		nextItem.Selectable = !nextItem.Disabled
-		nextItem.Children = markPermissionTreeManageScope(item.Children, manageable)
+		nextItem.Children = markPermissionTreeManageScopeWithPath(item.Children, manageable, pathEnabled)
 		nextItem.HasChild = len(nextItem.Children) > 0
 		result = append(result, nextItem)
 	}
@@ -510,14 +631,55 @@ func markPermissionTreeChecked(items []types.AdminPermissionItem, checked map[in
 	return result
 }
 
-// resolvePermissionUpdateParentID 计算编辑权限时最终使用的父级权限 ID。
-// 编辑接口的 pid 是历史 int 字段，无法区分“未提交 pid”和“显式提交 0”；
-// 因此非顶级权限未提交 pid=0 时保留原父级，已有顶级权限继续保持 pid=0。
-func resolvePermissionUpdateParentID(currentPid int, requestPid int) int {
-	if requestPid > 0 || currentPid == 0 {
-		return requestPid
+// manageablePermissionItemIDSet 基于缓存权限树和角色权限缓存计算当前管理员可管理范围。
+func (l *AdminPermissionLogic) manageablePermissionItemIDSet(items []types.AdminPermissionItem) (map[int]struct{}, error) {
+	roleLogic := &AdminRoleLogic{BaseLogic: l.BaseLogic}
+	roleIDs, err := roleLogic.CurrentOperatorEnabledRoleIDs()
+	if err != nil {
+		return nil, errors.Tag(err)
 	}
-	return currentPid
+	isSuperRole := roleIDsContainSuper(roleIDs)
+	operatorPermissionSet := make(map[int]struct{})
+	if !isSuperRole {
+		for _, roleID := range roleIDs {
+			permissionIDs, err := roleLogic.RolePermissionIDsWithCache(roleID)
+			if err != nil {
+				return nil, errors.Tag(err)
+			}
+			for _, permissionID := range permissionIDs {
+				operatorPermissionSet[permissionID] = struct{}{}
+			}
+		}
+	}
+	result := make(map[int]struct{})
+	var walk func([]types.AdminPermissionItem)
+	walk = func(nodes []types.AdminPermissionItem) {
+		for _, item := range nodes {
+			if isSuperRole || permissionItemWithinScope(item, operatorPermissionSet) {
+				result[item.ID] = struct{}{}
+			}
+			walk(item.Children)
+		}
+	}
+	walk(items)
+	return result, nil
+}
+
+// permissionItemWithinScope 判断权限自身或任一祖先是否属于当前管理员权限集合。
+func permissionItemWithinScope(item types.AdminPermissionItem, permissionSet map[int]struct{}) bool {
+	if _, ok := permissionSet[item.ID]; ok {
+		return true
+	}
+	for _, parentIDText := range strings.Split(item.Pids, ",") {
+		parentID, err := strconv.Atoi(strings.TrimSpace(parentIDText))
+		if err != nil || parentID <= 0 {
+			continue
+		}
+		if _, ok := permissionSet[parentID]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // permissionParentChanged 判断权限编辑是否真实发生父级迁移。
@@ -609,22 +771,192 @@ func (l *AdminPermissionLogic) ensurePermissionParentWithinManageScope(parentPer
 	return l.ensurePermissionsWithinManageScope([]int{parentPermissionID})
 }
 
-// permissionPidsTx 在事务内计算权限族谱。
+// loadPermissionHierarchyTx 在指定数据库上下文中读取权限轻量层级快照。
+func (l *AdminPermissionLogic) loadPermissionHierarchyTx(tx *gorm.DB) ([]model.AdminPermission, error) {
+	var permissions []model.AdminPermission
+	if err := freshTxStatement(tx).Model(&model.AdminPermission{}).
+		Select("id, pid, pids, status").
+		Order("id ASC").
+		Find(&permissions).Error; err != nil {
+		return nil, errors.Wrap(err, "AdminPermissionLogic.loadPermissionHierarchyTx 查询权限层级失败")
+	}
+	return permissions, nil
+}
+
+// disabledPermissionPathID 按真实 pid 链返回目标权限路径上首个禁用节点。
+func disabledPermissionPathID(permissions []model.AdminPermission, permissionID int) (int, error) {
+	permissionByID := make(map[int]model.AdminPermission, len(permissions))
+	for _, permission := range permissions {
+		permissionByID[permission.ID] = permission
+	}
+	visited := make(map[int]struct{}, len(permissions))
+	for currentID := permissionID; currentID > 0; {
+		if _, ok := visited[currentID]; ok {
+			return 0, errors.Errorf("权限父级链存在循环 ID[%d]", currentID)
+		}
+		visited[currentID] = struct{}{}
+		permission, ok := permissionByID[currentID]
+		if !ok {
+			return 0, errors.Errorf("权限ID[%d]不存在", currentID)
+		}
+		if permission.Status != 1 {
+			return permission.ID, nil
+		}
+		currentID = permission.Pid
+	}
+	return 0, nil
+}
+
+// disabledPermissionPathID 从主库返回目标权限路径上首个禁用节点。
+func (l *AdminPermissionLogic) disabledPermissionPathID(permissionID int) (int, error) {
+	if permissionID <= 0 {
+		return 0, nil
+	}
+	permissions, err := l.loadPermissionHierarchyTx(l.Svc.WriteDB(svc.DatabaseMain))
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	return disabledPermissionPathID(permissions, permissionID)
+}
+
+// permissionPidsFromHierarchy 根据真实 pid 链生成权限族谱，并拒绝自引用或循环父级。
+func permissionPidsFromHierarchy(permissions []model.AdminPermission, pid int, selfID int) (string, error) {
+	if pid <= 0 {
+		return "", nil
+	}
+	permissionByID := make(map[int]model.AdminPermission, len(permissions))
+	for _, permission := range permissions {
+		permissionByID[permission.ID] = permission
+	}
+	ancestorIDs := make([]int, 0)
+	visited := make(map[int]struct{}, len(permissions))
+	for currentID := pid; currentID > 0; {
+		if currentID == selfID {
+			return "", errors.Errorf("父级权限不能是权限ID[%d]自身或其子级", selfID)
+		}
+		if _, ok := visited[currentID]; ok {
+			return "", errors.Errorf("权限父级链存在循环 ID[%d]", currentID)
+		}
+		visited[currentID] = struct{}{}
+		permission, ok := permissionByID[currentID]
+		if !ok {
+			return "", errors.Errorf("父级权限ID[%d]不存在", currentID)
+		}
+		ancestorIDs = append(ancestorIDs, currentID)
+		currentID = permission.Pid
+	}
+	for left, right := 0, len(ancestorIDs)-1; left < right; left, right = left+1, right-1 {
+		ancestorIDs[left], ancestorIDs[right] = ancestorIDs[right], ancestorIDs[left]
+	}
+	parts := make([]string, 0, len(ancestorIDs))
+	for _, permissionID := range ancestorIDs {
+		parts = append(parts, strconv.Itoa(permissionID))
+	}
+	return strings.Join(parts, ","), nil
+}
+
+// descendantPermissionPids 根据 pid 邻接关系重建指定权限全部子孙的族谱。
+func descendantPermissionPids(permissions []model.AdminPermission, rootID int) (map[int]string, error) {
+	permissionByID := make(map[int]model.AdminPermission, len(permissions))
+	childrenByPID := make(map[int][]int, len(permissions))
+	for _, permission := range permissions {
+		permissionByID[permission.ID] = permission
+		childrenByPID[permission.Pid] = append(childrenByPID[permission.Pid], permission.ID)
+	}
+	root, ok := permissionByID[rootID]
+	if !ok {
+		return nil, errors.Errorf("权限ID[%d]不存在", rootID)
+	}
+	result := make(map[int]string)
+	visited := map[int]struct{}{rootID: {}}
+	var walk func(parentID int, parentPids string) error
+	walk = func(parentID int, parentPids string) error {
+		for _, childID := range childrenByPID[parentID] {
+			if _, ok := visited[childID]; ok {
+				return errors.Errorf("权限子树存在循环 ID[%d]", childID)
+			}
+			visited[childID] = struct{}{}
+			childPids := corelogic.BuildTreePids(parentID, parentPids)
+			result[childID] = childPids
+			if err := walk(childID, childPids); err != nil {
+				return errors.Tag(err)
+			}
+		}
+		return nil
+	}
+	if err := walk(root.ID, root.Pids); err != nil {
+		return nil, errors.Tag(err)
+	}
+	return result, nil
+}
+
+// permissionPidsTx 在事务内按真实 pid 链计算权限族谱。
 func (l *AdminPermissionLogic) permissionPidsTx(tx *gorm.DB, pid int, selfID int) (string, error) {
 	if pid <= 0 {
 		return "", nil
 	}
-	if pid == selfID {
-		return "", errors.Errorf("AdminPermissionLogic.permissionPidsTx 父级权限不能是自己 pid=%d selfID=%d", pid, selfID)
+	permissions, err := l.loadPermissionHierarchyTx(tx)
+	if err != nil {
+		return "", errors.Tag(err)
 	}
-	var parent model.AdminPermission
-	if err := tx.Where("id = ?", pid).First(&parent).Error; err != nil {
-		return "", errors.Wrapf(err, "AdminPermissionLogic.permissionPidsTx 查询父级权限ID[%d]失败", pid)
+	pids, err := permissionPidsFromHierarchy(permissions, pid, selfID)
+	if err != nil {
+		return "", errors.Wrapf(err, "AdminPermissionLogic.permissionPidsTx 计算父级权限ID[%d]族谱失败", pid)
 	}
-	if corelogic.ContainsTreeID(parent.Pids, selfID) {
-		return "", errors.Errorf("AdminPermissionLogic.permissionPidsTx 不能把权限移动到自己的子级下面 pid=%d selfID=%d", pid, selfID)
+	return pids, nil
+}
+
+// syncPermissionDescendantPidsTx 在权限换父级后同步更新全部子孙族谱。
+func (l *AdminPermissionLogic) syncPermissionDescendantPidsTx(tx *gorm.DB, permissionID int) error {
+	permissions, err := l.loadPermissionHierarchyTx(tx)
+	if err != nil {
+		return errors.Tag(err)
 	}
-	return corelogic.BuildTreePids(parent.ID, parent.Pids), nil
+	nextPids, err := descendantPermissionPids(permissions, permissionID)
+	if err != nil {
+		return errors.Wrapf(err, "AdminPermissionLogic.syncPermissionDescendantPidsTx 重建权限ID[%d]子树族谱失败", permissionID)
+	}
+	currentPids := make(map[int]string, len(permissions))
+	permissionIDs := make([]int, 0, len(nextPids))
+	for _, permission := range permissions {
+		currentPids[permission.ID] = permission.Pids
+		if _, ok := nextPids[permission.ID]; ok {
+			permissionIDs = append(permissionIDs, permission.ID)
+		}
+	}
+	sort.Ints(permissionIDs)
+	updatedAt := time.Now()
+	for _, descendantPermissionID := range permissionIDs {
+		pids := nextPids[descendantPermissionID]
+		if currentPids[descendantPermissionID] == pids {
+			continue
+		}
+		if err := freshTxStatement(tx).Model(&model.AdminPermission{}).
+			Where("id = ?", descendantPermissionID).
+			Updates(map[string]any{"pids": pids, "updated_at": updatedAt}).Error; err != nil {
+			return errors.Wrapf(err, "AdminPermissionLogic.syncPermissionDescendantPidsTx 更新权限ID[%d]族谱失败", descendantPermissionID)
+		}
+	}
+	return nil
+}
+
+// permissionSubtreeIDs 按真实 pid 邻接关系返回权限自身及全部子孙 ID。
+func (l *AdminPermissionLogic) permissionSubtreeIDs(permissionID int) ([]int, error) {
+	permissions, err := l.loadPermissionHierarchyTx(l.Svc.WriteDB(svc.DatabaseMain))
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	descendantPids, err := descendantPermissionPids(permissions, permissionID)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	permissionIDs := make([]int, 0, len(descendantPids)+1)
+	permissionIDs = append(permissionIDs, permissionID)
+	for descendantPermissionID := range descendantPids {
+		permissionIDs = append(permissionIDs, descendantPermissionID)
+	}
+	sort.Ints(permissionIDs)
+	return permissionIDs, nil
 }
 
 // ensurePermissionUUIDUniqueTx 校验权限 UUID 唯一。
@@ -644,11 +976,17 @@ func (l *AdminPermissionLogic) ensurePermissionUUIDUniqueTx(tx *gorm.DB, uuid st
 }
 
 // nextPermissionUUID 根据当前最大数字 UUID 生成下一个权限 UUID。
-func (l *AdminPermissionLogic) nextPermissionUUID() string {
+func (l *AdminPermissionLogic) nextPermissionUUID() (string, error) {
+	if l == nil || l.Svc == nil {
+		return "", errors.Errorf("权限数据库未初始化")
+	}
+	db := l.Svc.WriteDB(svc.DatabaseMain)
+	if db == nil {
+		return "", errors.Errorf("权限数据库未初始化")
+	}
 	var uuids []string
-	if err := l.Svc.ReadDB(svc.DatabaseMain).Model(&model.AdminPermission{}).Pluck("uuid", &uuids).Error; err != nil {
-		corelogic.LogWrappedError(l, err, "AdminPermissionLogic.nextPermissionUUID 查询最大UUID失败")
-		return "100001"
+	if err := db.Model(&model.AdminPermission{}).Pluck("uuid", &uuids).Error; err != nil {
+		return "", errors.Wrap(err, "AdminPermissionLogic.nextPermissionUUID 查询最大UUID失败")
 	}
 	maxValue := 100000
 	for _, uuid := range uuids {
@@ -660,78 +998,23 @@ func (l *AdminPermissionLogic) nextPermissionUUID() string {
 			maxValue = value
 		}
 	}
-	return fmt.Sprintf("%06d", maxValue+1)
+	return fmt.Sprintf("%06d", maxValue+1), nil
 }
 
-// refreshPermissionRelatedCache 清理权限相关缓存，确保下次读取重建最新权限数据。
-func (l *AdminPermissionLogic) refreshPermissionRelatedCache(routeAliases ...string) {
-	manager, err := cachelogic.TableCacheManager(l.BaseLogic)
-	if err != nil {
-		corelogic.LogWrappedError(l, err, "AdminPermissionLogic.refreshPermissionRelatedCache 初始化表缓存管理器失败")
-		manager = nil
+// refreshPermissionRelatedCache 清理权限树、共享权限索引和受影响角色权限关系缓存。
+func (l *AdminPermissionLogic) refreshPermissionRelatedCache(roleIDs ...int) error {
+	coreKeys := []string{keys.PermissionTree, keys.RoutePermissionIDs, keys.PermissionUUID}
+	for _, roleID := range types.UniquePositiveInts(roleIDs) {
+		coreKeys = append(coreKeys, fmt.Sprintf(keys.RolePermission, roleID))
 	}
-	coreKeys := []string{keys.PermissionTree, keys.PermissionModule, keys.PermissionUUID}
-	if manager != nil {
-		for _, key := range coreKeys {
-			physicalKey := cachelogic.TableCachePhysicalKey(l.BaseLogic, key)
-			if err := manager.DeleteByKey(l.Ctx, physicalKey); err != nil && !cachelogic.IsTableCacheTargetNotFound(err) {
-				corelogic.LogWrappedError(l, err, "AdminPermissionLogic.refreshPermissionRelatedCache 清理权限缓存key[%s]失败", key)
-			}
-		}
-	}
-	cachelogic.DeleteRedisKeysExactBatches(l.BaseLogic, "AdminPermissionLogic.refreshPermissionRelatedCache 删除权限核心缓存", cachelogic.TableCachePhysicalKeys(l.BaseLogic, coreKeys...))
-	l.deleteRoutePermissionCandidateCache(routeAliases...)
-	cachelogic.InvalidateAllRolePermissionCache(l.BaseLogic)
-	cachelogic.InvalidateAllAdminPermissionCache(l.BaseLogic)
+	return cachelogic.DeleteTableCacheKeysExact(
+		l.BaseLogic,
+		"AdminPermissionLogic.refreshPermissionRelatedCache 删除权限缓存",
+		cachelogic.TableCachePhysicalKeys(l.BaseLogic, coreKeys...),
+	)
 }
 
-// RefreshPermissionRelatedCache 清理权限树、角色权限、管理员权限和路由候选权限缓存。
-func (l *AdminPermissionLogic) RefreshPermissionRelatedCache(routeAliases ...string) {
-	l.refreshPermissionRelatedCache(routeAliases...)
-}
-
-// deleteRoutePermissionCandidateCache 精确删除路由候选权限缓存，避免使用通配前缀 SCAN。
-func (l *AdminPermissionLogic) deleteRoutePermissionCandidateCache(routeAliases ...string) {
-	aliases := l.routePermissionCandidateAliases(routeAliases...)
-	cacheKeys := make([]string, 0, len(aliases)+1)
-	for _, alias := range aliases {
-		cacheKeys = append(cacheKeys, fmt.Sprintf(keys.RoutePermissionIDs, alias))
-	}
-	cacheKeys = append(cacheKeys, keys.RoutePermissionAliasIndex)
-	cachelogic.DeleteRedisKeysExactBatches(l.BaseLogic, "AdminPermissionLogic.deleteRoutePermissionCandidateCache 删除路由候选权限缓存", cachelogic.TableCachePhysicalKeys(l.BaseLogic, cacheKeys...))
-}
-
-// routePermissionCandidateAliases 合并显式变更模块、已访问索引和当前权限模块，覆盖正向与空值缓存。
-func (l *AdminPermissionLogic) routePermissionCandidateAliases(routeAliases ...string) []string {
-	aliases := make([]string, 0, len(routeAliases))
-	aliases = append(aliases, routeAliases...)
-	if l.Redis() != nil {
-		for _, indexKey := range cachelogic.TableCachePhysicalKeys(l.BaseLogic, keys.RoutePermissionAliasIndex) {
-			indexedAliases, err := l.Redis().SMembers(l.Ctx, indexKey).Result()
-			if err != nil {
-				corelogic.LogWrappedError(l, err, "AdminPermissionLogic.routePermissionCandidateAliases 读取路由候选权限索引失败 key=%s", indexKey)
-				continue
-			}
-			aliases = append(aliases, indexedAliases...)
-		}
-	}
-	readDB, err := cachelogic.TableCacheReadDB(l.BaseLogic, svc.DatabaseMain, "main")
-	if err != nil {
-		corelogic.LogWrappedError(l, err, "AdminPermissionLogic.routePermissionCandidateAliases 获取admin读库失败")
-		return helper.UniqueNonEmptyStrings(aliases)
-	}
-	var modules []string
-	// 当前启用权限 module 可枚举出正在使用的路由候选缓存；显式参数负责覆盖被删除或被禁用的原 module。
-	if err := readDB.WithContext(l.Ctx).
-		Model(&model.AdminPermission{}).
-		Select("module").
-		Where("status = 1").
-		Where("module <> ''").
-		Order("id ASC").
-		Pluck("module", &modules).Error; err != nil {
-		corelogic.LogWrappedError(l, err, "AdminPermissionLogic.routePermissionCandidateAliases 查询启用权限模块失败")
-		return helper.UniqueNonEmptyStrings(aliases)
-	}
-	aliases = append(aliases, modules...)
-	return helper.UniqueNonEmptyStrings(aliases)
+// RefreshPermissionRelatedCache 清理权限树、共享权限索引和指定角色权限关系缓存。
+func (l *AdminPermissionLogic) RefreshPermissionRelatedCache(roleIDs ...int) error {
+	return l.refreshPermissionRelatedCache(roleIDs...)
 }

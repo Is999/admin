@@ -11,6 +11,8 @@
 - 需求或问题表述不充分、存在多种解释、目标仓库/入口不清或涉及接口、数据、权限、安全、大表、缓存、迁移时，必须先结合代码和文档说明理解、证据、待确认点和执行边界；未经确认不得直接落代码。
 - 优先延续当前项目模式和现有分层；遇到成熟通用能力、高风险基础设施或手写实现容易出错的场景，必须先检查现有实现和成熟依赖/框架。确需新增抽象、目录、框架或依赖时，先说明必要性、收益、替代方案、影响范围和验证方式，并让开发确认后再落地。
 - 代码必须简洁、逻辑清晰、命名统一、边界明确、易读易维护；合理封装必须服务于降低真实复杂度、复用稳定边界或隔离外部依赖，不能过度封装破坏清晰性。
+- 在业务正确和生产闭环前提下，简洁、逻辑清晰、易读、易维护和高性能是最高优先级；性能先看热路径的 I/O、扫描范围和分配，不用难读的微优化处理冷路径。
+- 每个 helper、interface、wrapper、状态和分支都必须解决当前已证明的问题；未上线且确认无调用方的兼容逻辑直接删除，租约、幂等和原子状态迁移等真实并发边界保持最小且可测试。
 - 代码注释、配置注释和文档说明必须简洁清晰；不能啰嗦堆砌，也不能含糊到无法指导排障或维护。
 - 重构必须保证原有能力不遗漏，并说明迁移后的入口、影响范围和验证方式。
 - 需求任务及其拆解出的每个小任务必须按真实入口、调用链和交付面闭环完成；禁止只搭骨架、只写样例、只实现基础能力、单一分支或 happy path 后宣称完成。确因依赖、权限、环境或风险无法完成时，必须在交付说明中明确未完成项、阻塞原因、影响范围和下一步处理方式。
@@ -51,7 +53,7 @@
 - 所有新增或调整的 SQL 都必须先评估执行计划、索引、基数、返回行数和目标库压力；禁止用历史遗留 SQL 风格代替性能评估。
 - 原生 SQL 必须保存为 `*.sql.tmpl` 并通过 `go:embed` 加载；禁止在 Go 业务代码中内联多行 SQL、`fmt.Sprintf("SELECT ...")` 或模板外 `Exec("RENAME TABLE ...")`。
 - `.lua` 是 `go:embed` 加载的 Redis Lua 脚本代码资产，必须提交仓库；禁止在 Go 业务代码中使用 `redis.NewScript(...)` 内联 Lua。
-- 文档权限是集中 seed 契约：新增或删除 Markdown 文档时，只同步 `internal/database/assets/document_permission_seed.sql`、`internal/routealias/docs.go` 和文档导航；禁止新增 `document_permission_*.sql` 或 `sync_document_permission_*` 迁移文件。已上线环境需要在发布单中手动执行新增 `INSERT IGNORE` 并刷新权限缓存。
+- 文档权限采用双表基线：入口保留在 `admin_permission.sql`，单篇正文使用 `admin_doc_permission.sql` 的 `site + path`，角色关系使用 `admin_role_doc_permission_rel.sql`。新增或删除 Markdown 时同步 `internal/routealias/docs.go` 和文档导航；未上线阶段直接更新基线资产，不追加增量迁移。
 - SQL seed 如果显式保留自增主键 `id`，新增行必须按 `id` 递增放在对应位置，不能为了贴近同类业务行插入到中间。
 - 新增或移动 `*.sql.tmpl`、`.lua` 时，必须同步检查 Go 侧 `//go:embed`、渲染方法和最小单测。
 - Go 调用侧必须使用 `embedasset.StripLeadingLineComments(template, "--")` 或当前包 helper 剥离文件头说明，再交给 MySQL、ClickHouse 或 Redis 执行。
@@ -112,12 +114,13 @@ loggerx.Infow(ctx, "工作流节点开始处理",
 
 ## 7. 接口与业务码规范
 
-- API 响应必须使用统一结构：`status/code/message/data`。
+- API 响应必须使用统一结构：`status/code/message/data/traceId/spanId`。
 - 不同业务错误必须返回不同业务码；业务码要表达上下文和失败节点，但 `message` 不能暴露 SQL、密钥、内部表名或真实下游错误。
 - 新增业务码必须补中文和英文文案。
 - 新增接口必须补接口文档，文档格式遵循 [接口文档统一规范](接口文档/接口文档统一规范.md)。
 - 新增路由必须补 `RouteMeta`、审计动作和中文说明；需要权限控制的路由必须补权限码。
 - 路由别名被 `RouteMeta`、签名/加密策略、权限白名单、强制改密或 MFA 放行列表复用时，必须先收口到 `internal/routealias` 常量，禁止在多处重复写字符串。
+- 内网路由必须使用 `/internal/` 前缀和 `RouteAccessInternal`，只注册到独立 `internal_server`；必须校验 Ops HMAC 与 Redis nonce 防重放，生产跨主机链路使用 mTLS。
 - 健康探针或高频轮询接口如需跳过普通访问日志，必须在模块 `RouteSpecs()` 设置 `SkipAccessLog`，真实注册和 `RouteContract` 会从规格派生；禁止在访问日志中间件里追加路径白名单。
 - 仅 token 白名单路由可不配置权限码，但必须写清白名单原因和 token 校验边界，例如个人收件箱能力、`/api/permissions/max-uuid`。
 - 接口文档如果发现与代码不一致，必须同步修正，不能继续保留误导性描述。

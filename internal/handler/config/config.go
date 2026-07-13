@@ -2,9 +2,11 @@ package config
 
 import (
 	"admin/internal/handler/shared"
+	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/Is999/go-utils/errors"
@@ -119,6 +121,7 @@ func ExportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
 			return
 		}
+		defer os.Remove(filePath)
 		if logMeta != nil {
 			logicObj.AddAdminLog(logMeta.Action, logMeta.Route, logMeta.Method, logMeta.Describe, &req)
 		}
@@ -134,6 +137,67 @@ func ExportSysConfigExcelHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			resp.WithReq(&req)
 			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
 		}
+	}
+}
+
+// PrepareSysConfigExcelBackupHandler 生成并持久化字典导入前全量备份。
+func PrepareSysConfigExcelBackupHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionLogHandler(shared.SysConfigImport, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+		var req types.SysConfigExcelBackupReq
+		if err := httpx.Parse(r, &req); err != nil {
+			return nil, types.ParamErrorResult(err)
+		}
+		logicObj := configlogic.NewSysConfigLogic(r, sCtx)
+		resp := logicObj.PrepareImportBackup(&req)
+		resp.WithReq(&req)
+		return logicObj, resp
+	})
+}
+
+// DownloadSysConfigExcelBackupHandler 下载当前管理员生成的字典导入前备份。
+func DownloadSysConfigExcelBackupHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.SysConfigExcelBackupDownloadReq
+		if err := httpx.Parse(r, &req); err != nil {
+			shared.WriteBizResponse(w, r, nil, types.ParamErrorResult(err), nil)
+			return
+		}
+		logicObj := configlogic.NewSysConfigLogic(r, sCtx)
+		logMeta := shared.ActionLogParamFromMeta(shared.SysConfigImport)
+		objectStream, fileName, resp := logicObj.OpenImportBackup(&req, r.Header.Get("Range"))
+		if resp != nil {
+			resp.WithReq(&req)
+			shared.WriteBizResponse(w, r, logicObj, resp, logMeta)
+			return
+		}
+		defer objectStream.Reader.Close()
+		rangeHeader := strings.TrimSpace(r.Header.Get("Range"))
+		streamReader := io.Reader(objectStream.Reader)
+		if rangeHeader == "" {
+			// 隐藏本地文件的 Seek 能力，使完整下载直接写入真实 ResponseWriter 并保留客户端断开错误。
+			streamReader = bufio.NewReader(objectStream.Reader)
+		}
+		if err := transfer.ServeStream(
+			w,
+			r,
+			streamReader,
+			fileName,
+			objectStream.ContentType,
+			objectStream.ContentLength,
+			"attachment",
+			objectStream.AcceptRanges,
+			objectStream.ContentRange,
+		); err != nil {
+			// 响应头或文件内容可能已经写出，此时不能再拼接 JSON 错误体污染下载文件。
+			logicObj.Errorf("输出字典备份[%s]失败: %v", req.BackupID, err)
+			return
+		}
+		if rangeHeader == "" {
+			if err := logicObj.MarkImportBackupDownloaded(req.BackupID); err != nil {
+				logicObj.Errorf("标记字典备份[%s]下载完成失败: %v", req.BackupID, err)
+			}
+		}
+		logicObj.AddAdminLog(logMeta.Action, logMeta.Route, logMeta.Method, logMeta.Describe, &req)
 	}
 }
 

@@ -12,22 +12,17 @@ func TestNewDefaultsStartsFromSinglePhysicalResultShard(t *testing.T) {
 	if got.ShardTotal != 1 {
 		t.Fatalf("ShardTotal=%d want=1", got.ShardTotal)
 	}
-	if got.RuntimeShardTotal != 1024 {
-		t.Fatalf("RuntimeShardTotal=%d want=1024", got.RuntimeShardTotal)
-	}
 	if got.ResultShardTotal != 1 {
 		t.Fatalf("ResultShardTotal=%d want=1", got.ResultShardTotal)
 	}
 }
 
-// TestNewDefaultsKeepsConfiguredPhysicalResultShard 验证显式物理分表配置仍可平滑扩容。
-func TestNewDefaultsKeepsConfiguredPhysicalResultShard(t *testing.T) {
+// TestNewDefaultsKeepsLogicalResultTable 验证工作分片数不会改变 Proxy 逻辑结果表。
+func TestNewDefaultsKeepsLogicalResultTable(t *testing.T) {
 	got := NewDefaults(config.UserTagConfig{
 		DefaultShardTotal: 8,
-		RuntimeShardTotal: 1024,
-		ResultShardTotal:  128,
 	})
-	if got.ShardTotal != 8 || got.RuntimeShardTotal != 1024 || got.ResultShardTotal != 128 {
+	if got.ShardTotal != 8 || got.ResultShardTotal != 1 {
 		t.Fatalf("unexpected defaults: %+v", got)
 	}
 }

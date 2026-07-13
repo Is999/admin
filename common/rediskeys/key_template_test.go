@@ -20,8 +20,8 @@ func TestKeyTemplatePrefix(t *testing.T) {
 		},
 		{
 			name:     "printf placeholder",
-			template: "admin_permission_ids:%d",
-			want:     "admin_permission_ids:",
+			template: "role_permission:%d",
+			want:     "role_permission:",
 		},
 		{
 			name:     "mixed placeholders",

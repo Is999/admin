@@ -6,6 +6,8 @@ import (
 	"admin/internal/jobs/usertag/repository"
 	"admin/internal/jobs/usertag/runtimectx"
 	"admin/internal/jobs/usertag/types"
+
+	"github.com/Is999/go-utils/errors"
 )
 
 // PrepareStage 负责清理当前工作流运行期状态，并在 full 模式清空预建临时表。
@@ -29,6 +31,9 @@ func (s *PrepareStage) Plans(ctx *runtimectx.Context) ([]queryplan.Plan, error) 
 
 // Run 执行准备阶段。
 func (s *PrepareStage) Run(ctx *runtimectx.Context, plans map[string]any) (Result, error) {
+	if err := requireSkeletonDryRun(ctx); err != nil {
+		return Result{}, errors.Tag(err)
+	}
 	if err := s.repo.ResetRuntimeState(ctx.Context, ctx.WorkflowID()); err != nil {
 		return Result{}, ctx.Wrap(err, "清理运行期状态失败")
 	}
@@ -56,6 +61,9 @@ func (s *FinalizeStage) Plans(ctx *runtimectx.Context) ([]queryplan.Plan, error)
 
 // Run 执行最终提交。
 func (s *FinalizeStage) Run(ctx *runtimectx.Context, plans map[string]any) (Result, error) {
+	if err := requireSkeletonDryRun(ctx); err != nil {
+		return Result{}, errors.Tag(err)
+	}
 	if err := s.repo.FinalizeResultTables(ctx.Context, ctx.Options); err != nil {
 		return Result{}, ctx.Wrap(err, "切换最终标签表失败")
 	}
@@ -80,6 +88,9 @@ func (s *DispatchHooksStage) Plans(ctx *runtimectx.Context) ([]queryplan.Plan, e
 
 // Run 执行当前分片事件 hook 派发。
 func (s *DispatchHooksStage) Run(ctx *runtimectx.Context, plans map[string]any) (Result, error) {
+	if err := requireSkeletonDryRun(ctx); err != nil {
+		return Result{}, errors.Tag(err)
+	}
 	if !ctx.Options.EventHookEnabled {
 		return Result{Skipped: true}, nil
 	}

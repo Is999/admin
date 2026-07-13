@@ -5,9 +5,7 @@ import "admin/internal/config"
 const (
 	// defaultShardTotal 是用户标签工作流默认任务分片数。
 	defaultShardTotal = 1
-	// defaultRuntimeShardTotal 是运行期 UID 索引默认逻辑分片数。
-	defaultRuntimeShardTotal = 1024
-	// defaultResultShardTotal 是用户标签结果表默认物理分表数。
+	// defaultResultShardTotal 是主线逻辑结果表的固定数量。
 	defaultResultShardTotal = 1
 	// defaultBatchSize 是默认游标批次大小。
 	defaultBatchSize = 2000
@@ -21,27 +19,25 @@ const (
 
 // Defaults 定义 usertag 运行默认值。
 type Defaults struct {
-	ShardTotal        int  // 工作流默认分片数
-	RuntimeShardTotal int  // 运行期 UID 索引分片数
-	ResultShardTotal  int  // 标签结果物理分表数
-	BatchSize         int  // 游标扫描批次大小
-	WorkerCount       int  // 节点内部 worker 数
-	DiffBatchSize     int  // 标签差异处理批次大小
-	EventBatchSize    int  // 事件 outbox 派发批次大小
-	EventHookEnabled  bool // 是否启用用户标签事件 hook
+	ShardTotal       int  // 工作流默认分片数
+	ResultShardTotal int  // 逻辑结果表数量
+	BatchSize        int  // 游标扫描批次大小
+	WorkerCount      int  // 节点内部 worker 数
+	DiffBatchSize    int  // 标签差异处理批次大小
+	EventBatchSize   int  // 事件 outbox 派发批次大小
+	EventHookEnabled bool // 是否启用用户标签事件 hook
 }
 
 // NewDefaults 根据全局用户标签配置构造 默认值。
 func NewDefaults(cfg config.UserTagConfig) Defaults {
 	return Defaults{
-		ShardTotal:        boundedPositiveOr(cfg.DefaultShardTotal, defaultShardTotal, MaxShardTotal),
-		RuntimeShardTotal: boundedPositiveOr(cfg.RuntimeShardTotal, defaultRuntimeShardTotal, MaxPhysicalShardTotal),
-		ResultShardTotal:  boundedPositiveOr(cfg.ResultShardTotal, defaultResultShardTotal, MaxPhysicalShardTotal),
-		BatchSize:         boundedPositiveOr(cfg.DefaultBatchSize, defaultBatchSize, MaxBatchSize),
-		WorkerCount:       boundedPositiveOr(cfg.DefaultWorkerCount, defaultWorkerCount, MaxWorkerCount),
-		DiffBatchSize:     boundedPositiveOr(cfg.DiffBatchSize, defaultDiffBatchSize, MaxBatchSize),
-		EventBatchSize:    boundedPositiveOr(cfg.EventBatchSize, defaultEventBatchSize, MaxBatchSize),
-		EventHookEnabled:  cfg.EventHookEnabled,
+		ShardTotal:       boundedPositiveOr(cfg.DefaultShardTotal, defaultShardTotal, MaxShardTotal),
+		ResultShardTotal: defaultResultShardTotal,
+		BatchSize:        boundedPositiveOr(cfg.DefaultBatchSize, defaultBatchSize, MaxBatchSize),
+		WorkerCount:      boundedPositiveOr(cfg.DefaultWorkerCount, defaultWorkerCount, MaxWorkerCount),
+		DiffBatchSize:    boundedPositiveOr(cfg.DiffBatchSize, defaultDiffBatchSize, MaxBatchSize),
+		EventBatchSize:   boundedPositiveOr(cfg.EventBatchSize, defaultEventBatchSize, MaxBatchSize),
+		EventHookEnabled: cfg.EventHookEnabled,
 	}
 }
 

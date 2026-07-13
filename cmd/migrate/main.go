@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
+	keys "admin/common/rediskeys"
 	"admin/common/runtimecfg"
 	"admin/internal/bootstrap"
 	"admin/internal/config"
@@ -15,7 +17,9 @@ import (
 	mysqlx "admin/internal/infra/mysql"
 	"admin/internal/infra/redisx"
 	corelogic "admin/internal/logic"
+	cachelogic "admin/internal/logic/cache"
 	rbaclogic "admin/internal/logic/rbac"
+	"admin/internal/model"
 	"admin/internal/svc"
 
 	"github.com/Is999/go-utils/errors"
@@ -29,6 +33,10 @@ const (
 	actionDryRun = "dry-run"
 	// actionUp 执行未完成迁移。
 	actionUp = "up"
+	// migrationLockName 与 API 共用迁移锁，避免同实例并发修改库结构。
+	migrationLockName = "app:schema-migration"
+	// migrationLockWait 限制发布任务等待已有迁移结束的时间。
+	migrationLockWait = time.Minute
 )
 
 // migrationCommandOptions 表示迁移命令行参数。
@@ -101,10 +109,15 @@ func run(ctx context.Context, options migrationCommandOptions, output io.Writer)
 		}
 	}()
 
-	results, err := database.RunMigrations(ctx, database.NewGormMigrationStore(db), database.DefaultMigrations(), database.MigrationRunOptions{
-		DryRun:           resolvedAction != actionUp,
-		AllowBootstrap:   options.AllowBootstrap,
-		AllowDestructive: options.AllowDestructive,
+	var results []database.MigrationRunItem
+	err = database.WithMigrationLock(ctx, sqlDB, migrationLockName, migrationLockWait, func() error {
+		var runErr error
+		results, runErr = database.RunMigrations(ctx, database.NewGormMigrationStore(db), database.DefaultMigrations(), database.MigrationRunOptions{
+			DryRun:           resolvedAction != actionUp,
+			AllowBootstrap:   options.AllowBootstrap,
+			AllowDestructive: options.AllowDestructive,
+		})
+		return errors.Tag(runErr)
 	})
 	if printErr := printResults(output, results); printErr != nil {
 		return errors.Wrap(printErr, "输出迁移结果失败")
@@ -112,12 +125,12 @@ func run(ctx context.Context, options migrationCommandOptions, output io.Writer)
 	if err != nil {
 		return errors.Tag(err)
 	}
-	if permissionCacheRefreshRequired(resolvedAction, results) {
-		if err := refreshPermissionCacheAfterMigration(ctx, cfg, db); err != nil {
-			return errors.Wrap(err, "刷新权限缓存失败")
+	if authorizationCacheRefreshRequired(resolvedAction, results) {
+		if err := refreshAuthorizationCacheAfterMigration(ctx, cfg, db); err != nil {
+			return errors.Wrap(err, "刷新鉴权缓存失败")
 		}
-		if _, err := fmt.Fprintln(output, "权限缓存已刷新：permission_related"); err != nil {
-			return errors.Wrap(err, "输出权限缓存刷新结果失败")
+		if _, err := fmt.Fprintln(output, "鉴权缓存已刷新：authorization_related"); err != nil {
+			return errors.Wrap(err, "输出鉴权缓存刷新结果失败")
 		}
 	}
 	return nil
@@ -155,8 +168,8 @@ func printResults(output io.Writer, results []database.MigrationRunItem) error {
 	return nil
 }
 
-// permissionCacheRefreshRequired 判断本轮迁移是否需要刷新权限缓存。
-func permissionCacheRefreshRequired(action string, results []database.MigrationRunItem) bool {
+// authorizationCacheRefreshRequired 判断本轮迁移是否需要刷新鉴权缓存。
+func authorizationCacheRefreshRequired(action string, results []database.MigrationRunItem) bool {
 	if action != actionUp {
 		return false
 	}
@@ -164,30 +177,34 @@ func permissionCacheRefreshRequired(action string, results []database.MigrationR
 		if item.Status != database.MigrationStatusExecuted && item.Status != database.MigrationStatusApplied {
 			continue
 		}
-		if isPermissionDataMigration(item) {
+		if isAuthorizationDataMigration(item) {
 			return true
 		}
 	}
 	return false
 }
 
-// isPermissionDataMigration 判断迁移是否会影响权限定义或角色授权关系。
-func isPermissionDataMigration(item database.MigrationRunItem) bool {
+// isAuthorizationDataMigration 判断迁移是否会影响路由或文档权限定义。
+func isAuthorizationDataMigration(item database.MigrationRunItem) bool {
 	switch strings.TrimSpace(item.Name) {
-	case "sync_document_permissions":
+	case "bootstrap_admin_permission", "bootstrap_admin_doc_permission":
 		return true
 	}
 	switch strings.TrimSpace(item.Asset) {
-	case "document_permission_seed.sql":
+	case "admin_permission.sql", "admin_doc_permission.sql":
 		return true
 	}
 	return false
 }
 
-// refreshPermissionCacheAfterMigration 复用权限领域刷新逻辑，避免迁移补权后继续命中旧缓存。
-func refreshPermissionCacheAfterMigration(ctx context.Context, cfg config.Config, db *gorm.DB) (err error) {
+// refreshAuthorizationCacheAfterMigration 清理路由与文档权限共享索引，避免迁移后继续命中旧缓存。
+func refreshAuthorizationCacheAfterMigration(ctx context.Context, cfg config.Config, db *gorm.DB) (err error) {
 	if db == nil {
 		return errors.Errorf("MySQL 连接不能为空")
+	}
+	var roleIDs []int
+	if err = db.Model(&model.AdminRole{}).Pluck("id", &roleIDs).Error; err != nil {
+		return errors.Wrap(err, "查询角色 ID 失败")
 	}
 	restoreRuntimeConfig := publishMigrationRuntimeConfig(cfg)
 	defer restoreRuntimeConfig()
@@ -209,7 +226,19 @@ func refreshPermissionCacheAfterMigration(ctx context.Context, cfg config.Config
 	logicObj := &rbaclogic.AdminPermissionLogic{
 		BaseLogic: corelogic.NewBaseLogicWithContext(ctx, svcCtx),
 	}
-	logicObj.RefreshPermissionRelatedCache()
+	routeCacheErr := logicObj.RefreshPermissionRelatedCache(roleIDs...)
+	docCacheKeys := []string{keys.DocPermissionList, keys.DocResourcePermissionID}
+	for _, roleID := range roleIDs {
+		docCacheKeys = append(docCacheKeys, fmt.Sprintf(keys.RoleDocPermission, roleID))
+	}
+	docCacheErr := cachelogic.DeleteTableCacheKeysExact(
+		logicObj.BaseLogic,
+		"refreshAuthorizationCacheAfterMigration 删除文档权限缓存",
+		cachelogic.TableCachePhysicalKeys(logicObj.BaseLogic, docCacheKeys...),
+	)
+	if cacheErr := errors.Join(routeCacheErr, docCacheErr); cacheErr != nil {
+		return errors.Wrap(cacheErr, "清理路由与文档权限缓存失败")
+	}
 	return nil
 }
 

@@ -30,13 +30,19 @@ func newHTTPServer() core.Component {
 		if err != nil {
 			return errors.Wrapf(err, "创建 HTTP 服务失败 host=%s port=%d", restConf.Host, restConf.Port)
 		}
+		internalServer, err := newInternalServer(state.Config)
+		if err != nil {
+			return errors.Tag(err)
+		}
 		// HTTP 路由模块从统一规格解析，handler 只负责按给定模块完成注册。
 		routeModules := handler.ComposeRouteModules(handler.BuiltinRouteModules(), state.RouteModules)
 		if err := register.ValidateNamesUnique(register.KindRoute, register.RouteModuleNames(routeModules)); err != nil {
 			return errors.Tag(err)
 		}
-		handler.RegisterHandlersWithModules(server, state.ServiceContext, routeModules...)
+		handler.RegisterPublicHandlersWithModules(server, state.ServiceContext, routeModules...)
+		handler.RegisterInternalHandlersWithModules(internalServer, state.ServiceContext, routeModules...)
 		state.Server = server
+		state.InternalServer = internalServer
 		return nil
 	})
 }

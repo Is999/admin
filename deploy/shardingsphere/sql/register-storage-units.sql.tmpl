@@ -1,0 +1,17 @@
+-- 必须通过 Proxy 管理账号执行；口令由发布系统在执行时注入，禁止提交真实值。
+CREATE DATABASE `__LOGICAL_DATABASE__`;
+USE `__LOGICAL_DATABASE__`;
+
+REGISTER STORAGE UNIT ds_0 (
+  URL="jdbc:mysql://__DS0_HOST__:__DS0_PORT__/__DS0_DATABASE__?serverTimezone=Asia%2FShanghai&sslMode=VERIFY_IDENTITY&allowPublicKeyRetrieval=false",
+  USER="__DS0_USER__",
+  PASSWORD="__DS0_PASSWORD__",
+  PROPERTIES("minPoolSize"="5","maxPoolSize"="50","connectionTimeout"="30000","idleTimeout"="60000")
+), ds_1 (
+  URL="jdbc:mysql://__DS1_HOST__:__DS1_PORT__/__DS1_DATABASE__?serverTimezone=Asia%2FShanghai&sslMode=VERIFY_IDENTITY&allowPublicKeyRetrieval=false",
+  USER="__DS1_USER__",
+  PASSWORD="__DS1_PASSWORD__",
+  PROPERTIES("minPoolSize"="5","maxPoolSize"="50","connectionTimeout"="30000","idleTimeout"="60000")
+), CHECK_PRIVILEGES=SELECT,XA,PIPELINE;
+
+SHOW STORAGE UNITS;

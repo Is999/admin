@@ -27,7 +27,7 @@ const (
 type Event struct {
 	Topic       string          // Kafka Topic 名称
 	Partition   int             // Kafka 分区号
-	Offset      int64           // Kafka offset
+	Offset      int64           // Kafka 消费位点
 	Key         json.RawMessage // Kafka 消息 key
 	PrimaryKey  json.RawMessage // Debezium 主键 payload
 	Database    string          // 来源数据库
@@ -48,8 +48,8 @@ type Source struct {
 	File        string // binlog 文件名
 	GTID        string // GTID 集合或当前 GTID
 	Snapshot    string // 快照状态：true/false/last
-	ServerID    int64  // MySQL server_id
-	Position    int64  // binlog position
+	ServerID    int64  // MySQL 服务实例 ID
+	Position    int64  // binlog 文件偏移量
 	Row         int64  // binlog row 序号
 	TimestampMS int64  // 来源事件毫秒时间戳
 }
@@ -133,10 +133,10 @@ type debeziumSource struct {
 	Database    string `json:"db"`        // 来源数据库
 	Table       string `json:"table"`     // 来源表
 	File        string `json:"file"`      // binlog 文件名
-	GTID        string `json:"gtid"`      // GTID
+	GTID        string `json:"gtid"`      // 全局事务标识
 	Snapshot    any    `json:"snapshot"`  // 快照状态
-	ServerID    int64  `json:"server_id"` // MySQL server_id
-	Position    int64  `json:"pos"`       // binlog position
+	ServerID    int64  `json:"server_id"` // MySQL 服务实例 ID
+	Position    int64  `json:"pos"`       // binlog 文件偏移量
 	Row         int64  `json:"row"`       // binlog row 序号
 	TimestampMS int64  `json:"ts_ms"`     // 来源事件毫秒时间戳
 }

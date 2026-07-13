@@ -7,233 +7,226 @@ import (
 )
 
 const (
-	// docsFileAliasPrefix 表示单篇 Markdown 文档权限 module 前缀。
-	docsFileAliasPrefix = "docs.file."
+	// DocSiteAdmin 表示 Admin 后台文档站。
+	DocSiteAdmin = "admin"
+	// DocSiteAPI 表示 API 服务文档站。
+	DocSiteAPI = "api"
+	// docResourceKeySeparator 分隔文档站点与路径；文件路径不能包含 NUL，因而可以无歧义解析。
+	docResourceKeySeparator = "\x00"
 )
 
-// docsPermissionRule 描述文档目录前缀与权限别名的关系。
-type docsPermissionRule struct {
-	Prefix string // /api/docs 下的相对目录前缀，使用文档站真实目录名
-	Alias  Alias  // 命中目录后用于后台权限表校验的稳定别名
+// DocResource 是文档权限使用的稳定资源键。
+type DocResource struct {
+	Site string // 文档所属站点
+	Path string // 站点内 Markdown 相对路径
 }
 
-// docsPermissionRules 维护会随文档目录变动调整的访问规则；更具体的二级目录放在前面。
-var docsPermissionRules = []docsPermissionRule{
-	{Prefix: "角色文档/运维", Alias: DocsRoleOps},
-	{Prefix: "角色文档/后端开发", Alias: DocsRoleBackend},
-	{Prefix: "角色文档/前端与测试", Alias: DocsRoleFrontend},
-	{Prefix: "功能模块/任务系统", Alias: DocsFeatureTask},
-	{Prefix: "功能模块/用户标签", Alias: DocsFeatureUserTag},
-	{Prefix: "api/接口文档/前台系统", Alias: DocsAPIServiceFront},
-	{Prefix: "api/接口文档", Alias: DocsAPIServiceIndex},
-	{Prefix: "api", Alias: DocsAPIServiceIndex},
-	{Prefix: "接口文档/后台系统", Alias: DocsAPIAdmin},
-	{Prefix: "接口文档/任务系统", Alias: DocsAPITask},
-	{Prefix: "接口文档/用户标签", Alias: DocsUserTag},
-	{Prefix: "接口文档", Alias: DocsAPIIndex},
-}
-
-// docsContentPaths 维护当前文档站可直接阅读的 Markdown 文档路径；docsify 资源不进入角色授权。
-var docsContentPaths = []string{
-	"功能模块/任务系统/任务系统使用手册.md",
-	"功能模块/任务系统/任务系统首页.md",
-	"功能模块/用户标签/任务系统与用户标签排障手册.md",
-	"功能模块/用户标签/用户标签实现与调度说明.md",
-	"功能模块/用户标签/用户标签操作手册.md",
-	"功能模块/用户标签/用户标签首页.md",
-	"功能模块/用户标签/用户标签骨架验收指南.md",
-	"功能模块/用户标签/用户标签骨架验证指南.md",
-	"接口文档/任务系统/任务列表接口.md",
-	"接口文档/任务系统/任务总控接口.md",
-	"接口文档/任务系统/任务注册表接口.md",
-	"接口文档/任务系统/任务监控接口.md",
-	"接口文档/任务系统/任务系统接口.md",
-	"接口文档/任务系统/任务队列接口.md",
-	"接口文档/任务系统/收集器任务接口.md",
-	"接口文档/任务系统/运行配置管理接口.md",
-	"接口文档/后台系统/个人信息接口.md",
-	"接口文档/后台系统/内网初始化管理员接口.md",
-	"接口文档/后台系统/前台用户管理接口.md",
-	"接口文档/后台系统/后台系统接口.md",
-	"接口文档/后台系统/基础规范与认证接口.md",
-	"接口文档/后台系统/安全调试接口.md",
-	"接口文档/后台系统/接口文档访问接口.md",
-	"接口文档/后台系统/文件传输接口.md",
-	"接口文档/后台系统/日志管理接口.md",
-	"接口文档/后台系统/权限管理接口.md",
-	"接口文档/后台系统/消息中心接口.md",
-	"接口文档/后台系统/秘钥管理接口.md",
-	"接口文档/后台系统/管理员管理接口.md",
-	"接口文档/后台系统/系统配置接口.md",
-	"接口文档/后台系统/缓存管理接口.md",
-	"接口文档/后台系统/角色管理接口.md",
-	"接口文档/接口文档统一规范.md",
-	"接口文档/接口文档首页.md",
-	"接口文档/用户标签/内网接口.md",
-	"接口文档/用户标签/指定标签重算接口.md",
-	"接口文档/用户标签/用户标签工作流接口.md",
-	"接口文档/用户标签/用户标签接口.md",
-	"文档首页.md",
-	"角色文档/前端与测试/前端权限码与管理员权限映射说明.md",
-	"角色文档/前端与测试/接口联调与验收说明.md",
-	"角色文档/后端开发/AI开发提示词.md",
-	"角色文档/后端开发/AI开发规范.md",
-	"角色文档/后端开发/任务队列与工作流指南.md",
-	"角色文档/后端开发/多因素认证与管理员角色规则.md",
-	"角色文档/后端开发/库表路由规范.md",
-	"角色文档/后端开发/开发扩展指南.md",
-	"角色文档/后端开发/组件注册清单.md",
-	"角色文档/后端开发/配置字段说明.md",
-	"角色文档/运维/数据库迁移治理.md",
-	"角色文档/运维/部署发布指南.md",
-	"api/接口文档/前台系统/健康检查接口.md",
-	"api/接口文档/前台系统/用户接口.md",
-	"api/接口文档/前台系统/系统接口.md",
-	"api/接口文档/前台系统/认证接口.md",
-	"api/接口文档/接口文档统一规范.md",
-	"api/角色文档/后端开发/AI开发提示词.md",
-	"api/角色文档/后端开发/AI开发规范.md",
-	"api/角色文档/后端开发/前端安全清单同步.md",
-	"api/角色文档/后端开发/开发扩展指南.md",
-	"api/角色文档/后端开发/组件注册清单.md",
-	"api/角色文档/后端开发/认证安全指标与告警.md",
-	"api/角色文档/运维/数据库迁移治理.md",
-	"api/角色文档/运维/部署发布指南.md",
-}
-
-// DocsAliases 返回所有可配置的文档访问权限别名。
-func DocsAliases() []Alias {
-	aliases := []Alias{DocsIndex}
-	seen := map[Alias]struct{}{DocsIndex: {}}
-	for _, rule := range docsPermissionRules {
-		if _, ok := seen[rule.Alias]; ok {
-			continue
-		}
-		seen[rule.Alias] = struct{}{}
-		aliases = append(aliases, rule.Alias)
+// Key 返回文档权限使用的稳定资源键，非法资源返回空字符串。
+func (r DocResource) Key() string {
+	site := strings.TrimSpace(r.Site)
+	path := strings.TrimSpace(r.Path)
+	if (site != DocSiteAdmin && site != DocSiteAPI) || path == "" || strings.ContainsRune(path, '\x00') {
+		return ""
 	}
-	for _, docsPath := range docsContentPaths {
-		alias := docsFileAlias(docsPath)
-		if _, ok := seen[alias]; ok {
-			continue
-		}
-		seen[alias] = struct{}{}
-		aliases = append(aliases, alias)
-	}
-	return aliases
+	return site + docResourceKeySeparator + path
 }
 
-// DocsContentPaths 返回当前纳入权限表的全部可阅读文档路径。
-func DocsContentPaths() []string {
-	result := make([]string, len(docsContentPaths))
-	copy(result, docsContentPaths)
+// ParseDocResourceKey 解析稳定文档资源键，格式或站点非法时返回 false。
+func ParseDocResourceKey(value string) (DocResource, bool) {
+	site, path, ok := strings.Cut(value, docResourceKeySeparator)
+	resource := DocResource{Site: strings.TrimSpace(site), Path: strings.TrimSpace(path)}
+	if !ok || resource.Key() != value {
+		return DocResource{}, false
+	}
+	return resource, true
+}
+
+// docsResources 维护当前文档站可直接阅读的 Markdown 文档；docsify 公共资源不进入正文授权。
+var docsResources = []DocResource{
+	{Site: DocSiteAdmin, Path: "功能模块/任务系统/任务系统使用手册.md"},
+	{Site: DocSiteAdmin, Path: "功能模块/任务系统/任务系统首页.md"},
+	{Site: DocSiteAdmin, Path: "功能模块/用户标签/任务系统与用户标签排障手册.md"},
+	{Site: DocSiteAdmin, Path: "功能模块/用户标签/用户标签实现与调度说明.md"},
+	{Site: DocSiteAdmin, Path: "功能模块/用户标签/用户标签操作手册.md"},
+	{Site: DocSiteAdmin, Path: "功能模块/用户标签/用户标签首页.md"},
+	{Site: DocSiteAdmin, Path: "功能模块/用户标签/用户标签骨架验收指南.md"},
+	{Site: DocSiteAdmin, Path: "功能模块/用户标签/用户标签骨架验证指南.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/任务系统/任务列表接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/任务系统/任务总控接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/任务系统/任务注册表接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/任务系统/任务监控接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/任务系统/任务系统接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/任务系统/任务队列接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/任务系统/收集器任务接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/任务系统/运行配置管理接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/个人信息接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/内网初始化管理员接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/前台用户管理接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/后台系统接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/基础规范与认证接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/安全调试接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/接口文档访问接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/文件传输接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/日志管理接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/权限管理接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/消息中心接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/秘钥管理接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/管理员管理接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/系统配置接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/缓存管理接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/后台系统/角色管理接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/接口文档统一规范.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/接口文档首页.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/用户标签/内网接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/用户标签/指定标签重算接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/用户标签/用户标签工作流接口.md"},
+	{Site: DocSiteAdmin, Path: "接口文档/用户标签/用户标签接口.md"},
+	{Site: DocSiteAdmin, Path: "文档首页.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/前端与测试/前端权限码与管理员权限映射说明.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/前端与测试/接口联调与验收说明.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/AI开发提示词.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/AI开发规范.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/任务队列与工作流指南.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/多因素认证与管理员角色规则.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/库表路由规范.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/开发扩展指南.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/系统组件功能说明.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/组件注册清单.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/后端开发/配置字段说明.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/运维/数据库迁移治理.md"},
+	{Site: DocSiteAdmin, Path: "角色文档/运维/部署发布指南.md"},
+	{Site: DocSiteAPI, Path: "接口文档/前台系统/健康检查接口.md"},
+	{Site: DocSiteAPI, Path: "接口文档/前台系统/用户接口.md"},
+	{Site: DocSiteAPI, Path: "接口文档/前台系统/系统接口.md"},
+	{Site: DocSiteAPI, Path: "接口文档/前台系统/认证接口.md"},
+	{Site: DocSiteAPI, Path: "接口文档/接口文档统一规范.md"},
+	{Site: DocSiteAPI, Path: "角色文档/后端开发/AI开发提示词.md"},
+	{Site: DocSiteAPI, Path: "角色文档/后端开发/AI开发规范.md"},
+	{Site: DocSiteAPI, Path: "角色文档/后端开发/前端安全清单同步.md"},
+	{Site: DocSiteAPI, Path: "角色文档/后端开发/开发扩展指南.md"},
+	{Site: DocSiteAPI, Path: "角色文档/后端开发/组件注册清单.md"},
+	{Site: DocSiteAPI, Path: "角色文档/后端开发/认证安全指标与告警.md"},
+	{Site: DocSiteAPI, Path: "角色文档/运维/数据库迁移治理.md"},
+	{Site: DocSiteAPI, Path: "角色文档/运维/部署发布指南.md"},
+}
+
+// DocsResources 返回全部受保护文档资源。
+func DocsResources() []DocResource {
+	result := make([]DocResource, len(docsResources))
+	copy(result, docsResources)
 	return result
 }
 
-// DocsAliasForPath 按文档站请求路径返回权限别名；可阅读 Markdown 优先返回单篇文档权限。
-func DocsAliasForPath(requestPath string) Alias {
-	docsPath := normalizedDocsPath(requestPath)
-	if docsPath == "" {
-		return DocsIndex
+// DocsResourceForPath 按文档站请求路径返回精确文档资源；公共资源和未知文档返回 false。
+func DocsResourceForPath(requestPath string) (DocResource, bool) {
+	docsPath, ok := NormalizeDocsRequestPath(requestPath)
+	if !ok {
+		return DocResource{}, false
 	}
-	if alias, ok := DocsFileAliasForPath(docsPath); ok {
-		return alias
-	}
-	return DocsParentAliasForPath(docsPath)
+	return docsResourceFromAssetPath(docsPath)
 }
 
-// DocsAliasForAssetPath 按 docsify 文档资源路径返回权限别名，basePath 用于前台 API 代理文档。
-func DocsAliasForAssetPath(basePath string, assetPath string) Alias {
-	parts := []string{strings.Trim(strings.TrimSpace(basePath), "/"), strings.Trim(strings.TrimSpace(assetPath), "/")}
-	docsPath := strings.Trim(strings.Join(parts, "/"), "/")
-	if docsPath == "" {
-		return DocsIndex
+// DocsResourceForAssetPath 按 docsify 站点基路径和资源路径返回精确文档资源。
+func DocsResourceForAssetPath(basePath string, assetPath string) (DocResource, bool) {
+	parts := []string{
+		strings.Trim(strings.TrimSpace(basePath), "/"),
+		strings.Trim(strings.TrimSpace(assetPath), "/"),
 	}
-	return DocsAliasForPath("/api/docs/" + docsPath)
+	return docsResourceFromAssetPath(strings.Trim(strings.Join(parts, "/"), "/"))
 }
 
-// DocsFileAliasForPath 返回单篇文档权限别名；非内容文档返回 false。
-func DocsFileAliasForPath(assetPath string) (Alias, bool) {
-	docsPath := normalizedDocsAssetPath(assetPath)
-	if docsPath == "" {
-		return "", false
+// DocsEntryAliasForPath 返回请求所属文档站的入口路由权限。
+func DocsEntryAliasForPath(requestPath string) Alias {
+	docsPath, _ := NormalizeDocsRequestPath(requestPath)
+	// Admin 与 API 文档站共用 docsify 静态资源，只校验登录安全态，不能反向要求 Admin 文档入口权限。
+	if strings.HasPrefix(docsPath, "vendor/") {
+		return Ignore
 	}
-	for _, item := range docsContentPaths {
-		if item == docsPath {
-			return docsFileAlias(docsPath), true
-		}
-	}
-	return "", false
-}
-
-// DocsFilePathFromAlias 从单篇文档权限别名还原文档路径。
-func DocsFilePathFromAlias(alias Alias) (string, bool) {
-	value := string(alias)
-	if !strings.HasPrefix(value, docsFileAliasPrefix) {
-		return "", false
-	}
-	docsPath := normalizedDocsAssetPath(strings.TrimPrefix(value, docsFileAliasPrefix))
-	return docsPath, docsPath != ""
-}
-
-// DocsParentAliasForPath 返回文档所属目录权限别名；非具体目录命中时使用文档入口。
-func DocsParentAliasForPath(assetPath string) Alias {
-	docsPath := normalizedDocsAssetPath(assetPath)
-	if docsPath == "" {
-		return DocsIndex
-	}
-	for _, rule := range docsPermissionRules {
-		if docsPathMatchesRule(docsPath, rule.Prefix) {
-			return rule.Alias
-		}
+	if docsPath == "api" || strings.HasPrefix(docsPath, "api/") {
+		return DocsAPIServiceIndex
 	}
 	return DocsIndex
 }
 
-// DocsCandidateAliases 返回访问指定文档别名时必须匹配的权限别名集合。
-func DocsCandidateAliases(alias Alias) []Alias {
-	alias = Alias(strings.TrimSpace(string(alias)))
-	if alias == "" {
-		return []Alias{}
+// DocsPathNeedsResourcePermission 判断请求是否是必须精确授权的 Markdown 正文。
+func DocsPathNeedsResourcePermission(requestPath string) bool {
+	docsPath, ok := NormalizeDocsRequestPath(requestPath)
+	if !ok {
+		// 非法路径必须进入精确资源校验并失败关闭，不能降级成文档站公共资源。
+		return true
 	}
-	return []Alias{alias}
+	if docsPath == "" {
+		return false
+	}
+	name := pathpkg.Base(docsPath)
+	switch strings.ToLower(name) {
+	case "_sidebar.md", "_navbar.md", "404.md":
+		return false
+	default:
+		return strings.EqualFold(pathpkg.Ext(name), ".md")
+	}
 }
 
-// normalizedDocsPath 返回 /api/docs 下的相对路径，空值表示文档首页或站点公共资源。
-func normalizedDocsPath(requestPath string) string {
-	if text, err := url.PathUnescape(strings.TrimSpace(requestPath)); err == nil {
-		requestPath = text
+// docsResourceFromAssetPath 把聚合文档路径转换为 site + path 资源键。
+func docsResourceFromAssetPath(assetPath string) (DocResource, bool) {
+	docsPath := normalizedDocsAssetPath(assetPath)
+	if docsPath == "" {
+		return DocResource{}, false
 	}
-	cleanPath := pathpkg.Clean("/" + strings.TrimLeft(strings.TrimSpace(requestPath), "/"))
+	resource := DocResource{Site: DocSiteAdmin, Path: docsPath}
+	if strings.HasPrefix(docsPath, "api/") {
+		resource.Site = DocSiteAPI
+		resource.Path = strings.TrimPrefix(docsPath, "api/")
+	}
+	for _, item := range docsResources {
+		if item == resource {
+			return resource, true
+		}
+	}
+	return DocResource{}, false
+}
+
+// NormalizeDocsRequestPath 返回 /api/docs 下的规范相对路径，非法路径返回 false。
+func NormalizeDocsRequestPath(requestPath string) (string, bool) {
+	if strings.TrimSpace(requestPath) == "" {
+		return "", false
+	}
+	cleanPath, ok := cleanDocsPath(requestPath)
+	if !ok {
+		return "", false
+	}
 	if cleanPath == "/api/docs" || cleanPath == "/api/docs/" {
-		return ""
+		return "", true
 	}
 	if !strings.HasPrefix(cleanPath, "/api/docs/") {
-		return ""
+		return "", false
 	}
-	return strings.TrimPrefix(cleanPath, "/api/docs/")
+	return strings.TrimPrefix(cleanPath, "/api/docs/"), true
 }
 
-// normalizedDocsAssetPath 规整文档站内部资源路径，避免同一文档出现多种 module。
+// normalizedDocsAssetPath 规整文档站内部资源路径。
 func normalizedDocsAssetPath(assetPath string) string {
-	if text, err := url.PathUnescape(strings.TrimSpace(assetPath)); err == nil {
-		assetPath = text
-	}
-	cleanPath := pathpkg.Clean("/" + strings.TrimLeft(strings.TrimSpace(assetPath), "/"))
-	if cleanPath == "/" || strings.HasPrefix(cleanPath, "/../") {
+	cleanPath, ok := cleanDocsPath(assetPath)
+	if !ok || cleanPath == "/" {
 		return ""
 	}
 	return strings.TrimPrefix(cleanPath, "/")
 }
 
-// docsFileAlias 返回单篇 Markdown 文档对应的权限 module。
-func docsFileAlias(docsPath string) Alias {
-	return Alias(docsFileAliasPrefix + normalizedDocsAssetPath(docsPath))
-}
-
-// docsPathMatchesRule 判断文档相对路径是否命中目录规则，目录本身和目录下文件都算命中。
-func docsPathMatchesRule(docsPath string, prefix string) bool {
-	docsPath = strings.Trim(strings.TrimSpace(docsPath), "/")
-	prefix = strings.Trim(strings.TrimSpace(prefix), "/")
-	return docsPath == prefix || strings.HasPrefix(docsPath, prefix+"/")
+// cleanDocsPath 解码并规整文档路径，拒绝点段、反斜杠和空字节。
+func cleanDocsPath(value string) (string, bool) {
+	decoded, err := url.PathUnescape(strings.TrimSpace(value))
+	if err != nil {
+		return "", false
+	}
+	decoded = strings.TrimSpace(decoded)
+	if strings.Contains(decoded, "\\") || strings.ContainsRune(decoded, '\x00') {
+		return "", false
+	}
+	for _, segment := range strings.Split(decoded, "/") {
+		if segment == "." || segment == ".." {
+			return "", false
+		}
+	}
+	return pathpkg.Clean("/" + strings.TrimLeft(decoded, "/")), true
 }

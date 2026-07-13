@@ -224,6 +224,10 @@ func TestNewPingsRedisAtStartup(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	defer client.Close()
+	singleClient, ok := client.(*redis.Client)
+	if !ok || !singleClient.Options().ContextTimeoutEnabled {
+		t.Fatalf("Redis 客户端必须启用 context deadline: type=%T", client)
+	}
 }
 
 // TestNewRequiresEveryConfiguredRedisAddressReachable 确保每个配置的 Redis 地址都必须可连通。

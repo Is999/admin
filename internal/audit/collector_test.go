@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,10 +15,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// fakeCollector 记录测试中投递的 Collector 事件，便于断言审计载荷。
 type fakeCollector struct {
 	events []collectorx.Event // 已投递的 Collector 事件
 }
 
+// Enqueue 保存待断言事件并返回原始事件 ID。
 func (f *fakeCollector) Enqueue(_ context.Context, event collectorx.Event) (string, error) {
 	f.events = append(f.events, event)
 	return event.EventID, nil
@@ -50,6 +53,49 @@ func TestCollectorWriterEnqueueAdminLog(t *testing.T) {
 	}
 	if payload.UserID != row.UserID {
 		t.Fatalf("payload 不符合预期: %+v", payload)
+	}
+	if payload.EventID != eventID {
+		t.Fatalf("payload event_id = %q, want %q", payload.EventID, eventID)
+	}
+}
+
+// TestAdminLogBatchProcessorDeduplicatesBatchEventID 验证批内重复事件只生成一条幂等写入和一条成功结果。
+func TestAdminLogBatchProcessorDeduplicatesBatchEventID(t *testing.T) {
+	db := newDryRunMySQL(t)
+	createdRows := 0
+	createdID := -1
+	hasConflictClause := false
+	if err := db.Callback().Create().Before("gorm:create").Register("test:capture_admin_log_batch", func(tx *gorm.DB) {
+		value := reflect.ValueOf(tx.Statement.Dest)
+		if value.Kind() == reflect.Pointer {
+			value = value.Elem()
+		}
+		if value.IsValid() && value.Kind() == reflect.Slice {
+			createdRows = value.Len()
+			if value.Len() > 0 {
+				createdID = int(value.Index(0).FieldByName("ID").Int())
+			}
+		}
+		_, hasConflictClause = tx.Statement.Clauses["ON CONFLICT"]
+	}); err != nil {
+		t.Fatalf("注册 GORM 测试回调失败: %v", err)
+	}
+	payload, _ := json.Marshal(model.AdminLog{ID: 99, UserID: 7, UserName: "tester", CreatedAt: time.Now()})
+	results, err := NewAdminLogBatchProcessor(db).ProcessBatch(context.Background(), []collectorx.Event{
+		{EventID: "admin_log:audit:duplicate", BizType: AdminLogCollectorBizType, Payload: payload},
+		{EventID: "admin_log:audit:duplicate", BizType: AdminLogCollectorBizType, Payload: payload},
+	})
+	if err != nil {
+		t.Fatalf("ProcessBatch() error = %v", err)
+	}
+	if createdRows != 1 || len(results) != 1 || !results[0].Success {
+		t.Fatalf("批内去重不符合预期 rows=%d results=%+v", createdRows, results)
+	}
+	if createdID != 0 {
+		t.Fatalf("载荷主键未清零 created_id=%d", createdID)
+	}
+	if !hasConflictClause {
+		t.Fatal("admin_log 幂等写入必须使用 ON CONFLICT")
 	}
 }
 
@@ -99,6 +145,7 @@ func TestAdminLogBatchProcessorRejectsBadPayload(t *testing.T) {
 	}
 }
 
+// newDryRunMySQL 创建不建立真实连接的 GORM DryRun 实例。
 func newDryRunMySQL(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(mysql.New(mysql.Config{

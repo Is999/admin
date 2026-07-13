@@ -65,9 +65,9 @@ type SnowflakeConfig struct {
 	Segment  IDSegmentConfig      `json:"segment,optional"`   // 高吞吐业务号段配置；启用的 namespace 不再使用雪花位格式
 }
 
-// UserConfig 定义业务用户写入路由和后台导出策略配置。
+// UserConfig 定义业务用户物理路由和后台导出策略。
 type UserConfig struct {
-	RouteShardCount int   `json:"route_shard_count,optional,default=1"` // 新增业务用户默认物理表数量：1/2/4/.../1024
+	RouteShardCount int   `json:"route_shard_count,optional,default=1"` // 用户物理分片数量，由当前部署方案校验允许值
 	ExportSplitRows int64 `json:"export_split_rows,optional"`           // 用户列表单个 Excel 文件最大导出行数，默认 500000
 }
 
@@ -181,6 +181,15 @@ type ArchiveConfig struct {
 	Jobs                   []ArchiveJobConfig `json:"jobs,optional"`                       // 归档任务列表
 }
 
+const (
+	// CollectorBizTypeAdminLogAudit 表示管理员审计日志批量持久化业务类型。
+	CollectorBizTypeAdminLogAudit = "admin_log.audit"
+	// CollectorBizTypeAuthSecurity 表示认证风控事件业务类型。
+	CollectorBizTypeAuthSecurity = "auth.security"
+	// CollectorTopicAuthSecurity 表示 API 与 Admin 共享的认证风控 Kafka Topic。
+	CollectorTopicAuthSecurity = "api_collector_auth_security_events"
+)
+
 // CollectorKafkaConfig 定义通用收集器的 Kafka 正常链路配置。
 type CollectorKafkaConfig struct {
 	Brokers                    []string `json:"brokers,optional"`                       // Kafka broker 地址列表；为空时继承顶层 kafka
@@ -192,11 +201,12 @@ type CollectorKafkaConfig struct {
 
 // CollectorTaskConfig 定义单个 Collector 业务任务的本地批量聚合策略。
 type CollectorTaskConfig struct {
-	Topic                 string `json:"topic,optional"`                   // 该业务任务投递和消费的 Kafka Topic
-	GroupID               string `json:"group_id,optional"`                // 该业务任务的 Kafka 消费组；同 Topic 必须一致
-	BatchSize             int    `json:"batch_size,optional"`              // 同 bizType 单批最大事件数
-	BatchWaitMilliseconds int    `json:"batch_wait_milliseconds,optional"` // 同 bizType 未满批时最大等待毫秒数
-	IdempotencyEnabled    *bool  `json:"idempotency_enabled,optional"`     // 是否覆盖默认 Redis 单任务 EventID 去重开关
+	Topic                   string `json:"topic,optional"`                     // 该业务任务投递和消费的 Kafka Topic
+	GroupID                 string `json:"group_id,optional"`                  // 该业务任务的 Kafka 消费组；同 Topic 必须一致
+	BatchSize               int    `json:"batch_size,optional"`                // 同 bizType 单批最大事件数
+	BatchWaitMilliseconds   int    `json:"batch_wait_milliseconds,optional"`   // 同 bizType 未满批时最大等待毫秒数
+	ProcessorTimeoutSeconds int    `json:"processor_timeout_seconds,optional"` // Processor 单批执行超时秒数
+	IdempotencyEnabled      *bool  `json:"idempotency_enabled,optional"`       // 是否覆盖默认 Redis 单任务 EventID 去重开关
 }
 
 // CollectorFailureRetryConfig 定义通用收集器失败账本重试配置。
@@ -206,6 +216,13 @@ type CollectorFailureRetryConfig struct {
 	RunningLeaseSeconds   int `json:"running_lease_seconds,optional"`   // 重试中事件租约秒数，超时后自动回收重试
 	MaxRetryTimes         int `json:"max_retry_times,optional"`         // 最大失败重试次数，达到后进入死信
 }
+
+const (
+	// DefaultCollectorIdempotencyTTLSeconds 是 Collector 成功和失败终态的默认保留秒数。
+	DefaultCollectorIdempotencyTTLSeconds = 3600
+	// DefaultCollectorIdempotencyProcessingTTLSeconds 是 Collector 处理中 token 的默认租约秒数。
+	DefaultCollectorIdempotencyProcessingTTLSeconds = 600
+)
 
 // CollectorIdempotencyConfig 定义通用收集器 Redis 单任务幂等去重配置。
 type CollectorIdempotencyConfig struct {
@@ -268,8 +285,6 @@ type UserTagConfig struct {
 	DefaultShardTotal  int  `json:"default_shard_total,optional"`  // 默认工作流任务分片数，小量数据建议从 1 开始
 	DefaultBatchSize   int  `json:"default_batch_size,optional"`   // 默认游标扫描批次大小
 	DefaultWorkerCount int  `json:"default_worker_count,optional"` // 节点内部 worker 默认值
-	RuntimeShardTotal  int  `json:"runtime_shard_total,optional"`  // 运行期 UID 索引分片数，默认 1000
-	ResultShardTotal   int  `json:"result_shard_total,optional"`   // 标签结果物理分表数量，默认 1
 	DiffBatchSize      int  `json:"diff_batch_size,optional"`      // 标签差异解析批次大小
 	EventBatchSize     int  `json:"event_batch_size,optional"`     // 事件 outbox 派发批次大小
 }
@@ -308,28 +323,27 @@ func (c TaskPeriodicConfig) EnabledOrDefault() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
-// TaskQueueConfig 定义任务系统的 Worker、队列、聚合、独立 Redis 与保留参数。
+// TaskQueueConfig 定义任务系统的 Worker、队列、聚合、独立 Redis 与失败归档参数。
 type TaskQueueConfig struct {
-	Enabled                   bool                     `json:"enabled,optional"`                     // 是否启用任务系统
-	AppID                     string                   `json:"-"`                                    // 任务系统站点命名空间
-	DefaultQueue              string                   `json:"default_queue,optional"`               // 默认工作流队列
-	Concurrency               int                      `json:"concurrency,optional"`                 // Worker 并发度
-	StrictPriority            bool                     `json:"strict_priority,optional"`             // 是否启用严格优先级
-	Queues                    map[string]int           `json:"queues,optional"`                      // 队列权重配置
-	Redis                     RedisConfig              `json:"redis,optional"`                       // 任务系统独立 Redis 配置
-	DefaultRetry              int                      `json:"default_retry,optional"`               // 默认重试次数
-	DefaultTimeoutSeconds     int                      `json:"default_timeout_seconds,optional"`     // 默认任务超时（秒）
-	DefaultUniqueTTLSeconds   int                      `json:"default_unique_ttl_seconds,optional"`  // 默认去重 TTL（秒）
-	CompletedRetentionSeconds int                      `json:"completed_retention_seconds,optional"` // 已完成任务保留时长（秒）
-	ArchivedRetentionSeconds  int                      `json:"archived_retention_seconds,optional"`  // 归档失败任务保留时长（秒）
-	ShutdownTimeoutSeconds    int                      `json:"shutdown_timeout_seconds,optional"`    // Worker 关闭等待时间（秒）
-	TaskCheckSeconds          int                      `json:"task_check_seconds,optional"`          // 空队列轮询间隔（秒）
-	DelayedTaskCheckSeconds   int                      `json:"delayed_task_check_seconds,optional"`  // 定时/重试任务检查间隔（秒）
-	GroupGracePeriodSeconds   int                      `json:"group_grace_period_seconds,optional"`  // 聚合等待窗口（秒）
-	GroupMaxDelaySeconds      int                      `json:"group_max_delay_seconds,optional"`     // 聚合最大等待时间（秒）
-	GroupMaxSize              int                      `json:"group_max_size,optional"`              // 单次聚合最大任务数
-	Scheduler                 TaskQueueSchedulerConfig `json:"scheduler,optional"`                   // 周期调度器配置
-	Periodic                  []TaskPeriodicConfig     `json:"periodic,optional"`                    // 周期任务列表
+	Enabled                  bool                     `json:"enabled,optional"`                    // 是否启用任务系统
+	AppID                    string                   `json:"-"`                                   // 任务系统站点命名空间
+	DefaultQueue             string                   `json:"default_queue,optional"`              // 默认工作流队列
+	Concurrency              int                      `json:"concurrency,optional"`                // Worker 并发度
+	StrictPriority           bool                     `json:"strict_priority,optional"`            // 是否启用严格优先级
+	Queues                   map[string]int           `json:"queues,optional"`                     // 队列权重配置
+	Redis                    RedisConfig              `json:"redis,optional"`                      // 任务系统独立 Redis 配置
+	DefaultRetry             int                      `json:"default_retry,optional"`              // 默认重试次数
+	DefaultTimeoutSeconds    int                      `json:"default_timeout_seconds,optional"`    // 默认任务超时（秒）
+	DefaultUniqueTTLSeconds  int                      `json:"default_unique_ttl_seconds,optional"` // 默认去重 TTL（秒）
+	ArchivedRetentionSeconds int                      `json:"archived_retention_seconds,optional"` // 归档失败任务保留时长（秒）
+	ShutdownTimeoutSeconds   int                      `json:"shutdown_timeout_seconds,optional"`   // Worker 关闭等待时间（秒）
+	TaskCheckSeconds         int                      `json:"task_check_seconds,optional"`         // 空队列轮询间隔（秒）
+	DelayedTaskCheckSeconds  int                      `json:"delayed_task_check_seconds,optional"` // 定时/重试任务检查间隔（秒）
+	GroupGracePeriodSeconds  int                      `json:"group_grace_period_seconds,optional"` // 聚合等待窗口（秒）
+	GroupMaxDelaySeconds     int                      `json:"group_max_delay_seconds,optional"`    // 聚合最大等待时间（秒）
+	GroupMaxSize             int                      `json:"group_max_size,optional"`             // 单次聚合最大任务数
+	Scheduler                TaskQueueSchedulerConfig `json:"scheduler,optional"`                  // 周期调度器配置
+	Periodic                 []TaskPeriodicConfig     `json:"periodic,optional"`                   // 周期任务列表
 }
 
 // WorkflowsConfig 聚合工作流类配置。
@@ -362,6 +376,25 @@ type APIServiceConfig struct {
 	InternalBaseURL string `json:"internal_base_url,optional"` // API 内网地址，仅 admin 后端调用
 	OpsToken        string `json:"ops_token,optional"`         // API 内网运维令牌，也是 HMAC 签名密钥
 	TimeoutSeconds  int    `json:"timeout_seconds,optional"`   // API 内网调用超时秒数，默认 5
+	CAFile          string `json:"ca_file,optional"`           // API 内网 mTLS 服务端 CA 文件
+	CertFile        string `json:"cert_file,optional"`         // Admin mTLS 客户端证书文件
+	KeyFile         string `json:"key_file,optional"`          // Admin mTLS 客户端私钥文件
+	ServerName      string `json:"server_name,optional"`       // API 服务端证书名称，留空使用 URL 主机名
+}
+
+// OpsConfig 定义 Admin 内网运维接口保护配置。
+type OpsConfig struct {
+	Token      string   `json:"token"`                // 内网接口令牌，也是 HMAC 签名密钥
+	AllowedIPs []string `json:"allowed_ips,optional"` // 允许调用的内网 IP 或 CIDR
+}
+
+// InternalServerConfig 定义只注册内网路由的独立监听器。
+type InternalServerConfig struct {
+	Host         string `json:"host"`                    // 监听 IP；生产环境必须为回环或私有地址
+	Port         int    `json:"port"`                    // 独立监听端口，不得与公网端口相同
+	CertFile     string `json:"cert_file,optional"`      // mTLS 服务端证书文件
+	KeyFile      string `json:"key_file,optional"`       // mTLS 服务端私钥文件
+	ClientCAFile string `json:"client_ca_file,optional"` // mTLS 客户端 CA 文件
 }
 
 // FileStorageLocalConfig 定义本地文件存储根目录和访问域名。
@@ -375,8 +408,8 @@ type FileStorageS3Config struct {
 	Enabled              bool   `json:"enabled,optional"`                // 是否启用 S3 存储
 	Bucket               string `json:"bucket,optional"`                 // S3 bucket 名称
 	Region               string `json:"region,optional"`                 // S3 区域
-	AccessKey            string `json:"access_key,optional"`             // S3 AccessKey
-	SecretKey            string `json:"secret_key,optional"`             // S3 SecretKey
+	AccessKey            string `json:"access_key,optional"`             // S3 访问凭证标识
+	SecretKey            string `json:"secret_key,optional"`             // S3 访问凭证秘钥
 	PathPrefix           string `json:"path_prefix,optional"`            // S3 对象路径前缀
 	Domain               string `json:"domain,optional"`                 // S3 自定义访问域名
 	Endpoint             string `json:"endpoint,optional"`               // 自定义 S3 Endpoint
@@ -387,8 +420,18 @@ type FileStorageS3Config struct {
 // FileStorageVirusScannerConfig 定义文件上传后的病毒扫描器配置。
 // Name 为空时使用 noop 空实现。
 type FileStorageVirusScannerConfig struct {
-	Name string `json:"name,optional"` // 病毒扫描器名称
+	Name           string `json:"name,optional"`            // 扫描器名称：noop | clamav
+	Command        string `json:"command,optional"`         // clamdscan 命令路径，空值从 PATH 查找
+	ConfigFile     string `json:"config_file,optional"`     // clamd 配置文件路径，空值使用 clamdscan 默认配置
+	TimeoutSeconds int    `json:"timeout_seconds,optional"` // 单文件扫描超时秒数，默认 120
 }
+
+const (
+	// VirusScannerNoop 表示关闭文件病毒扫描。
+	VirusScannerNoop = "noop"
+	// VirusScannerClamAV 表示使用 clamdscan 扫描上传文件。
+	VirusScannerClamAV = "clamav"
+)
 
 // FileStorageUploadSessionConfig 定义断点续传会话的运行参数。
 type FileStorageUploadSessionConfig struct {
@@ -408,16 +451,16 @@ type FileStorageConfig struct {
 
 // ObservabilityConfig 聚合日志、链路追踪和审计相关配置，避免可观测性参数散落在多个配置段中。
 type ObservabilityConfig struct {
-	ServiceName     string  `json:"service_name,optional"`       // 服务名
-	Environment     string  `json:"environment,optional"`        // 观测环境，由顶层 Mode 填充
-	TraceEnabled    bool    `json:"trace_enabled,optional"`      // 是否启用 trace 采样/上报
-	OTLPProtocol    string  `json:"otlp_protocol,optional"`      // OTLP 协议：grpc/http；为空默认 grpc
-	OTLPEndpoint    string  `json:"otlp_endpoint,optional"`      // OTLP endpoint
-	OTLPInsecure    bool    `json:"otlp_insecure,optional"`      // OTLP 是否明文
-	SampleRatio     float64 `json:"sample_ratio,optional"`       // trace 采样率 0~1
-	SlowSQLMs       int64   `json:"slow_sql_ms,optional"`        // 慢 SQL 阈值，毫秒
-	RedisSlowMs     int64   `json:"redis_slow_ms,optional"`      // 慢 Redis 阈值，毫秒
-	LogBodyMaxBytes int     `json:"log_body_max_bytes,optional"` // 审计/日志负载最大长度
+	ServiceName     string  `json:"service_name,optional"`           // 服务名
+	Environment     string  `json:"environment,optional"`            // 观测环境，由顶层 Mode 填充
+	TraceEnabled    bool    `json:"trace_enabled,optional"`          // 是否启用 trace 采样/上报
+	OTLPProtocol    string  `json:"otlp_protocol,optional"`          // OTLP 协议：grpc/http；为空默认 grpc
+	OTLPEndpoint    string  `json:"otlp_endpoint,optional"`          // OTLP 上报地址
+	OTLPInsecure    bool    `json:"otlp_insecure,optional"`          // OTLP 是否明文
+	SampleRatio     float64 `json:"sample_ratio,optional,default=1"` // trace 采样率 0~1；显式 0 表示关闭采样
+	SlowSQLMs       int64   `json:"slow_sql_ms,optional"`            // 慢 SQL 阈值，毫秒
+	RedisSlowMs     int64   `json:"redis_slow_ms,optional"`          // 慢 Redis 阈值，毫秒
+	LogBodyMaxBytes int     `json:"log_body_max_bytes,optional"`     // 审计/日志负载最大长度
 }
 
 // LarkAlertConfig 定义 Lark 群机器人告警配置。
@@ -437,32 +480,43 @@ type AlertConfig struct {
 	Lark LarkAlertConfig `json:"lark,optional"` // Lark 群机器人告警配置
 }
 
+// IPRegionConfig 配置离线 IP 归属地库；支持内置五字段及其尾部扩展字段，替换数据后需重启进程。
+type IPRegionConfig struct {
+	Enabled     bool   `json:"enabled,optional"`       // 是否启用本地 IP 归属地解析
+	IPv4XDBPath string `json:"ipv4_xdb_path,optional"` // IPv4 XDB 绝对路径
+	IPv6XDBPath string `json:"ipv6_xdb_path,optional"` // IPv6 XDB 绝对路径，可留空禁用 IPv6 查询
+}
+
 // Config 是服务总配置，除 go-zero RestConf 外，补充数据库、Redis、JWT 与可观测性参数。
 type Config struct {
-	rest.RestConf                           // go-zero HTTP 基础配置
-	RunMode       int                       `json:"run_mode,optional"`                     // 进程启动模式位掩码；未显式传 `-mode` 时作为兜底值
-	AppID         string                    `json:"app_id,optional"`                       // 站点/应用 ID（如 1）
-	AppKey        string                    `json:"app_key,optional"`                      // 全局应用密钥，用于 MFA 秘钥等敏感数据的库内加解密
-	Snowflake     SnowflakeConfig           `json:"snowflake,optional"`                    // 分布式雪花 ID 配置
-	User          UserConfig                `json:"user,optional"`                         // 业务用户写入路由配置
-	JwtSecret     string                    `json:"jwt_secret"`                            // JWT 签名密钥
-	JwtExpiresIn  int64                     `json:"jwt_expires_in,optional,default=86400"` // JWT 过期时间，单位秒，默认 24 小时
-	HotReload     HotReloadConfig           `json:"hot_reload,optional"`                   // config.yaml 热加载配置
-	ConfigFiles   ConfigFilesConfig         `json:"config_files,optional"`                 // 外部配置文件入口
-	RuntimeConfig RuntimeConfigSourceConfig `json:"runtime_config,optional"`               // 运行期大列表配置来源
-	APIService    APIServiceConfig          `json:"api_service,optional"`                  // 前台 API 内网运维接口配置
-	FileStorage   FileStorageConfig         `json:"file_storage,optional"`                 // 统一文件存储配置，支持本地与 S3
-	Security      SecurityConfig            `json:"security,optional"`                     // 后台接口签名验签和加解密配置
-	Observability ObservabilityConfig       `json:"observability,optional"`                // 日志、审计、追踪等可观测性配置
-	Alert         AlertConfig               `json:"alert,optional"`                        // 外部告警通道配置
-	Collector     CollectorConfig           `json:"collector,optional"`                    // 通用收集器配置
-	CDC           CDCConfig                 `json:"cdc,optional"`                          // Debezium CDC 消费器配置
-	TestScenarios TestScenariosConfig       `json:"test_scenarios,optional"`               // 本地验证场景配置
-	MySQL         MySQLConfig               `json:"mysql,optional"`                        // 默认主库 MySQL 配置
-	SiteMySQL     SiteMySQLConfig           `json:"site_mysql,optional"`                   // 可选命名扩展库配置
-	Redis         RedisConfig               `json:"redis"`                                 // Redis 连接与连接池配置
-	Kafka         KafkaConfig               `json:"kafka,optional"`                        // Kafka 标签变更同步配置
-	Task          TaskQueueConfig           `json:"task,optional"`                         // 异步任务系统配置
-	Archive       ArchiveConfig             `json:"archive,optional"`                      // 通用归档配置
-	Workflows     WorkflowsConfig           `json:"workflows,optional"`                    // 工作流类配置聚合入口
+	rest.RestConf                            // go-zero HTTP 基础配置
+	RunMode        int                       `json:"run_mode,optional"`                     // 进程启动模式位掩码；未显式传 `-mode` 时作为兜底值
+	AppID          string                    `json:"app_id,optional"`                       // 站点/应用 ID（如 1）
+	AppKey         string                    `json:"app_key,optional"`                      // 持久数据根密钥，用于 MFA 和用户敏感字段加解密与查询哈希
+	TrustedProxies []string                  `json:"trusted_proxies,optional"`              // 允许提供 X-Forwarded-For 的反向代理 IP/CIDR
+	Snowflake      SnowflakeConfig           `json:"snowflake,optional"`                    // 分布式雪花 ID 配置
+	User           UserConfig                `json:"user,optional"`                         // 业务用户写入路由配置
+	JwtSecret      string                    `json:"jwt_secret"`                            // JWT 签名密钥
+	JwtExpiresIn   int64                     `json:"jwt_expires_in,optional,default=86400"` // JWT 过期时间，单位秒，默认 24 小时
+	HotReload      HotReloadConfig           `json:"hot_reload,optional"`                   // config.yaml 热加载配置
+	ConfigFiles    ConfigFilesConfig         `json:"config_files,optional"`                 // 外部配置文件入口
+	RuntimeConfig  RuntimeConfigSourceConfig `json:"runtime_config,optional"`               // 运行期大列表配置来源
+	APIService     APIServiceConfig          `json:"api_service,optional"`                  // 前台 API 内网运维接口配置
+	Ops            OpsConfig                 `json:"ops,optional"`                          // Admin 内网运维接口保护配置
+	InternalServer InternalServerConfig      `json:"internal_server,optional"`              // 内网路由独立监听配置
+	FileStorage    FileStorageConfig         `json:"file_storage,optional"`                 // 统一文件存储配置，支持本地与 S3
+	IPRegion       IPRegionConfig            `json:"ip_region,optional"`                    // 本地 IP 归属地解析配置
+	Security       SecurityConfig            `json:"security,optional"`                     // 后台接口签名验签和加解密配置
+	Observability  ObservabilityConfig       `json:"observability,optional"`                // 日志、审计、追踪等可观测性配置
+	Alert          AlertConfig               `json:"alert,optional"`                        // 外部告警通道配置
+	Collector      CollectorConfig           `json:"collector,optional"`                    // 通用收集器配置
+	CDC            CDCConfig                 `json:"cdc,optional"`                          // Debezium CDC 消费器配置
+	TestScenarios  TestScenariosConfig       `json:"test_scenarios,optional"`               // 本地验证场景配置
+	MySQL          MySQLConfig               `json:"mysql,optional"`                        // 默认主库 MySQL 配置
+	SiteMySQL      SiteMySQLConfig           `json:"site_mysql,optional"`                   // 可选命名扩展库配置
+	Redis          RedisConfig               `json:"redis"`                                 // Redis 连接与连接池配置
+	Kafka          KafkaConfig               `json:"kafka,optional"`                        // Kafka 标签变更同步配置
+	Task           TaskQueueConfig           `json:"task,optional"`                         // 异步任务系统配置
+	Archive        ArchiveConfig             `json:"archive,optional"`                      // 通用归档配置
+	Workflows      WorkflowsConfig           `json:"workflows,optional"`                    // 工作流类配置聚合入口
 }

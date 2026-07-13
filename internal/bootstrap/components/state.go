@@ -24,6 +24,7 @@ type State struct {
 	ServiceContext *svc.ServiceContext         // 全局服务上下文
 	Shutdown       func(context.Context) error // 基础设施关闭钩子
 	Server         *rest.Server                // HTTP 服务实例
+	InternalServer *rest.Server                // 只注册内网路由的独立 HTTP 服务
 	TaskManager    *taskqueue.Manager          // 任务队列管理器
 	TaskRuntime    *taskruntime.Runtime        // 任务运行时注册中心
 	TaskRedis      redis.UniversalClient       // 任务系统使用的 Redis 客户端
@@ -35,6 +36,7 @@ type State struct {
 // RuntimeSnapshot 表示装配完成后交给 App 持有的运行时快照。
 type RuntimeSnapshot struct {
 	Server         *rest.Server          // HTTP 服务实例
+	InternalServer *rest.Server          // 只注册内网路由的独立 HTTP 服务
 	ServiceContext *svc.ServiceContext   // 全局服务上下文
 	TaskManager    *taskqueue.Manager    // 任务队列管理器
 	TaskRuntime    *taskruntime.Runtime  // 任务运行时注册中心
@@ -69,6 +71,7 @@ func Snapshot(state *State) RuntimeSnapshot {
 	}
 	return RuntimeSnapshot{
 		Server:         state.Server,
+		InternalServer: state.InternalServer,
 		ServiceContext: state.ServiceContext,
 		TaskManager:    state.TaskManager,
 		TaskRuntime:    state.TaskRuntime,

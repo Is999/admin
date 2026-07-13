@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	i18n "admin/common/i18n"
+	"admin/internal/model"
 	"admin/internal/svc"
 	"admin/internal/types"
 	"admin/pkg/storage"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const (
@@ -31,8 +34,6 @@ const (
 
 	// FileTransferBizAdminAvatar 表示管理员头像上传业务。
 	FileTransferBizAdminAvatar = "admin-avatar"
-	// FileTransferBizSecretKeyMaterial 表示秘钥材料上传业务。
-	FileTransferBizSecretKeyMaterial = "secret-key-material"
 	// FileTransferBizSysConfigExcelImport 表示字典 Excel 导入文件上传业务。
 	FileTransferBizSysConfigExcelImport = "sys-config-excel-import"
 )
@@ -76,6 +77,10 @@ func (l *FileTransferLogic) InitUpload(req *types.FileUploadInitReq) *types.BizR
 	if err != nil {
 		return types.ParamErrorResult(err).
 			WithError(corelogic.WrapLogicError(err, "FileTransferLogic.InitUpload 业务类型校验失败"))
+	}
+	if err := l.ensureUploadCleanupTaskQueue(); err != nil {
+		return types.ServerError(i18n.MsgKeyInternalErrorFormat, err,
+			"FileTransferLogic.InitUpload 上传对象清理任务不可用").ToBizResult()
 	}
 	ctxAdmin := l.GetCtxAdmin()
 	operatorID := 0
@@ -228,19 +233,87 @@ func (l *FileTransferLogic) PrepareDownload(uploadID string) (*transfer.UploadSe
 	return session, nil
 }
 
-// PreparePublicAccess 校验上传会话是否允许匿名访问。
-func (l *FileTransferLogic) PreparePublicAccess(uploadID string) (*transfer.UploadSession, error) {
-	session, err := l.GetSession(uploadID)
+// PreparePublicAccess 校验对象目录和管理员头像引用，只有已保存生效的头像允许匿名访问。
+func (l *FileTransferLogic) PreparePublicAccess(rawObjectKey string) (*transfer.UploadSession, error) {
+	objectStorage, err := l.objectStorage()
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if !l.IsCompletedSession(session) {
-		return nil, errors.Errorf("上传会话尚未完成")
+	objectKey, err := objectStorage.ResolveObjectKey(rawObjectKey)
+	if err != nil {
+		return nil, errors.Tag(err)
 	}
-	if !isPublicAccessibleBizType(session.BizType) {
+	pathPrefix := ""
+	if objectStorage.Type() == storage.TypeS3 {
+		pathPrefix = l.Svc.CurrentConfig().FileStorage.S3.PathPrefix
+	}
+	if !isManagedUploadObjectKey(objectKey, storage.ObjectKeyPrefix(pathPrefix, FileTransferBizAdminAvatar)) {
 		return nil, errors.Errorf("当前文件不允许公开访问")
 	}
-	return session, nil
+	referenced, err := isAdminAvatarReferenced(l.Svc.WriteDB(svc.DatabaseMain), objectKey)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if !referenced {
+		return nil, errors.Errorf("当前头像尚未保存生效")
+	}
+	return &transfer.UploadSession{
+		BizType:        FileTransferBizAdminAvatar,
+		FileName:       filepath.Base(objectKey),
+		ObjectKey:      objectKey,
+		StoredFileName: filepath.Base(objectKey),
+	}, nil
+}
+
+// ValidateAdminAvatar 校验管理员头像来自当前操作者已完成的上传，并返回规范访问地址。
+func (l *FileTransferLogic) ValidateAdminAvatar(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	objectStorage, err := l.objectStorage()
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	objectKey, err := resolveFileObjectKey(objectStorage, raw)
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	accessURL := buildPublicObjectURL(objectKey)
+	referenced, err := isAdminAvatarReferenced(l.Svc.WriteDB(svc.DatabaseMain), objectKey)
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	if referenced {
+		return accessURL, nil
+	}
+	session, err := l.ResolveManagedSessionByFileURL(raw)
+	if err != nil {
+		return "", errors.Tag(err)
+	}
+	if err := l.EnsureSessionOwner(session); err != nil {
+		return "", errors.Tag(err)
+	}
+	if !l.IsCompletedSession(session) || session.BizType != FileTransferBizAdminAvatar || session.ObjectKey != objectKey {
+		return "", errors.Errorf("管理员头像上传尚未完成")
+	}
+	return accessURL, nil
+}
+
+// isAdminAvatarReferenced 查询对象是否已被管理员资料引用，作为匿名访问的持久化完成边界。
+func isAdminAvatarReferenced(db *gorm.DB, objectKey string) (bool, error) {
+	if db == nil || strings.TrimSpace(objectKey) == "" {
+		return false, nil
+	}
+	var admin model.Admin
+	err := db.Model(&model.Admin{}).
+		Select("id").
+		Where("avatar = ?", buildPublicObjectURL(objectKey)).
+		Take(&admin).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	return admin.ID > 0, errors.Tag(err)
 }
 
 // OpenSessionObject 打开上传会话对应的统一存储对象。
@@ -348,7 +421,7 @@ func (l *FileTransferLogic) ResolveManagedSessionByFileURL(fileURL string) (*tra
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	objectKey, err := objectStorage.ResolveObjectKey(fileURL)
+	objectKey, err := resolveFileObjectKey(objectStorage, fileURL)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -410,12 +483,67 @@ func isPublicAccessibleBizType(bizType string) bool {
 	return strings.TrimSpace(bizType) == FileTransferBizAdminAvatar
 }
 
+// isManagedUploadObjectKey 校验对象 key 是否符合指定上传业务的固定目录结构。
+func isManagedUploadObjectKey(objectKey string, expectedPrefix string) bool {
+	objectParts := strings.Split(strings.Trim(strings.TrimSpace(objectKey), "/"), "/")
+	prefixParts := strings.Split(strings.Trim(strings.TrimSpace(expectedPrefix), "/"), "/")
+	if len(prefixParts) == 0 || len(objectParts) != len(prefixParts)+3 {
+		return false
+	}
+	for index, part := range prefixParts {
+		if objectParts[index] != part {
+			return false
+		}
+	}
+	return isDecimalPathPart(objectParts[len(prefixParts)], 6) &&
+		isDecimalPathPart(objectParts[len(prefixParts)+1], 2) &&
+		strings.TrimSpace(objectParts[len(prefixParts)+2]) != ""
+}
+
+// isDecimalPathPart 校验日期目录是否由固定长度数字组成。
+func isDecimalPathPart(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // buildUploadAccessURL 构建上传会话的访问 URL。
 func buildUploadAccessURL(session *transfer.UploadSession) string {
-	if session == nil || !isPublicAccessibleBizType(session.BizType) {
+	if session == nil || !strings.EqualFold(strings.TrimSpace(session.Status), "completed") ||
+		!isPublicAccessibleBizType(session.BizType) || strings.TrimSpace(session.ObjectKey) == "" {
 		return ""
 	}
-	return fmt.Sprintf("/api/file-transfer/access?uploadId=%s", session.UploadID)
+	return buildPublicObjectURL(session.ObjectKey)
+}
+
+// buildPublicObjectURL 构建公开对象的规范访问地址。
+func buildPublicObjectURL(objectKey string) string {
+	return "/api/file-transfer/access?objectKey=" + url.QueryEscape(strings.TrimSpace(objectKey))
+}
+
+// resolveFileObjectKey 解析对象 key、存储 URL 或公开访问 URL，统一返回存储层对象 key。
+func resolveFileObjectKey(objectStorage storage.ObjectStorage, raw string) (string, error) {
+	if objectStorage == nil {
+		return "", errors.Errorf("对象存储未初始化")
+	}
+	raw = strings.TrimSpace(raw)
+	parsedURL, err := url.Parse(raw)
+	if err != nil {
+		return "", errors.Wrap(err, "解析文件地址失败")
+	}
+	if parsedURL.Path == "/api/file-transfer/access" {
+		raw = strings.TrimSpace(parsedURL.Query().Get("objectKey"))
+		if raw == "" {
+			return "", errors.Errorf("公开文件地址缺少对象 key")
+		}
+	}
+	return objectStorage.ResolveObjectKey(raw)
 }
 
 // buildUploadDownloadURL 构建上传会话的下载 URL。
@@ -500,6 +628,9 @@ func (l *FileTransferLogic) initDirectUpload(req *types.FileUploadInitReq, opera
 		ExpiresAt:      corelogic.FormatDateTime(now.Add(l.uploadSessionTTL())),
 		DirectUpload:   plan,
 	}
+	if err := l.enqueueUploadedObjectCleanup(session.UploadID, session.BizType, session.ObjectKey, l.uploadSessionTTL()); err != nil {
+		return nil, errors.Tag(err)
+	}
 	uploadManager, err := l.uploadManager()
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -516,7 +647,20 @@ func (l *FileTransferLogic) completeServerUpload(uploadID string) (*transfer.Upl
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	session, err := uploadManager.Complete(l.Ctx, uploadID)
+	session, err := uploadManager.Complete(l.Ctx, uploadID, func(ctx context.Context, session *transfer.UploadSession, filePath string) error {
+		policy, err := l.uploadPolicy(session.BizType)
+		if err != nil {
+			return errors.Tag(err)
+		}
+		if err = l.validateCompletedFile(filePath, policy); err != nil {
+			return errors.Tag(err)
+		}
+		scanner, err := l.virusScanner()
+		if err != nil {
+			return errors.Tag(err)
+		}
+		return errors.Tag(scanner.ScanFile(ctx, filePath))
+	})
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
@@ -579,16 +723,6 @@ func (l *FileTransferLogic) persistServerUploadedFile(session *transfer.UploadSe
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
-	if err := l.validateCompletedFile(session.StoragePath, policy); err != nil {
-		return nil, errors.Tag(err)
-	}
-	scanner, err := l.virusScanner()
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
-	if err := scanner.ScanFile(l.Ctx, session.StoragePath, session.BizType); err != nil {
-		return nil, errors.Tag(err)
-	}
 	objectStorage, err := l.objectStorage()
 	if err != nil {
 		return nil, errors.Tag(err)
@@ -611,9 +745,13 @@ func (l *FileTransferLogic) persistServerUploadedFile(session *transfer.UploadSe
 		}
 		return nil, errors.Tag(err)
 	}
-	if localFileExists(session.StoragePath) {
-		_ = os.Remove(session.StoragePath)
+	if err := l.enqueueUploadedObjectCleanup(session.UploadID, session.BizType, storedObject.ObjectKey, l.uploadSessionTTL()); err != nil {
+		if deleteErr := objectStorage.Delete(l.Ctx, storedObject.ObjectKey); deleteErr != nil {
+			corelogic.LogWrappedError(l, deleteErr, "FileTransferLogic.persistServerUploadedFile 回滚清理任务投递失败对象失败")
+		}
+		return nil, errors.Tag(err)
 	}
+	localPath := session.StoragePath
 	session.StorageType = storedObject.StorageType
 	session.ObjectKey = storedObject.ObjectKey
 	session.StoragePath = storedObject.ObjectKey
@@ -626,7 +764,13 @@ func (l *FileTransferLogic) persistServerUploadedFile(session *transfer.UploadSe
 		return nil, errors.Tag(err)
 	}
 	if err := uploadManager.PersistSession(l.Ctx, session); err != nil {
+		if deleteErr := objectStorage.Delete(l.Ctx, storedObject.ObjectKey); deleteErr != nil {
+			corelogic.LogWrappedError(l, deleteErr, "FileTransferLogic.persistServerUploadedFile 回滚会话持久化失败对象失败")
+		}
 		return nil, errors.Tag(err)
+	}
+	if localFileExists(localPath) {
+		_ = os.Remove(localPath)
 	}
 	return session, nil
 }
@@ -767,7 +911,7 @@ func (l *FileTransferLogic) validateDirectUploadedObject(session *transfer.Uploa
 	if err != nil {
 		return errors.Tag(err)
 	}
-	if err := scanner.ScanFile(l.Ctx, tempPath, session.BizType); err != nil {
+	if err := scanner.ScanFile(l.Ctx, tempPath); err != nil {
 		return errors.Tag(err)
 	}
 	return nil

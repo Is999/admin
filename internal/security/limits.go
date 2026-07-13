@@ -33,7 +33,7 @@ func ValidateSecurityFieldCount(fields []string, scope string) error {
 	return nil
 }
 
-// ValidateSecurityScalarValue 校验普通安全字段值，签名和非 json: 加密只允许轻量标量。
+// ValidateSecurityScalarValue 校验普通加密字段值，非 json: 加密只允许轻量标量。
 func ValidateSecurityScalarValue(scope string, field string, value any) error {
 	if isComplexSecurityValue(value) {
 		return errors.Wrapf(ErrSecurityPayloadTooLarge, "%s字段[%s]不允许复杂结构", scope, field)

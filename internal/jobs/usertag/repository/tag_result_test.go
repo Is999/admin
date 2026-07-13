@@ -1,9 +1,11 @@
 package repository
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
+	"admin/common/idgen"
 	"admin/internal/jobs/usertag/route"
 	"admin/internal/jobs/usertag/types"
 	"admin/internal/model"
@@ -14,9 +16,22 @@ import (
 
 // TestWorkflowShardUIDsFiltersCurrentShard 验证骨架仓储仍按工作流分片过滤 UID。
 func TestWorkflowShardUIDsFiltersCurrentShard(t *testing.T) {
-	repo := NewTagRepository(NewRuntimeDeps(nil, route.NewShardPlan(10, 10)))
-	uids := repo.WorkflowShardUIDs(types.RuntimeOptions{ShardIndex: 1, ShardTotal: 2}, []int64{1, 2, 3, 4, 3, 0})
-	if len(uids) != 2 || uids[0] != 1 || uids[1] != 3 {
+	repo := NewTagRepository(NewRuntimeDeps(nil, route.NewShardPlan(10)))
+	input := []int64{1, 2, 3, 4, 3, 0}
+	uids := repo.WorkflowShardUIDs(types.RuntimeOptions{ShardIndex: 1, ShardTotal: 2}, input)
+	want := make([]int64, 0, len(input))
+	seen := make(map[int64]struct{})
+	for _, uid := range input {
+		if uid <= 0 || idgen.ShardNo(uid)*2/idgen.ShardMod != 1 {
+			continue
+		}
+		if _, exists := seen[uid]; exists {
+			continue
+		}
+		seen[uid] = struct{}{}
+		want = append(want, uid)
+	}
+	if !reflect.DeepEqual(uids, want) {
 		t.Fatalf("unexpected shard uids: %#v", uids)
 	}
 }
@@ -31,7 +46,7 @@ func TestEventOutboxRowToChangeKeepsTagSource(t *testing.T) {
 
 // TestApplyEventOutboxScopeSkipsShardForSingleWorker 验证单任务派发会覆盖所有 outbox 分片。
 func TestApplyEventOutboxScopeSkipsShardForSingleWorker(t *testing.T) {
-	repo := NewTagRepository(NewRuntimeDeps(nil, route.NewShardPlan(10, 10)))
+	repo := NewTagRepository(NewRuntimeDeps(nil, route.NewShardPlan(10)))
 	query, err := repo.applyEventOutboxScope(newUserTagDryRunDB(t).Model(&model.UserTagEventOutbox{}), types.RuntimeOptions{ShardTotal: 1})
 	if err != nil {
 		t.Fatalf("applyEventOutboxScope() error = %v", err)
@@ -44,8 +59,8 @@ func TestApplyEventOutboxScopeSkipsShardForSingleWorker(t *testing.T) {
 
 // TestApplyEventOutboxScopeUsesRuntimeShardIndex 验证分片数一致时命中 shard_no 索引。
 func TestApplyEventOutboxScopeUsesRuntimeShardIndex(t *testing.T) {
-	repo := NewTagRepository(NewRuntimeDeps(nil, route.NewShardPlan(10, 10)))
-	query, err := repo.applyEventOutboxScope(newUserTagDryRunDB(t).Model(&model.UserTagEventOutbox{}), types.RuntimeOptions{ShardIndex: 3, ShardTotal: 10})
+	repo := NewTagRepository(NewRuntimeDeps(nil, route.NewShardPlan(1024)))
+	query, err := repo.applyEventOutboxScope(newUserTagDryRunDB(t).Model(&model.UserTagEventOutbox{}), types.RuntimeOptions{ShardIndex: 3, ShardTotal: 1024})
 	if err != nil {
 		t.Fatalf("applyEventOutboxScope() error = %v", err)
 	}
@@ -58,18 +73,18 @@ func TestApplyEventOutboxScopeUsesRuntimeShardIndex(t *testing.T) {
 	}
 }
 
-// TestApplyEventOutboxScopeFallsBackToUIDModulo 验证工作流分片数不等于运行期索引分片数时按 UID 取模。
-func TestApplyEventOutboxScopeFallsBackToUIDModulo(t *testing.T) {
-	repo := NewTagRepository(NewRuntimeDeps(nil, route.NewShardPlan(10, 16)))
+// TestApplyEventOutboxScopeUsesBucketRange 验证分片数不整除时仍使用连续固定桶范围。
+func TestApplyEventOutboxScopeUsesBucketRange(t *testing.T) {
+	repo := NewTagRepository(NewRuntimeDeps(nil, route.NewShardPlan(10)))
 	query, err := repo.applyEventOutboxScope(newUserTagDryRunDB(t).Model(&model.UserTagEventOutbox{}), types.RuntimeOptions{ShardIndex: 3, ShardTotal: 10})
 	if err != nil {
 		t.Fatalf("applyEventOutboxScope() error = %v", err)
 	}
 	stmt := query.Find(&[]model.UserTagEventOutbox{}).Statement
-	if !strings.Contains(stmt.SQL.String(), "MOD(uid, ?) = ?") {
-		t.Fatalf("expected uid modulo filter, sql=%s", stmt.SQL.String())
+	if !strings.Contains(stmt.SQL.String(), "shard_no BETWEEN") {
+		t.Fatalf("expected shard_no BETWEEN filter, sql=%s", stmt.SQL.String())
 	}
-	if len(stmt.Vars) != 2 || stmt.Vars[0] != 10 || stmt.Vars[1] != 3 {
+	if len(stmt.Vars) != 2 || stmt.Vars[0] != 308 || stmt.Vars[1] != 409 {
 		t.Fatalf("unexpected vars: %#v", stmt.Vars)
 	}
 }

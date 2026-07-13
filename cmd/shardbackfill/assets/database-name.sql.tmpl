@@ -1,0 +1,6 @@
+-- 代码资产：读取当前源数据库名以派生命名锁。
+-- SQL 方言：MySQL 8.0。
+-- 调用方：cmd/shardbackfill.acquireTableLock。
+-- 参数来源：无动态参数。
+-- 安全边界：只读取当前连接数据库名。
+SELECT DATABASE()

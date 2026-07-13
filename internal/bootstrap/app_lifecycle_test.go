@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"admin/internal/bootstrap/components"
+	"admin/internal/svc"
 )
 
 // TestAppLifecycleHooksOrder 确保启动钩子按注册顺序执行，停止钩子按逆序执行。
@@ -49,7 +50,9 @@ func TestAppLifecycleHooksOrder(t *testing.T) {
 // TestAppLifecycleHooksRollbackOnStartFailure 确保启动中途失败时会回滚已启动组件，避免后台协程残留。
 func TestAppLifecycleHooksRollbackOnStartFailure(t *testing.T) {
 	called := make([]string, 0, 3)
+	alerter := &lifecycleAlertRecorder{}
 	app := &App{
+		ServiceContext: &svc.ServiceContext{RuntimeAlerter: alerter},
 		startHooks: []components.LifecycleHook{
 			{Name: "first", Run: func(context.Context) error {
 				called = append(called, "start:first")
@@ -82,6 +85,33 @@ func TestAppLifecycleHooksRollbackOnStartFailure(t *testing.T) {
 	if err := app.runStopHooks(context.Background()); err != nil {
 		t.Fatalf("期望重复停止保持幂等，实际错误为 %v", err)
 	}
+	if len(alerter.alerts) != 1 || alerter.alerts[0].Operation != "start" || alerter.alerts[0].TaskName != "second" {
+		t.Fatalf("启动失败告警不符合预期: %+v", alerter.alerts)
+	}
+}
+
+// TestComponentRegisterFailureUsesIndependentAlerter 验证组件注册失败会使用已装配的独立告警入口。
+func TestComponentRegisterFailureUsesIndependentAlerter(t *testing.T) {
+	alerter := &lifecycleAlertRecorder{}
+	svcCtx := &svc.ServiceContext{RuntimeAlerter: alerter}
+	notifyComponentRegisterFailure(context.Background(), svcCtx, assertLifecycleError{})
+	if len(alerter.alerts) != 1 {
+		t.Fatalf("组件注册失败告警数量=%d, want 1", len(alerter.alerts))
+	}
+	alert := alerter.alerts[0]
+	if alert.Operation != "register" || alert.TaskName != "component_registry" {
+		t.Fatalf("组件注册失败告警不符合预期: %+v", alert)
+	}
+}
+
+// lifecycleAlertRecorder 记录生命周期测试告警。
+type lifecycleAlertRecorder struct {
+	alerts []svc.TaskRuntimeAlert // 已接收的运行告警
+}
+
+// NotifyRuntimeAlert 记录一次运行告警。
+func (r *lifecycleAlertRecorder) NotifyRuntimeAlert(_ context.Context, alert svc.TaskRuntimeAlert) {
+	r.alerts = append(r.alerts, alert)
 }
 
 // assertLifecycleError 是生命周期测试使用的固定错误。

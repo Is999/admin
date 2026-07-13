@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"regexp"
 	"strings"
 	"time"
 
@@ -42,54 +41,20 @@ func NewTagRepository(deps RuntimeDeps) *TagRepository {
 	return &TagRepository{deps: deps}
 }
 
-// PrepareResultTables 清空 full 模式临时标签结果表。
-func (r *TagRepository) PrepareResultTables(ctx context.Context, opts types.RuntimeOptions) error {
+// PrepareResultTables 在正式结果写入尚未闭环前拒绝创建或清空结果表。
+func (r *TagRepository) PrepareResultTables(_ context.Context, opts types.RuntimeOptions) error {
 	if opts.DryRun || opts.Mode != types.ModeFull {
 		return nil
 	}
-	logDB, err := r.logDB()
-	if err != nil {
-		return errors.Tag(err)
-	}
-	for _, shard := range r.deps.ShardPlan.TagShardsForWorkflow(opts.ShardIndex, opts.ShardTotal) {
-		currentTable := model.UserTagShardTableName(shard)
-		tmpTable := model.UserTagTmpShardTableName(shard)
-		if err := r.ensureResultShardTable(ctx, logDB, currentTable); err != nil {
-			return errors.Wrapf(err, "创建用户标签结果表失败 table=%s", currentTable)
-		}
-		if err := logDB.WithContext(ctx).Exec(userTagCreateLikeTableSQL(tmpTable, currentTable)).Error; err != nil {
-			return errors.Wrapf(err, "创建用户标签临时表失败 table=%s", tmpTable)
-		}
-		if err := logDB.WithContext(ctx).Exec(userTagTruncateTableSQL(tmpTable)).Error; err != nil {
-			return errors.Wrapf(err, "清空用户标签临时表失败 table=%s", tmpTable)
-		}
-	}
-	return nil
+	return errors.New("用户标签 full 结果写入尚未实现，禁止应用操作结果表")
 }
 
-// FinalizeResultTables 在 full 所有节点成功后交换 tmp 和线上结果表。
-func (r *TagRepository) FinalizeResultTables(ctx context.Context, opts types.RuntimeOptions) error {
+// FinalizeResultTables 在正式结果提交尚未闭环前拒绝切换结果表。
+func (r *TagRepository) FinalizeResultTables(_ context.Context, opts types.RuntimeOptions) error {
 	if opts.DryRun || opts.Mode != types.ModeFull {
 		return nil
 	}
-	logDB, err := r.logDB()
-	if err != nil {
-		return errors.Tag(err)
-	}
-	for _, shard := range r.deps.ShardPlan.TagShardsForWorkflow(opts.ShardIndex, opts.ShardTotal) {
-		currentTable := model.UserTagShardTableName(shard)
-		tmpTable := model.UserTagTmpShardTableName(shard)
-		swapTable := model.UserTagSwapShardTableName(shard)
-		renameItems := []string{
-			quoteIdent(currentTable) + " TO " + quoteIdent(swapTable),
-			quoteIdent(tmpTable) + " TO " + quoteIdent(currentTable),
-			quoteIdent(swapTable) + " TO " + quoteIdent(tmpTable),
-		}
-		if err := logDB.WithContext(ctx).Exec(userTagRenameTableSQL(renameItems)).Error; err != nil {
-			return errors.Wrapf(err, "切换用户标签结果表失败 shard=%d", shard)
-		}
-	}
-	return nil
+	return errors.New("用户标签 full 结果提交尚未实现，禁止应用切换结果表")
 }
 
 // ResetRuntimeState 清理当前工作流的运行期 UID、checkpoint 和事件 outbox。
@@ -348,10 +313,7 @@ func (r *TagRepository) runtimeUIDBatch(ctx context.Context, opts types.RuntimeO
 		return nil, errors.Tag(err)
 	}
 	shard := r.deps.ShardPlan.NormalizeShard(opts.ShardIndex, opts.ShardTotal)
-	condition, err := r.deps.ShardPlan.IndexedUIDCondition("uid", "shard_no", shard)
-	if err != nil {
-		return nil, errors.Tag(err)
-	}
+	condition := r.deps.ShardPlan.IndexedUIDCondition(shard)
 	batchSize := positiveBatchSize(opts.BatchSize)
 	uids := make([]int64, 0, batchSize)
 	query := logDB.WithContext(ctx).Table(model.TableNameUserTagRuntimeUID).
@@ -525,10 +487,7 @@ func (r *TagRepository) applyEventOutboxScope(query *gorm.DB, opts types.Runtime
 	}
 	if opts.ShardTotal > 1 {
 		shard := r.deps.ShardPlan.NormalizeShard(opts.ShardIndex, opts.ShardTotal)
-		condition, err := r.deps.ShardPlan.IndexedUIDCondition("uid", "shard_no", shard)
-		if err != nil {
-			return nil, errors.Tag(err)
-		}
+		condition := r.deps.ShardPlan.IndexedUIDCondition(shard)
 		if condition.Expr != "" {
 			query = query.Where(condition.Expr, condition.Args...)
 		}
@@ -537,17 +496,6 @@ func (r *TagRepository) applyEventOutboxScope(query *gorm.DB, opts types.Runtime
 		query = query.Where("uid IN ?", opts.UIDs)
 	}
 	return query, nil
-}
-
-// ensureResultShardTable 按需创建用户标签结果物理分表。
-func (r *TagRepository) ensureResultShardTable(ctx context.Context, db *gorm.DB, table string) error {
-	if db == nil {
-		return errors.New("用户标签结果表数据库连接为空")
-	}
-	if table == model.UserTagShardTableName(0) {
-		return nil
-	}
-	return errors.Tag(db.WithContext(ctx).Exec(userTagCreateLikeTableSQL(table, model.UserTagShardTableName(0))).Error)
 }
 
 // markEventOutboxFailed 标记事件派发失败并设置下一次重试时间。
@@ -603,7 +551,18 @@ func eventOutboxLocker(opts types.RuntimeOptions) string {
 
 // WorkflowShardUIDs 返回当前 workflow 分片负责的 UID 集合。
 func (r *TagRepository) WorkflowShardUIDs(opts types.RuntimeOptions, uids []int64) []int64 {
-	return filterUIDsByShard(uniqueInt64s(uids), opts.ShardIndex, opts.ShardTotal)
+	shard := r.deps.ShardPlan.NormalizeShard(opts.ShardIndex, opts.ShardTotal)
+	items := uniqueInt64s(uids)
+	out := make([]int64, 0, len(items))
+	for _, uid := range items {
+		if uid <= 0 {
+			continue
+		}
+		if r.deps.ShardPlan.UIDShard(uid, shard.Total) == shard.Index {
+			out = append(out, uid)
+		}
+	}
+	return out
 }
 
 // logDB 返回用户标签写库连接。
@@ -643,16 +602,4 @@ func truncateString(value string, limit int) string {
 		return value
 	}
 	return value[:limit]
-}
-
-// simpleIdentPattern 限制动态表名和列名只能使用安全标识符。
-var simpleIdentPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// quoteIdent 返回安全 MySQL 标识符。
-func quoteIdent(name string) string {
-	name = strings.TrimSpace(name)
-	if !simpleIdentPattern.MatchString(name) {
-		return "``"
-	}
-	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }

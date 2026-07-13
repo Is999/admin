@@ -1,0 +1,8 @@
+-- 代码资产：读取 shardbackfill checkpoint 表级结构属性。
+-- SQL 方言：MySQL 8.0 information_schema。
+-- 调用方：cmd/shardbackfill.validateCheckpointSchema。
+-- 参数来源：无动态参数，固定检查运维进度表。
+-- 安全边界：只读单表元数据，不扫描任务数据。
+SELECT `ENGINE`, `TABLE_COLLATION`, `TABLE_COMMENT`, `CREATE_OPTIONS`
+FROM `information_schema`.`TABLES`
+WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'shard_backfill_checkpoint'

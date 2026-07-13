@@ -115,9 +115,6 @@ func NewQuery[T schema.Tabler](db *gorm.DB, model T) *Query[T] {
 	}
 }
 
-// Available 检查查询对象是否可用
-func (q *Query[T]) Available() bool { return q.db != nil }
-
 // Exists 判断记录是否存在
 func (q *Query[T]) Exists(scopes ...func(db *gorm.DB) *gorm.DB) (exists bool, err error) {
 	err = q.db.Model(&q.model).Select("1").Scopes(scopes...).Limit(1).Scan(&exists).Error

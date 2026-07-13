@@ -1,0 +1,17 @@
+-- 代码资产：创建 shardbackfill 集成测试更新保护触发器。
+-- SQL 方言：MySQL 8.0。
+-- 调用方：cmd/shardbackfill.createUpdateGuard。
+-- 参数来源：无动态参数，仅使用固定测试对象名。
+-- 安全边界：语义与生产源表更新保护模板保持一致。
+CREATE TRIGGER `shard_backfill_case_bu`
+BEFORE UPDATE ON `shard_backfill_case`
+FOR EACH ROW
+BEGIN
+  IF NOT (NEW.`id` <=> OLD.`id`) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'backfill cursor primary key is immutable';
+  END IF;
+  IF (NOT (NEW.`uid` <=> OLD.`uid`) OR NOT (NEW.`shard_no` <=> OLD.`shard_no`))
+     AND (NEW.`shard_no` IS NULL OR NEW.`uid` IS NULL OR NEW.`uid` <= 0 OR NEW.`shard_no` <> MOD(CRC32(CAST(NEW.`uid` AS CHAR)), 1024)) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'shard_no does not match fixed user bucket';
+  END IF;
+END

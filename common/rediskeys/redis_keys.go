@@ -5,6 +5,13 @@ const (
 	// ScopeRoot 表示 Redis 缓存和锁的 app_id 命名空间根前缀。
 	// Redis 类型：命名空间前缀，TTL 过期规则：不直接写入 Redis。
 	ScopeRoot = "app:"
+	// rateLimitRedisRoot 表示项目分布式限流状态的二级业务前缀。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由具体限流算法管理状态和 TTL。
+	// GCRA 逻辑 key 会由 redis_rate 在物理 key 前追加固定的 `rate:` 前缀。
+	rateLimitRedisRoot = "rate_limit"
+	// rateLimitFixedIntervalSegment 表示固定间隔限流状态的算法隔离段。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由固定间隔限流令牌的 interval 控制。
+	rateLimitFixedIntervalSegment = "fixed_interval"
 )
 
 // table-cache Redis key 二级前缀集中维护。
@@ -39,6 +46,12 @@ const (
 	// taskAsynqRedisRoot 表示 Asynq 框架固定 Redis 根前缀。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq 内部 key 生命周期控制。
 	taskAsynqRedisRoot = "asynq"
+	// taskAsynqStatePending 表示 Asynq pending 状态 list 段。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq pending 队列生命周期控制。
+	taskAsynqStatePending = "pending"
+	// taskAsynqStateActive 表示 Asynq active 状态 list 段。
+	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq active 队列生命周期控制。
+	taskAsynqStateActive = "active"
 	// taskAsynqStateRetry 表示 Asynq retry 状态 zset 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq retry 队列生命周期控制。
 	taskAsynqStateRetry = "retry"
@@ -73,21 +86,6 @@ const (
 	// taskWorkflowNodesSegment 表示工作流节点集合 key 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由工作流节点集合 key 的调用方 TTL 控制。
 	taskWorkflowNodesSegment = "nodes"
-	// taskWorkflowScheduledSegment 表示工作流节点调度去重 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由节点调度去重 key 的调用方 TTL 控制。
-	taskWorkflowScheduledSegment = "scheduled"
-	// taskWorkflowFinalizedSegment 表示工作流节点终态收口 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由节点终态 key 的调用方 TTL 控制。
-	taskWorkflowFinalizedSegment = "finalized"
-	// taskWorkflowInstanceSegment 表示工作流分片实例 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由分片实例 key 的调用方 TTL 控制。
-	taskWorkflowInstanceSegment = "instance"
-	// taskWorkflowCompletedSegment 表示工作流完成标记 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由工作流完成标记 key 的调用方 TTL 控制。
-	taskWorkflowCompletedSegment = "completed"
-	// taskWorkflowFailedSegment 表示工作流失败标记 key 段。
-	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由工作流失败标记 key 的调用方 TTL 控制。
-	taskWorkflowFailedSegment = "failed"
 	// taskWorkflowUniqueSegment 表示工作流幂等占位 key 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由工作流幂等 key TTL 控制。
 	taskWorkflowUniqueSegment = "unique"
@@ -116,74 +114,64 @@ const (
 	// 参数依次为部署级 scope、业务 namespace；该 key 不追加 app_id 前缀，确保同一业务统一递增。
 	IDSegmentCounter = "idgen:segment:%s:%s"
 
-	// AdminInfo 表示管理员信息缓存业务段模板。
-	// Redis 类型：Hash，TTL 过期规则：无固定 TTL，按业务更新或删除精确失效。
+	// AdminSession 表示管理员会话缓存业务段模板。
+	// Redis 类型：Hash，TTL 过期规则：跟随 JwtExpiresIn，登录和刷新令牌时续期。
 	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
-	AdminInfo = "admin:info:%d"
+	AdminSession = "admin:session:%d"
 
-	// AdminInfoPattern 表示管理员信息缓存业务段展示模板。
+	// AdminSessionPattern 表示管理员会话缓存业务段展示模板。
 	// Redis 类型：Hash 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
-	AdminInfoPattern = "admin:info:{adminID}"
+	AdminSessionPattern = "admin:session:{adminID}"
+
+	// SecurityCacheSyncBarrier 表示安全缓存存在待补偿失效任务。
+	// Redis 类型：String，TTL 过期规则：无 TTL，待补偿任务全部完成后精确删除。
+	SecurityCacheSyncBarrier = "security:cache_sync:barrier"
+
+	// SecurityCacheSyncLock 表示安全缓存失效补偿 worker 的分布式锁。
+	// Redis 类型：String（由 redsync 管理），TTL 过期规则：由 redsync 锁 TTL 控制，到期自动释放。
+	SecurityCacheSyncLock = "security:cache_sync:lock"
 
 	// RoleStatus 表示角色状态缓存键。
-	// Redis 类型：Hash，TTL 过期规则：无固定 TTL，按业务更新或删除精确失效。
+	// Redis 类型：Hash，TTL 过期规则：由 table-cache 鉴权目标统一控制。
 	RoleStatus = "role_status"
 
-	// RolePermission 表示角色权限缓存键模板。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
+	// RolePermission 表示角色路由权限关系缓存键模板。
+	// Redis 类型：Set，成员为原始权限 ID；TTL 过期规则：由 table-cache 鉴权目标统一控制。
 	// `%d` 位置填充角色 ID。
 	RolePermission = "role_permission:%d"
 
-	// RolePermissionPattern 表示角色权限缓存键展示模板。
+	// RolePermissionPattern 表示角色路由权限关系缓存键展示模板。
 	// Redis 类型：Set 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
 	RolePermissionPattern = "role_permission:{roleID}"
 
-	// RolePermissionWriteLock 表示角色权限写操作互斥锁。
+	// RoleDocPermission 表示角色文档权限关系缓存键模板。
+	// Redis 类型：Set，成员为原始文档权限 ID；TTL 过期规则：由 table-cache 鉴权目标统一控制。
+	// `%d` 位置填充角色 ID。
+	RoleDocPermission = "role_doc_permission:%d"
+
+	// RoleDocPermissionPattern 表示角色文档权限关系缓存键展示模板。
+	// Redis 类型：Set 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
+	RoleDocPermissionPattern = "role_doc_permission:{roleID}"
+
+	// RBACWriteLock 表示角色、权限和授权关系写操作互斥锁。
 	// Redis 类型：String（由 redsync 管理），TTL 过期规则：由 redsync 锁 TTL 控制，到期自动释放。
-	RolePermissionWriteLock = "admin:role:permission:write:lock"
+	RBACWriteLock = "admin:rbac:write:lock"
 
 	// RoleTree 表示角色树缓存键。
 	// Redis 类型：String（JSON 文本），TTL 过期规则：无固定 TTL，按角色变更精确失效。
 	RoleTree = "role_tree"
 
-	// AdminRoleIDs 表示管理员启用角色 ID 集合缓存键模板。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
+	// AdminRoleIDs 表示管理员角色关系缓存键模板。
+	// Redis 类型：Set，成员为原始角色 ID；TTL 过期规则：由 table-cache 鉴权目标统一控制。
 	// `%d` 位置填充管理员 ID。
 	AdminRoleIDs = "admin_role_ids:%d"
 
-	// AdminRoleIDsPattern 表示管理员启用角色 ID 集合缓存键展示模板。
+	// AdminRoleIDsPattern 表示管理员角色关系缓存键展示模板。
 	// Redis 类型：Set 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
 	AdminRoleIDsPattern = "admin_role_ids:{adminID}"
 
-	// AdminPermissionIDs 表示管理员聚合权限 ID 集合缓存键模板。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
-	// `%d` 位置填充管理员 ID。
-	AdminPermissionIDs = "admin_permission_ids:%d"
-
-	// AdminPermissionIDsPattern 表示管理员聚合权限 ID 集合缓存键展示模板。
-	// Redis 类型：Set 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
-	AdminPermissionIDsPattern = "admin_permission_ids:{adminID}"
-
-	// AdminPermissionUUIDs 表示管理员最终权限码集合缓存键模板。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
-	// `%d` 位置填充管理员 ID。
-	AdminPermissionUUIDs = "admin_permission_uuids:%d"
-
-	// AdminPermissionUUIDsPattern 表示管理员最终权限码集合缓存键展示模板。
-	// Redis 类型：Set 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
-	AdminPermissionUUIDsPattern = "admin_permission_uuids:{adminID}"
-
-	// AdminProfile 表示管理员公开资料缓存键模板。
-	// Redis 类型：String（JSON 文本），TTL 过期规则：无固定 TTL，按管理员资料或角色变更精确失效。
-	// `%d` 位置填充管理员 ID。
-	AdminProfile = "admin_profile:%d"
-
-	// AdminProfilePattern 表示管理员公开资料缓存键展示模板。
-	// Redis 类型：String 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
-	AdminProfilePattern = "admin_profile:{adminID}"
-
 	// AdminRolesDetail 表示管理员角色名称列表缓存键模板。
-	// Redis 类型：String（JSON 文本），TTL 过期规则：无固定 TTL，按管理员角色变更精确失效。
+	// Redis 类型：String（JSON 文本），TTL 过期规则：由 table-cache 目标配置为 1 小时，并按管理员角色变更精确失效。
 	// `%d` 位置填充管理员 ID。
 	AdminRolesDetail = "admin_roles_detail:%d"
 
@@ -191,31 +179,25 @@ const (
 	// Redis 类型：String 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
 	AdminRolesDetailPattern = "admin_roles_detail:{adminID}"
 
-	// PermissionModule 表示权限模块缓存键。
-	// Redis 类型：Hash，TTL 过期规则：无固定 TTL，按业务更新或删除精确失效。
-	PermissionModule = "permission_module"
+	// RoutePermissionIDs 表示启用路由别名到权限 ID 的反向索引缓存键。
+	// Redis 类型：Hash，field 为路由别名，value 为逗号分隔的权限 ID；TTL 过期规则：由 table-cache 鉴权目标统一控制。
+	RoutePermissionIDs = "route_permission_ids"
 
 	// PermissionUUID 表示权限 UUID 缓存键。
-	// Redis 类型：Hash，TTL 过期规则：无固定 TTL，按业务更新或删除精确失效。
+	// Redis 类型：Hash，field 为启用权限 ID，value 为 UUID；TTL 过期规则：由 table-cache 鉴权目标统一控制。
 	PermissionUUID = "permission_uuid"
 
 	// PermissionTree 表示权限树缓存键。
 	// Redis 类型：String（JSON 文本），TTL 过期规则：无固定 TTL，按权限变更精确失效。
 	PermissionTree = "permission_tree"
 
-	// RoutePermissionIDs 表示路由别名候选权限 ID 集合缓存键模板。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
-	// `%s` 位置填充路由别名。
-	RoutePermissionIDs = "route_permission_ids:%s"
+	// DocPermissionList 表示全部文档权限节点缓存键。
+	// Redis 类型：String（JSON 文本），TTL 过期规则：按 table-cache 目标配置过期。
+	DocPermissionList = "doc_permission_list"
 
-	// RoutePermissionIDsPattern 表示路由别名候选权限 ID 集合缓存键展示模板。
-	// Redis 类型：Set 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
-	RoutePermissionIDsPattern = "route_permission_ids:{routeAlias}"
-
-	// RoutePermissionAliasIndex 表示已写入路由权限候选缓存的路由别名索引。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
-	// 成员为 routeAlias，用于权限定义变更时精确删除 `route_permission_ids:{routeAlias}`，避免前缀 SCAN。
-	RoutePermissionAliasIndex = "route_permission_ids:index"
+	// DocResourcePermissionID 表示启用文档资源反向索引缓存键。
+	// Redis 类型：Hash，field 为 site 与 path 组成的资源键，value 为文档权限 ID；TTL 过期规则：由 table-cache 鉴权目标统一控制。
+	DocResourcePermissionID = "doc_resource_permission_id"
 
 	// SysConfigUUID 表示系统配置缓存键模板。
 	// Redis 类型：Hash，TTL 过期规则：无固定 TTL，按业务更新或删除精确失效。
@@ -271,34 +253,34 @@ const (
 	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
 	LoginCheckMFAFlag = "login_check_mfa_flag:%d"
 
-	// AdminLogoutToken 表示管理员登出令牌标记业务段模板。
-	// Redis 类型：String，TTL 过期规则：由调用方 TTL 或业务精确删除控制。
+	// AdminMFATwoStep 表示管理员二次校验票据 Hash 业务段模板。
+	// Redis 类型：Hash，field 为票据 key，value 为带独立过期时间的票据内容；TTL 过期规则：Hash 保留最长票据窗口，value 独立校验真实过期时间。
 	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
-	AdminLogoutToken = "admin:logout_token:%d"
+	AdminMFATwoStep = "admin:mfa:two_step:%d"
 
-	// AdminMFATwoStepTicket 表示管理员二次校验票据业务段模板。
-	// Redis 类型：String，TTL 过期规则：由调用方 TTL 或业务精确删除控制。
-	// 第一个 `%d` 位置填充管理员 ID，第二个 `%s` 位置填充票据 key。
-	AdminMFATwoStepTicket = "admin:mfa:two_step:%d:%s"
-
-	// AdminMFATwoStepTicketPattern 表示管理员二次校验票据业务段展示模板。
-	// Redis 类型：String 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
-	AdminMFATwoStepTicketPattern = "admin:mfa:two_step:{adminID}:{ticketKey}"
-
-	// AdminMFATwoStepIndex 表示管理员二次校验票据索引业务段模板。
-	// Redis 类型：Set，TTL 过期规则：无固定 TTL，成员按业务生命周期精确增删。
-	// `%d` 位置填充管理员 ID，调用侧通过 WithPrefix 追加 app_id 前缀。
-	AdminMFATwoStepIndex = "admin:mfa:two_step:index:%d"
+	// AdminMFATwoStepPattern 表示管理员二次校验票据业务段展示模板。
+	// Redis 类型：Hash 模板，TTL 过期规则：不直接写入 Redis，仅用于展示或匹配真实 key。
+	AdminMFATwoStepPattern = "admin:mfa:two_step:{adminID}"
 
 	// SysConfigExcelExportLock 表示字典配置导出条件互斥锁 key 模板。
 	// Redis 类型：String（由 redsync 管理），TTL 过期规则：由 redsync 锁 TTL 控制，到期自动释放。
 	// `%s` 位置填充导出条件指纹，避免同条件并发重复生成 Excel。
 	SysConfigExcelExportLock = "sys_config:excel:export:%s"
 
-	// SysConfigExcelImportLock 表示字典配置导入用户互斥锁 key 模板。
+	// SysConfigMutationLock 表示字典配置写入互斥锁。
 	// Redis 类型：String（由 redsync 管理），TTL 过期规则：由 redsync 锁 TTL 控制，到期自动释放。
-	// `%d` 位置填充管理员 ID，避免同一管理员并发导入覆盖变更。
-	SysConfigExcelImportLock = "sys_config:excel:import:%d"
+	// 新增、编辑和导入共用该锁，保证正式导入的快照校验与实际写入之间没有应用内并发变更。
+	SysConfigMutationLock = "sys_config:mutation:lock"
+
+	// SysConfigImportBackup 表示字典导入前备份状态缓存键模板。
+	// Redis 类型：String（JSON 文本），TTL 过期规则：备份生成后保留 30 天。
+	// `%s` 位置填充 backupId，状态记录文件对象、操作者、上传会话和数据快照。
+	SysConfigImportBackup = "sys_config:excel:import:backup:%s"
+
+	// SysConfigImportBackupUsed 表示字典导入备份消费标记键模板。
+	// Redis 类型：String，TTL 过期规则：与对应备份剩余保留时间一致。
+	// `%s` 位置填充 backupId，通过 SETNX 保证同一备份只能执行一次导入。
+	SysConfigImportBackupUsed = "sys_config:excel:import:backup:used:%s"
 
 	// AdminExportJob 表示管理员列表导出任务状态缓存键模板。
 	// Redis 类型：String（JSON 文本），TTL 过期规则：按管理员导出任务状态 TTL 自动过期。
@@ -359,6 +341,11 @@ const (
 	// Redis 类型：String，TTL 过期规则：按签名防重放 TTL 自动过期。
 	// `%s` 位置填充 RequestID，实际 Redis key 通过 WithPrefix 追加 app_id 前缀。
 	SignatureReplayRequest = "signature:request:%s"
+
+	// OpsReplayNonce 表示内网运维请求 nonce 防重放缓存键模板。
+	// Redis 类型：String，TTL 过期规则：覆盖请求时间戳剩余有效窗口后自动过期。
+	// `%s` 位置填充十六进制 nonce，实际 Redis key 通过 WithPrefix 追加 app_id 前缀。
+	OpsReplayNonce = "ops:nonce:%s"
 
 	// LoginCaptcha 表示登录图形验证码缓存键模板。
 	// Redis 类型：String，TTL 过期规则：按登录验证码 TTL 自动过期，校验成功或失败后立即删除。

@@ -1,0 +1,9 @@
+-- 代码资产：幂等创建回填任务进度。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.ensureCheckpoint。
+-- 参数来源：全部任务字段通过预编译参数传入。
+-- 安全边界：任务名主键防止重复创建，恢复时还会校验不可变参数。
+INSERT IGNORE INTO `shard_backfill_checkpoint` (
+  `job_name`, `table_name`, `primary_key`, `uid_column`, `insert_trigger`, `update_trigger`,
+  `range_start`, `range_end`, `cursor_value`, `verify_cursor`, `status`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

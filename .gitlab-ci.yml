@@ -3,6 +3,7 @@ stages:
   - build
 
 variables:
+  GIT_DEPTH: "0"
   GOMODCACHE: "$CI_PROJECT_DIR/.cache/go/pkg/mod"
   GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
 
@@ -13,12 +14,11 @@ cache:
     - .cache/go-build
 
 test:
-  image: golang:1.26
+  image: golang:1.26.5
   stage: test
   script:
-    - make fmt-check
-    - make test
-    - make secret-scan
+    - 'git fetch --no-tags origin "$CI_DEFAULT_BRANCH:refs/remotes/origin/$CI_DEFAULT_BRANCH"'
+    - 'BRANCH_BASE="origin/$CI_DEFAULT_BRANCH" make ci'
 
 prometheus-rules:
   image:
@@ -29,13 +29,13 @@ prometheus-rules:
     - promtool check rules docs/prometheus/*.yml
 
 build:
-  image: golang:1.26
+  image: golang:1.26.5
   stage: build
   script:
     - make build build-tools package VERSION="$CI_COMMIT_SHORT_SHA"
   artifacts:
     paths:
-      - bin/admin-cron
-      - bin/admin-cron-migrate
+      - bin/admin
+      - bin/admin-migrate
       - dist/*.tar.gz
     expire_in: 7 days

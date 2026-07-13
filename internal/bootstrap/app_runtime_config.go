@@ -19,7 +19,7 @@ func publishRuntimeConfig(c config.Config) runtimecfg.Snapshot {
 }
 
 // applyStartupRuntimeConfig 在组件注册前应用 DB active release。
-func applyStartupRuntimeConfig(ctx context.Context, svcCtx *svc.ServiceContext, cfg *config.Config) error {
+func applyStartupRuntimeConfig(ctx context.Context, svcCtx *svc.ServiceContext, cfg *config.Config) (svc.RuntimeConfigReloadResult, error) {
 	return runtimewatch.ApplyStartup(ctx, svcCtx, cfg, func(c config.Config) {
 		publishRuntimeConfig(c)
 	})
@@ -56,9 +56,9 @@ func (a *App) startRuntimeConfigWatcher() {
 }
 
 // stopRuntimeConfigWatcher 停止 DB 运行配置轮询。
-func (a *App) stopRuntimeConfigWatcher() {
+func (a *App) stopRuntimeConfigWatcher(ctx context.Context) error {
 	if a == nil {
-		return
+		return nil
 	}
-	a.runtimeConfig.Stop()
+	return errors.Tag(a.runtimeConfig.Stop(ctx))
 }

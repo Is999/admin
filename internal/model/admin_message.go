@@ -45,6 +45,7 @@ type AdminMessage struct {
 	Link               string     `gorm:"column:link;type:varchar(500);not null;default:'';comment:跳转链接(路由或外链)" json:"link"`                                                              // 跳转链接
 	SenderAdminID      int        `gorm:"column:sender_admin_id;type:int unsigned;not null;default:0;index:idx_sender_admin_id,priority:1;comment:发送人管理员ID" json:"senderAdminId"`         // 发送人管理员 ID
 	SenderAdminName    string     `gorm:"column:sender_admin_name;type:varchar(20);not null;default:'';comment:发送人账号快照" json:"senderAdminName"`                                           // 发送人账号快照
+	ReplyToID          int64      `gorm:"column:reply_to_id;type:bigint unsigned;not null;default:0;comment:回复的原消息ID" json:"replyToId"`                                                   // 回复的原消息 ID，0 表示非回复消息
 	HandledStatus      int        `gorm:"column:handled_status;type:tinyint unsigned;not null;default:0;index:idx_handled_status,priority:1;comment:处理状态(0未处理1已处理)" json:"handledStatus"` // 处理状态
 	HandledByAdminID   int        `gorm:"column:handled_by_admin_id;type:int unsigned;not null;default:0;comment:处理人管理员ID" json:"handledByAdminId"`                                       // 处理人管理员ID
 	HandledByAdminName string     `gorm:"column:handled_by_admin_name;type:varchar(20);not null;default:'';comment:处理人账号快照" json:"handledByAdminName"`                                    // 处理人账号快照
@@ -85,6 +86,10 @@ type AdminMessageInboxItem struct {
 	Link               string `json:"link"`               // 跳转链接
 	SenderAdminID      int    `json:"senderAdminId"`      // 发送人管理员ID
 	SenderAdminName    string `json:"senderAdminName"`    // 发送人账号
+	ReplyToID          int64  `json:"replyToId"`          // 回复的原消息ID
+	ReplyToTitle       string `json:"replyToTitle"`       // 原消息标题
+	ReplyToSenderName  string `json:"replyToSenderName"`  // 原消息发送人账号
+	ReplyToCreatedAt   string `json:"replyToCreatedAt"`   // 原消息创建时间
 	HandledStatus      int    `json:"handledStatus"`      // 处理状态：0未处理 1已处理
 	HandledByAdminName string `json:"handledByAdminName"` // 处理人账号
 	HandledAt          string `json:"handledAt"`          // 处理时间（格式化字符串）
@@ -104,6 +109,7 @@ func ListAdminMessageInbox(
 	keyword string,
 	startTime *time.Time,
 	endTime *time.Time,
+	messageID int64,
 ) ([]AdminMessageInboxItem, int64, error) {
 	page, pageSize, err := validatePage(page, pageSize)
 	if err != nil {
@@ -135,6 +141,9 @@ func ListAdminMessageInbox(
 	if endTime != nil {
 		dbq = dbq.Where("m.created_at <= ?", *endTime)
 	}
+	if messageID > 0 {
+		dbq = dbq.Where("m.id = ?", messageID)
+	}
 
 	var total int64
 	if err := dbq.Count(&total).Error; err != nil {
@@ -155,6 +164,10 @@ func ListAdminMessageInbox(
 		Link               string     `gorm:"column:link"`                  // 跳转链接
 		SenderAdminID      int        `gorm:"column:sender_admin_id"`       // 发送人管理员 ID
 		SenderAdminName    string     `gorm:"column:sender_admin_name"`     // 发送人账号快照
+		ReplyToID          int64      `gorm:"column:reply_to_id"`           // 回复的原消息 ID
+		ReplyToTitle       string     `gorm:"column:reply_to_title"`        // 原消息标题
+		ReplyToSenderName  string     `gorm:"column:reply_to_sender_name"`  // 原消息发送人账号
+		ReplyToCreatedAt   *time.Time `gorm:"column:reply_to_created_at"`   // 原消息创建时间
 		HandledStatus      int        `gorm:"column:handled_status"`        // 处理状态
 		HandledByAdminName string     `gorm:"column:handled_by_admin_name"` // 处理人账号快照
 		HandledAt          *time.Time `gorm:"column:handled_at"`            // 处理时间
@@ -164,7 +177,7 @@ func ListAdminMessageInbox(
 	}
 	var rows []row
 
-	err = dbq.Select([]string{
+	err = dbq.Joins("LEFT JOIN " + TableNameAdminMessage + " AS p ON p.id = m.reply_to_id").Select([]string{
 		"m.id AS id",
 		"m.type AS type",
 		"m.level AS level",
@@ -174,6 +187,10 @@ func ListAdminMessageInbox(
 		"m.link AS link",
 		"m.sender_admin_id AS sender_admin_id",
 		"m.sender_admin_name AS sender_admin_name",
+		"m.reply_to_id AS reply_to_id",
+		"p.title AS reply_to_title",
+		"p.sender_admin_name AS reply_to_sender_name",
+		"p.created_at AS reply_to_created_at",
 		"m.handled_status AS handled_status",
 		"m.handled_by_admin_name AS handled_by_admin_name",
 		"m.handled_at AS handled_at",
@@ -198,6 +215,10 @@ func ListAdminMessageInbox(
 		if it.HandledAt != nil {
 			handledAt = it.HandledAt.Format(time.DateTime)
 		}
+		replyToCreatedAt := ""
+		if it.ReplyToCreatedAt != nil {
+			replyToCreatedAt = it.ReplyToCreatedAt.Format(time.DateTime)
+		}
 		items = append(items, AdminMessageInboxItem{
 			ID:                 it.ID,
 			Type:               it.Type,
@@ -208,6 +229,10 @@ func ListAdminMessageInbox(
 			Link:               it.Link,
 			SenderAdminID:      it.SenderAdminID,
 			SenderAdminName:    it.SenderAdminName,
+			ReplyToID:          it.ReplyToID,
+			ReplyToTitle:       it.ReplyToTitle,
+			ReplyToSenderName:  it.ReplyToSenderName,
+			ReplyToCreatedAt:   replyToCreatedAt,
 			HandledStatus:      it.HandledStatus,
 			HandledByAdminName: it.HandledByAdminName,
 			HandledAt:          handledAt,
@@ -230,6 +255,10 @@ type AdminMessageSentItem struct {
 	Link                string `json:"link"`                // 跳转链接
 	SenderAdminID       int    `json:"senderAdminId"`       // 发送人管理员ID
 	SenderAdminName     string `json:"senderAdminName"`     // 发送人账号
+	ReplyToID           int64  `json:"replyToId"`           // 回复的原消息ID
+	ReplyToTitle        string `json:"replyToTitle"`        // 原消息标题
+	ReplyToSenderName   string `json:"replyToSenderName"`   // 原消息发送人账号
+	ReplyToCreatedAt    string `json:"replyToCreatedAt"`    // 原消息创建时间
 	ReceiverTotal       int64  `json:"receiverTotal"`       // 收件人总数
 	ReceiverReadTotal   int64  `json:"receiverReadTotal"`   // 已读收件人数
 	ReceiverUnreadTotal int64  `json:"receiverUnreadTotal"` // 未读收件人数
@@ -249,6 +278,7 @@ func ListAdminMessageSent(
 	keyword string,
 	startTime *time.Time,
 	endTime *time.Time,
+	messageID int64,
 ) ([]AdminMessageSentItem, int64, error) {
 	page, pageSize, err := validatePage(page, pageSize)
 	if err != nil {
@@ -275,6 +305,9 @@ func ListAdminMessageSent(
 	if endTime != nil {
 		dbq = dbq.Where("m.created_at <= ?", *endTime)
 	}
+	if messageID > 0 {
+		dbq = dbq.Where("m.id = ?", messageID)
+	}
 
 	var total int64
 	if err := dbq.Count(&total).Error; err != nil {
@@ -294,6 +327,10 @@ func ListAdminMessageSent(
 		Link               string     `gorm:"column:link"`                  // 跳转链接
 		SenderAdminID      int        `gorm:"column:sender_admin_id"`       // 发送人管理员 ID
 		SenderAdminName    string     `gorm:"column:sender_admin_name"`     // 发送人账号快照
+		ReplyToID          int64      `gorm:"column:reply_to_id"`           // 回复的原消息 ID
+		ReplyToTitle       string     `gorm:"column:reply_to_title"`        // 原消息标题
+		ReplyToSenderName  string     `gorm:"column:reply_to_sender_name"`  // 原消息发送人账号
+		ReplyToCreatedAt   *time.Time `gorm:"column:reply_to_created_at"`   // 原消息创建时间
 		ReceiverTotal      int64      `gorm:"column:receiver_total"`        // 收件人总数
 		ReceiverReadTotal  int64      `gorm:"column:receiver_read_total"`   // 已读收件人数
 		HandledStatus      int        `gorm:"column:handled_status"`        // 处理状态
@@ -303,7 +340,7 @@ func ListAdminMessageSent(
 	}
 	var rows []row
 
-	err = dbq.Select([]string{
+	err = dbq.Joins("LEFT JOIN " + TableNameAdminMessage + " AS p ON p.id = m.reply_to_id").Select([]string{
 		"m.id AS id",
 		"m.type AS type",
 		"m.level AS level",
@@ -313,6 +350,10 @@ func ListAdminMessageSent(
 		"m.link AS link",
 		"m.sender_admin_id AS sender_admin_id",
 		"m.sender_admin_name AS sender_admin_name",
+		"m.reply_to_id AS reply_to_id",
+		"p.title AS reply_to_title",
+		"p.sender_admin_name AS reply_to_sender_name",
+		"p.created_at AS reply_to_created_at",
 		"(SELECT COUNT(1) FROM " + TableNameAdminMessageReceiver + " AS r WHERE r.message_id = m.id) AS receiver_total",
 		"(SELECT COUNT(1) FROM " + TableNameAdminMessageReceiver + " AS r WHERE r.message_id = m.id AND r.read_status = 1) AS receiver_read_total",
 		"m.handled_status AS handled_status",
@@ -333,6 +374,10 @@ func ListAdminMessageSent(
 		if it.HandledAt != nil {
 			handledAt = it.HandledAt.Format(time.DateTime)
 		}
+		replyToCreatedAt := ""
+		if it.ReplyToCreatedAt != nil {
+			replyToCreatedAt = it.ReplyToCreatedAt.Format(time.DateTime)
+		}
 		items = append(items, AdminMessageSentItem{
 			ID:                  it.ID,
 			Type:                it.Type,
@@ -343,6 +388,10 @@ func ListAdminMessageSent(
 			Link:                it.Link,
 			SenderAdminID:       it.SenderAdminID,
 			SenderAdminName:     it.SenderAdminName,
+			ReplyToID:           it.ReplyToID,
+			ReplyToTitle:        it.ReplyToTitle,
+			ReplyToSenderName:   it.ReplyToSenderName,
+			ReplyToCreatedAt:    replyToCreatedAt,
 			ReceiverTotal:       it.ReceiverTotal,
 			ReceiverReadTotal:   it.ReceiverReadTotal,
 			ReceiverUnreadTotal: it.ReceiverTotal - it.ReceiverReadTotal,
@@ -353,6 +402,63 @@ func ListAdminMessageSent(
 		})
 	}
 	return items, total, nil
+}
+
+// AdminMessageReceiverOption 表示发送消息时可选择的启用管理员最小字段集。
+type AdminMessageReceiverOption struct {
+	ID       int    `gorm:"column:id"`        // 管理员ID
+	Username string `gorm:"column:username"`  // 登录账号
+	RealName string `gorm:"column:real_name"` // 真实姓名
+}
+
+// ListAdminMessageReceiverOptions 分页查询启用管理员的消息收件人选项。
+func ListAdminMessageReceiverOptions(db *gorm.DB, page, pageSize int, excludeAdminID int) ([]AdminMessageReceiverOption, int64, error) {
+	page, pageSize, err := validatePage(page, pageSize)
+	if err != nil {
+		return nil, 0, errors.Tag(err)
+	}
+
+	dbq := db.Model(&Admin{}).Where("status = ?", 1)
+	if excludeAdminID > 0 {
+		dbq = dbq.Where("id <> ?", excludeAdminID)
+	}
+	var total int64
+	if err := dbq.Count(&total).Error; err != nil {
+		return nil, 0, errors.Tag(err)
+	}
+	items := make([]AdminMessageReceiverOption, 0, pageSize)
+	if total == 0 {
+		return items, 0, nil
+	}
+	if err := dbq.
+		Select("id, name AS username, real_name").
+		Order("id ASC").
+		Limit(pageSize).
+		Offset((page - 1) * pageSize).
+		Scan(&items).Error; err != nil {
+		return nil, 0, errors.Tag(err)
+	}
+	return items, total, nil
+}
+
+// AdminMessageReplyTarget 表示回复校验所需的原消息最小字段集。
+type AdminMessageReplyTarget struct {
+	ID            int64 `gorm:"column:id"`              // 原消息 ID
+	SenderAdminID int   `gorm:"column:sender_admin_id"` // 原消息发送人管理员 ID
+}
+
+// FindAdminMessageReplyTarget 查询当前管理员可回复的原消息。
+func FindAdminMessageReplyTarget(db *gorm.DB, messageID int64, receiverAdminID int) (AdminMessageReplyTarget, error) {
+	var target AdminMessageReplyTarget
+	err := db.Session(&gorm.Session{NewDB: true}).
+		Table(TableNameAdminMessage+" AS m").
+		Joins("JOIN "+TableNameAdminMessageReceiver+" AS r ON r.message_id = m.id").
+		Select("m.id AS id, m.sender_admin_id AS sender_admin_id").
+		Where("m.id = ?", messageID).
+		Where("r.receiver_admin_id = ?", receiverAdminID).
+		Where("r.delete_status = 0").
+		Take(&target).Error
+	return target, errors.Tag(err)
 }
 
 // AdminMessageReceiverItem 表示发送人查看的收件人已读明细项。
@@ -464,6 +570,7 @@ func ListAdminMessageNotifications(db *gorm.DB, receiverAdminID int, limit int) 
 		"",
 		nil,
 		nil,
+		0,
 	)
 	if err != nil {
 		return nil, errors.Tag(err)

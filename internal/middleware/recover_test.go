@@ -27,7 +27,7 @@ func TestRecoverMiddlewareReturnsJSON(t *testing.T) {
 
 	// 中间件顺序保持和 RegisterHandlers 一致：outer recover -> trace -> access log -> inner recover。
 	handler := NewRecoverMiddleware().Handle(
-		NewTraceMiddleware().Handle(
+		NewTraceMiddleware(nil).Handle(
 			NewAccessLogMiddleware().Handle(
 				NewRecoverMiddleware().Handle(func(w http.ResponseWriter, r *http.Request) {
 					panic("boom")

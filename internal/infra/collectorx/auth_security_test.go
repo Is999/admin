@@ -52,6 +52,9 @@ func TestNormalizeAuthSecurityLabels(t *testing.T) {
 	if got := normalizeAuthSecurityAppID("site-a"); got != "site-a" {
 		t.Fatalf("normalizeAuthSecurityAppID() = %q", got)
 	}
+	if got := normalizeAuthSecurityAppID("site.api"); got != "site.api" {
+		t.Fatalf("normalizeAuthSecurityAppID(dot) = %q", got)
+	}
 	if got := normalizeAuthSecurityAppID("site/a"); got != authSecurityLabelOther {
 		t.Fatalf("normalizeAuthSecurityAppID(invalid) = %q, want other", got)
 	}

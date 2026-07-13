@@ -35,6 +35,22 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodPost,
+			Path:        "/api/dicts/import/backup", // 生成导入前全量备份。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.SysConfigImport,
+			Description: shared.SysConfigImport.Describe,
+			Handler:     PrepareSysConfigExcelBackupHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/dicts/import/backup/:backupId", // 下载导入前全量备份。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.SysConfigImport,
+			Description: shared.SysConfigImport.Describe,
+			Handler:     DownloadSysConfigExcelBackupHandler,
+		},
+		{
+			Method:      http.MethodPost,
 			Path:        "/api/dicts/import", // 导入系统配置。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.SysConfigImport,

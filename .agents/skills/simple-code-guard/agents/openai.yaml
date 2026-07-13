@@ -1,0 +1,4 @@
+interface:
+  display_name: "简洁代码护栏"
+  short_description: "约束三项目代码保持简洁、清晰、易读、易维护并防止过度设计"
+  default_prompt: "使用 $simple-code-guard 复核并简化当前改动，保持业务语义、生产正确性与项目规范。"

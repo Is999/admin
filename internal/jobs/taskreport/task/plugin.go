@@ -9,6 +9,7 @@ import (
 	"admin/internal/jobs/taskreport"
 	"admin/internal/svc"
 	queue "admin/internal/task/queue"
+	"admin/internal/task/taskwire"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/hibiken/asynq"
@@ -19,6 +20,8 @@ const (
 	PluginName = "task_report"
 	// maxReportWindow 限制手动补跑窗口，避免误扫过大的 Asynq 历史集合。
 	maxReportWindow = 72 * time.Hour
+	// maxReportFutureSkew 容忍调度节点与 worker 的极小时间偏差，同时拒绝未来统计窗口。
+	maxReportFutureSkew = 2 * time.Second
 )
 
 // Runtime 描述任务运行日报注册所需的最小运行时能力。
@@ -44,14 +47,15 @@ func Setup(runtime Runtime) error {
 		if err != nil {
 			return errors.Tag(err)
 		}
-		start, end, err := resolveReportWindow(payload)
+		start, end, err := resolveReportWindow(payload, task.Headers()[taskwire.HeaderScheduledAt])
 		if err != nil {
 			return errors.Tag(err)
 		}
 		report, err := taskreport.NewService(runtime.Manager()).Build(ctx, taskreport.ReportRequest{
-			WindowStart: start,
-			WindowEnd:   end,
-			GeneratedAt: time.Now(),
+			WindowStart:       start,
+			WindowEnd:         end,
+			GeneratedAt:       time.Now(),
+			ExcludeWorkflowID: payload.WorkflowID,
 		})
 		if err != nil {
 			taskreport.RecordBuildError(ctx)
@@ -81,21 +85,35 @@ func decodePayload(task *asynq.Task) (taskreport.TaskPayload, error) {
 }
 
 // resolveReportWindow 解析手动窗口，并限制最大回看范围。
-func resolveReportWindow(payload taskreport.TaskPayload) (time.Time, time.Time, error) {
+func resolveReportWindow(payload taskreport.TaskPayload, scheduledAt string) (time.Time, time.Time, error) {
 	now := time.Now()
-	start, end := taskreport.Window(now)
+	windowEnd := now
+	if scheduledAt = strings.TrimSpace(scheduledAt); scheduledAt != "" {
+		parsed, err := time.Parse(time.RFC3339, scheduledAt)
+		if err != nil {
+			return time.Time{}, time.Time{}, errors.Wrap(err, "解析日报计划触发时间失败")
+		}
+		windowEnd = parsed
+	}
+	start, end := taskreport.Window(windowEnd)
+	windowStartText := strings.TrimSpace(payload.WindowStart)
+	windowEndText := strings.TrimSpace(payload.WindowEnd)
+	if (windowStartText == "") != (windowEndText == "") {
+		return time.Time{}, time.Time{}, errors.Errorf("日报手动统计窗口必须同时提供开始和结束时间")
+	}
 	var err error
-	if strings.TrimSpace(payload.WindowStart) != "" {
-		start, err = time.Parse(time.RFC3339, strings.TrimSpace(payload.WindowStart))
+	if windowStartText != "" {
+		start, err = time.Parse(time.RFC3339, windowStartText)
 		if err != nil {
 			return time.Time{}, time.Time{}, errors.Wrap(err, "解析日报窗口开始时间失败")
 		}
-	}
-	if strings.TrimSpace(payload.WindowEnd) != "" {
-		end, err = time.Parse(time.RFC3339, strings.TrimSpace(payload.WindowEnd))
+		end, err = time.Parse(time.RFC3339, windowEndText)
 		if err != nil {
 			return time.Time{}, time.Time{}, errors.Wrap(err, "解析日报窗口结束时间失败")
 		}
+	}
+	if start.Nanosecond() != 0 || end.Nanosecond() != 0 {
+		return time.Time{}, time.Time{}, errors.Errorf("日报统计窗口必须按整秒对齐: start=%s end=%s", start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano))
 	}
 	if !end.After(start) {
 		return time.Time{}, time.Time{}, errors.Errorf("日报统计窗口非法: start=%s end=%s", start.Format(time.RFC3339), end.Format(time.RFC3339))
@@ -103,15 +121,19 @@ func resolveReportWindow(payload taskreport.TaskPayload) (time.Time, time.Time, 
 	if end.Sub(start) > maxReportWindow {
 		return time.Time{}, time.Time{}, errors.Errorf("日报统计窗口超过上限: window=%s max=%s", end.Sub(start), maxReportWindow)
 	}
+	if end.After(now.Add(maxReportFutureSkew)) {
+		return time.Time{}, time.Time{}, errors.Errorf("日报统计窗口结束时间不能位于未来: end=%s now=%s", end.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
 	return start, end, nil
 }
 
 // dailySummaryWorkflow 构造任务运行日报工作流定义。
 func dailySummaryWorkflow() *queue.WorkflowDefinition {
 	return &queue.WorkflowDefinition{
-		Name:         taskreport.WorkflowNameDailySummary,
-		Description:  "周期任务与工作流运行日报工作流，按统计窗口聚合任务执行、失败、慢任务和队列状态",
-		DefaultQueue: queue.QueueMaintenance,
+		Name:                     taskreport.WorkflowNameDailySummary,
+		Description:              "周期任务与工作流运行日报工作流，按统计窗口聚合任务执行、失败、慢任务和队列状态",
+		DefaultQueue:             queue.QueueMaintenance,
+		PeriodicUniqueBySchedule: true,
 		Nodes: map[string]*queue.WorkflowNodeDefinition{
 			taskreport.NodeDailySummary: {
 				Name:     taskreport.NodeDailySummary,

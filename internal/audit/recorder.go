@@ -15,7 +15,6 @@ import (
 	"admin/internal/requestctx"
 
 	"github.com/Is999/go-utils/errors"
-	"gorm.io/gorm"
 )
 
 const (
@@ -39,8 +38,8 @@ type Event struct {
 	HTTPStatus   int                  // HTTP 状态码
 	BizCode      int                  // 业务码
 	ErrorMessage string               // 错误信息
-	TraceID      string               // Trace ID
-	SpanID       string               // Span ID
+	TraceID      string               // 链路追踪 ID
+	SpanID       string               // 链路跨度 ID
 }
 
 // AdminLogEnqueuer 约束审计日志写入 Collector 的最小能力。
@@ -48,15 +47,21 @@ type AdminLogEnqueuer interface {
 	EnqueueAdminLog(context.Context, string, model.AdminLog) error
 }
 
+// IPLocator 约束审计日志所需的 IP 归属地查询能力。
+type IPLocator interface {
+	Lookup(string) string
+}
+
 // Recorder 负责把请求上下文中的链路元数据与显式事件字段合并后落到 admin_log。
 type Recorder struct {
 	mu              sync.RWMutex     // 保护 Collector 写入器切换
 	enqueuer        AdminLogEnqueuer // Collector 投递入口，正常链路不直接写 DB
+	ipLocator       IPLocator        // 本地 IP 归属地查询器，未配置时为空
 	logBodyMaxBytes int              // 审计日志请求体的最大截断长度，防止超大请求拖垮数据库
 }
 
 // NewRecorder 创建审计记录器，同时约束审计详情最大长度，避免大对象或敏感信息失控落库。
-func NewRecorder(_ *gorm.DB, logBodyMaxBytes int) *Recorder {
+func NewRecorder(logBodyMaxBytes int) *Recorder {
 	if logBodyMaxBytes <= 0 {
 		logBodyMaxBytes = defaultAuditLogBodyMaxSize
 	}
@@ -75,6 +80,16 @@ func (r *Recorder) SetEnqueuer(enqueuer AdminLogEnqueuer) {
 	r.enqueuer = enqueuer
 }
 
+// SetIPLocator 设置本地 IP 归属地查询器，启动期注入后供审计日志写入复用。
+func (r *Recorder) SetIPLocator(locator IPLocator) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ipLocator = locator
+}
+
 // currentEnqueuer 返回当前 Collector 投递入口。
 func (r *Recorder) currentEnqueuer() AdminLogEnqueuer {
 	if r == nil {
@@ -83,6 +98,28 @@ func (r *Recorder) currentEnqueuer() AdminLogEnqueuer {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.enqueuer
+}
+
+// lookupIPRegion 返回 IP 归属地；查询失败或未启用时保留空值，不阻断审计主链路。
+func (r *Recorder) lookupIPRegion(ip string) string {
+	if r == nil || ip == "" {
+		return ""
+	}
+	r.mu.RLock()
+	locator := r.ipLocator
+	r.mu.RUnlock()
+	if locator == nil {
+		return ""
+	}
+	return locator.Lookup(ip)
+}
+
+// resolvedIPRegion 优先复用同一请求已解析的归属地，未命中时再执行本地查询。
+func (r *Recorder) resolvedIPRegion(meta *requestctx.Meta, ip string) string {
+	if meta != nil && strings.TrimSpace(ip) == strings.TrimSpace(meta.ClientIP) && meta.ClientIPRegionResolved {
+		return strings.TrimSpace(meta.ClientIPRegion)
+	}
+	return r.lookupIPRegion(ip)
 }
 
 // Record 是统一审计入口，所有登录、登出、CRUD 操作都应通过这里写入审计表。
@@ -112,6 +149,7 @@ func (r *Recorder) buildLogEntry(ctx context.Context, event Event) model.AdminLo
 	}
 	now := time.Now()
 
+	ip := requestctx.NormalizeClientIP(helper.FirstNonEmptyString(event.IP, ipFromMeta(meta)))
 	entry := model.AdminLog{
 		UserID:       firstPositive(event.UserID, userIDFromMeta(meta)),
 		UserName:     helper.FirstNonEmptyString(event.UserName, userNameFromMeta(meta)),
@@ -120,8 +158,8 @@ func (r *Recorder) buildLogEntry(ctx context.Context, event Event) model.AdminLo
 		Method:       event.Method,
 		Describe:     event.Describe,
 		Data:         Serialize(event.Data, r.logBodyMaxBytes),
-		IP:           helper.FirstNonEmptyString(event.IP, ipFromMeta(meta)),
-		Ipaddr:       "",
+		IP:           ip,
+		Ipaddr:       r.resolvedIPRegion(meta, ip),
 		TraceID:      helper.FirstNonEmptyString(event.TraceID, traceIDFromMeta(meta)),
 		SpanID:       helper.FirstNonEmptyString(event.SpanID, spanIDFromMeta(meta)),
 		HTTPStatus:   firstPositive(event.HTTPStatus, httpStatusFromMeta(meta)),

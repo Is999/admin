@@ -36,24 +36,3 @@ func uniqueInt64s(items []int64) []int64 {
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
-
-// filterUIDsByShard 按 uid%shard_total 过滤当前 worker 负责的 UID。
-func filterUIDsByShard(uids []int64, shardIndex, shardTotal int) []int64 {
-	if shardTotal <= 0 {
-		shardTotal = 1
-	}
-	out := make([]int64, 0, len(uids))
-	for _, uid := range uids {
-		if uid <= 0 {
-			continue
-		}
-		shard := int(uid % int64(shardTotal))
-		if shard < 0 {
-			shard += shardTotal
-		}
-		if shard == shardIndex%shardTotal {
-			out = append(out, uid)
-		}
-	}
-	return out
-}

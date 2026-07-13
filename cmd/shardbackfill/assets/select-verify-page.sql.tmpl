@@ -1,0 +1,10 @@
+-- 代码资产：按唯一游标读取一页 UID 与固定桶用于全量校验。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.selectVerifyPage。
+-- 参数来源：表名和列名仅由已校验标识符替换；范围和批量通过预编译参数传入。
+-- 安全边界：依赖单列唯一索引，批量上限 10000，禁止 OFFSET 和无界扫描。
+SELECT CAST(__PRIMARY_KEY__ AS CHAR), CAST(__UID_COLUMN__ AS CHAR), `shard_no`
+FROM __TABLE__
+WHERE __PRIMARY_KEY__ > ? AND __PRIMARY_KEY__ <= ?
+ORDER BY __PRIMARY_KEY__
+LIMIT ?

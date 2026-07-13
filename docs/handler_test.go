@@ -20,6 +20,31 @@ func TestHandlerServesChineseMarkdown(t *testing.T) {
 	}
 }
 
+// TestHandlerRejectsDoubleEncodedTraversal 验证静态处理器不会把二次编码点段归一到文档根目录。
+func TestHandlerRejectsDoubleEncodedTraversal(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/docs/%252e%252e/文档首页.md", nil)
+	recorder := httptest.NewRecorder()
+
+	Handler()(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("http status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
+// TestHandlerRejectsDirectoryListing 验证子目录不会暴露未授权文档文件名。
+func TestHandlerRejectsDirectoryListing(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/docs/%E8%A7%92%E8%89%B2%E6%96%87%E6%A1%A3/%E5%90%8E%E7%AB%AF%E5%BC%80%E5%8F%91/", nil)
+	recorder := httptest.NewRecorder()
+
+	Handler()(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("http status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+	if strings.Contains(recorder.Body.String(), "AI开发规范.md") {
+		t.Fatal("directory response must not expose document filenames")
+	}
+}
+
 // TestIndexKeepsFastDocsConfig 校验文档首页保留根路径、异步搜索和本地静态依赖配置。
 func TestIndexKeepsFastDocsConfig(t *testing.T) {
 	content, err := fs.ReadFile(FS, "site/index.html")
@@ -46,6 +71,19 @@ func TestIndexKeepsFastDocsConfig(t *testing.T) {
 		strings.Contains(html, "window.location.reload") ||
 		strings.Contains(html, "search.min.js") {
 		t.Fatal("docs page must not depend on blocking search plugin or CDN")
+	}
+}
+
+// TestDocsSearchInputsHaveStableIdentity 校验两个文档站搜索框可被浏览器识别。
+func TestDocsSearchInputsHaveStableIdentity(t *testing.T) {
+	for _, filePath := range []string{"site/index.html", "site/api/index.html"} {
+		content, err := fs.ReadFile(FS, filePath)
+		if err != nil {
+			t.Fatalf("读取文档首页失败 path=%s: %v", filePath, err)
+		}
+		if !strings.Contains(string(content), `id="docs-search" name="docs-search" type="search"`) {
+			t.Fatalf("文档搜索框缺少稳定标识 path=%s", filePath)
+		}
 	}
 }
 

@@ -36,9 +36,9 @@ func useCacheManageTestAppID(t *testing.T, appID string) {
 	})
 }
 
-// TestMaskCacheValueForAdminInfo 验证管理员登录态缓存按字段级规则展示，
+// TestMaskCacheValueForAdminSession 验证管理员会话缓存按字段级规则展示，
 // 仅遮罩 token 等通用敏感字段，保留资料字段与备注原样展示。
-func TestMaskCacheValueForAdminInfo(t *testing.T) {
+func TestMaskCacheValueForAdminSession(t *testing.T) {
 	value := map[string]string{
 		"lastLoginIpaddr":   "中国香港",
 		"avatar":            "https://cdn.example.com/avatar.png",
@@ -57,7 +57,7 @@ func TestMaskCacheValueForAdminInfo(t *testing.T) {
 	}
 
 	useCacheManageTestAppID(t, "site-a")
-	got := maskCacheValue(keys.AdminInfoRedisKey(1), value)
+	got := maskCacheValue(keys.AdminSessionRedisKey(1), value)
 	masked, ok := got.(map[string]string)
 	if !ok {
 		t.Fatalf("maskCacheValue() type = %T, want map[string]string", got)
@@ -119,7 +119,7 @@ func TestMaskCacheValueForReplayTicket(t *testing.T) {
 	}
 
 	useCacheManageTestAppID(t, "site-a")
-	got := maskCacheValue(keys.AdminMFATwoStepTicketRedisKey(7, "demo"), value)
+	got := maskCacheValue(keys.AdminMFATwoStepRedisKey(7), value)
 	masked, ok := got.(map[string]string)
 	if !ok {
 		t.Fatalf("maskCacheValue() type = %T, want map[string]string", got)
@@ -139,8 +139,8 @@ func TestNormalizeCacheSearchPatternRejectsDangerousBroadScan(t *testing.T) {
 			t.Fatalf("期望搜索模式 %q 被拒绝，实际返回 nil", pattern)
 		}
 	}
-	adminInfoWildcard := strings.Replace(keys.AdminInfoLogicalPattern(), "{adminID}", "*", 1)
-	if got, err := normalizeCacheSearchPattern(adminInfoWildcard); err != nil || got != adminInfoWildcard {
+	adminSessionWildcard := strings.Replace(keys.AdminSessionLogicalPattern(), "{adminID}", "*", 1)
+	if got, err := normalizeCacheSearchPattern(adminSessionWildcard); err != nil || got != adminSessionWildcard {
 		t.Fatalf("期望合法搜索模式透传，实际 got=%q err=%v", got, err)
 	}
 }
@@ -149,16 +149,16 @@ func TestNormalizeCacheSearchPatternRejectsDangerousBroadScan(t *testing.T) {
 func TestMatchCacheListItemSupportsTemplatePrefixOnly(t *testing.T) {
 	useCacheManageTestAppID(t, "site-a")
 	templateItem := types.CacheItem{
-		Index:      "admin_info",
-		Key:        keys.AdminInfoPatternRedisKey(),
-		KeyTitle:   keys.AdminInfoPatternRedisKey(),
-		ExampleKey: keys.AdminInfoRedisKey(1),
+		Index:      "admin_session",
+		Key:        keys.AdminSessionPatternRedisKey(),
+		KeyTitle:   keys.AdminSessionPatternRedisKey(),
+		ExampleKey: keys.AdminSessionRedisKey(1),
 		IsTemplate: true,
 	}
-	if !matchCacheListItem(templateItem, keys.KeyTemplatePrefix(keys.AdminInfoLogicalPattern())) {
+	if !matchCacheListItem(templateItem, keys.KeyTemplatePrefix(keys.AdminSessionLogicalPattern())) {
 		t.Fatal("期望模板缓存支持按固定前缀匹配")
 	}
-	if !matchCacheListItem(templateItem, keys.AdminInfoRedisKey(1)) {
+	if !matchCacheListItem(templateItem, keys.AdminSessionRedisKey(1)) {
 		t.Fatal("期望模板缓存支持按示例 key 精确匹配")
 	}
 
@@ -364,7 +364,7 @@ func TestCacheSearchPatternMatch(t *testing.T) {
 		{pattern: "config_uuid:*", value: "config_uuid:abc", want: true},
 		{pattern: "role_permission:1?", value: "role_permission:12", want: true},
 		{pattern: "role_permission:1?", value: "role_permission:123", want: false},
-		{pattern: "admin_profile:*", value: "admin_roles_detail:1", want: false},
+		{pattern: "admin:session:*", value: "admin_roles_detail:1", want: false},
 	}
 	for _, tt := range tests {
 		if got := cacheSearchPatternMatch(tt.pattern, tt.value); got != tt.want {
@@ -383,10 +383,16 @@ func TestMatchSearchTemplateTarget(t *testing.T) {
 	if target == nil || target.templateKey != wantConfigTemplate {
 		t.Fatalf("matchSearchTemplateTarget(config_uuid:*) = %+v, want %s", target, wantConfigTemplate)
 	}
-	adminTarget := logicObj.matchSearchTemplateTarget("admin_profile:*")
-	wantAdminTemplate := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.AdminProfilePattern)
+	adminTarget := logicObj.matchSearchTemplateTarget("admin:session:*")
+	wantAdminTemplate := keys.AdminSessionPatternRedisKey()
 	if adminTarget == nil || adminTarget.templateKey != wantAdminTemplate {
-		t.Fatalf("matchSearchTemplateTarget(admin_profile:*) = %+v, want %s", adminTarget, wantAdminTemplate)
+		t.Fatalf("matchSearchTemplateTarget(admin:session:*) = %+v, want %s", adminTarget, wantAdminTemplate)
+	}
+	runtimeReleaseTemplate := cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RuntimeConfigReleasePattern)
+	runtimeReleasePattern := strings.Replace(runtimeReleaseTemplate, "{releaseID}", "*", 1)
+	runtimeReleaseTarget := logicObj.matchSearchTemplateTarget(runtimeReleasePattern)
+	if runtimeReleaseTarget == nil || runtimeReleaseTarget.templateKey != runtimeReleaseTemplate {
+		t.Fatalf("matchSearchTemplateTarget(%s) = %+v, want %s", runtimeReleasePattern, runtimeReleaseTarget, runtimeReleaseTemplate)
 	}
 	if got := logicObj.matchSearchTemplateTarget("permission_tree"); got != nil {
 		t.Fatalf("matchSearchTemplateTarget(permission_tree) = %+v, want nil", got)
@@ -407,13 +413,13 @@ func TestCacheSearchCandidateMatchesLogicalTableCachePattern(t *testing.T) {
 		t.Fatalf("cacheSearchCandidateMatches(logical pattern, %s) = false, want true", candidate)
 	}
 
-	adminInfoWildcard := strings.Replace(keys.AdminInfoLogicalPattern(), "{adminID}", "*", 1)
-	adminTarget := logicObj.matchSearchTemplateTarget(adminInfoWildcard)
+	adminSessionWildcard := strings.Replace(keys.AdminSessionLogicalPattern(), "{adminID}", "*", 1)
+	adminTarget := logicObj.matchSearchTemplateTarget(adminSessionWildcard)
 	if adminTarget == nil {
-		t.Fatal("matchSearchTemplateTarget(admin info wildcard) returned nil")
+		t.Fatal("matchSearchTemplateTarget(admin session wildcard) returned nil")
 	}
-	if !logicObj.cacheSearchCandidateMatches(adminInfoWildcard, keys.AdminInfoRedisKey(1), adminTarget) {
-		t.Fatal("cacheSearchCandidateMatches(admin info) = false, want true")
+	if !logicObj.cacheSearchCandidateMatches(adminSessionWildcard, keys.AdminSessionRedisKey(1), adminTarget) {
+		t.Fatal("cacheSearchCandidateMatches(admin session) = false, want true")
 	}
 }
 
@@ -425,9 +431,9 @@ func TestCacheTemplateDefinitionsUsePhysicalKeys(t *testing.T) {
 	prefix := keys.TableCachePrefix()
 	appPrefix := keys.Prefix()
 	for _, item := range logicObj.cacheItems() {
-		if item.Index == "admin_info" {
+		if item.Index == "admin_session" {
 			if !strings.HasPrefix(item.Key, appPrefix) || !strings.HasPrefix(item.KeyTitle, appPrefix) || !strings.HasPrefix(item.ExampleKey, appPrefix) {
-				t.Fatalf("admin info key=%s keyTitle=%s exampleKey=%s should use app prefix %s", item.Key, item.KeyTitle, item.ExampleKey, appPrefix)
+				t.Fatalf("admin session key=%s keyTitle=%s exampleKey=%s should use app prefix %s", item.Key, item.KeyTitle, item.ExampleKey, appPrefix)
 			}
 			continue
 		}
@@ -462,25 +468,62 @@ func TestCacheTemplateDefinitionsUsePhysicalKeys(t *testing.T) {
 	}
 }
 
-// TestRefreshCacheByKeyDispatchesAdminInfoOutsideTableCache 验证登录态刷新不会被 table-cache 前缀校验拦截。
-func TestRefreshCacheByKeyDispatchesAdminInfoOutsideTableCache(t *testing.T) {
+// TestRolePermissionTemplatesSupportWarmup 验证规范化角色权限关系缓存可从零预热。
+func TestRolePermissionTemplatesSupportWarmup(t *testing.T) {
+	logicObj := &SystemCacheLogic{
+		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{})),
+	}
+	wants := map[string]bool{
+		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RolePermissionPattern):    false,
+		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RoleDocPermissionPattern): false,
+	}
+	for _, target := range logicObj.warmupTemplateTargets() {
+		if _, ok := wants[target.templateKey]; ok {
+			wants[target.templateKey] = true
+		}
+	}
+	for templateKey, found := range wants {
+		if !found {
+			t.Fatalf("role permission warmup target %s not found", templateKey)
+		}
+	}
+}
+
+// TestCacheItemWarmupCapabilityMatchesWhitelist 验证页面只为后端预热白名单展示操作。
+func TestCacheItemWarmupCapabilityMatchesWhitelist(t *testing.T) {
+	logicObj := &SystemCacheLogic{
+		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{})),
+	}
+	for _, item := range logicObj.cacheItems() {
+		want := logicObj.matchWarmupTemplateTarget(item.Key) != nil
+		if item.WarmupSupported != want {
+			t.Fatalf("cache item %s warmupSupported=%v, want %v", item.Index, item.WarmupSupported, want)
+		}
+		if item.Index == "runtime_config_release" && item.WarmupSupported {
+			t.Fatal("runtime_config_release should not expose bulk warmup")
+		}
+	}
+}
+
+// TestRefreshCacheByKeyDispatchesAdminSessionOutsideTableCache 验证会话刷新不会被 table-cache 前缀校验拦截。
+func TestRefreshCacheByKeyDispatchesAdminSessionOutsideTableCache(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	logicObj := &SystemCacheLogic{
 		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})),
 	}
 
-	invalidAdminInfoKey := logicObj.AppRedisKey(strings.Replace(keys.AdminInfoLogicalPattern(), "{adminID}", "not-number", 1))
-	err := logicObj.RefreshCacheByKey(invalidAdminInfoKey)
+	invalidAdminSessionKey := logicObj.AppRedisKey(strings.Replace(keys.AdminSessionLogicalPattern(), "{adminID}", "not-number", 1))
+	err := logicObj.RefreshCacheByKey(invalidAdminSessionKey)
 	if err == nil {
-		t.Fatal("RefreshCacheByKey(admin info) error = nil, want invalid admin info key error")
+		t.Fatal("RefreshCacheByKey(admin session) error = nil, want invalid admin session key error")
 	}
 	message := err.Error()
 	if strings.Contains(message, "缺少指定前缀") {
-		t.Fatalf("RefreshCacheByKey(admin info) hit table-cache prefix guard: %v", err)
+		t.Fatalf("RefreshCacheByKey(admin session) hit table-cache prefix guard: %v", err)
 	}
-	if !strings.Contains(message, "管理员登录态缓存key不合法") {
-		t.Fatalf("RefreshCacheByKey(admin info) error = %v, want admin info rebuild validation error", err)
+	if !strings.Contains(message, "管理员会话缓存key不合法") {
+		t.Fatalf("RefreshCacheByKey(admin session) error = %v, want admin session rebuild validation error", err)
 	}
 }
 
@@ -500,7 +543,7 @@ func TestForeignAppCacheKeyRejected(t *testing.T) {
 		t.Fatalf("RefreshCacheByKey(%s) error = %v, want foreign app rejection", foreignTableKey, err)
 	}
 
-	foreignSessionKey := "app:site-b:admin:info:7"
+	foreignSessionKey := "app:site-b:admin:session:7"
 	if logicObj.matchCacheItem(foreignSessionKey) != nil {
 		t.Fatal("其它 app_id 的登录态 key 不应匹配本站点内置缓存项")
 	}
@@ -539,14 +582,14 @@ func TestSearchKeysExactLogicalTableCacheKeyFindsPhysicalKey(t *testing.T) {
 	}
 }
 
-// TestKeyInfoLogicalAdminInfoKeyReadsAppPrefix 验证详情接口输入逻辑 key 时读取 app_id 命名空间下的真实缓存。
-func TestKeyInfoLogicalAdminInfoKeyReadsAppPrefix(t *testing.T) {
+// TestKeyInfoLogicalAdminSessionKeyReadsAppPrefix 验证详情接口输入逻辑 key 时读取 app_id 命名空间下的真实缓存。
+func TestKeyInfoLogicalAdminSessionKeyReadsAppPrefix(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	logicObj := &SystemCacheLogic{
 		BaseLogic: corelogic.NewBaseLogicWithContext(context.Background(), svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})),
 	}
-	physicalKey := keys.AdminInfoRedisKey(7)
+	physicalKey := keys.AdminSessionRedisKey(7)
 	if err := client.HSet(context.Background(), physicalKey, map[string]any{
 		"id":       "7",
 		"username": "admin",
@@ -555,7 +598,7 @@ func TestKeyInfoLogicalAdminInfoKeyReadsAppPrefix(t *testing.T) {
 		t.Fatalf("HSet(%s) error = %v", physicalKey, err)
 	}
 
-	result := logicObj.KeyInfo(&types.CacheKeyReq{Key: keys.AdminInfoLogicalKey(7)})
+	result := logicObj.KeyInfo(&types.CacheKeyReq{Key: keys.AdminSessionLogicalKey(7)})
 	if result == nil || result.Code != codes.Success {
 		t.Fatalf("KeyInfo() result = %+v, want success", result)
 	}
@@ -581,6 +624,13 @@ func TestValidateSearchPatternRejectsUnknownWildcard(t *testing.T) {
 	}
 	if err := logicObj.validateSearchPattern("config_uuid:*"); err != nil {
 		t.Fatalf("期望已登记模板搜索放行，实际 error = %v", err)
+	}
+	runtimeReleasePattern := strings.Replace(
+		cachelogic.TableCachePhysicalKey(logicObj.BaseLogic, keys.RuntimeConfigReleasePattern),
+		"{releaseID}", "*", 1,
+	)
+	if err := logicObj.validateSearchPattern(runtimeReleasePattern); err != nil {
+		t.Fatalf("期望运行配置发布快照模板搜索放行，实际 error = %v", err)
 	}
 	if err := logicObj.validateSearchPattern("permission_tree"); err != nil {
 		t.Fatalf("期望精确 key 搜索放行，实际 error = %v", err)

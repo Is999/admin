@@ -1,0 +1,8 @@
+-- 代码资产：在业务更新事务内推进回填游标。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.updateBackfillProgress。
+-- 参数来源：进度、状态和任务名通过预编译参数传入。
+-- 安全边界：任务名主键确保只更新一行。
+UPDATE `shard_backfill_checkpoint`
+SET `cursor_value` = ?, `updated_rows` = ?, `status` = ?
+WHERE `job_name` = ?

@@ -1,0 +1,9 @@
+-- 代码资产：修正已锁定游标范围内的固定逻辑桶。
+-- SQL 方言：MySQL 8.0 InnoDB。
+-- 调用方：cmd/shardbackfill.updateShardNo。
+-- 参数来源：表名和列名仅由已校验标识符替换；游标范围通过预编译参数传入。
+-- 安全边界：仅更新当前已锁定批次，范围上限由批量查询确定。
+UPDATE __TABLE__
+SET `shard_no` = MOD(CRC32(CAST(__UID_COLUMN__ AS CHAR)), 1024)
+WHERE __PRIMARY_KEY__ > ? AND __PRIMARY_KEY__ <= ?
+  AND (`shard_no` IS NULL OR `shard_no` <> MOD(CRC32(CAST(__UID_COLUMN__ AS CHAR)), 1024))

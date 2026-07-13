@@ -15,7 +15,9 @@ func LifecycleFailure(phase, hookName string, err error) svc.TaskRuntimeAlert {
 	}
 	hookName = strings.TrimSpace(hookName)
 	status := "服务生命周期钩子失败，进程启动或平滑停止未按预期完成"
-	if phase == "start" {
+	if phase == "register" {
+		status = "服务启动组件注册失败，已释放当前启动阶段创建的资源"
+	} else if phase == "start" {
 		status = "服务启动钩子失败，已尝试回滚已启动组件"
 	} else if phase == "stop" {
 		status = "服务平滑停止钩子失败，部分资源可能未完整释放"

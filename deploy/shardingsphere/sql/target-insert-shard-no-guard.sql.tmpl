@@ -1,0 +1,20 @@
+-- 目标物理表新写保护：逻辑表建成后、迁移启动前，直连每个实际数据节点逐表创建。
+-- 物理表名、主键列、UID列和触发器名必须来自 SHOW SHARDING TABLE NODES 审核清单。
+-- lock_wait_timeout 让元数据锁无法快速取得时直接失败；每个物理表使用数据库内唯一触发器名。
+SET SESSION lock_wait_timeout = 5;
+
+DELIMITER //
+CREATE TRIGGER `__INSERT_TRIGGER__`
+AFTER INSERT ON `__PHYSICAL_TABLE__`
+FOR EACH ROW
+BEGIN
+  IF NEW.`__PRIMARY_KEY__` IS NULL
+     OR NEW.`__PRIMARY_KEY__` <= 0
+     OR NEW.`shard_no` IS NULL
+     OR NEW.`__UID_COLUMN__` IS NULL
+     OR NEW.`__UID_COLUMN__` <= 0
+     OR NEW.`shard_no` <> MOD(CRC32(CAST(NEW.`__UID_COLUMN__` AS CHAR)), 1024) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'shard_no does not match fixed user bucket';
+  END IF;
+END//
+DELIMITER ;

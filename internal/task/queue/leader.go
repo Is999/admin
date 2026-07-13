@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"admin/internal/infra/loggerx"
@@ -26,6 +27,17 @@ type LeaderRunner struct {
 	renewInterval time.Duration                         // leader 锁续租间隔
 	instanceID    string                                // 当前实例唯一标识
 	onAcquire     func(context.Context) (func(), error) // 成为 leader 后执行的启动回调，返回释放函数
+	healthMu      sync.RWMutex                          // 保护选举循环心跳状态
+	health        leaderHealth                          // 选举循环运行和最近心跳状态
+	started       chan struct{}                         // 选举循环已实际进入运行态信号
+	startOnce     sync.Once                             // 保证启动信号只关闭一次
+}
+
+// leaderHealth 描述调度器选举循环的本地运行状态。
+type leaderHealth struct {
+	running       bool      // 选举循环是否仍在运行
+	lastHeartbeat time.Time // 最近一次完成 Redis 选举或续租检查的时间
+	lastError     string    // 最近一次选举或续租错误
 }
 
 // NewLeaderRunner 创建分布式 leader 选举器。
@@ -43,6 +55,7 @@ func NewLeaderRunner(client redis.UniversalClient, key string, ttl, renewInterva
 		renewInterval: renewInterval,
 		instanceID:    uuid.NewString(),
 		onAcquire:     onAcquire,
+		started:       make(chan struct{}),
 	}
 }
 
@@ -51,6 +64,11 @@ func (r *LeaderRunner) Start(ctx context.Context) {
 	if r == nil || r.client == nil || r.onAcquire == nil || r.key == "" {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.markRunning()
+	defer r.markStopped()
 
 	var (
 		release  func()
@@ -63,6 +81,7 @@ func (r *LeaderRunner) Start(ctx context.Context) {
 		if !isLeader {
 			ok, err := r.client.SetNX(ctx, r.key, r.instanceID, r.ttl).Result()
 			if err != nil {
+				r.markHeartbeat(err)
 				loggerx.Errorw(ctx, "任务队列 leader 竞争失败", errors.Wrap(err, "竞争 scheduler leader 锁"),
 					logx.Field("key", r.key),
 					logx.Field("instance", r.instanceID),
@@ -70,6 +89,7 @@ func (r *LeaderRunner) Start(ctx context.Context) {
 			} else if ok {
 				release, err = r.onAcquire(ctx)
 				if err != nil {
+					r.markHeartbeat(err)
 					loggerx.Errorw(ctx, "任务队列 leader 启动调度器失败", errors.Wrap(err, "启动 scheduler leader 回调"),
 						logx.Field("key", r.key),
 						logx.Field("instance", r.instanceID),
@@ -77,13 +97,17 @@ func (r *LeaderRunner) Start(ctx context.Context) {
 					_ = r.release(ctx)
 				} else {
 					isLeader = true
+					r.markHeartbeat(nil)
 					loggerx.Infow(ctx, "任务队列 leader 已获取",
 						logx.Field("key", r.key),
 						logx.Field("instance", r.instanceID),
 					)
 				}
+			} else {
+				r.markHeartbeat(nil)
 			}
 		}
+		r.signalStarted()
 
 		select {
 		case <-ctx.Done():
@@ -99,6 +123,7 @@ func (r *LeaderRunner) Start(ctx context.Context) {
 				continue
 			}
 			ok, err := renewLeaderScript.Run(ctx, r.client, []string{r.key}, r.instanceID, r.ttl.Milliseconds()).Int()
+			r.markHeartbeat(err)
 			if err != nil || ok == 0 {
 				if err != nil {
 					loggerx.Errorw(ctx, "任务队列 leader 续租失败", errors.Wrap(err, "续租 scheduler leader 锁"),
@@ -119,6 +144,70 @@ func (r *LeaderRunner) Start(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// signalStarted 在首次 Redis 选举检查完成后确认循环已实际启动。
+func (r *LeaderRunner) signalStarted() {
+	r.startOnce.Do(func() {
+		close(r.started)
+	})
+}
+
+// Ready 校验选举循环真实运行且心跳未停滞。
+func (r *LeaderRunner) Ready(now time.Time) error {
+	if r == nil {
+		return errors.New("任务 Scheduler 选举循环未初始化")
+	}
+	r.healthMu.RLock()
+	health := r.health
+	r.healthMu.RUnlock()
+	if !health.running {
+		return errors.New("任务 Scheduler 选举循环未运行")
+	}
+	if health.lastError != "" {
+		return errors.Errorf("任务 Scheduler 选举心跳失败: %s", health.lastError)
+	}
+	maxAge := 3 * r.renewInterval
+	if maxAge <= 0 {
+		maxAge = time.Minute
+	}
+	if health.lastHeartbeat.IsZero() || now.Sub(health.lastHeartbeat) > maxAge {
+		return errors.Errorf("任务 Scheduler 选举心跳已超时: max_age=%s", maxAge)
+	}
+	return nil
+}
+
+// waitStarted 等待选举 goroutine 实际进入运行态。
+func (r *LeaderRunner) waitStarted() {
+	if r == nil || r.started == nil {
+		return
+	}
+	<-r.started
+}
+
+// markRunning 标记选举循环已启动并写入首次心跳。
+func (r *LeaderRunner) markRunning() {
+	r.healthMu.Lock()
+	r.health = leaderHealth{running: true, lastHeartbeat: time.Now()}
+	r.healthMu.Unlock()
+}
+
+// markHeartbeat 记录一次选举或续租检查结果。
+func (r *LeaderRunner) markHeartbeat(err error) {
+	r.healthMu.Lock()
+	r.health.lastHeartbeat = time.Now()
+	r.health.lastError = ""
+	if err != nil {
+		r.health.lastError = err.Error()
+	}
+	r.healthMu.Unlock()
+}
+
+// markStopped 标记选举循环已经退出。
+func (r *LeaderRunner) markStopped() {
+	r.healthMu.Lock()
+	r.health.running = false
+	r.healthMu.Unlock()
 }
 
 // releaseWithTimeout 使用短超时释放当前实例的 leader 锁，避免停止流程被 Redis 阻塞。

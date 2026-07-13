@@ -18,28 +18,49 @@ import (
 
 // TestRegisterHandlersRegistersExpectedRoutes 确认裁剪业务模块后，主体框架路由仍然完整注册。
 func TestRegisterHandlersRegistersExpectedRoutes(t *testing.T) {
-	server := rest.MustNewServer(rest.RestConf{
+	publicServer := rest.MustNewServer(rest.RestConf{
 		Host: "127.0.0.1",
 		Port: 0,
 	})
-	defer server.Stop()
+	defer publicServer.Stop()
+	internalServer := rest.MustNewServer(rest.RestConf{
+		Host: "127.0.0.1",
+		Port: 0,
+	})
+	defer internalServer.Stop()
 
-	RegisterHandlers(server, svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
-	routes := server.Routes()
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	RegisterPublicHandlers(publicServer, svcCtx)
+	RegisterInternalHandlers(internalServer, svcCtx)
+	publicRoutes := publicServer.Routes()
+	internalRoutes := internalServer.Routes()
+	routes := append(publicRoutes, internalRoutes...)
 	contracts := DefaultRouteContracts()
 	if len(routes) != len(contracts) {
 		t.Fatalf("expected %d routes, got %d", len(contracts), len(routes))
 	}
+	for _, route := range publicRoutes {
+		if strings.HasPrefix(route.Path, "/internal/") {
+			t.Fatalf("公网监听器注册了内网路由: %s %s", route.Method, route.Path)
+		}
+	}
+	for _, route := range internalRoutes {
+		if !strings.HasPrefix(route.Path, "/internal/") {
+			t.Fatalf("内网监听器注册了公网路由: %s %s", route.Method, route.Path)
+		}
+	}
 
 	routeSet := make(map[string]struct{}, len(routes))
-	for index, route := range routes {
+	for _, route := range routes {
 		key := route.Method + " " + route.Path
 		if _, ok := routeSet[key]; ok {
 			t.Fatalf("路由重复注册: %s", key)
 		}
 		routeSet[key] = struct{}{}
-		if want := contracts[index].Key(); key != want {
-			t.Fatalf("路由注册顺序或契约不一致: index=%d got=%s want=%s", index, key, want)
+	}
+	for _, contract := range contracts {
+		if _, ok := routeSet[contract.Key()]; !ok {
+			t.Fatalf("契约路由未注册: %s", contract.Key())
 		}
 	}
 
@@ -117,9 +138,9 @@ func TestDefaultRouteContractsAreSelfConsistent(t *testing.T) {
 	}
 }
 
-// TestDefaultRouteContractsAreDocumented 确保真实路由路径在接口文档站中可检索。
+// TestDefaultRouteContractsAreDocumented 确保真实路由路径在接口文档和生成清单中可检索。
 func TestDefaultRouteContractsAreDocumented(t *testing.T) {
-	docs := readDocsSiteMarkdown(t, filepath.Join("..", "..", "docs", "site"))
+	docs := readDocsSiteContent(t, filepath.Join("..", "..", "docs", "site"))
 	for _, contract := range DefaultRouteContracts() {
 		if !strings.Contains(docs, contract.Path) {
 			t.Fatalf("接口文档缺少路由模板: %s", contract.Key())
@@ -127,15 +148,16 @@ func TestDefaultRouteContractsAreDocumented(t *testing.T) {
 	}
 }
 
-// readDocsSiteMarkdown 读取测试所需数据。
-func readDocsSiteMarkdown(t *testing.T, root string) string {
+// readDocsSiteContent 读取 Markdown 文档和由后端生成的 JSON 路由清单。
+func readDocsSiteContent(t *testing.T, root string) string {
 	t.Helper()
 	var builder strings.Builder
 	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return errors.Tag(err)
 		}
-		if entry.IsDir() || filepath.Ext(path) != ".md" {
+		extension := filepath.Ext(path)
+		if entry.IsDir() || (extension != ".md" && extension != ".json") {
 			return nil
 		}
 		body, err := os.ReadFile(path)
@@ -172,10 +194,11 @@ func TestDefaultRouteContractsHaveAccessPolicyAliases(t *testing.T) {
 // TestDefaultRouteContractsSkipAccessLog 确保高频低价值路由才标记跳过普通访问日志。
 func TestDefaultRouteContractsSkipAccessLog(t *testing.T) {
 	skipRoutes := map[string]struct{}{
-		http.MethodGet + " /api/live":                         {},
-		http.MethodGet + " /api/ready":                        {},
-		http.MethodGet + " /api/metrics":                      {},
-		http.MethodGet + " /api/admin-messages/notifications": {},
+		http.MethodGet + " /api/live":                                     {},
+		http.MethodGet + " /api/ready":                                    {},
+		http.MethodGet + " /api/metrics":                                  {},
+		http.MethodGet + " /api/admin-messages/notifications":             {},
+		http.MethodGet + " /api/runtime-config/archive-jobs/:id/progress": {},
 	}
 	seen := make(map[string]struct{}, len(skipRoutes))
 	for _, contract := range DefaultRouteContracts() {
@@ -230,17 +253,19 @@ func TestRegisterHandlersAppendsRouteModules(t *testing.T) {
 	})
 	defer server.Stop()
 
-	module := NewRouteModuleFunc("custom", func(scope *RouteScope) {
-		scope.Server.AddRoute(rest.Route{
+	module := NewRouteModuleFunc("custom", func() []shared.RouteSpec {
+		return []shared.RouteSpec{{
 			Method: http.MethodGet,
 			Path:   "/api/custom",
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_ = r
-				w.WriteHeader(http.StatusNoContent)
-			}),
-		})
+			Access: shared.RouteAccessPublic,
+			Handler: func(*svc.ServiceContext) http.HandlerFunc {
+				return func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNoContent)
+				}
+			},
+		}}
 	})
-	RegisterHandlers(server, svc.NewServiceContext(config.Config{}, svc.Dependencies{}), module)
+	RegisterPublicHandlers(server, svc.NewServiceContext(config.Config{}, svc.Dependencies{}), module)
 
 	routeSet := make(map[string]struct{}, len(server.Routes()))
 	for _, route := range server.Routes() {
@@ -249,4 +274,39 @@ func TestRegisterHandlersAppendsRouteModules(t *testing.T) {
 	if _, ok := routeSet[http.MethodGet+" /api/custom"]; !ok {
 		t.Fatal("期望外部路由模块已注册")
 	}
+}
+
+// TestCustomRouteModuleIsPartitionedByAccess 确保扩展模块也不能把内网路由注册到公网监听器。
+func TestCustomRouteModuleIsPartitionedByAccess(t *testing.T) {
+	publicServer := rest.MustNewServer(rest.RestConf{Host: "127.0.0.1", Port: 0})
+	defer publicServer.Stop()
+	internalServer := rest.MustNewServer(rest.RestConf{Host: "127.0.0.1", Port: 0})
+	defer internalServer.Stop()
+	module := NewRouteModuleFunc("custom-internal", func() []shared.RouteSpec {
+		return []shared.RouteSpec{{
+			Method:  http.MethodPost,
+			Path:    "/internal/custom",
+			Access:  shared.RouteAccessInternal,
+			Handler: func(*svc.ServiceContext) http.HandlerFunc { return func(http.ResponseWriter, *http.Request) {} },
+		}}
+	})
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	RegisterPublicHandlersWithModules(publicServer, svcCtx, module)
+	RegisterInternalHandlersWithModules(internalServer, svcCtx, module)
+	if routeExists(publicServer.Routes(), http.MethodPost+" /internal/custom") {
+		t.Fatal("扩展内网路由不能注册到公网监听器")
+	}
+	if !routeExists(internalServer.Routes(), http.MethodPost+" /internal/custom") {
+		t.Fatal("扩展内网路由应注册到内网监听器")
+	}
+}
+
+// routeExists 判断路由集合是否包含指定 method/path。
+func routeExists(routes []rest.Route, want string) bool {
+	for _, route := range routes {
+		if route.Method+" "+route.Path == want {
+			return true
+		}
+	}
+	return false
 }

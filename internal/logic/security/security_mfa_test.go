@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"admin/internal/config"
+	cachelogic "admin/internal/logic/cache"
 	"admin/internal/model"
 	"admin/internal/svc"
 
+	"github.com/Is999/go-utils/errors"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
@@ -26,10 +28,29 @@ func newTestSecurityLogicWithAppID(appID string) *SecurityLogic {
 	svcCtx := svc.NewServiceContext(config.Config{
 		AppID:  appID,
 		AppKey: "unit-test-app-key",
-		// JwtExpiresIn 用于 CacheLogic.SetAdminInfo 写入过期时间，避免测试环境默认 0 导致缓存立即过期。
+		// JwtExpiresIn 用于 CacheLogic.SetAdminSession 写入过期时间，避免测试环境默认 0 导致缓存立即过期。
 		JwtExpiresIn: 3600,
 	}, svc.Dependencies{})
 	return NewSecurityLogic(context.Background(), svcCtx)
+}
+
+// TestMFACacheFailsClosedOnAppIDMismatch 验证 MFA 缓存不会在 app_id 错配时写入空 key。
+func TestMFACacheFailsClosedOnAppIDMismatch(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+		server.Close()
+	})
+	logicObj := newTestSecurityLogicWithAppID("site-b")
+	logicObj.Svc.Rds = client
+
+	if err := logicObj.MarkLoginMFACompleted(7); !errors.Is(err, cachelogic.ErrRedisUnavailable) {
+		t.Fatalf("MarkLoginMFACompleted() error = %v, want ErrRedisUnavailable", err)
+	}
+	if keys := server.Keys(); len(keys) != 0 {
+		t.Fatalf("Redis keys = %v, want empty", keys)
+	}
 }
 
 // TestEncryptDecryptAdminMFASecret 验证管理员 MFA 秘钥会以密文写库，并可正确解密回原始种子。
@@ -301,24 +322,21 @@ func TestConsumeMFATwoStepTicketPreservesVerifyResult(t *testing.T) {
 	}
 }
 
-// TestClearAdminMFATwoStepTicketsUsesIndex 验证 MFA 二次票据按索引精确清理，不依赖 Redis SCAN。
-func TestClearAdminMFATwoStepTicketsUsesIndex(t *testing.T) {
+// TestClearAdminMFATwoStepTicketsDeletesOnlyTargetHash 验证 MFA 二次票据按管理员 Hash 精确清理。
+func TestClearAdminMFATwoStepTicketsDeletesOnlyTargetHash(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	logicObj := newTestSecurityLogic()
 	logicObj.Svc.Rds = client
 
-	twoStep, err := logicObj.IssueMFATwoStepTicket(99, MFAScenarioEditUser)
+	_, err := logicObj.IssueMFATwoStepTicket(99, MFAScenarioEditUser)
 	if err != nil {
 		t.Fatalf("IssueMFATwoStepTicket failed: %v", err)
 	}
-	adminTicketKey := logicObj.mfaTwoStepTicketKey(99, twoStep.Key)
-	otherTicketKey := logicObj.mfaTwoStepTicketKey(100, "keep")
-	if err := client.Set(context.Background(), otherTicketKey, "demo", time.Minute).Err(); err != nil {
-		t.Fatalf("Set(otherTicketKey) error = %v", err)
-	}
-	if err := client.SAdd(context.Background(), logicObj.mfaTwoStepIndexKey(99), otherTicketKey).Err(); err != nil {
-		t.Fatalf("SAdd(dirty member) error = %v", err)
+	adminTicketKey := logicObj.mfaTwoStepKey(99)
+	otherTicketKey := logicObj.mfaTwoStepKey(100)
+	if err := client.HSet(context.Background(), otherTicketKey, "keep", "demo").Err(); err != nil {
+		t.Fatalf("HSet(otherTicketKey) error = %v", err)
 	}
 
 	if err := logicObj.ClearAdminMFATwoStepTickets(99); err != nil {
@@ -327,11 +345,48 @@ func TestClearAdminMFATwoStepTicketsUsesIndex(t *testing.T) {
 	if server.Exists(adminTicketKey) {
 		t.Fatalf("管理员票据 %s 未被清理", adminTicketKey)
 	}
-	if server.Exists(logicObj.mfaTwoStepIndexKey(99)) {
-		t.Fatalf("管理员票据索引未被清理")
-	}
 	if !server.Exists(otherTicketKey) {
-		t.Fatalf("其它管理员票据不应被脏索引误删")
+		t.Fatalf("其它管理员票据 Hash 不应被删除")
+	}
+	if exists, err := client.HExists(context.Background(), otherTicketKey, "keep").Result(); err != nil || !exists {
+		t.Fatalf("其它管理员票据字段丢失 exists=%t err=%v", exists, err)
+	}
+}
+
+// TestMFATwoStepTicketKeepsIndependentExpiry 验证新票据延长 Hash TTL 时不会延长旧票据的有效期。
+func TestMFATwoStepTicketKeepsIndependentExpiry(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	logicObj := newTestSecurityLogic()
+	logicObj.Svc.Rds = client
+
+	first, err := logicObj.IssueMFATwoStepTicket(99, MFAScenarioEditUser)
+	if err != nil {
+		t.Fatalf("IssueMFATwoStepTicket(first) failed: %v", err)
+	}
+	hashKey := logicObj.mfaTwoStepKey(99)
+	firstRaw, err := client.HGet(context.Background(), hashKey, first.Key).Result()
+	if err != nil {
+		t.Fatalf("HGet(first) error = %v", err)
+	}
+	firstPayload, err := decodeMFATwoStepTicketPayload(firstRaw)
+	if err != nil {
+		t.Fatalf("decode first payload error = %v", err)
+	}
+	firstPayload.ExpiresAt = time.Now().Add(-time.Second).UnixMilli()
+	if err := client.HSet(context.Background(), hashKey, first.Key, encodeMFATwoStepTicketPayload(firstPayload)).Err(); err != nil {
+		t.Fatalf("expire first ticket error = %v", err)
+	}
+	second, err := logicObj.IssueMFATwoStepTicket(99, MFAScenarioEditUser)
+	if err != nil {
+		t.Fatalf("IssueMFATwoStepTicket(second) failed: %v", err)
+	}
+
+	if err := logicObj.VerifyMFATwoStepTicket(99, MFAScenarioEditUser, first.Key, first.Value); err != ErrAdminMFATwoStepExpired {
+		t.Fatalf("first ticket error = %v, want %v", err, ErrAdminMFATwoStepExpired)
+	}
+	if err := logicObj.VerifyMFATwoStepTicket(99, MFAScenarioEditUser, second.Key, second.Value); err != nil {
+		t.Fatalf("second ticket should remain valid: %v", err)
 	}
 }
 
@@ -437,15 +492,11 @@ func TestCheckAdminMFAToleratesOneSecondSkew(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	svcCtx := svc.NewServiceContext(config.Config{AppID: "site-a", AppKey: "unit-test-app-key"}, svc.Dependencies{Rds: client})
 	logicObj := NewSecurityLogic(context.Background(), svcCtx)
-	cipherText, err := logicObj.EncryptAdminMFASecret("JBSWY3DPEHPK3PXP")
-	if err != nil {
-		t.Fatalf("EncryptAdminMFASecret failed: %v", err)
-	}
 	lastLoginTime := time.Unix(1_777_613_352, 0)
 	admin := &model.Admin{
 		ID:            1,
 		Name:          "super999",
-		MfaSecureKey:  cipherText,
+		MfaSecureKey:  adminAccessMFASecretUnknown,
 		MfaStatus:     1,
 		LastLoginTime: lastLoginTime,
 	}
@@ -453,8 +504,9 @@ func TestCheckAdminMFAToleratesOneSecondSkew(t *testing.T) {
 	if err := client.Set(context.Background(), cacheKey, lastLoginTime.Unix()-1, time.Minute).Err(); err != nil {
 		t.Fatalf("Set(%s) error = %v", cacheKey, err)
 	}
-	if !logicObj.HasPassedLoginMFA(admin) {
-		t.Fatalf("HasPassedLoginMFA() = false, want true")
+	passed, err := logicObj.HasPassedLoginMFA(admin)
+	if err != nil || !passed {
+		t.Fatalf("HasPassedLoginMFA() = %v, error=%v, want true", passed, err)
 	}
 	if err := logicObj.checkAdminMFA(admin); err != nil {
 		t.Fatalf("checkAdminMFA() = %v, want nil", err)
@@ -478,6 +530,43 @@ func TestCheckAdminMFARequiresBindWhenEnabledSecretMissing(t *testing.T) {
 	}
 }
 
+// TestCheckAdminMFAFailsClosedWithoutRedis 验证已绑定账号不能在 Redis 缺失时绕过登录 MFA。
+func TestCheckAdminMFAFailsClosedWithoutRedis(t *testing.T) {
+	logicObj := newTestSecurityLogic()
+	secret, err := logicObj.EncryptAdminMFASecret("JBSWY3DPEHPK3PXP")
+	if err != nil {
+		t.Fatalf("EncryptAdminMFASecret() error = %v", err)
+	}
+	err = logicObj.checkAdminMFA(&model.Admin{
+		ID:           20,
+		Name:         "admin-without-redis",
+		MfaStatus:    1,
+		MfaSecureKey: secret,
+	})
+	if !errors.Is(err, cachelogic.ErrRedisUnavailable) {
+		t.Fatalf("checkAdminMFA() error = %v, want Redis fail-closed error", err)
+	}
+}
+
+// TestLoginMFAStateFailsWithoutRedis 验证登录 MFA 标记读写不会在 Redis 缺失时静默成功。
+func TestLoginMFAStateFailsWithoutRedis(t *testing.T) {
+	logicObj := newTestSecurityLogic()
+	admin := &model.Admin{ID: 20}
+
+	if _, err := logicObj.HasPassedLoginMFA(admin); !errors.Is(err, cachelogic.ErrRedisUnavailable) {
+		t.Fatalf("HasPassedLoginMFA() error=%v, want ErrRedisUnavailable", err)
+	}
+	if err := logicObj.MarkLoginMFACompleted(admin.ID); !errors.Is(err, cachelogic.ErrRedisUnavailable) {
+		t.Fatalf("MarkLoginMFACompleted() error=%v, want ErrRedisUnavailable", err)
+	}
+	if err := logicObj.ClearLoginMFACompleted(admin.ID); !errors.Is(err, cachelogic.ErrRedisUnavailable) {
+		t.Fatalf("ClearLoginMFACompleted() error=%v, want ErrRedisUnavailable", err)
+	}
+	if err := logicObj.ClearAdminMFATwoStepTickets(admin.ID); !errors.Is(err, cachelogic.ErrRedisUnavailable) {
+		t.Fatalf("ClearAdminMFATwoStepTickets() error=%v, want ErrRedisUnavailable", err)
+	}
+}
+
 // TestNeedMFATwoStepSkipsForcedPasswordChangeWhenNeedResetPassword 验证必须改密阶段修改密码时不再强制要求 MFA 二次票据。
 func TestNeedMFATwoStepSkipsForcedPasswordChangeWhenNeedResetPassword(t *testing.T) {
 	logicObj := newTestSecurityLogic()
@@ -487,7 +576,11 @@ func TestNeedMFATwoStepSkipsForcedPasswordChangeWhenNeedResetPassword(t *testing
 		MfaStatus:         1,
 		NeedResetPassword: 1,
 	}
-	if logicObj.NeedMFATwoStep(admin, MFAScenarioChangePassword) {
+	need, err := logicObj.NeedMFATwoStep(admin, MFAScenarioChangePassword)
+	if err != nil {
+		t.Fatalf("NeedMFATwoStep() error = %v", err)
+	}
+	if need {
 		t.Fatalf("NeedMFATwoStep() = true, want false when need_reset_password=1")
 	}
 }
@@ -498,23 +591,34 @@ func TestNeedOperateMFATwoStepDependsOnForceConfig(t *testing.T) {
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	logicObj := newTestSecurityLogic()
 	logicObj.Svc.Rds = client
-	if logicObj.NeedOperateMFATwoStep(MFAScenarioEditUser) {
+	seedBoolSecurityConfig(t, client, ConfigAdminMFACheckEnable, false)
+	need, err := logicObj.NeedOperateMFATwoStep(MFAScenarioEditUser)
+	if err != nil {
+		t.Fatalf("NeedOperateMFATwoStep() error = %v", err)
+	}
+	if need {
 		t.Fatalf("NeedOperateMFATwoStep() = true, want false when force config disabled")
 	}
 	seedBoolSecurityConfig(t, client, ConfigAdminMFACheckEnable, true)
-	if !logicObj.NeedOperateMFATwoStep(MFAScenarioEditUser) {
-		t.Fatalf("NeedOperateMFATwoStep() = false, want true when force config enabled")
+	// testCases 覆盖强制开关启用后的后台操作和非后台操作场景。
+	testCases := []struct {
+		name     string // 测试场景名称
+		scenario int    // MFA 业务场景
+		want     bool   // 是否需要二次校验
+	}{
+		{name: "编辑管理员", scenario: MFAScenarioEditUser, want: true},
+		{name: "重置密码", scenario: MFAScenarioResetUserPassword, want: true},
+		{name: "重置首次状态", scenario: MFAScenarioResetUserInitialState, want: true},
+		{name: "删除管理员", scenario: MFAScenarioDeleteUser, want: true},
+		{name: "登录场景", scenario: MFAScenarioLogin, want: false},
 	}
-	if !logicObj.NeedOperateMFATwoStep(MFAScenarioResetUserPassword) {
-		t.Fatalf("NeedOperateMFATwoStep(reset password) = false, want true")
-	}
-	if !logicObj.NeedOperateMFATwoStep(MFAScenarioResetUserInitialState) {
-		t.Fatalf("NeedOperateMFATwoStep(reset initial state) = false, want true")
-	}
-	if !logicObj.NeedOperateMFATwoStep(MFAScenarioDeleteUser) {
-		t.Fatalf("NeedOperateMFATwoStep(delete user) = false, want true")
-	}
-	if logicObj.NeedOperateMFATwoStep(MFAScenarioLogin) {
-		t.Fatalf("NeedOperateMFATwoStep(login) = true, want false")
+	for _, testCase := range testCases {
+		need, callErr := logicObj.NeedOperateMFATwoStep(testCase.scenario)
+		if callErr != nil {
+			t.Fatalf("NeedOperateMFATwoStep(%s) error = %v", testCase.name, callErr)
+		}
+		if need != testCase.want {
+			t.Fatalf("NeedOperateMFATwoStep(%s) = %v, want %v", testCase.name, need, testCase.want)
+		}
 	}
 }

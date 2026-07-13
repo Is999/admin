@@ -1,0 +1,9 @@
+-- 代码资产：确认 shardbackfill 集成测试对象名未被占用。
+-- SQL 方言：MySQL 8.0 information_schema。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：无动态参数，仅检查固定测试对象名。
+-- 安全边界：对象已存在时测试失败，禁止先删除未知数据。
+SELECT EXISTS(
+  SELECT 1 FROM `information_schema`.`TABLES`
+  WHERE `TABLE_SCHEMA` = DATABASE() AND `TABLE_NAME` = 'shard_backfill_case'
+)

@@ -1,0 +1,6 @@
+-- 代码资产：短暂移除更新保护以制造集成测试错桶行。
+-- SQL 方言：MySQL 8.0。
+-- 调用方：cmd/shardbackfill.TestBackfillResumesAndVerifiesOnMySQL。
+-- 参数来源：无动态参数，仅使用固定测试对象名。
+-- 安全边界：只允许在隔离测试库执行，随后立即重建触发器。
+DROP TRIGGER `shard_backfill_case_bu`

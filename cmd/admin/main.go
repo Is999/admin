@@ -9,6 +9,15 @@ import (
 
 	"admin/internal/bootstrap"
 	"admin/internal/infra/loggerx"
+
+	"github.com/zeromicro/go-zero/core/proc"
+)
+
+const (
+	// shutdownTimeout 为 HTTP 排空后的后台任务和基础设施关闭预留时间。
+	shutdownTimeout = 20 * time.Second
+	// forceQuitTimeout 必须晚于应用停止期限，并早于容器默认 30 秒终止宽限期。
+	forceQuitTimeout = 29 * time.Second
 )
 
 // configFile 支持通过 -f 指定配置文件，便于区分本地、测试和线上环境。
@@ -59,6 +68,7 @@ func runApp(ctx context.Context, configFile string, explicitMode *int) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	proc.SetTimeToForceQuit(forceQuitTimeout)
 	// 入口只保留参数解析和生命周期控制；`-mode` 未传时回退到配置文件中的 `run_mode`。
 	app, err := bootstrap.WireWithConfigMode(ctx, configFile, explicitMode)
 	if err != nil {
@@ -68,7 +78,7 @@ func runApp(ctx context.Context, configFile string, explicitMode *int) int {
 	defer func() {
 		// 退出时统一关闭 server、tracer provider 等资源，避免后台批量上报丢失。
 		// 使用带超时的 Context 避免因队列断连等极端情况导致进程无限挂起。
-		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := app.Stop(stopCtx); err != nil {
 			loggerx.Errorw(stopCtx, "应用停止失败", err)

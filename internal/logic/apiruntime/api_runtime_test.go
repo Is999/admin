@@ -2,6 +2,7 @@ package apiruntime
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -68,7 +69,7 @@ func TestSyncUserRuntimeUsesInternalOpsRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	resp, err := client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, false, false, "  manual sync  ")
+	resp, err := client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, false, false, 0, "  manual sync  ")
 	if err != nil {
 		t.Fatalf("SyncUserRuntime() error = %v", err)
 	}
@@ -104,8 +105,116 @@ func TestSyncUserRuntimeRejectsMismatchedUserID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	if _, err = client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, true, false, ""); err == nil {
+	if _, err = client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, true, false, 0, ""); err == nil {
 		t.Fatalf("SyncUserRuntime() error = nil, want mismatched user ID error")
+	}
+}
+
+// TestSyncUserRuntimeRequiresCommittedAuthVersion 校验会话失效请求不能绕过数据库认证版本栅栏。
+func TestSyncUserRuntimeRequiresCommittedAuthVersion(t *testing.T) {
+	client, err := NewClient(config.APIServiceConfig{
+		InternalBaseURL: "http://127.0.0.1:1",
+		OpsToken:        "ops-token",
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err = client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, false, true, 0, "manual"); err == nil {
+		t.Fatal("失效会话未提供认证版本时应在发起 HTTP 请求前失败")
+	}
+}
+
+// TestSyncUserRuntimeCarriesCommittedAuthVersion 校验会话清理请求和回执都绑定 admin 已提交的认证版本。
+func TestSyncUserRuntimeCarriesCommittedAuthVersion(t *testing.T) {
+	const authVersion = uint64(7)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload userRuntimeSyncPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("Decode payload error = %v", err)
+		}
+		if !payload.Sessions || payload.AuthVersion != authVersion {
+			t.Fatalf("payload = %+v, want sessions with authVersion=%d", payload, authVersion)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": true,
+			"code":   200,
+			"data": map[string]any{
+				"userId":              testRuntimeSyncUserIDString,
+				"sessionsInvalidated": true,
+				"authVersion":         authVersion,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(config.APIServiceConfig{InternalBaseURL: server.URL, OpsToken: "ops-token"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	resp, err := client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, false, true, authVersion, "manual")
+	if err != nil {
+		t.Fatalf("SyncUserRuntime() error = %v", err)
+	}
+	if !resp.SessionsInvalidated || resp.AuthVersion != authVersion {
+		t.Fatalf("response = %+v, want invalidated authVersion=%d", resp, authVersion)
+	}
+}
+
+// TestSyncUserRuntimeRejectsIncompleteResult 验证 API 未确认请求动作时不能返回伪成功回执。
+func TestSyncUserRuntimeRejectsIncompleteResult(t *testing.T) {
+	tests := []struct {
+		name        string // name 表示测试场景。
+		profile     bool   // profile 表示是否请求清理资料缓存。
+		sessions    bool   // sessions 表示是否请求清理登录态。
+		authVersion uint64 // authVersion 表示请求使用的认证版本。
+	}{
+		{name: "profile", profile: true},
+		{name: "sessions", sessions: true, authVersion: 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status": true,
+					"code":   200,
+					"data": map[string]any{
+						"userId":      testRuntimeSyncUserIDString,
+						"authVersion": tt.authVersion,
+					},
+				})
+			}))
+			defer server.Close()
+
+			client, err := NewClient(config.APIServiceConfig{InternalBaseURL: server.URL, OpsToken: "ops-token"})
+			if err != nil {
+				t.Fatalf("NewClient() error = %v", err)
+			}
+			if _, err = client.SyncUserRuntime(context.Background(), testRuntimeSyncUserID, tt.profile, tt.sessions, tt.authVersion, "manual"); err == nil {
+				t.Fatal("SyncUserRuntime() error = nil, want incomplete result rejection")
+			}
+		})
+	}
+}
+
+// TestRequestAPIRejectsRawErrorBodyLeak 验证下游错误正文不会进入可向上返回的错误链。
+func TestRequestAPIRejectsRawErrorBodyLeak(t *testing.T) {
+	const secretText = "internal-db-password=do-not-leak"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(secretText))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(config.APIServiceConfig{InternalBaseURL: server.URL, OpsToken: "ops-token"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	_, err = client.ConfigReloadStatus(context.Background())
+	if err == nil {
+		t.Fatal("ConfigReloadStatus() error = nil, want HTTP failure")
+	}
+	if strings.Contains(err.Error(), secretText) {
+		t.Fatalf("error leaked downstream response body: %v", err)
 	}
 }
 
@@ -311,6 +420,31 @@ func TestNewClientValidatesRequiredConfig(t *testing.T) {
 	}
 }
 
+// TestClientRejectsRedirect 验证 API 内网客户端不会把 Ops 请求头转发到重定向目标。
+func TestClientRejectsRedirect(t *testing.T) {
+	redirectReached := false
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirectReached = true
+	}))
+	t.Cleanup(target.Close)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(source.Close)
+
+	client, err := NewClient(config.APIServiceConfig{InternalBaseURL: source.URL, OpsToken: "ops-token"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err = client.ConfigReloadStatus(context.Background()); err == nil {
+		t.Fatal("期望重定向响应被当作失败，实际为 nil")
+	}
+	if redirectReached {
+		t.Fatal("API 内网客户端不应跟随重定向")
+	}
+}
+
 // assertAPIRequestSigned 验证 admin 发出的 API 内网请求携带 token 与 HMAC 签名。
 func assertAPIRequestSigned(t *testing.T, r *http.Request, token string, body []byte) {
 	t.Helper()
@@ -328,11 +462,16 @@ func assertAPIRequestSigned(t *testing.T, r *http.Request, token string, body []
 	if delta := time.Since(time.Unix(seconds, 0)); delta < -time.Minute || delta > time.Minute {
 		t.Fatalf("%s = %q outside test window", apiRuntimeOpsTimestampHeader, timestamp)
 	}
+	nonce := r.Header.Get(apiRuntimeOpsNonceHeader)
+	nonceBytes, err := hex.DecodeString(nonce)
+	if err != nil || len(nonceBytes) != 16 {
+		t.Fatalf("%s = %q，不是 16 字节十六进制随机数", apiRuntimeOpsNonceHeader, nonce)
+	}
 	bodyHash := apiRequestBodySHA256(body)
 	if got := r.Header.Get(apiRuntimeOpsBodySHA256Header); got != bodyHash {
 		t.Fatalf("%s = %q, want %q", apiRuntimeOpsBodySHA256Header, got, bodyHash)
 	}
-	wantSignature := signAPIRequestText(token, r.Method, r.URL.RequestURI(), timestamp, bodyHash)
+	wantSignature := signAPIRequestText(token, r.Method, r.URL.RequestURI(), timestamp, nonce, bodyHash)
 	if got := r.Header.Get(apiRuntimeOpsSignatureHeader); got != wantSignature {
 		t.Fatalf("%s = %q, want %q", apiRuntimeOpsSignatureHeader, got, wantSignature)
 	}

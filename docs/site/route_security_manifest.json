@@ -7,9 +7,9 @@
       "path": "/api/auth/captcha",
       "access": "public",
       "describe": "获取登录图形验证码",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -30,7 +30,9 @@
         "secureCode"
       ],
       "responseSign": [
-        "token"
+        "token",
+        "user.phone",
+        "user.buildMFAURL"
       ],
       "responseCipher": [
         "token",
@@ -44,7 +46,7 @@
       "path": "/api/auth/refresh",
       "access": "auth",
       "describe": "刷新访问令牌",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
       "responseSign": [
         "token",
@@ -62,7 +64,7 @@
       "describe": "管理员退出登录",
       "requestSign": [],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -71,9 +73,9 @@
       "path": "/api/auth/codes",
       "access": "auth",
       "describe": "获取当前用户权限码",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -82,39 +84,15 @@
       "path": "/api/auth/profile",
       "access": "auth",
       "describe": "获取当前登录资料",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
       "responseSign": [
-        "token"
-      ],
-      "responseCipher": [
-        "token"
-      ]
-    },
-    {
-      "alias": "auth.verify_account",
-      "method": "POST",
-      "path": "/api/auth/verify-account",
-      "access": "public",
-      "describe": "验证账号并生成MFA绑定信息",
-      "requestSign": [
-        "username",
-        "password",
-        "secureCode",
-        "key",
-        "captcha"
-      ],
-      "requestCipher": [
-        "password",
-        "secureCode"
-      ],
-      "responseSign": [
-        "token"
+        "token",
+        "phone"
       ],
       "responseCipher": [
         "token",
-        "user.phone",
-        "user.buildMFAURL"
+        "phone"
       ]
     },
     {
@@ -123,9 +101,12 @@
       "path": "/api/profile",
       "access": "auth",
       "describe": "获取当前管理员资料",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": [
+        "phone",
+        "buildMFAURL"
+      ],
       "responseCipher": [
         "phone",
         "buildMFAURL"
@@ -143,7 +124,7 @@
       "requestCipher": [
         "secure"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -161,8 +142,12 @@
         "secure",
         "mfaSecureKey"
       ],
-      "responseSign": [],
-      "responseCipher": []
+      "responseSign": [
+        "buildMFAURL"
+      ],
+      "responseCipher": [
+        "buildMFAURL"
+      ]
     },
     {
       "alias": "admin.list",
@@ -170,9 +155,9 @@
       "path": "/api/admins",
       "access": "auth",
       "describe": "查询管理员列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -181,9 +166,9 @@
       "path": "/api/admins/exports",
       "access": "auth",
       "describe": "异步导出管理员列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -192,9 +177,9 @@
       "path": "/api/admins/exports/status/:jobId",
       "access": "auth",
       "describe": "查询管理员导出进度",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -203,9 +188,9 @@
       "path": "/api/admins/exports/download/:jobId",
       "access": "auth",
       "describe": "下载管理员导出文件",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -221,6 +206,7 @@
         "phone",
         "password",
         "mfaSecureKey",
+        "avatar",
         "twoStepKey",
         "twoStepValue"
       ],
@@ -230,7 +216,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -245,7 +231,7 @@
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -264,7 +250,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -283,7 +269,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -292,9 +278,9 @@
       "path": "/api/admins/roles/:id",
       "access": "auth",
       "describe": "查询管理员角色",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -304,11 +290,12 @@
       "access": "auth",
       "describe": "编辑管理员角色",
       "requestSign": [
+        "roleIDs",
         "twoStepKey",
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -317,9 +304,9 @@
       "path": "/api/admins/:id",
       "access": "auth",
       "describe": "查询管理员详情",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -329,22 +316,20 @@
       "access": "auth",
       "describe": "编辑管理员",
       "requestSign": [
-        "username",
         "realName",
         "email",
         "phone",
+        "avatar",
         "password",
-        "mfaSecureKey",
         "twoStepKey",
         "twoStepValue"
       ],
       "requestCipher": [
         "password",
-        "mfaSecureKey",
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -358,7 +343,7 @@
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -367,9 +352,9 @@
       "path": "/api/users",
       "access": "auth",
       "describe": "查询前台用户列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -396,7 +381,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -417,7 +402,7 @@
         "email",
         "phone"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -426,9 +411,9 @@
       "path": "/api/users/exports/status/:jobId",
       "access": "auth",
       "describe": "查询前台用户导出进度",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -437,9 +422,9 @@
       "path": "/api/users/exports/download/:jobId",
       "access": "auth",
       "describe": "下载前台用户导出文件",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -448,9 +433,9 @@
       "path": "/api/users/:id",
       "access": "auth",
       "describe": "查询前台用户详情",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -473,7 +458,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -488,7 +473,7 @@
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -507,7 +492,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -523,7 +508,7 @@
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -532,9 +517,9 @@
       "path": "/api/api-runtime/config-reload",
       "access": "auth",
       "describe": "查询API配置热加载状态",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -543,9 +528,9 @@
       "path": "/api/api-runtime/config-reload/items",
       "access": "auth",
       "describe": "查询API运行态配置项",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -559,7 +544,7 @@
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -574,7 +559,7 @@
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -583,10 +568,14 @@
       "path": "/api/admins/mfa-secret-key-url/:id",
       "access": "auth",
       "describe": "生成管理员MFA绑定地址",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
-      "responseCipher": []
+      "responseSign": [
+        "buildMFAURL"
+      ],
+      "responseCipher": [
+        "buildMFAURL"
+      ]
     },
     {
       "alias": "profile.update_password",
@@ -608,7 +597,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -622,7 +611,6 @@
         "email",
         "phone",
         "avatar",
-        "description",
         "twoStepKey",
         "twoStepValue"
       ],
@@ -632,7 +620,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -652,7 +640,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -671,7 +659,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -680,10 +668,14 @@
       "path": "/api/profile/mfa-secret/refresh",
       "access": "auth",
       "describe": "个人中心重新生成MFA秘钥",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
-      "responseCipher": []
+      "responseSign": [
+        "buildMFAURL"
+      ],
+      "responseCipher": [
+        "buildMFAURL"
+      ]
     },
     {
       "alias": "profile.update_avatar",
@@ -695,7 +687,7 @@
         "avatar"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -704,9 +696,9 @@
       "path": "/api/roles",
       "access": "auth",
       "describe": "查询角色列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -715,9 +707,9 @@
       "path": "/api/roles/tree",
       "access": "auth",
       "describe": "查询角色树",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -726,9 +718,9 @@
       "path": "/api/roles/tree-options",
       "access": "auth",
       "describe": "查询角色树下拉",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -737,9 +729,13 @@
       "path": "/api/roles",
       "access": "auth",
       "describe": "新增角色",
-      "requestSign": [],
+      "requestSign": [
+        "title",
+        "pid",
+        "status"
+      ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -748,9 +744,12 @@
       "path": "/api/roles/:id",
       "access": "auth",
       "describe": "编辑角色",
-      "requestSign": [],
+      "requestSign": [
+        "title",
+        "pid"
+      ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -759,9 +758,11 @@
       "path": "/api/roles/status/:id",
       "access": "auth",
       "describe": "修改角色状态",
-      "requestSign": [],
+      "requestSign": [
+        "status"
+      ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -770,20 +771,23 @@
       "path": "/api/roles/permissions/:id",
       "access": "auth",
       "describe": "编辑角色权限",
-      "requestSign": [],
+      "requestSign": [
+        "routePermissionIds",
+        "docPermissionIds"
+      ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
       "alias": "role.permission.tree",
       "method": "GET",
-      "path": "/api/roles/permissions/tree/:id/:isPid",
+      "path": "/api/roles/permissions/tree/:id",
       "access": "auth",
       "describe": "查询角色权限树",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -792,9 +796,9 @@
       "path": "/api/roles/:id",
       "access": "auth",
       "describe": "删除角色",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -803,9 +807,9 @@
       "path": "/api/permissions",
       "access": "auth",
       "describe": "查询权限列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -814,9 +818,9 @@
       "path": "/api/permissions/tree",
       "access": "auth",
       "describe": "查询权限树",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -825,9 +829,9 @@
       "path": "/api/permissions/max-uuid",
       "access": "auth",
       "describe": "查询下一个权限UUID",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -836,9 +840,16 @@
       "path": "/api/permissions",
       "access": "auth",
       "describe": "新增权限",
-      "requestSign": [],
+      "requestSign": [
+        "uuid",
+        "title",
+        "module",
+        "pid",
+        "type",
+        "status"
+      ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -847,9 +858,15 @@
       "path": "/api/permissions/:id",
       "access": "auth",
       "describe": "编辑权限",
-      "requestSign": [],
+      "requestSign": [
+        "uuid",
+        "title",
+        "module",
+        "pid",
+        "type"
+      ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -858,9 +875,11 @@
       "path": "/api/permissions/status/:id",
       "access": "auth",
       "describe": "修改权限状态",
-      "requestSign": [],
+      "requestSign": [
+        "status"
+      ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -869,9 +888,33 @@
       "path": "/api/permissions/:id",
       "access": "auth",
       "describe": "删除权限",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "doc_permission.list",
+      "method": "GET",
+      "path": "/api/doc-permissions",
+      "access": "auth",
+      "describe": "查询文档权限列表",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "doc_permission.status.update",
+      "method": "PATCH",
+      "path": "/api/doc-permissions/status/:id",
+      "access": "auth",
+      "describe": "修改文档权限状态",
+      "requestSign": [
+        "status"
+      ],
+      "requestCipher": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -880,9 +923,9 @@
       "path": "/api/dicts",
       "access": "auth",
       "describe": "查询系统配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -891,9 +934,9 @@
       "path": "/api/dicts",
       "access": "auth",
       "describe": "新增系统配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -902,9 +945,37 @@
       "path": "/api/dicts/export",
       "access": "auth",
       "describe": "导出系统配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.import",
+      "method": "POST",
+      "path": "/api/dicts/import/backup",
+      "access": "auth",
+      "describe": "导入系统配置",
+      "requestSign": [
+        "uploadId",
+        "backupId"
+      ],
+      "requestCipher": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "system.config.import",
+      "method": "GET",
+      "path": "/api/dicts/import/backup/:backupId",
+      "access": "auth",
+      "describe": "导入系统配置",
+      "requestSign": [
+        "uploadId",
+        "backupId"
+      ],
+      "requestCipher": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -913,9 +984,12 @@
       "path": "/api/dicts/import",
       "access": "auth",
       "describe": "导入系统配置",
-      "requestSign": [],
+      "requestSign": [
+        "uploadId",
+        "backupId"
+      ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -924,9 +998,9 @@
       "path": "/api/dicts/:id",
       "access": "auth",
       "describe": "编辑系统配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -935,9 +1009,9 @@
       "path": "/api/dicts/cache/:uuid",
       "access": "auth",
       "describe": "查看系统配置缓存",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -946,9 +1020,9 @@
       "path": "/api/dicts/cache/refresh/:uuid",
       "access": "auth",
       "describe": "刷新系统配置缓存",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -957,9 +1031,9 @@
       "path": "/api/caches",
       "access": "auth",
       "describe": "查询缓存列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -968,9 +1042,20 @@
       "path": "/api/caches/server-info",
       "access": "auth",
       "describe": "查看缓存服务器信息",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "cache.server.info",
+      "method": "GET",
+      "path": "/api/caches/metrics",
+      "access": "auth",
+      "describe": "查看表缓存运行指标",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -979,9 +1064,9 @@
       "path": "/api/caches/key-info",
       "access": "auth",
       "describe": "查看缓存键信息",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -990,9 +1075,9 @@
       "path": "/api/caches/keys",
       "access": "auth",
       "describe": "搜索缓存键",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1001,9 +1086,9 @@
       "path": "/api/caches/key-info/search",
       "access": "auth",
       "describe": "查看缓存键信息",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1012,9 +1097,9 @@
       "path": "/api/caches/refresh",
       "access": "auth",
       "describe": "刷新缓存",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1023,9 +1108,9 @@
       "path": "/api/caches/refresh-all",
       "access": "auth",
       "describe": "刷新全部缓存",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1034,9 +1119,9 @@
       "path": "/api/caches/warmup",
       "access": "auth",
       "describe": "按模板预热缓存",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1045,9 +1130,9 @@
       "path": "/api/admin-logs",
       "access": "auth",
       "describe": "查询管理员审计日志",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1056,9 +1141,9 @@
       "path": "/api/secret-keys",
       "access": "auth",
       "describe": "查询秘钥列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1067,9 +1152,16 @@
       "path": "/api/secret-keys/:id",
       "access": "auth",
       "describe": "查询秘钥详情",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": [
+        "aesKeyRef",
+        "aesIvRef",
+        "rsaPublicKeyUserRef",
+        "rsaPublicKeyServerRef",
+        "rsaPrivateKeyServerRef",
+        "versionList"
+      ],
       "responseCipher": [
         "aesKeyRef",
         "aesIvRef",
@@ -1101,7 +1193,6 @@
         "stableVersion",
         "grayVersion",
         "grayPercent",
-        "remark",
         "twoStepKey",
         "twoStepValue"
       ],
@@ -1114,7 +1205,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1139,7 +1230,6 @@
         "stableVersion",
         "grayVersion",
         "grayPercent",
-        "remark",
         "twoStepKey",
         "twoStepValue"
       ],
@@ -1152,7 +1242,7 @@
         "twoStepKey",
         "twoStepValue"
       ],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1167,7 +1257,7 @@
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1181,7 +1271,7 @@
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1206,7 +1296,6 @@
         "stableVersion",
         "grayVersion",
         "grayPercent",
-        "remark",
         "twoStepKey",
         "twoStepValue"
       ],
@@ -1269,7 +1358,7 @@
       "path": "/api/security/debug/sign",
       "access": "auth",
       "describe": "安全调试签名",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [
         "payloadText"
       ],
@@ -1295,7 +1384,7 @@
       "path": "/api/security/debug/verify",
       "access": "auth",
       "describe": "安全调试验签",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [
         "payloadText",
         "sign"
@@ -1323,7 +1412,7 @@
       "path": "/api/security/debug/encrypt",
       "access": "auth",
       "describe": "安全调试加密",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [
         "payloadText"
       ],
@@ -1345,7 +1434,7 @@
       "path": "/api/security/debug/decrypt",
       "access": "auth",
       "describe": "安全调试解密",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [
         "payloadText"
       ],
@@ -1367,9 +1456,9 @@
       "path": "/api/admin-messages",
       "access": "auth",
       "describe": "查询管理员消息收件箱",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1378,9 +1467,20 @@
       "path": "/api/admin-messages/sent",
       "access": "auth",
       "describe": "查询管理员已发送消息",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "message.receiver_options",
+      "method": "GET",
+      "path": "/api/admin-messages/receiver-options",
+      "access": "auth",
+      "describe": "查询管理员消息可用收件人选项",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1389,9 +1489,9 @@
       "path": "/api/admin-messages/:id/receivers",
       "access": "auth",
       "describe": "查询管理员消息收件人明细",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1400,9 +1500,9 @@
       "path": "/api/admin-messages/unread-count",
       "access": "auth",
       "describe": "查询管理员未读消息数量",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1411,9 +1511,9 @@
       "path": "/api/admin-messages/notifications",
       "access": "auth",
       "describe": "查询管理员通知列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1422,9 +1522,9 @@
       "path": "/api/admin-messages/read",
       "access": "auth",
       "describe": "标记管理员消息已读",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1433,9 +1533,9 @@
       "path": "/api/admin-messages/delete",
       "access": "auth",
       "describe": "删除管理员消息",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1444,9 +1544,9 @@
       "path": "/api/admin-messages/send",
       "access": "auth",
       "describe": "发送管理员消息",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1455,9 +1555,9 @@
       "path": "/api/admin-messages/handle",
       "access": "auth",
       "describe": "标记管理员消息已处理",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1466,9 +1566,9 @@
       "path": "/api/tasks",
       "access": "auth",
       "describe": "手动投递任务",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1477,9 +1577,9 @@
       "path": "/api/tasks",
       "access": "auth",
       "describe": "查询任务列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1488,9 +1588,9 @@
       "path": "/api/tasks/overview",
       "access": "auth",
       "describe": "查询任务列表",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1499,9 +1599,9 @@
       "path": "/api/tasks/workflows",
       "access": "auth",
       "describe": "手动触发工作流",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1510,9 +1610,9 @@
       "path": "/api/tasks/workflows/:workflowId",
       "access": "auth",
       "describe": "查询工作流状态",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1521,9 +1621,9 @@
       "path": "/api/tasks/queues",
       "access": "auth",
       "describe": "查询任务队列概览",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1532,9 +1632,9 @@
       "path": "/api/tasks/registry/task-types",
       "access": "auth",
       "describe": "查询任务队列概览",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1543,9 +1643,9 @@
       "path": "/api/tasks/registry/workflows",
       "access": "auth",
       "describe": "查询工作流状态",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1554,9 +1654,9 @@
       "path": "/api/tasks/config-reload",
       "access": "auth",
       "describe": "查询配置热加载状态",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1565,9 +1665,9 @@
       "path": "/api/tasks/config-reload/items",
       "access": "auth",
       "describe": "查询配置热加载配置项",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1576,9 +1676,9 @@
       "path": "/api/tasks/config-reload",
       "access": "auth",
       "describe": "手动触发配置热加载",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1587,9 +1687,9 @@
       "path": "/api/tasks/:taskId",
       "access": "auth",
       "describe": "查询任务详情",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1598,9 +1698,9 @@
       "path": "/api/tasks/queues/pause/:queue",
       "access": "auth",
       "describe": "暂停任务队列",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1609,9 +1709,9 @@
       "path": "/api/tasks/run/:taskId",
       "access": "auth",
       "describe": "立即执行任务",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1620,9 +1720,9 @@
       "path": "/api/tasks/:taskId",
       "access": "auth",
       "describe": "删除任务",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1631,9 +1731,9 @@
       "path": "/api/tasks/queues/resume/:queue",
       "access": "auth",
       "describe": "恢复任务队列",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1642,9 +1742,9 @@
       "path": "/api/runtime-config/overview",
       "access": "auth",
       "describe": "查询运行配置概览",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1653,9 +1753,9 @@
       "path": "/api/runtime-config/periodic",
       "access": "auth",
       "describe": "查询运行配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1664,9 +1764,9 @@
       "path": "/api/runtime-config/periodic",
       "access": "auth",
       "describe": "保存运行配置草稿",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1675,9 +1775,9 @@
       "path": "/api/runtime-config/periodic/:id",
       "access": "auth",
       "describe": "保存运行配置草稿",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1686,9 +1786,20 @@
       "path": "/api/runtime-config/archive-jobs",
       "access": "auth",
       "describe": "查询运行配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "runtime.config.list",
+      "method": "GET",
+      "path": "/api/runtime-config/archive-jobs/:id/progress",
+      "access": "auth",
+      "describe": "查询归档任务执行详情",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1697,9 +1808,9 @@
       "path": "/api/runtime-config/archive-jobs",
       "access": "auth",
       "describe": "保存运行配置草稿",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1708,9 +1819,9 @@
       "path": "/api/runtime-config/archive-jobs/:id",
       "access": "auth",
       "describe": "保存运行配置草稿",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1719,9 +1830,9 @@
       "path": "/api/runtime-config/validate",
       "access": "auth",
       "describe": "预检运行配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1730,9 +1841,9 @@
       "path": "/api/runtime-config/publish",
       "access": "auth",
       "describe": "发布运行配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1741,9 +1852,9 @@
       "path": "/api/runtime-config/releases",
       "access": "auth",
       "describe": "查询运行配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1752,9 +1863,9 @@
       "path": "/api/runtime-config/releases/:releaseId",
       "access": "auth",
       "describe": "查询运行配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1763,9 +1874,9 @@
       "path": "/api/runtime-config/rollback",
       "access": "auth",
       "describe": "回滚运行配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1774,9 +1885,9 @@
       "path": "/api/runtime-config/import-current",
       "access": "auth",
       "describe": "导入运行配置",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1785,9 +1896,9 @@
       "path": "/api/collector/overview",
       "access": "auth",
       "describe": "查询Collector观测概览",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1796,9 +1907,9 @@
       "path": "/api/collector/failures",
       "access": "auth",
       "describe": "查询Collector失败事件",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1807,9 +1918,9 @@
       "path": "/api/collector/failures/run",
       "access": "auth",
       "describe": "手动执行Collector失败重试",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1818,9 +1929,9 @@
       "path": "/api/collector/failures/retry",
       "access": "auth",
       "describe": "手动重试Collector失败事件",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1829,9 +1940,9 @@
       "path": "/api/user-tags/workflows",
       "access": "auth",
       "describe": "触发用户标签工作流",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1840,9 +1951,9 @@
       "path": "/api/user-tags/recalculations",
       "access": "auth",
       "describe": "指定标签重新计算",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1854,12 +1965,11 @@
       "requestSign": [
         "workflowId",
         "mode",
-        "reason",
         "twoStepKey",
         "twoStepValue"
       ],
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1868,9 +1978,9 @@
       "path": "/internal/user-tags/workflows",
       "access": "internal",
       "describe": "触发用户标签工作流",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1879,9 +1989,9 @@
       "path": "/internal/user-tags/recalculations",
       "access": "internal",
       "describe": "指定标签重新计算",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     },
     {
@@ -1890,20 +2000,9 @@
       "path": "/internal/auth/init-admin-bootstrap",
       "access": "internal",
       "describe": "内网初始化管理员账号",
-      "requestSign": [],
+      "requestSign": null,
       "requestCipher": [],
-      "responseSign": [],
-      "responseCipher": []
-    },
-    {
-      "alias": "docs.index",
-      "method": "POST",
-      "path": "/api/docs/session",
-      "access": "auth",
-      "describe": "创建文档访问会话",
-      "requestSign": [],
-      "requestCipher": [],
-      "responseSign": [],
+      "responseSign": null,
       "responseCipher": []
     }
   ]

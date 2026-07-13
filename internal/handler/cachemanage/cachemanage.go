@@ -1,9 +1,9 @@
 package cachemanage
 
 import (
-	"admin/internal/handler/shared"
 	"net/http"
 
+	"admin/internal/handler/shared"
 	cachemanagelogic "admin/internal/logic/cachemanage"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -24,6 +24,14 @@ func GetCacheServerInfoHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionLogHandler(shared.CacheServerInfo, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
 		logicObj := cachemanagelogic.NewSystemCacheLogic(r, sCtx)
 		return logicObj, logicObj.ServerInfo().WithReq(shared.ActionReq("cache_server_info"))
+	})
+}
+
+// GetCacheMetricsHandler 查询当前进程的表缓存运行指标。
+func GetCacheMetricsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionLogHandler(shared.CacheServerInfo, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+		logicObj := cachemanagelogic.NewSystemCacheLogic(r, sCtx)
+		return logicObj, logicObj.Metrics().WithReq(shared.ActionReq("cache_metrics"))
 	})
 }
 

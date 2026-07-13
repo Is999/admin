@@ -14,9 +14,10 @@ func TestBuildUserTagWorkflowReqTargetedUIDs(t *testing.T) {
 	req := &types.TriggerUserTagWorkflowReq{
 		Mode:        "targeted",
 		TagTypes:    []int{30, 20},
-		UIDs:        []int64{10001, 10002},
+		UIDs:        []string{"10001", "10002"},
 		BatchSize:   300,
 		WorkerCount: 4,
+		DryRun:      true,
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("校验 targeted 请求失败: %v", err)
@@ -56,6 +57,7 @@ func TestBuildUserTagWorkflowReqRecalculate(t *testing.T) {
 		TagTypes:  []int{30, 5},
 		BatchSize: 500,
 		Retry:     &retry,
+		DryRun:    true,
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("校验 recalculate 请求失败: %v", err)
@@ -88,8 +90,9 @@ func TestBuildUserTagWorkflowReqUniqueKeyUsesCanonicalParams(t *testing.T) {
 	first := &types.TriggerUserTagWorkflowReq{
 		Mode:      usertagtask.ModeTargeted,
 		TagTypes:  []int{30},
-		UIDs:      []int64{10001, 10002},
+		UIDs:      []string{"10001", "10002"},
 		BatchSize: 500,
+		DryRun:    true,
 	}
 	if err := first.Validate(); err != nil {
 		t.Fatalf("校验 first 请求失败: %v", err)
@@ -97,8 +100,9 @@ func TestBuildUserTagWorkflowReqUniqueKeyUsesCanonicalParams(t *testing.T) {
 	second := &types.TriggerUserTagWorkflowReq{
 		Mode:      usertagtask.ModeTargeted,
 		TagTypes:  []int{30},
-		UIDs:      []int64{10001, 10003},
+		UIDs:      []string{"10001", "10003"},
 		BatchSize: 500,
+		DryRun:    true,
 	}
 	if err := second.Validate(); err != nil {
 		t.Fatalf("校验 second 请求失败: %v", err)
@@ -106,8 +110,9 @@ func TestBuildUserTagWorkflowReqUniqueKeyUsesCanonicalParams(t *testing.T) {
 	sameAsFirst := &types.TriggerUserTagWorkflowReq{
 		Mode:      usertagtask.ModeTargeted,
 		TagTypes:  []int{30},
-		UIDs:      []int64{10002, 10001},
+		UIDs:      []string{"10002", "10001"},
 		BatchSize: 500,
+		DryRun:    true,
 	}
 	if err := sameAsFirst.Validate(); err != nil {
 		t.Fatalf("校验 sameAsFirst 请求失败: %v", err)
@@ -129,8 +134,9 @@ func TestBuildUserTagWorkflowReqKeepsExplicitUniqueKey(t *testing.T) {
 	req := &types.TriggerUserTagWorkflowReq{
 		Mode:      usertagtask.ModeTargeted,
 		TagTypes:  []int{30},
-		UIDs:      []int64{10001},
+		UIDs:      []string{"10001"},
 		UniqueKey: "custom-key",
+		DryRun:    true,
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("校验 targeted 请求失败: %v", err)

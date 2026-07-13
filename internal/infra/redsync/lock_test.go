@@ -70,6 +70,57 @@ func TestWithLockReturnsUnlockError(t *testing.T) {
 	}
 }
 
+// TestWithLockUnlocksOnPanic 校验业务 panic 时仍会释放锁，并保持 panic 向上抛出。
+func TestWithLockUnlocksOnPanic(t *testing.T) {
+	// server 和 client 构造可重新竞争同一锁 key 的本地 Redis 环境。
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+
+	// panicValue 和 recovered 校验 WithLock 只负责清理资源，不吞掉业务 panic。
+	const panicValue = "lock callback panic"
+	var recovered any
+	func() {
+		defer func() {
+			recovered = recover()
+		}()
+		_ = WithLock(context.Background(), client, "lock:panic", time.Second, func(context.Context) error {
+			panic(panicValue)
+		})
+	}()
+	if recovered != panicValue {
+		t.Fatalf("recovered panic = %v, want %q", recovered, panicValue)
+	}
+	if err := WithLock(context.Background(), client, "lock:panic", time.Second, nil); err != nil {
+		t.Fatalf("expected lock to be released after panic, got %v", err)
+	}
+}
+
+// TestWithLockPreservesAcquireContextError 校验等待锁期间超时会保留 context 错误语义。
+func TestWithLockPreservesAcquireContextError(t *testing.T) {
+	// server 和 client 构造锁竞争环境，由较短的父 deadline 中止后续退避。
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+
+	// holder 先持有目标锁，确保被测调用进入竞争等待。
+	holder := NewLock(client, "lock:acquire-timeout")
+	if err := holder.TryLock(context.Background(), time.Second); err != nil {
+		t.Fatalf("expected holder lock success, got %v", err)
+	}
+	defer holder.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	err := WithLock(ctx, client, "lock:acquire-timeout", time.Second, func(context.Context) error {
+		t.Fatal("timed out lock callback should not run")
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected acquisition deadline error, got %v", err)
+	}
+}
+
 // TestWithLockCancelsContextOnRenewalFailure 校验续期失败后业务 context 会被主动取消。
 func TestWithLockCancelsContextOnRenewalFailure(t *testing.T) {
 	// server 和 client 在业务函数内主动关闭，用来触发后台续期失败。
@@ -91,5 +142,8 @@ func TestWithLockCancelsContextOnRenewalFailure(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected protected context cancellation, got %v", err)
+	}
+	if !errors.Is(err, ErrLockLost) {
+		t.Fatalf("expected lock lost error, got %v", err)
 	}
 }

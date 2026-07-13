@@ -1,0 +1,20 @@
+-- 源表新写保护：清点并升级全部写入方后、开始回填前创建，发现旧写入方会直接拒绝错误 INSERT。
+-- 表名、主键列、UID列和触发器名必须来自发布白名单；先查 information_schema.TRIGGERS 避免重名。
+-- lock_wait_timeout 让元数据锁无法快速取得时直接失败，禁止排队阻塞生产写入。
+SET SESSION lock_wait_timeout = 5;
+
+DELIMITER //
+CREATE TRIGGER `__INSERT_TRIGGER__`
+AFTER INSERT ON `__UID_TABLE__`
+FOR EACH ROW
+BEGIN
+  IF NEW.`__PRIMARY_KEY__` IS NULL
+     OR NEW.`__PRIMARY_KEY__` <= 0
+     OR NEW.`shard_no` IS NULL
+     OR NEW.`__UID_COLUMN__` IS NULL
+     OR NEW.`__UID_COLUMN__` <= 0
+     OR NEW.`shard_no` <> MOD(CRC32(CAST(NEW.`__UID_COLUMN__` AS CHAR)), 1024) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'shard_no does not match fixed user bucket';
+  END IF;
+END//
+DELIMITER ;

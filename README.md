@@ -86,6 +86,8 @@ cmd/admin
 
 ## 目录结构
 
+本分支代码树与 `main` 完全一致，仅本 README 按 Proxy 部署方式说明目录职责。运行配置保持 `user.route_shard_count=1`，共享的 `internal/sharding` 路由函数因此返回逻辑表名；固定 `shard_no` 由应用写入，物理拓扑和分片规则由 Proxy 执行。
+
 ```text
 admin
 ├── cmd                       # 二进制入口
@@ -105,10 +107,10 @@ admin
 │   ├── prometheus            # Prometheus 告警规则
 │   ├── grafana               # Grafana 面板
 │   └── handler.go            # 文档站资源读取入口
-├── deploy                    # 发布、集成环境和候选分表部署资产
+├── deploy                    # 发布、集成环境和 ShardingSphere-Proxy 部署资产
 │   ├── docker                # Admin 容器镜像
 │   ├── integration           # 本地集成依赖编排
-│   ├── shardingsphere        # Proxy 候选方案镜像、配置模板、DistSQL 和迁移 SQL
+│   ├── shardingsphere        # Proxy 镜像、配置模板、DistSQL 和迁移 SQL
 │   └── systemd               # 控制面和 Worker 服务单元
 ├── etc                       # 配置模板和运行期配置拆分
 │   └── config.d              # runtime.yaml 等运行期大列表配置
@@ -123,11 +125,11 @@ admin
 │   ├── jobs                  # 归档、导出、用户标签等后台任务实现
 │   ├── logic                 # 用例编排、规则校验、事务边界、缓存和运行配置
 │   ├── middleware            # 鉴权、签名、加解密、内网限制、访问日志、Recover
-│   ├── model                 # GORM Model、表名、数据访问和运行态模型
+│   ├── model                 # GORM Model、固定分片字段、Proxy 逻辑表和数据访问
 │   ├── requestctx            # 链路字段、调用方、任务和 trace 元数据
 │   ├── routealias            # 路由别名常量
 │   ├── security              # 路由字段级签名、加密、大小限制和测试向量
-│   ├── sharding              # 固定桶物理表数量校验和稳定表名映射
+│   ├── sharding              # main 共享的固定桶映射；本分支配置为 1，仅返回逻辑表名
 │   ├── svc                   # ServiceContext 与基础设施依赖聚合
 │   ├── task                  # Asynq 队列、工作流、任务插件运行时和进度统计
 │   └── types                 # API 请求、响应、列表项和参数校验

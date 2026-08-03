@@ -4,7 +4,7 @@ import (
 	codes "admin/common/codes"
 	i18n "admin/common/i18n"
 	"admin/internal/audit"
-	"admin/internal/jobs/archive"
+	adminlog "admin/internal/jobs/archive/adminlog"
 	corelogic "admin/internal/logic"
 	"admin/internal/svc"
 	"admin/internal/types"
@@ -30,9 +30,7 @@ func NewAdminLogLogic(r *http.Request, svcCtx *svc.ServiceContext) *AdminLogLogi
 // QueryAdminLog 按筛选条件分页查询管理员操作日志，并转换为前端展示结构。
 // 当前查询只读取热表数据，不再拼接归档历史表，保证后台日志查询链路稳定且易排障。
 func (l *AdminLogLogic) QueryAdminLog(req *types.AdminLogQueryReq) *types.BizResult {
-	// 管理员日志查询统一经由归档服务封装，但当前策略固定只查热表。
-	archiveService := archive.NewService(l.Svc, archive.WithControlDatabase(svc.DatabaseMain))
-	logs, total, meta, err := archiveService.QueryAdminLogs(l.Ctx, req)
+	logs, total, meta, err := adminlog.Query(l.Ctx, l.Svc, req)
 	if err != nil {
 		return &types.BizResult{
 			Code:       codes.DBError,

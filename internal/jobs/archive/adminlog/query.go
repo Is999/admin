@@ -7,11 +7,18 @@ import (
 	"strings"
 	"time"
 
+	"admin/internal/jobs/archive"
 	"admin/internal/model"
+	"admin/internal/svc"
 	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
 	"gorm.io/gorm"
+)
+
+const (
+	// JobName 是管理员审计日志对应的归档任务名。
+	JobName = "admin_log"
 )
 
 // Meta 描述管理员日志查询元信息。
@@ -23,8 +30,43 @@ type Meta struct {
 // adminLogOrderPattern 约束管理员日志列表动态排序字段，避免 ORDER BY 注入。
 var adminLogOrderPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// QueryDirect 查询管理员审计日志热表。
-func QueryDirect(ctx context.Context, db *gorm.DB, req *types.AdminLogQueryReq, startTime, endTime *time.Time, queryWriteDB bool) ([]model.AdminLog, int64, Meta, error) {
+// Query 查询管理员审计日志热表，并复用同名归档任务的数据源路由配置。
+func Query(ctx context.Context, svcCtx *svc.ServiceContext, req *types.AdminLogQueryReq) ([]model.AdminLog, int64, Meta, error) {
+	if req == nil {
+		return nil, 0, Meta{}, errors.Errorf("管理员日志查询参数不能为空")
+	}
+	startTime, endTime, err := req.TimeRange()
+	if err != nil {
+		return nil, 0, Meta{}, errors.Tag(err)
+	}
+	source := querySource(svcCtx)
+	return queryDirect(ctx, queryDB(svcCtx, source), req, startTime, endTime, source.QueryWriteDB)
+}
+
+// querySource 返回管理员日志查询的数据源属性，未配置归档任务时回退默认主库。
+func querySource(svcCtx *svc.ServiceContext) archive.JobQuerySource {
+	if source, ok := archive.NewService(svcCtx).JobQuerySource(JobName); ok {
+		return source
+	}
+	return archive.JobQuerySource{Database: svc.DatabaseMain}
+}
+
+// queryDB 根据归档任务配置选择管理员日志查询连接。
+func queryDB(svcCtx *svc.ServiceContext, source archive.JobQuerySource) *gorm.DB {
+	if svcCtx == nil {
+		return nil
+	}
+	if source.QueryWriteDB {
+		return svcCtx.WriteDB(source.Database)
+	}
+	if db := svcCtx.ReadDB(source.Database); db != nil {
+		return db
+	}
+	return svcCtx.WriteDB(source.Database)
+}
+
+// queryDirect 使用已选定的数据库连接查询管理员审计日志热表。
+func queryDirect(ctx context.Context, db *gorm.DB, req *types.AdminLogQueryReq, startTime, endTime *time.Time, queryWriteDB bool) ([]model.AdminLog, int64, Meta, error) {
 	if req == nil {
 		return nil, 0, Meta{}, errors.Errorf("管理员日志查询参数不能为空")
 	}

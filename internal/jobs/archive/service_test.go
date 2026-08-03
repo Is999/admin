@@ -11,7 +11,6 @@ import (
 	"unicode/utf8"
 
 	"admin/internal/config"
-	"admin/internal/model"
 	"admin/internal/svc"
 
 	"gorm.io/driver/mysql"
@@ -1585,45 +1584,6 @@ func TestResolveTargetsSupportsModeSuffix(t *testing.T) {
 	mergedRuns := NewService(svcCtx).resolveTargets([]string{"admin_log#archive", "admin_log#delete"})
 	if len(mergedRuns) != 1 || mergedRuns[0].Mode != archiveRunModeAll {
 		t.Fatalf("期望同一 job 的 archive/delete 后缀合并为 all，实际为 %#v", mergedRuns)
-	}
-}
-
-// TestAdminLogQueryJobFallbackToHotTable 验证管理员日志查询在未配置归档 job 时会回退到热表配置。
-func TestAdminLogQueryJobFallbackToHotTable(t *testing.T) {
-	service := NewService(svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
-	job := service.adminLogQueryJob()
-	if job.Name != JobNameAdminLog {
-		t.Fatalf("adminLogQueryJob().Name = %s, want %s", job.Name, JobNameAdminLog)
-	}
-	if job.Database != svc.DatabaseMain {
-		t.Fatalf("adminLogQueryJob().Database = %s, want %s", job.Database, svc.DatabaseMain)
-	}
-	if job.TableName != model.TableNameAdminLog {
-		t.Fatalf("adminLogQueryJob().TableName = %s, want %s", job.TableName, model.TableNameAdminLog)
-	}
-}
-
-// TestAdminLogQueryJobUsesConfiguredJob 验证管理员日志查询仍优先复用已配置的归档 job 热表信息。
-func TestAdminLogQueryJobUsesConfiguredJob(t *testing.T) {
-	service := NewService(svc.NewServiceContext(config.Config{
-		Archive: config.ArchiveConfig{
-			Jobs: []config.ArchiveJobConfig{
-				{
-					Name:         JobNameAdminLog,
-					Enabled:      true,
-					Database:     string(svc.DatabaseMain),
-					TableName:    model.TableNameAdminLog,
-					QueryWriteDB: true,
-				},
-			},
-		},
-	}, svc.Dependencies{}))
-	job := service.adminLogQueryJob()
-	if !job.QueryWriteDB {
-		t.Fatalf("adminLogQueryJob().QueryWriteDB = false, want true")
-	}
-	if job.TableName != model.TableNameAdminLog {
-		t.Fatalf("adminLogQueryJob().TableName = %s, want %s", job.TableName, model.TableNameAdminLog)
 	}
 }
 

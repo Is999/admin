@@ -13,11 +13,8 @@ import (
 	keys "admin/common/rediskeys"
 	"admin/common/runtimecfg"
 	redislock "admin/internal/infra/redsync"
-	adminlog "admin/internal/jobs/archive/adminlog"
-	"admin/internal/model"
 	"admin/internal/svc"
 	"admin/internal/task/stats"
-	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
 	"github.com/redis/go-redis/v9"
@@ -32,9 +29,6 @@ const (
 
 	// WorkflowNameRun 是通用归档工作流名称。
 	WorkflowNameRun = "archive.run"
-
-	// JobNameAdminLog 是 admin_log 的归档任务名。
-	JobNameAdminLog = "admin_log"
 )
 
 const (
@@ -204,9 +198,6 @@ type Service struct {
 	controlDatabase svc.DBName          // 归档控制表归属库名
 }
 
-// AdminLogQueryMeta 是管理员日志查询返回给接口层的元信息。
-type AdminLogQueryMeta = adminlog.Meta
-
 // Option 定义归档服务运行期可插拔配置项。
 type Option func(s *Service)
 
@@ -290,45 +281,6 @@ func NewService(svcCtx *svc.ServiceContext, opts ...Option) *Service {
 		}
 	}
 	return s
-}
-
-// QueryAdminLogs 查询管理员审计日志。
-func (s *Service) QueryAdminLogs(ctx context.Context, req *types.AdminLogQueryReq) ([]model.AdminLog, int64, AdminLogQueryMeta, error) {
-	if req == nil {
-		return nil, 0, AdminLogQueryMeta{}, errors.Errorf("管理员日志查询参数不能为空")
-	}
-	startTime, endTime, err := req.TimeRange()
-	if err != nil {
-		return nil, 0, AdminLogQueryMeta{}, errors.Tag(err)
-	}
-	job := s.adminLogQueryJob()
-	return adminlog.QueryDirect(ctx, s.adminLogDB(job), req, startTime, endTime, job.QueryWriteDB)
-}
-
-// adminLogQueryJob 返回管理员日志热表查询配置。
-func (s *Service) adminLogQueryJob() jobConfig {
-	if job, ok := s.jobByName(JobNameAdminLog); ok {
-		return job
-	}
-	return jobConfig{
-		Name:      JobNameAdminLog,
-		Database:  svc.DatabaseMain,
-		TableName: model.TableNameAdminLog,
-	}
-}
-
-// adminLogDB 返回管理员日志查询应使用的连接。
-func (s *Service) adminLogDB(job jobConfig) *gorm.DB {
-	if s == nil || s.svcCtx == nil {
-		return nil
-	}
-	if job.QueryWriteDB {
-		return withWriteResolver(s.jobSourceWriteDB(job))
-	}
-	if db := s.svcCtx.ReadDB(job.Database); db != nil {
-		return db
-	}
-	return withWriteResolver(s.jobSourceWriteDB(job))
 }
 
 // archiveTraceName 拼接归档任务处理量明细名称。

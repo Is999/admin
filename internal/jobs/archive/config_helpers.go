@@ -284,6 +284,24 @@ type jobConfig struct {
 	QueryWriteDB            bool          // 查询是否强制走主库
 }
 
+// JobQuerySource 描述业务查询适配层复用的归档数据源属性。
+type JobQuerySource struct {
+	Database     svc.DBName // 热表所属逻辑库
+	QueryWriteDB bool       // 查询是否强制走主库
+}
+
+// JobQuerySource 根据归档任务名返回已校验的热表数据源属性。
+func (s *Service) JobQuerySource(name string) (JobQuerySource, bool) {
+	job, ok := s.jobByName(name)
+	if !ok {
+		return JobQuerySource{}, false
+	}
+	return JobQuerySource{
+		Database:     job.Database,
+		QueryWriteDB: job.QueryWriteDB,
+	}, true
+}
+
 // jobRunConfig 表示一次工作流 target 解析后的执行目标。
 type jobRunConfig struct {
 	Job  jobConfig // 归档任务配置

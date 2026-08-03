@@ -4,8 +4,65 @@ import (
 	"context"
 	"testing"
 
+	"admin/internal/config"
+	"admin/internal/svc"
 	"admin/internal/types"
 )
+
+// TestQuerySourceFallbackToMain 验证未配置管理员日志归档任务时查询回退默认主库。
+func TestQuerySourceFallbackToMain(t *testing.T) {
+	source := querySource(svc.NewServiceContext(config.Config{}, svc.Dependencies{}))
+	if source.Database != svc.DatabaseMain {
+		t.Fatalf("querySource().Database = %s, want %s", source.Database, svc.DatabaseMain)
+	}
+	if source.QueryWriteDB {
+		t.Fatal("querySource().QueryWriteDB = true, want false")
+	}
+}
+
+// TestQuerySourceIgnoresDisabledArchiveJob 验证停用的归档任务不会改变管理员日志查询路由。
+func TestQuerySourceIgnoresDisabledArchiveJob(t *testing.T) {
+	svcCtx := svc.NewServiceContext(config.Config{
+		Archive: config.ArchiveConfig{
+			Jobs: []config.ArchiveJobConfig{
+				{
+					Name:         JobName,
+					Database:     "log",
+					TableName:    "admin_log",
+					QueryWriteDB: true,
+				},
+			},
+		},
+	}, svc.Dependencies{})
+	source := querySource(svcCtx)
+	if source.Database != svc.DatabaseMain || source.QueryWriteDB {
+		t.Fatalf("querySource() = %#v, want default main reader", source)
+	}
+}
+
+// TestQuerySourceUsesConfiguredArchiveJob 验证管理员日志查询复用已校验归档任务的数据源属性。
+func TestQuerySourceUsesConfiguredArchiveJob(t *testing.T) {
+	svcCtx := svc.NewServiceContext(config.Config{
+		Archive: config.ArchiveConfig{
+			Jobs: []config.ArchiveJobConfig{
+				{
+					Name:         JobName,
+					Enabled:      true,
+					Database:     string(svc.DatabaseMain),
+					TableName:    "admin_log",
+					QueryWriteDB: true,
+				},
+			},
+		},
+	}, svc.Dependencies{})
+	source := querySource(svcCtx)
+	if source.Database != svc.DatabaseMain {
+		t.Fatalf("querySource().Database = %s, want %s", source.Database, svc.DatabaseMain)
+	}
+	if !source.QueryWriteDB {
+		t.Fatal("querySource().QueryWriteDB = false, want true")
+	}
+}
 
 // TestBuildOrderClauseAllowsOnlySafeIdentifiers 验证动态排序只能使用合法标识符和明确方向。
 func TestBuildOrderClauseAllowsOnlySafeIdentifiers(t *testing.T) {
@@ -44,10 +101,10 @@ func TestBuildOrderClauseAllowsOnlySafeIdentifiers(t *testing.T) {
 
 // TestQueryDirectValidatesRequiredInputs 验证管理员日志查询不会在参数或数据库缺失时继续执行。
 func TestQueryDirectValidatesRequiredInputs(t *testing.T) {
-	if _, _, _, err := QueryDirect(context.Background(), nil, nil, nil, nil, false); err == nil {
+	if _, _, _, err := queryDirect(context.Background(), nil, nil, nil, nil, false); err == nil {
 		t.Fatal("nil request should be rejected")
 	}
-	if _, _, _, err := QueryDirect(context.Background(), nil, &types.AdminLogQueryReq{}, nil, nil, false); err == nil {
+	if _, _, _, err := queryDirect(context.Background(), nil, &types.AdminLogQueryReq{}, nil, nil, false); err == nil {
 		t.Fatal("nil database should be rejected")
 	}
 }

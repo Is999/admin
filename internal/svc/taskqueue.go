@@ -13,7 +13,7 @@ type TaskOption func(options *TaskOptions)
 // TaskOptions 描述一次任务投递时可覆盖的运行参数。
 type TaskOptions struct {
 	Queue     string        // 目标队列名称，为空时使用默认队列
-	Retry     int           // 最大重试次数
+	Retry     *int          // 最大重试次数；nil 表示使用 Asynq 默认值，0 表示禁用重试
 	Timeout   time.Duration // 单个任务执行超时时间
 	Delay     time.Duration // 相对当前时间的延迟投递时间
 	ProcessAt *time.Time    // 指定绝对时间投递，和 Delay 互斥
@@ -92,7 +92,7 @@ func WithTaskQueue(queue string) TaskOption {
 // WithTaskRetry 指定任务最大重试次数。
 func WithTaskRetry(retry int) TaskOption {
 	return func(options *TaskOptions) {
-		options.Retry = retry
+		options.Retry = new(retry)
 	}
 }
 
@@ -189,4 +189,11 @@ type TaskQueue interface {
 
 	// ResumeQueue 恢复指定队列的消费。
 	ResumeQueue(ctx context.Context, queue string) error
+}
+
+// TaskHistoryQueue 描述可选的任务终态历史和观测能力，避免扩大基础投递接口影响业务替身。
+type TaskHistoryQueue interface {
+	ListTaskWorkflows(ctx context.Context, req *types.ListTaskWorkflowsReq) (*types.TaskWorkflowHistoryListResp, error)
+	ListTaskFailures(ctx context.Context, req *types.ListTaskFailuresReq) (*types.TaskFailureListResp, error)
+	TaskObservability(ctx context.Context) (*types.TaskObservabilityResp, error)
 }

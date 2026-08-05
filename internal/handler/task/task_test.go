@@ -1,10 +1,12 @@
 package task
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	tasklimits "admin/internal/task/limits"
 	"admin/internal/types"
 )
 
@@ -50,5 +52,69 @@ func TestParseEnqueueTaskReq_MissingPayload(t *testing.T) {
 	var req types.EnqueueTaskReq
 	if err := parseEnqueueTaskReq(httpReq, &req); err == nil {
 		t.Fatal("parseEnqueueTaskReq() error = nil, want payload validation error")
+	}
+}
+
+// TestParseEnqueueTaskReq_RejectsOversizedBody 确保解析层在分配无界请求体前拒绝超限内容。
+func TestParseEnqueueTaskReq_RejectsOversizedBody(t *testing.T) {
+	httpReq := httptest.NewRequest("POST", "/api/tasks", strings.NewReader(strings.Repeat("x", enqueueTaskBodyMaxBytes+1)))
+
+	var req types.EnqueueTaskReq
+	if err := parseEnqueueTaskReq(httpReq, &req); err == nil {
+		t.Fatal("parseEnqueueTaskReq() error = nil, want oversized body error")
+	}
+}
+
+// TestParseEnqueueTaskReq_RejectsOversizedPayload 确保任务负载不能超过统一的一 MiB 硬上限。
+func TestParseEnqueueTaskReq_RejectsOversizedPayload(t *testing.T) {
+	body := `{"taskType":"order_month_repair","payload":{"data":"` + strings.Repeat("x", tasklimits.MaxPayloadBytes) + `"}}`
+	httpReq := httptest.NewRequest("POST", "/api/tasks", strings.NewReader(body))
+
+	var req types.EnqueueTaskReq
+	if err := parseEnqueueTaskReq(httpReq, &req); err == nil {
+		t.Fatal("parseEnqueueTaskReq() error = nil, want oversized payload error")
+	}
+}
+
+// TestParseEnqueueTaskReq_RejectsTrailingJSON 确保单个请求不能拼接多份 JSON 文档绕过审计语义。
+func TestParseEnqueueTaskReq_RejectsTrailingJSON(t *testing.T) {
+	body := `{"taskType":"order_month_repair","payload":{}} {"taskType":"other","payload":{}}`
+	httpReq := httptest.NewRequest("POST", "/api/tasks", strings.NewReader(body))
+
+	var req types.EnqueueTaskReq
+	if err := parseEnqueueTaskReq(httpReq, &req); err == nil {
+		t.Fatal("parseEnqueueTaskReq() error = nil, want trailing JSON error")
+	}
+}
+
+// TestParseTaskJSONReq_RejectsOversizedWorkflowBody 确保工作流入口不会无界读取目标列表。
+func TestParseTaskJSONReq_RejectsOversizedWorkflowBody(t *testing.T) {
+	httpReq := httptest.NewRequest("POST", "/api/tasks/workflows", strings.NewReader(strings.Repeat("x", triggerWorkflowBodyMaxBytes+1)))
+
+	var req types.TriggerTaskWorkflowReq
+	if err := parseTaskJSONReq(httpReq, &req, triggerWorkflowBodyMaxBytes); err == nil {
+		t.Fatal("parseTaskJSONReq() error = nil, want oversized workflow body error")
+	}
+}
+
+// TestParseTaskJSONReq_AllowsEscapedTargetsWithinDecodedLimit 确保合法目标不会因 JSON 转义膨胀被解析层提前拒绝。
+func TestParseTaskJSONReq_AllowsEscapedTargetsWithinDecodedLimit(t *testing.T) {
+	target := strings.Repeat("\x01", tasklimits.MaxWorkflowTargetBytes)
+	targets := make([]string, tasklimits.MaxWorkflowTargetsBytes/tasklimits.MaxWorkflowTargetBytes)
+	for index := range targets {
+		targets[index] = target
+	}
+	reqBody, err := json.Marshal(types.TriggerTaskWorkflowReq{
+		Name:    "cache-refresh",
+		Targets: targets,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	httpReq := httptest.NewRequest("POST", "/api/tasks/workflows", strings.NewReader(string(reqBody)))
+
+	var req types.TriggerTaskWorkflowReq
+	if err = parseTaskJSONReq(httpReq, &req, triggerWorkflowBodyMaxBytes); err != nil {
+		t.Fatalf("parseTaskJSONReq() error = %v", err)
 	}
 }

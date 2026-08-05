@@ -1607,9 +1607,42 @@
     {
       "alias": "task.workflow.status",
       "method": "GET",
+      "path": "/api/tasks/workflows",
+      "access": "auth",
+      "describe": "查询工作流状态",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "task.workflow.status",
+      "method": "GET",
       "path": "/api/tasks/workflows/:workflowId",
       "access": "auth",
       "describe": "查询工作流状态",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "task.items.list",
+      "method": "GET",
+      "path": "/api/tasks/failures",
+      "access": "auth",
+      "describe": "查询任务列表",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "task.queue.list",
+      "method": "GET",
+      "path": "/api/tasks/observability",
+      "access": "auth",
+      "describe": "查询任务队列概览",
       "requestSign": null,
       "requestCipher": [],
       "responseSign": null,

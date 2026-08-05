@@ -127,6 +127,7 @@ func (m *Manager) StartWorker() error {
 	m.server = server
 	m.markWorkerStarted()
 	m.startArchivedCleanerLocked()
+	m.startHistoryCollectorLocked()
 	loggerx.Infow(context.Background(), "任务队列 工作进程已启动",
 		logx.Field("app_id", m.appNamespace()),
 		logx.Field("concurrency", m.concurrency()),
@@ -213,6 +214,8 @@ func (m *Manager) Stop(ctx context.Context) error {
 	m.markWorkerStopped()
 	archivedCleanStop := m.archivedCleanStop
 	m.archivedCleanStop = nil
+	historyStop := m.historyStop
+	m.historyStop = nil
 	m.lifecycleMu.Unlock()
 
 	if cancel != nil {
@@ -220,6 +223,9 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 	if archivedCleanStop != nil {
 		archivedCleanStop()
+	}
+	if historyStop != nil {
+		historyStop()
 	}
 	if server != nil {
 		shutdownDone := make(chan struct{})

@@ -287,14 +287,6 @@ const (
 	MsgKeyTaskRegistryWorkflowUserTagOutboxRetryDesc = "task.registry.workflow.user_tag_outbox_retry.desc"
 	// MsgKeyTaskRegistryWorkflowUserTagOutboxRetryHint 表示用户标签 outbox 重派工作流使用提示 key。
 	MsgKeyTaskRegistryWorkflowUserTagOutboxRetryHint = "task.registry.workflow.user_tag_outbox_retry.hint"
-	// MsgKeyTaskReportRetentionWarning 表示任务运行日报终态数据保留期不足提示 key。
-	MsgKeyTaskReportRetentionWarning = "task.report.retention_warning"
-	// MsgKeyTaskReportArchiveTrimWarning 表示 Asynq 失败归档达到裁剪阈值提示 key。
-	MsgKeyTaskReportArchiveTrimWarning = "task.report.archive_trim_warning"
-	// MsgKeyTaskReportScanLimitWarning 表示日报主动扫描截断提示 key。
-	MsgKeyTaskReportScanLimitWarning = "task.report.scan_limit_warning"
-	// MsgKeyTaskReportQueueLimitWarning 是日报队列读取上限提示。
-	MsgKeyTaskReportQueueLimitWarning = "task.report.queue_limit_warning"
 	// MsgKeyHotReloadFailed 表示配置热加载失败状态说明 key。
 	MsgKeyHotReloadFailed = "hot_reload.failed"
 	// MsgKeyHotReloadFingerprintInitFailed 表示初始化配置指纹失败状态说明 key。

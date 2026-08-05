@@ -9,24 +9,36 @@ import (
 	codes "admin/common/codes"
 	tasklogic "admin/internal/logic/task"
 	"admin/internal/svc"
+	tasklimits "admin/internal/task/limits"
 	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
 )
 
 const (
-	// enqueueTaskBodyMaxBytes 限制手工投递请求体大小，保持和 go-zero 默认 JSON 解析上限一致。
-	enqueueTaskBodyMaxBytes = 8 << 20
+	// enqueueTaskEnvelopeBytes 为任务类型、调度参数和 JSON 结构预留请求体空间。
+	enqueueTaskEnvelopeBytes = 64 << 10
+	// enqueueTaskBodyMaxBytes 限制手工投递请求体，防止解析层绕过任务负载硬上限。
+	enqueueTaskBodyMaxBytes = tasklimits.MaxPayloadBytes + enqueueTaskEnvelopeBytes
+	// triggerWorkflowBodyMaxBytes 覆盖控制字符最坏六倍 JSON 转义，解码后仍由目标总字节上限约束。
+	triggerWorkflowBodyMaxBytes = tasklimits.MaxWorkflowTargetsBytes*6 + enqueueTaskEnvelopeBytes
 )
 
 // TriggerTaskWorkflowHandler 手动触发工作流执行。
 func TriggerTaskWorkflowHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
-	return shared.ActionHandler[types.TriggerTaskWorkflowReq](shared.TaskWorkflowTrigger,
-		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.TriggerTaskWorkflowReq) (shared.LogicObj, *types.BizResult) {
-			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
-			return logicObj, logicObj.TriggerWorkflow(req)
-		},
-	)(sCtx)
+	return shared.ActionLogHandler(shared.TaskWorkflowTrigger, func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+		var req types.TriggerTaskWorkflowReq
+		if err := parseTaskJSONReq(r, &req, triggerWorkflowBodyMaxBytes); err != nil {
+			return nil, types.ParamErrorResult(err)
+		}
+		logicObj := tasklogic.NewTaskLogic(r, sCtx)
+		resp := logicObj.TriggerWorkflow(&req)
+		if resp == nil {
+			return logicObj, types.NewBizResult(codes.ServerError).WithError(errors.New("业务响应为空"))
+		}
+		resp.WithReq(&req)
+		return logicObj, resp
+	})
 }
 
 // EnqueueTaskHandler 手动投递一个已注册的通用任务。
@@ -48,12 +60,23 @@ func EnqueueTaskHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 
 // parseEnqueueTaskReq 使用标准 JSON 解析任务负载，保留 payload 原始结构给 Asynq 处理器。
 func parseEnqueueTaskReq(r *http.Request, req *types.EnqueueTaskReq) error {
-	if r == nil || req == nil {
+	return parseTaskJSONReq(r, req, enqueueTaskBodyMaxBytes)
+}
+
+// parseTaskJSONReq 有界解析单份任务 JSON，并执行请求自己的业务校验。
+func parseTaskJSONReq[T interface{ Validate() error }](r *http.Request, req T, maxBytes int64) error {
+	if r == nil {
 		return errors.Errorf("请求不能为空")
 	}
-	reader := io.LimitReader(r.Body, enqueueTaskBodyMaxBytes)
-	if err := json.NewDecoder(reader).Decode(req); err != nil {
-		return errors.Wrap(err, "解析任务投递请求失败")
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+	if err != nil {
+		return errors.Wrap(err, "读取任务请求失败")
+	}
+	if int64(len(raw)) > maxBytes {
+		return errors.Errorf("任务请求体不能超过 %d 字节", maxBytes)
+	}
+	if err = json.Unmarshal(raw, req); err != nil {
+		return errors.Wrap(err, "解析任务请求失败")
 	}
 	return req.Validate()
 }
@@ -66,6 +89,34 @@ func GetTaskWorkflowStatusHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 			return logicObj, logicObj.GetWorkflowStatus(req)
 		},
 	)(sCtx)
+}
+
+// ListTaskWorkflowsHandler 查询短期工作流历史。
+func ListTaskWorkflowsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.ListTaskWorkflowsReq](shared.TaskWorkflowStatus,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ListTaskWorkflowsReq) (shared.LogicObj, *types.BizResult) {
+			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
+			return logicObj, logicObj.ListTaskWorkflows(req)
+		},
+	)(sCtx)
+}
+
+// ListTaskFailuresHandler 查询最终失败任务历史。
+func ListTaskFailuresHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.ListTaskFailuresReq](shared.TaskItemsList,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ListTaskFailuresReq) (shared.LogicObj, *types.BizResult) {
+			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
+			return logicObj, logicObj.ListTaskFailures(req)
+		},
+	)(sCtx)
+}
+
+// TaskObservabilityHandler 查询 Redis 实时态和历史落库健康摘要。
+func TaskObservabilityHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.RespHandlerFunc(func(r *http.Request) (shared.LogicObj, *types.BizResult) {
+		logicObj := tasklogic.NewTaskLogic(r, sCtx)
+		return logicObj, logicObj.TaskObservability()
+	})
 }
 
 // GetTaskInfoHandler 查询单个任务详情。

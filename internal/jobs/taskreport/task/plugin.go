@@ -8,6 +8,7 @@ import (
 
 	"admin/internal/jobs/taskreport"
 	"admin/internal/svc"
+	taskhistory "admin/internal/task/history"
 	queue "admin/internal/task/queue"
 	"admin/internal/task/taskwire"
 
@@ -18,7 +19,7 @@ import (
 const (
 	// PluginName 是任务运行日报插件名称，供 taskruntime 包装注册时保持唯一。
 	PluginName = "task_report"
-	// maxReportWindow 限制手动补跑窗口，避免误扫过大的 Asynq 历史集合。
+	// maxReportWindow 限制手动补跑窗口，避免一次聚合过多 DB 历史。
 	maxReportWindow = 72 * time.Hour
 	// maxReportFutureSkew 容忍调度节点与 worker 的极小时间偏差，同时拒绝未来统计窗口。
 	maxReportFutureSkew = 2 * time.Second
@@ -42,6 +43,14 @@ func Setup(runtime Runtime) error {
 	if runtime == nil || runtime.ServiceContext() == nil || runtime.Manager() == nil {
 		return nil
 	}
+	svcCtx := runtime.ServiceContext()
+	var historyBuilder taskreport.HistoryReportBuilder
+	if runtime.Manager().CurrentConfig().History.EnabledOrDefault() {
+		historyBuilder = taskhistory.New(runtime.Manager().CurrentConfig().AppID, svcCtx.ReadDB(svc.DatabaseMain), svcCtx.WriteDB(svc.DatabaseMain))
+		if historyBuilder == nil {
+			return errors.Errorf("任务历史已启用，但日报主库或应用命名空间不可用")
+		}
+	}
 	if err := runtime.RegisterHandler(taskreport.TaskTypeDailySummary, asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 		payload, err := decodePayload(task)
 		if err != nil {
@@ -51,7 +60,7 @@ func Setup(runtime Runtime) error {
 		if err != nil {
 			return errors.Tag(err)
 		}
-		report, err := taskreport.NewService(runtime.Manager()).Build(ctx, taskreport.ReportRequest{
+		report, err := taskreport.NewService(runtime.Manager(), historyBuilder).Build(ctx, taskreport.ReportRequest{
 			WindowStart:       start,
 			WindowEnd:         end,
 			GeneratedAt:       time.Now(),

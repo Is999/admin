@@ -67,6 +67,9 @@ func TestRegisterHandlersRegistersExpectedRoutes(t *testing.T) {
 	taskDetailRoute := http.MethodGet + " /api/tasks/:taskId"
 	for _, fixedRoute := range []string{
 		http.MethodGet + " /api/tasks/overview",
+		http.MethodGet + " /api/tasks/workflows",
+		http.MethodGet + " /api/tasks/failures",
+		http.MethodGet + " /api/tasks/observability",
 		http.MethodGet + " /api/tasks/queues",
 		http.MethodGet + " /api/tasks/registry/task-types",
 		http.MethodGet + " /api/tasks/registry/workflows",

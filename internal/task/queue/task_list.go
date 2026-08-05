@@ -121,12 +121,25 @@ func (m *Manager) listTaskInfoPage(ctx context.Context, internalQueue string, in
 	if err != nil {
 		return nil, 0, errors.Tag(err)
 	}
-	info, qerr := m.inspector.GetQueueInfo(internalQueue)
+	total, qerr := m.taskStateTotal(ctx, internalQueue, internalGroup, state)
 	if qerr != nil {
 		return nil, 0, errors.Tag(qerr)
 	}
-	total := queueInfoTotalByState(info, state)
 	return items, total, nil
+}
+
+// taskStateTotal 使用状态 key 的固定复杂度计数返回列表总数，禁止为分页调用完整队列巡检。
+func (m *Manager) taskStateTotal(ctx context.Context, internalQueue string, internalGroup string, state string) (int64, error) {
+	switch strings.TrimSpace(state) {
+	case "pending":
+		return m.redis.LLen(ctx, keys.TaskAsynqPendingKey(internalQueue)).Result()
+	case "active":
+		return m.redis.LLen(ctx, keys.TaskAsynqActiveKey(internalQueue)).Result()
+	case "aggregating":
+		return m.redis.ZCard(ctx, keys.TaskAsynqGroupKey(internalQueue, internalGroup)).Result()
+	default:
+		return 0, errors.Errorf("不支持的任务状态: %s", state)
+	}
 }
 
 // taskStateUsesDescZSet 判断状态是否需要按 zset 分数倒序读取。
@@ -155,7 +168,7 @@ func (m *Manager) listDescZSetTaskInfoPage(ctx context.Context, internalQueue st
 		ids   []string
 		total int64
 	)
-	if minScore, maxScore, ok := descZSetScoreRange(state, timeRange, taskCompletedRetention); ok {
+	if minScore, maxScore, ok := descZSetScoreRange(state, timeRange, m.CompletedRetention()); ok {
 		total, err = m.redis.ZCount(ctx, key, minScore, maxScore).Result()
 		if err != nil {
 			return nil, 0, errors.Tag(err)
@@ -255,11 +268,7 @@ func (m *Manager) listScheduledTaskInfoPage(ctx context.Context, internalQueue s
 // scheduledTaskTotal 返回 scheduled 总数；带时间段时按 nextProcessAt 分数范围统计。
 func (m *Manager) scheduledTaskTotal(ctx context.Context, internalQueue string, timeRange taskListTimeRange) (int64, error) {
 	if !timeRange.hasRange {
-		info, err := m.inspector.GetQueueInfo(internalQueue)
-		if err != nil {
-			return 0, errors.Tag(err)
-		}
-		return int64(info.Scheduled), nil
+		return m.redis.ZCard(ctx, keys.TaskAsynqScheduledKey(internalQueue)).Result()
 	}
 	minScore, maxScore := scheduledScoreRange(timeRange)
 	total, err := m.redis.ZCount(ctx, keys.TaskAsynqScheduledKey(internalQueue), minScore, maxScore).Result()

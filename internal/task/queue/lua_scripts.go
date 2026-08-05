@@ -74,6 +74,17 @@ var releaseLeaderScriptText string
 //go:embed assets/delete_expired_archived_tasks.lua
 var deleteExpiredArchivedTasksScriptText string
 
+// taskHistoryEnqueueScriptText 保存终态历史事件有界入队 Lua 脚本源码。
+// 三个 key 使用同一 Redis Cluster hash tag，容量裁剪与事件写入保持原子。
+//
+//go:embed assets/task_history_enqueue.lua
+var taskHistoryEnqueueScriptText string
+
+// taskHistoryAckScriptText 保存终态历史事件批量确认 Lua 脚本源码。
+//
+//go:embed assets/task_history_ack.lua
+var taskHistoryAckScriptText string
+
 var (
 	// recordNodeOutcomeScript 通过 Lua 原子记录节点完成结果，避免重复 ack 或并发 shard 回写导致计数漂移。
 	recordNodeOutcomeScript = redis.NewScript(embedasset.StripLeadingLineComments(recordNodeOutcomeScriptText, "--"))
@@ -97,4 +108,8 @@ var (
 	releaseLeaderScript = redis.NewScript(embedasset.StripLeadingLineComments(releaseLeaderScriptText, "--"))
 	// deleteExpiredArchivedTasksScript 按失败时间清理过期 archived 任务。
 	deleteExpiredArchivedTasksScript = redis.NewScript(embedasset.StripLeadingLineComments(deleteExpiredArchivedTasksScriptText, "--"))
+	// taskHistoryEnqueueScript 原子写入并按硬上限裁剪最旧的待落库历史事件。
+	taskHistoryEnqueueScript = redis.NewScript(embedasset.StripLeadingLineComments(taskHistoryEnqueueScriptText, "--"))
+	// taskHistoryAckScript 在 DB 事务成功后原子移除已持久化事件。
+	taskHistoryAckScript = redis.NewScript(embedasset.StripLeadingLineComments(taskHistoryAckScriptText, "--"))
 )

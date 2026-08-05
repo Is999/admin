@@ -44,7 +44,10 @@ func (r *TriggerTaskWorkflowReq) Validate() error {
 	if r.ShardTotal > tasklimits.MaxShardTotal {
 		return errors.Errorf("shardTotal 不能超过 %d", tasklimits.MaxShardTotal)
 	}
-	if r.GrayPercent <= 0 {
+	if r.GrayPercent < 0 {
+		return errors.Errorf("grayPercent 不能小于 0")
+	}
+	if r.GrayPercent == 0 {
 		r.GrayPercent = 100
 	}
 	if r.GrayPercent > 100 {
@@ -53,9 +56,19 @@ func (r *TriggerTaskWorkflowReq) Validate() error {
 	for i := range r.Targets {
 		r.Targets[i] = strings.TrimSpace(r.Targets[i])
 	}
+	if err := tasklimits.ValidateWorkflowTargets(r.Targets); err != nil {
+		return errors.Tag(err)
+	}
+	if len(r.UniqueKey) > tasklimits.MaxUniqueKeyBytes {
+		return errors.Errorf("uniqueKey 不能超过 %d 字节", tasklimits.MaxUniqueKeyBytes)
+	}
 	if r.ProcessAt != "" {
-		if _, err := time.Parse(time.RFC3339, r.ProcessAt); err != nil {
+		processAt, err := time.Parse(time.RFC3339, r.ProcessAt)
+		if err != nil {
 			return errors.Errorf("processAt 必须为 RFC3339 时间格式")
+		}
+		if processAt.After(time.Now().Add(time.Duration(tasklimits.MaxScheduleDelaySeconds) * time.Second)) {
+			return errors.Errorf("processAt 不能晚于当前时间 %d 秒", tasklimits.MaxScheduleDelaySeconds)
 		}
 	}
 	if r.Deadline != "" {
@@ -66,8 +79,17 @@ func (r *TriggerTaskWorkflowReq) Validate() error {
 	if r.ProcessInSeconds != nil && *r.ProcessInSeconds < 0 {
 		return errors.Errorf("processInSeconds 不能小于 0")
 	}
+	if r.ProcessInSeconds != nil && *r.ProcessInSeconds > tasklimits.MaxScheduleDelaySeconds {
+		return errors.Errorf("processInSeconds 不能超过 %d", tasklimits.MaxScheduleDelaySeconds)
+	}
+	if r.ProcessAt != "" && r.ProcessInSeconds != nil && *r.ProcessInSeconds > 0 {
+		return errors.Errorf("processAt 和 processInSeconds 不能同时设置")
+	}
 	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds <= 0 {
 		return errors.Errorf("uniqueTTLSeconds 必须大于 0")
+	}
+	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds > tasklimits.MaxUniqueTTLSeconds {
+		return errors.Errorf("uniqueTTLSeconds 不能超过 %d", tasklimits.MaxUniqueTTLSeconds)
 	}
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")
@@ -274,12 +296,19 @@ func (r *EnqueueTaskReq) Validate() error {
 	if len(r.Payload) == 0 {
 		return errors.Errorf("payload 不能为空")
 	}
+	if len(r.Payload) > tasklimits.MaxPayloadBytes {
+		return errors.Errorf("payload 不能超过 %d 字节", tasklimits.MaxPayloadBytes)
+	}
 	if !json.Valid(r.Payload) {
 		return errors.Errorf("payload 必须为合法 JSON")
 	}
 	if r.ProcessAt != "" {
-		if _, err := time.Parse(time.RFC3339, r.ProcessAt); err != nil {
+		processAt, err := time.Parse(time.RFC3339, r.ProcessAt)
+		if err != nil {
 			return errors.Errorf("processAt 必须为 RFC3339 时间格式")
+		}
+		if processAt.After(time.Now().Add(time.Duration(tasklimits.MaxScheduleDelaySeconds) * time.Second)) {
+			return errors.Errorf("processAt 不能晚于当前时间 %d 秒", tasklimits.MaxScheduleDelaySeconds)
 		}
 	}
 	if r.Deadline != "" {
@@ -290,11 +319,17 @@ func (r *EnqueueTaskReq) Validate() error {
 	if r.ProcessInSeconds != nil && *r.ProcessInSeconds < 0 {
 		return errors.Errorf("processInSeconds 不能小于 0")
 	}
+	if r.ProcessInSeconds != nil && *r.ProcessInSeconds > tasklimits.MaxScheduleDelaySeconds {
+		return errors.Errorf("processInSeconds 不能超过 %d", tasklimits.MaxScheduleDelaySeconds)
+	}
 	if r.ProcessAt != "" && r.ProcessInSeconds != nil && *r.ProcessInSeconds > 0 {
 		return errors.Errorf("processAt 和 processInSeconds 不能同时设置")
 	}
 	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds <= 0 {
 		return errors.Errorf("uniqueTTLSeconds 必须大于 0")
+	}
+	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds > tasklimits.MaxUniqueTTLSeconds {
+		return errors.Errorf("uniqueTTLSeconds 不能超过 %d", tasklimits.MaxUniqueTTLSeconds)
 	}
 	if r.TimeoutSeconds != nil && *r.TimeoutSeconds <= 0 {
 		return errors.Errorf("timeoutSeconds 必须大于 0")
@@ -392,13 +427,6 @@ type TaskListResp struct {
 	Tasks      []TaskItem `json:"tasks"`                // 任务列表
 }
 
-// TaskReportScanUsage 记录日报读取一个 Asynq 原生页的受控资源消耗。
-type TaskReportScanUsage struct {
-	Tasks       int   // 已检查的原生页任务槽位数
-	Bytes       int64 // 已允许读取的 msg、result 和运行快照估算字节数
-	ByteLimited bool  // 是否因页级或全局字节预算停止读取
-}
-
 // TaskListOverviewResp 表示任务总览查询响应。
 type TaskListOverviewResp struct {
 	Queue          string           `json:"queue,omitempty"`          // 当前筛选队列；为空表示聚合全部可见队列
@@ -479,22 +507,241 @@ type TaskWorkflowShardTraceItem struct {
 
 // TaskWorkflowStatusResp 表示工作流实例的整体状态。
 type TaskWorkflowStatusResp struct {
-	WorkflowID     string                 `json:"workflowId"`               // 工作流实例 ID
-	WorkflowName   string                 `json:"workflowName"`             // 工作流名称
-	Status         string                 `json:"status"`                   // 工作流状态：pending/running/success/failed
-	Source         string                 `json:"source"`                   // 触发来源：api/periodic/internal
-	Queue          string                 `json:"queue"`                    // 默认执行队列
-	Targets        []string               `json:"targets,omitempty"`        // 执行目标列表
-	ShardTotal     int                    `json:"shardTotal"`               // 分片总数
-	GrayPercent    int                    `json:"grayPercent"`              // 灰度比例
-	ErrorMessage   string                 `json:"errorMessage,omitempty"`   // 工作流失败原因
-	CreatedAt      string                 `json:"createdAt"`                // 创建时间
-	UpdatedAt      string                 `json:"updatedAt"`                // 最近更新时间
-	FinishedAt     string                 `json:"finishedAt,omitempty"`     // 完成时间
-	DurationMS     int64                  `json:"durationMs,omitempty"`     // 工作流总耗时（毫秒）；执行中工作流表示已运行时长
-	Progress       *taskstats.Progress    `json:"progress,omitempty"`       // 工作流执行进度
-	ExecutionTrace *taskstats.Snapshot    `json:"executionTrace,omitempty"` // 工作流处理量聚合摘要
-	Nodes          []TaskWorkflowNodeItem `json:"nodes"`                    // 节点明细
+	WorkflowID      string                 `json:"workflowId"`                // 工作流实例 ID
+	WorkflowName    string                 `json:"workflowName"`              // 工作流名称
+	PeriodicName    string                 `json:"periodicName,omitempty"`    // 周期任务名称
+	Status          string                 `json:"status"`                    // 工作流状态：pending/running/success/failed
+	Source          string                 `json:"source"`                    // 触发来源：api/periodic/internal
+	Queue           string                 `json:"queue"`                     // 默认执行队列
+	Targets         []string               `json:"targets,omitempty"`         // 执行目标列表
+	ShardTotal      int                    `json:"shardTotal"`                // 分片总数
+	GrayPercent     int                    `json:"grayPercent"`               // 灰度比例
+	ErrorMessage    string                 `json:"errorMessage,omitempty"`    // 工作流失败原因
+	CreatedAt       string                 `json:"createdAt"`                 // 创建时间
+	UpdatedAt       string                 `json:"updatedAt"`                 // 最近更新时间
+	FinishedAt      string                 `json:"finishedAt,omitempty"`      // 完成时间
+	DurationMS      int64                  `json:"durationMs,omitempty"`      // 工作流总耗时（毫秒）；执行中工作流表示已运行时长
+	Progress        *taskstats.Progress    `json:"progress,omitempty"`        // 工作流执行进度
+	ExecutionTrace  *taskstats.Snapshot    `json:"executionTrace,omitempty"`  // 工作流处理量聚合摘要
+	Nodes           []TaskWorkflowNodeItem `json:"nodes"`                     // 节点明细
+	DataSource      string                 `json:"dataSource,omitempty"`      // 数据来源：redis/database
+	DetailLevel     string                 `json:"detailLevel,omitempty"`     // 明细层级：shard/node
+	DetailTruncated bool                   `json:"detailTruncated,omitempty"` // 分片或节点处理明细是否因历史容量上限被裁剪
+	HistoryStatus   string                 `json:"historyStatus,omitempty"`   // 历史落库状态：pending/persisted/failed
+	PersistedAt     string                 `json:"persistedAt,omitempty"`     // 历史落库时间
+}
+
+// ListTaskWorkflowsReq 表示工作流历史游标查询条件。
+type ListTaskWorkflowsReq struct {
+	WorkflowID   string `json:"workflowId,optional" form:"workflowId,optional"`     // 工作流实例 ID
+	WorkflowName string `json:"workflowName,optional" form:"workflowName,optional"` // 工作流名称
+	PeriodicName string `json:"periodicName,optional" form:"periodicName,optional"` // 周期任务名称
+	Status       string `json:"status,optional" form:"status,optional"`             // 终态：success/failed
+	Source       string `json:"source,optional" form:"source,optional"`             // 触发来源
+	Queue        string `json:"queue,optional" form:"queue,optional"`               // 默认队列
+	StartTime    string `json:"startTime,optional" form:"startTime,optional"`       // 查询开始时间，RFC3339
+	EndTime      string `json:"endTime,optional" form:"endTime,optional"`           // 查询结束时间，RFC3339
+	Cursor       string `json:"cursor,optional" form:"cursor,optional"`             // 下一页游标
+	PageSize     int    `json:"pageSize,optional" form:"pageSize,optional"`         // 每页条数，最大 100
+}
+
+// Validate 校验工作流历史查询边界。
+func (r *ListTaskWorkflowsReq) Validate() error {
+	if r == nil {
+		return errors.Errorf("工作流历史查询不能为空")
+	}
+	if len([]rune(strings.TrimSpace(r.WorkflowID))) > 128 || len([]rune(strings.TrimSpace(r.WorkflowName))) > 128 || len([]rune(strings.TrimSpace(r.PeriodicName))) > 128 || len([]rune(strings.TrimSpace(r.Queue))) > 128 {
+		return errors.Errorf("工作流历史查询关键字不能超过 128 个字符")
+	}
+	if len([]rune(strings.TrimSpace(r.Source))) > 32 {
+		return errors.Errorf("source 不能超过 32 个字符")
+	}
+	if len(strings.TrimSpace(r.Cursor)) > 256 {
+		return errors.Errorf("cursor 不能超过 256 个字符")
+	}
+	if status := strings.TrimSpace(r.Status); status != "" && status != "success" && status != "failed" {
+		return errors.Errorf("status 仅支持 success/failed")
+	}
+	if err := normalizeTaskHistoryRange(&r.StartTime, &r.EndTime); err != nil {
+		return errors.Tag(err)
+	}
+	if r.PageSize <= 0 {
+		r.PageSize = 20
+	}
+	if r.PageSize > 100 {
+		r.PageSize = 100
+	}
+	return nil
+}
+
+// TaskWorkflowHistoryItem 表示工作流历史列表项。
+type TaskWorkflowHistoryItem struct {
+	ID            uint64 `json:"id"`                     // 历史主键
+	WorkflowID    string `json:"workflowId"`             // 工作流实例 ID
+	WorkflowName  string `json:"workflowName"`           // 工作流名称
+	PeriodicName  string `json:"periodicName,omitempty"` // 周期任务名称
+	Status        string `json:"status"`                 // 工作流终态
+	Source        string `json:"source"`                 // 触发来源
+	Queue         string `json:"queue"`                  // 默认队列
+	NodeTotal     int    `json:"nodeTotal"`              // 节点数量
+	TaskTotal     int    `json:"taskTotal"`              // 节点实例总量
+	Succeeded     int    `json:"succeeded"`              // 成功实例数
+	Failed        int    `json:"failed"`                 // 失败实例数
+	Skipped       int    `json:"skipped"`                // 跳过实例数
+	TraceTotal    int64  `json:"traceTotal"`             // 处理总量
+	TraceError    int64  `json:"traceError"`             // 处理错误量
+	DurationMS    int64  `json:"durationMs"`             // 工作流耗时毫秒
+	ErrorMessage  string `json:"errorMessage,omitempty"` // 失败摘要
+	CreatedAt     string `json:"createdAt"`              // 工作流创建时间
+	FinishedAt    string `json:"finishedAt"`             // 终态时间
+	PersistedAt   string `json:"persistedAt"`            // 落库时间
+	DataSource    string `json:"dataSource"`             // 固定为 database
+	HistoryStatus string `json:"historyStatus"`          // 固定为 persisted
+}
+
+// TaskWorkflowHistoryListResp 表示工作流历史游标分页结果。
+type TaskWorkflowHistoryListResp struct {
+	Items      []TaskWorkflowHistoryItem `json:"items"`                // 当前页历史
+	NextCursor string                    `json:"nextCursor,omitempty"` // 下一页游标
+	HasMore    bool                      `json:"hasMore"`              // 是否还有下一页
+	DataSource string                    `json:"dataSource"`           // 固定为 database
+}
+
+// ListTaskFailuresReq 表示失败历史游标查询条件。
+type ListTaskFailuresReq struct {
+	TaskID     string `json:"taskId,optional" form:"taskId,optional"`         // 任务 ID
+	WorkflowID string `json:"workflowId,optional" form:"workflowId,optional"` // 工作流实例 ID
+	TaskType   string `json:"taskType,optional" form:"taskType,optional"`     // 任务类型
+	Queue      string `json:"queue,optional" form:"queue,optional"`           // 队列
+	StartTime  string `json:"startTime,optional" form:"startTime,optional"`   // 查询开始时间
+	EndTime    string `json:"endTime,optional" form:"endTime,optional"`       // 查询结束时间
+	Cursor     string `json:"cursor,optional" form:"cursor,optional"`         // 下一页游标
+	PageSize   int    `json:"pageSize,optional" form:"pageSize,optional"`     // 每页条数，最大 100
+}
+
+// Validate 校验失败历史查询边界。
+func (r *ListTaskFailuresReq) Validate() error {
+	if r == nil {
+		return errors.Errorf("失败历史查询不能为空")
+	}
+	if len([]rune(strings.TrimSpace(r.TaskID))) > 128 || len([]rune(strings.TrimSpace(r.WorkflowID))) > 128 || len([]rune(strings.TrimSpace(r.TaskType))) > 128 || len([]rune(strings.TrimSpace(r.Queue))) > 128 {
+		return errors.Errorf("失败历史查询关键字不能超过 128 个字符")
+	}
+	if len(strings.TrimSpace(r.Cursor)) > 256 {
+		return errors.Errorf("cursor 不能超过 256 个字符")
+	}
+	if err := normalizeTaskHistoryRange(&r.StartTime, &r.EndTime); err != nil {
+		return errors.Tag(err)
+	}
+	if r.PageSize <= 0 {
+		r.PageSize = 20
+	}
+	if r.PageSize > 100 {
+		r.PageSize = 100
+	}
+	return nil
+}
+
+// TaskFailureItem 表示最终失败任务的历史排障摘要。
+type TaskFailureItem struct {
+	ID            uint64 `json:"id"`                      // 历史主键
+	TaskID        string `json:"taskId"`                  // Asynq 任务 ID
+	TaskType      string `json:"taskType"`                // 任务类型
+	TaskName      string `json:"taskName"`                // 任务展示名
+	Queue         string `json:"queue"`                   // 队列
+	Source        string `json:"source,omitempty"`        // 触发来源
+	PeriodicName  string `json:"periodicName,omitempty"`  // 周期任务名称
+	WorkflowID    string `json:"workflowId,omitempty"`    // 工作流实例 ID
+	WorkflowName  string `json:"workflowName,omitempty"`  // 工作流名称
+	WorkflowNode  string `json:"workflowNode,omitempty"`  // 工作流节点
+	Retried       int    `json:"retried"`                 // 已重试次数
+	MaxRetry      int    `json:"maxRetry"`                // 最大重试次数
+	ErrorMessage  string `json:"errorMessage"`            // 脱敏错误摘要
+	TraceID       string `json:"traceId,omitempty"`       // 链路追踪 ID
+	FailedAt      string `json:"failedAt"`                // 最终失败时间
+	Rerunnable    bool   `json:"rerunnable"`              // Redis archived 是否仍可重跑
+	RerunExpireAt string `json:"rerunExpireAt,omitempty"` // 预计失去重跑能力的时间
+	DataSource    string `json:"dataSource"`              // 固定为 database
+}
+
+// TaskFailureListResp 表示失败历史游标分页结果。
+type TaskFailureListResp struct {
+	Items           []TaskFailureItem `json:"items"`                     // 当前页失败历史
+	NextCursor      string            `json:"nextCursor,omitempty"`      // 下一页游标
+	HasMore         bool              `json:"hasMore"`                   // 是否还有下一页
+	DataSource      string            `json:"dataSource"`                // 固定为 database
+	RerunCheckError string            `json:"rerunCheckError,omitempty"` // Redis 可重跑校验降级原因
+}
+
+// TaskHistoryHealth 表示终态历史落库链路健康状态。
+type TaskHistoryHealth struct {
+	Enabled         bool   `json:"enabled"`                   // 是否启用
+	Status          string `json:"status"`                    // 健康状态：disabled/healthy/delayed/error
+	Pending         int64  `json:"pending"`                   // 待落库事件数
+	PendingBytes    int64  `json:"pendingBytes"`              // 待落库事件载荷字节数
+	PendingMaxBytes int64  `json:"pendingMaxBytes"`           // 待落库载荷硬上限字节数
+	Dropped         int64  `json:"dropped"`                   // 因硬上限丢弃的最旧历史事件数
+	OldestPendingAt string `json:"oldestPendingAt,omitempty"` // 最老待落库时间
+	DelaySeconds    int64  `json:"delaySeconds"`              // 最老待落库延迟秒数
+	LastPersistedAt string `json:"lastPersistedAt,omitempty"` // 最近成功落库时间
+	LastFailureAt   string `json:"lastFailureAt,omitempty"`   // 最近失败时间
+	LastError       string `json:"lastError,omitempty"`       // 脱敏错误摘要
+}
+
+// TaskHistoryWindowSummary 表示最近窗口内的工作流汇总。
+type TaskHistoryWindowSummary struct {
+	WindowStart string  `json:"windowStart"` // 窗口开始时间
+	WindowEnd   string  `json:"windowEnd"`   // 窗口结束时间
+	Total       int64   `json:"total"`       // 工作流总数
+	Success     int64   `json:"success"`     // 成功工作流数
+	Failed      int64   `json:"failed"`      // 失败工作流数
+	SuccessRate float64 `json:"successRate"` // 成功率
+	AverageMS   int64   `json:"averageMs"`   // 平均耗时
+	MaxMS       int64   `json:"maxMs"`       // 最大耗时
+	TraceTotal  int64   `json:"traceTotal"`  // 总处理量
+	TraceError  int64   `json:"traceError"`  // 总错误量
+}
+
+// TaskRedisMemory 表示任务 Redis 实例内存状态。
+type TaskRedisMemory struct {
+	UsedBytes    int64   `json:"usedBytes"`    // Redis 已用内存
+	MaxBytes     int64   `json:"maxBytes"`     // Redis maxmemory；0 表示未配置
+	UsagePercent float64 `json:"usagePercent"` // maxmemory 使用率
+	CompletedTTL int     `json:"completedTTL"` // 成功明细保留秒数
+	ArchivedTTL  int     `json:"archivedTTL"`  // 失败归档保留秒数
+}
+
+// TaskObservabilityResp 表示任务系统观测摘要；实时态和历史态允许分别降级。
+type TaskObservabilityResp struct {
+	GeneratedAt  string                   `json:"generatedAt"`            // 生成时间
+	Redis        TaskRedisMemory          `json:"redis"`                  // Redis 内存状态
+	History      TaskHistoryHealth        `json:"history"`                // 历史落库健康状态
+	Last24Hours  TaskHistoryWindowSummary `json:"last24Hours"`            // 最近 24 小时工作流摘要
+	RedisError   string                   `json:"redisError,omitempty"`   // Redis 实时态降级原因
+	HistoryError string                   `json:"historyError,omitempty"` // DB 历史态降级原因
+}
+
+// normalizeTaskHistoryRange 补齐并校验历史查询时间范围，禁止无界扫描。
+func normalizeTaskHistoryRange(startText *string, endText *string) error {
+	now := time.Now()
+	if strings.TrimSpace(*endText) == "" {
+		*endText = now.Format(time.RFC3339)
+	}
+	end, err := time.Parse(time.RFC3339, strings.TrimSpace(*endText))
+	if err != nil {
+		return errors.Errorf("endTime 必须为 RFC3339 时间格式")
+	}
+	if strings.TrimSpace(*startText) == "" {
+		*startText = end.Add(-24 * time.Hour).Format(time.RFC3339)
+	}
+	start, err := time.Parse(time.RFC3339, strings.TrimSpace(*startText))
+	if err != nil {
+		return errors.Errorf("startTime 必须为 RFC3339 时间格式")
+	}
+	if !end.After(start) || end.Sub(start) > 31*24*time.Hour {
+		return errors.Errorf("历史查询时间范围必须大于 0 且不超过 31 天")
+	}
+	return nil
 }
 
 // TaskQueueItem 表示单个队列的当前快照。
@@ -529,9 +776,10 @@ type TaskServerItem struct {
 
 // TaskQueueListResp 表示任务队列与在线 worker 概览。
 type TaskQueueListResp struct {
-	Queues    []TaskQueueItem    `json:"queues"`              // 队列快照列表
-	Servers   []TaskServerItem   `json:"servers,omitempty"`   // 在线 worker 节点列表
-	Scheduler *TaskSchedulerItem `json:"scheduler,omitempty"` // 周期调度器运行状态
+	Queues         []TaskQueueItem    `json:"queues"`                   // 队列快照列表
+	Servers        []TaskServerItem   `json:"servers,omitempty"`        // 在线 worker 节点列表
+	Scheduler      *TaskSchedulerItem `json:"scheduler,omitempty"`      // 周期调度器运行状态
+	MetricsLimited bool               `json:"metricsLimited,omitempty"` // 聚合组超限时部分高成本指标是否已安全降级
 }
 
 // TaskConfigReloadStatusResp 表示 config.yaml 热加载运行状态。
@@ -614,7 +862,7 @@ type TaskSchedulerItem struct {
 	RenewIntervalSeconds     int    `json:"renewIntervalSeconds"`              // leader 锁续租间隔（秒）
 	SyncIntervalSeconds      int    `json:"syncIntervalSeconds"`               // 周期任务配置同步间隔（秒）
 	HeartbeatIntervalSeconds int    `json:"heartbeatIntervalSeconds"`          // 调度器心跳间隔（秒）
-	MaxQueueBacklog          int    `json:"maxQueueBacklog"`                   // 周期任务投递前允许的队列积压上限，0 表示关闭背压
+	MaxQueueBacklog          int    `json:"maxQueueBacklog"`                   // 周期任务投递前允许的队列积压上限
 	PeriodicTaskCount        int    `json:"periodicTaskCount"`                 // 当前有效周期任务数量
 	LastStatus               string `json:"lastStatus,omitempty"`              // 最近一次调度器总体状态
 	LastMessage              string `json:"lastMessage,omitempty"`             // 最近一次调度器总体状态说明

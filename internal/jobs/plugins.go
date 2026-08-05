@@ -3,6 +3,7 @@ package jobs
 import (
 	archivetask "admin/internal/jobs/archive/task"
 	exportjob "admin/internal/jobs/export"
+	taskhistory "admin/internal/jobs/taskhistory"
 	taskreporttask "admin/internal/jobs/taskreport/task"
 	usertagtask "admin/internal/jobs/usertag/task"
 	taskqueue "admin/internal/task/queue"
@@ -18,6 +19,13 @@ func PluginSpecs() []taskruntime.PluginSpec {
 			Method:      "jobs.TaskMetadataPlugin",
 			Description: "注册业务任务类型和工作流的展示元数据",
 			Build:       TaskMetadataPlugin,
+		},
+		{
+			Name:        taskhistory.PluginName,
+			File:        "internal/jobs/taskhistory/plugin.go",
+			Method:      "taskhistory.Setup",
+			Description: "注册任务终态历史异步落库和 DB 查询兜底",
+			Build:       TaskHistoryPlugin,
 		},
 		{
 			Name:        archivetask.PluginName,
@@ -55,6 +63,13 @@ func PluginSpecs() []taskruntime.PluginSpec {
 			Build:       UserTagPlugin,
 		},
 	}
+}
+
+// TaskHistoryPlugin 创建任务终态历史异步落库插件。
+func TaskHistoryPlugin() taskruntime.Plugin {
+	return taskruntime.NewPluginFunc(taskhistory.PluginName, func(runtime *taskruntime.Runtime) error {
+		return taskhistory.Setup(runtime)
+	})
 }
 
 // TaskMetadataPlugin 创建业务任务展示元数据插件。

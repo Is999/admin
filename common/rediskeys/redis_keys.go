@@ -29,6 +29,9 @@ const (
 	// taskRuntimeSegment 表示任务运行快照 key 的领域段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由任务运行快照 TTL 控制。
 	taskRuntimeSegment = "runtime"
+	// taskHistorySegment 表示终态历史异步落库缓冲区的领域段。
+	// Redis 类型：Key 片段，TTL 过期规则：缓冲区由容量上限和消费确认主动清理。
+	taskHistorySegment = "history"
 )
 
 // Collector Redis key 根前缀和运行段集中维护。
@@ -64,9 +67,24 @@ const (
 	// taskAsynqStateScheduled 表示 Asynq scheduled 状态 zset 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq scheduled 队列生命周期控制。
 	taskAsynqStateScheduled = "scheduled"
+	// taskAsynqPausedSegment 表示 Asynq 队列暂停标记段。
+	// Redis 类型：Key 片段，TTL 过期规则：由 Asynq 暂停和恢复操作管理。
+	taskAsynqPausedSegment = "paused"
+	// taskAsynqProcessedSegment 表示 Asynq 已处理计数段。
+	// Redis 类型：Key 片段，TTL 过期规则：由 Asynq 统计生命周期管理。
+	taskAsynqProcessedSegment = "processed"
+	// taskAsynqFailedSegment 表示 Asynq 失败计数段。
+	// Redis 类型：Key 片段，TTL 过期规则：由 Asynq 统计生命周期管理。
+	taskAsynqFailedSegment = "failed"
 	// taskAsynqTaskHashSegment 表示 Asynq 任务详情 hash 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq 任务详情生命周期控制。
 	taskAsynqTaskHashSegment = "t"
+	// taskAsynqGroupsSegment 表示 Asynq 聚合组集合段。
+	// Redis 类型：Set，TTL 过期规则：由 Asynq 聚合生命周期控制。
+	taskAsynqGroupsSegment = "groups"
+	// taskAsynqGroupSegment 表示 Asynq 单个聚合组 ZSet 段。
+	// Redis 类型：ZSet，TTL 过期规则：由 Asynq 聚合生命周期控制。
+	taskAsynqGroupSegment = "g"
 	// taskAsynqUniqueSegment 表示 Asynq 任务唯一锁 key 段。
 	// Redis 类型：Key 片段，TTL 过期规则：不直接写入 Redis，由 Asynq 唯一锁 TTL 控制。
 	taskAsynqUniqueSegment = "unique"

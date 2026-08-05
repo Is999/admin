@@ -407,7 +407,9 @@ task:
   default_timeout_seconds: 120
   # 默认任务唯一键 TTL，单位秒。
   default_unique_ttl_seconds: 60
-  # 归档失败任务保留时长，单位秒。
+  # 成功任务近期明细保留时长，单位秒；历史观测由 DB 汇总承接。
+  completed_retention_seconds: 1800
+  # 归档失败任务最长保留时长，单位秒；仍受 Asynq 每队列 archived 数量上限约束。
   archived_retention_seconds: 604800
   # Worker 优雅退出等待时间，单位秒。
   shutdown_timeout_seconds: 15
@@ -421,6 +423,14 @@ task:
   group_max_delay_seconds: 20
   # 单次聚合最大任务数。
   group_max_size: 100
+  # 任务终态历史异步落库；保存工作流汇总、容量受限的自适应明细和失败摘要，不长期保存普通成功任务明细。
+  history:
+    enabled: true
+    workflow_retention_days: 7
+    failure_retention_days: 14
+    pending_limit: 2000
+    flush_interval_seconds: 5
+    cleanup_interval_seconds: 60
   # 调度器配置。
   scheduler:
     # 是否启用调度器 leader。
@@ -435,8 +445,8 @@ task:
     sync_interval_seconds: 60
     # 调度器心跳间隔，单位秒。
     heartbeat_interval_seconds: 10
-    # 周期投递积压上限；0 表示关闭。
-    max_queue_backlog: 0
+    # 周期投递积压上限；达到上限后暂停新增周期实例。
+    max_queue_backlog: 10000
 
 # 通用归档配置。
 # 单表策略见运行期 archive_jobs。

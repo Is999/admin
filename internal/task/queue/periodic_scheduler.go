@@ -13,6 +13,7 @@ import (
 	"time"
 
 	i18n "admin/common/i18n"
+	keys "admin/common/rediskeys"
 	"admin/helper"
 	"admin/internal/config"
 	"admin/internal/infra/loggerx"
@@ -420,25 +421,38 @@ func (m *Manager) schedulerLeaderStillHeld(ctx context.Context) (bool, error) {
 }
 
 // periodicQueueBackpressureOK 检查周期任务目标队列是否低于配置积压上限。
-// 当 max_queue_backlog<=0 时不启用背压，按 cron 配置持续投递。
+// 未配置 max_queue_backlog 时使用安全默认值，禁止高频周期任务无界投递。
 func (m *Manager) periodicQueueBackpressureOK(ctx context.Context, cfg *asynq.PeriodicTaskConfig) (bool, string, int64, int64, error) {
 	if m == nil {
 		return false, "", 0, 0, errors.Errorf("任务队列管理器未初始化")
 	}
 	limit := m.schedulerMaxQueueBacklog()
 	queueName := m.periodicTaskQueue(cfg)
-	if limit <= 0 {
-		return true, queueName, 0, 0, nil
-	}
-	if m.inspector == nil {
-		return false, queueName, 0, limit, errors.Errorf("任务队列巡检器未初始化")
-	}
-	info, err := m.inspector.GetQueueInfo(queueName)
+	backlog, err := m.periodicQueueBacklog(ctx, queueName)
 	if err != nil {
-		return false, queueName, 0, limit, errors.Wrap(err, "查询周期任务队列积压失败")
+		return false, queueName, 0, limit, errors.Tag(err)
 	}
-	backlog := queueInfoBacklog(info)
-	return backlog <= limit, queueName, backlog, limit, nil
+	return backlog < limit, queueName, backlog, limit, nil
+}
+
+// periodicQueueBacklog 使用固定计数命令读取积压，避免 GetQueueInfo 计算任务内存和遍历详情。
+func (m *Manager) periodicQueueBacklog(ctx context.Context, internalQueue string) (int64, error) {
+	retryKey, err := keys.TaskAsynqStateZSetKey(internalQueue, asynq.TaskStateRetry.String())
+	if err != nil {
+		return 0, errors.Tag(err)
+	}
+	pipe := m.redis.Pipeline()
+	pendingCmd := pipe.LLen(ctx, keys.TaskAsynqPendingKey(internalQueue))
+	scheduledCmd := pipe.ZCard(ctx, keys.TaskAsynqScheduledKey(internalQueue))
+	retryCmd := pipe.ZCard(ctx, retryKey)
+	if _, err = pipe.Exec(ctx); err != nil {
+		return 0, errors.Wrap(err, "查询周期任务队列积压失败")
+	}
+	aggregating, err := m.aggregatingTaskCount(ctx, internalQueue, taskQueueGroupReadLimit)
+	if err != nil {
+		return 0, errors.Wrap(err, "查询周期任务聚合积压失败")
+	}
+	return pendingCmd.Val() + scheduledCmd.Val() + retryCmd.Val() + aggregating, nil
 }
 
 // periodicTaskQueue 从周期任务 payload 解析目标工作流队列，并转换为 Asynq 内部队列名。
@@ -451,14 +465,6 @@ func (m *Manager) periodicTaskQueue(cfg *asynq.PeriodicTaskConfig) string {
 		}
 	}
 	return m.namespacedQueueName(helper.FirstNonEmptyString(queue, m.defaultWorkflowQueue()))
-}
-
-// queueInfoBacklog 计算下游实际积压深度，只统计等待、延迟、重试和聚合中的任务。
-func queueInfoBacklog(info *asynq.QueueInfo) int64 {
-	if info == nil {
-		return 0
-	}
-	return int64(info.Pending + info.Scheduled + info.Retry + info.Aggregating)
 }
 
 // periodicTaskConfigHash 生成调度配置摘要，用于判断是否需要增删 cron entry。
@@ -504,10 +510,41 @@ func periodicTaskCronspec(item config.TaskPeriodicConfig) (string, error) {
 	return cronExpr, nil
 }
 
-// validatePeriodicCronspec 校验周期表达式是否能被秒级调度器解析。
+// validatePeriodicCronspec 校验周期表达式，并阻止秒字段组合潜在产生五秒内的连续投递。
 func validatePeriodicCronspec(cronspec string) error {
-	if _, err := periodicCronParser.Parse(strings.TrimSpace(cronspec)); err != nil {
+	cronspec = strings.TrimSpace(cronspec)
+	schedule, err := periodicCronParser.Parse(cronspec)
+	if err != nil {
 		return errors.Wrap(err, "解析周期任务 cron 失败")
+	}
+	fields := strings.Fields(cronspec)
+	if len(fields) == 5 {
+		return nil
+	}
+	if len(fields) == 6 {
+		schedule, err = periodicCronParser.Parse(fields[0] + " * * * * *")
+		if err != nil {
+			return errors.Wrap(err, "解析周期任务秒字段失败")
+		}
+	}
+	anchor := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Second)
+	first := schedule.Next(anchor)
+	if first.IsZero() {
+		return errors.Errorf("周期任务 cron 无法生成有效触发时间")
+	}
+	checks := 1
+	if len(fields) == 6 {
+		checks = 61
+	}
+	for range checks {
+		second := schedule.Next(first)
+		if second.IsZero() {
+			return errors.Errorf("周期任务 cron 无法生成连续触发时间")
+		}
+		if second.Sub(first) < time.Duration(tasklimits.MinPeriodicEverySeconds)*time.Second {
+			return errors.Errorf("周期任务 cron 触发间隔不能小于 %d 秒", tasklimits.MinPeriodicEverySeconds)
+		}
+		first = second
 	}
 	return nil
 }

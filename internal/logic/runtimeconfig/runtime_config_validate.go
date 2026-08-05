@@ -28,6 +28,9 @@ func ValidateSnapshot(snapshot ReleaseSnapshot) ([]string, error) {
 
 // validatePeriodicConfigs 校验周期任务快照，避免发布后才暴露重复调度或无效计划。
 func validatePeriodicConfigs(items []config.TaskPeriodicConfig) error {
+	if len(items) > tasklimits.MaxPeriodicCount {
+		return errors.Errorf("周期任务不能超过 %d 条", tasklimits.MaxPeriodicCount)
+	}
 	taskKeys := make(map[string]struct{}, len(items))
 	uniqueKeys := make(map[string]struct{}, len(items))
 	for _, item := range items {
@@ -54,6 +57,9 @@ func validatePeriodicConfigs(items []config.TaskPeriodicConfig) error {
 		}
 		if item.ShardTotal > tasklimits.MaxShardTotal {
 			return errors.Errorf("周期任务 shard_total 不能超过 %d name=%s", tasklimits.MaxShardTotal, strings.TrimSpace(item.Name))
+		}
+		if item.UniqueTTLSeconds > tasklimits.MaxUniqueTTLSeconds {
+			return errors.Errorf("周期任务 unique_ttl_seconds 不能超过 %d name=%s", tasklimits.MaxUniqueTTLSeconds, strings.TrimSpace(item.Name))
 		}
 		taskKey, err := taskqueue.PeriodicTaskConfigKey(item)
 		if err != nil {

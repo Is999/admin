@@ -119,14 +119,23 @@ func (r *SaveRuntimeTaskPeriodicReq) Validate() error {
 	if r.ShardTotal > tasklimits.MaxShardTotal {
 		return errors.Errorf("shardTotal 不能超过 %d", tasklimits.MaxShardTotal)
 	}
+	if r.UniqueTTLSeconds > tasklimits.MaxUniqueTTLSeconds {
+		return errors.Errorf("uniqueTtlSeconds 不能超过 %d", tasklimits.MaxUniqueTTLSeconds)
+	}
 	if r.Deadline != "" {
 		if _, err := time.Parse(time.RFC3339, r.Deadline); err != nil {
 			return errors.Errorf("deadline 必须为 RFC3339 时间格式")
 		}
 	}
 	r.Targets = helper.UniqueNonEmptyStrings(r.Targets)
+	if err := tasklimits.ValidateWorkflowTargets(r.Targets); err != nil {
+		return errors.Tag(err)
+	}
 	if len(r.Targets) == 0 {
 		r.Targets = nil
+	}
+	if len(r.UniqueKey) > tasklimits.MaxUniqueKeyBytes {
+		return errors.Errorf("uniqueKey 不能超过 %d 字节", tasklimits.MaxUniqueKeyBytes)
 	}
 	return nil
 }

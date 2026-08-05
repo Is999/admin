@@ -134,6 +134,13 @@ func TestValidateSnapshotRejectsPeriodicResourceOverridesAboveHardLimits(t *test
 			},
 			wantErr: "shard_total",
 		},
+		{
+			name: "unique ttl",
+			update: func(item *config.TaskPeriodicConfig) {
+				item.UniqueTTLSeconds = tasklimits.MaxUniqueTTLSeconds + 1
+			},
+			wantErr: "unique_ttl_seconds",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,6 +151,14 @@ func TestValidateSnapshotRejectsPeriodicResourceOverridesAboveHardLimits(t *test
 				t.Fatalf("ValidateSnapshot() error = %v, want %q limit", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestValidateSnapshotRejectsTooManyPeriodicTasks 校验发布快照不会绕过周期任务总量上限。
+func TestValidateSnapshotRejectsTooManyPeriodicTasks(t *testing.T) {
+	items := make([]config.TaskPeriodicConfig, tasklimits.MaxPeriodicCount+1)
+	if _, err := ValidateSnapshot(ReleaseSnapshot{TaskPeriodic: items}); err == nil || !strings.Contains(err.Error(), "周期任务不能超过") {
+		t.Fatalf("ValidateSnapshot() error = %v, want periodic count limit", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,56 @@ func newArchiveDryRunDB(t *testing.T) *gorm.DB {
 		t.Fatalf("gorm.Open() error = %v", err)
 	}
 	return db
+}
+
+// TestArchiveControlSchemaUsesMicrosecondPrecision 确保运行时 DDL 与 Model 均使用 MySQL 微秒精度。
+func TestArchiveControlSchemaUsesMicrosecondPrecision(t *testing.T) {
+	templates := []struct {
+		name   string   // 控制表名称
+		schema string   // 运行时建表模板
+		model  any      // 对应 GORM Model
+		fields []string // SQL 字段名
+		models []string // Model 字段名
+	}{
+		{
+			name:   tableNameWatermark,
+			schema: archiveWatermarkSchemaTemplate,
+			model:  Watermark{},
+			fields: []string{"watermark_time", "updated_at"},
+			models: []string{"WatermarkTime", "UpdatedAt"},
+		},
+		{
+			name:   tableNameSegment,
+			schema: archiveSegmentSchemaTemplate,
+			model:  Segment{},
+			fields: []string{
+				"range_start", "range_end", "lease_expires_at", "last_archived_time",
+				"created_at", "updated_at", "completed_at",
+			},
+			models: []string{
+				"RangeStart", "RangeEnd", "LeaseExpiresAt", "LastArchivedTime",
+				"CreatedAt", "UpdatedAt", "CompletedAt",
+			},
+		},
+	}
+	for _, tt := range templates {
+		schema := strings.ToLower(tt.schema)
+		for _, field := range tt.fields {
+			if !strings.Contains(schema, field+" datetime(6)") {
+				t.Fatalf("%s 运行时 DDL 的 %s 必须使用 datetime(6)", tt.name, field)
+			}
+		}
+		modelType := reflect.TypeOf(tt.model)
+		for _, fieldName := range tt.models {
+			field, ok := modelType.FieldByName(fieldName)
+			if !ok {
+				t.Fatalf("%s Model 缺少字段 %s", tt.name, fieldName)
+			}
+			if !strings.Contains(strings.ToLower(field.Tag.Get("gorm")), "type:datetime(6)") {
+				t.Fatalf("%s Model 的 %s 必须使用 datetime(6)", tt.name, fieldName)
+			}
+		}
+	}
 }
 
 // TestRenewSegmentDeleteLeaseUsesOwnerGuard 验证删除续租只允许当前 deleting worker 更新租约。
@@ -677,6 +728,22 @@ func TestArchiveUpperBoundUsesArchiveDelayDays(t *testing.T) {
 	want := time.Now().AddDate(0, 0, -2)
 	if upperBound.Before(want.Add(-time.Hour)) || upperBound.After(want.Add(time.Hour)) {
 		t.Fatalf("archiveUpperBound() = %s, want around %s", upperBound.Format(time.DateTime), want.Format(time.DateTime))
+	}
+}
+
+// TestRangePredicateArgsTimePreservesMicroseconds 验证 DATETIME 游标不会在绑定查询参数前丢失微秒。
+func TestRangePredicateArgsTimePreservesMicroseconds(t *testing.T) {
+	job := jobConfig{TimeColumnType: TimeColumnTypeTime}
+	start := time.Date(2026, time.January, 4, 0, 0, 0, 123456000, time.Local)
+	end := time.Date(2026, time.January, 4, 0, 1, 0, 654321000, time.Local)
+	args := rangePredicateArgs(job, start, end)
+	if len(args) != 2 {
+		t.Fatalf("rangePredicateArgs(time) len = %d, want 2", len(args))
+	}
+	gotStart, startOK := args[0].(time.Time)
+	gotEnd, endOK := args[1].(time.Time)
+	if !startOK || !endOK || !gotStart.Equal(start) || !gotEnd.Equal(end) {
+		t.Fatalf("rangePredicateArgs(time) = %#v, want start=%s end=%s", args, start.Format("15:04:05.999999"), end.Format("15:04:05.999999"))
 	}
 }
 

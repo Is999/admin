@@ -64,6 +64,7 @@ func (m *Manager) handleTaskError(ctx context.Context, task *asynq.Task, err err
 			loggerx.Errorw(ctx, "任务失败状态回写失败", markErr, fields...)
 		}
 		m.runTaskFinalFailureHooks(ctx, task, meta, err, fields)
+		m.enqueueTaskFailureHistory(ctx, task, meta, err)
 	}
 }
 
@@ -220,7 +221,13 @@ func (m *Manager) traceAndLogMiddleware() asynq.MiddlewareFunc {
 				span.SetStatus(otelcodes.Error, err.Error())
 				span.RecordError(err)
 			} else {
-				m.writeTaskResult(ctx, task, requestctx.FromContext(ctx), begin, statsSnapshot)
+				if m.writeTaskResult(ctx, task, requestctx.FromContext(ctx), begin, statsSnapshot) {
+					cleanupCtx, cleanupCancel := m.taskFinalWriteContext(ctx)
+					if cleanupErr := m.deleteSuccessfulTaskRuntime(cleanupCtx, queue, taskID); cleanupErr != nil {
+						loggerx.Errorw(cleanupCtx, "任务成功运行快照清理失败", cleanupErr, taskLogFields(task)...)
+					}
+					cleanupCancel()
+				}
 				loggerx.Infow(ctx, taskLogMessage("任务 执行完成", requestctx.FromContext(ctx)), fields...)
 				span.SetStatus(otelcodes.Ok, "ok")
 			}

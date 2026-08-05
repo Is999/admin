@@ -368,7 +368,7 @@ func (m *Manager) toTaskItem(ctx context.Context, info *asynq.TaskInfo) types.Ta
 	return m.toTaskItemWithRuntime(info, nil, runtimeRecord)
 }
 
-// toTaskItemWithRuntime 使用已读取的运行快照组装任务详情，供任务列表和日报避免逐条访问 Redis。
+// toTaskItemWithRuntime 使用已读取的运行快照组装任务详情，供任务列表避免重复访问 Redis。
 func (m *Manager) toTaskItemWithRuntime(info *asynq.TaskInfo, periodicNextRuns []periodicNextRun, runtimeRecord taskRuntimeRecord) types.TaskItem {
 	if info == nil {
 		return types.TaskItem{}
@@ -427,28 +427,6 @@ func (m *Manager) toTaskItemWithRuntime(info *asynq.TaskInfo, periodicNextRuns [
 		item.NextProcessAt = periodicNextProcessAtForTaskItem(item, periodicNextRuns)
 	}
 	return item
-}
-
-// queueInfoTotalByState 根据任务状态返回队列中对应的统计总数。
-func queueInfoTotalByState(info *asynq.QueueInfo, state string) int64 {
-	switch state {
-	case "pending":
-		return int64(info.Pending)
-	case "active":
-		return int64(info.Active)
-	case "scheduled":
-		return int64(info.Scheduled)
-	case "retry":
-		return int64(info.Retry)
-	case "archived":
-		return int64(info.Archived)
-	case "completed":
-		return int64(info.Completed)
-	case "aggregating":
-		return int64(info.Aggregating)
-	default:
-		return int64(info.Size)
-	}
 }
 
 // formatTime 把零值时间转换为空串，其他时间统一格式化为 RFC3339。

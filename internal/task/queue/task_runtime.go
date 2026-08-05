@@ -3,7 +3,6 @@ package taskqueue
 import (
 	"context"
 	"encoding/json"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/Is999/go-utils/errors"
 
 	keys "admin/common/rediskeys"
+	"admin/internal/audit"
 	"admin/internal/infra/loggerx"
 	"admin/internal/requestctx"
 	taskstats "admin/internal/task/stats"
@@ -26,17 +26,18 @@ const (
 	taskRuntimeHeartbeatInterval = 5 * time.Second
 	// taskRuntimeHeartbeatWriteTimeout 限制单次心跳写入，避免任务收尾被异常 Redis 请求长期阻塞。
 	taskRuntimeHeartbeatWriteTimeout = 2 * time.Second
-	// taskRuntimeReportEntryOverheadBytes 为每条运行快照预留 Redis 回包和容器内存裕量。
-	taskRuntimeReportEntryOverheadBytes = 256
-	// maxTaskExecutionTraceBytes 限制单个任务写入 Redis 和 Asynq 结果的处理量快照大小。
-	maxTaskExecutionTraceBytes = 64 << 10
+	// maxTaskExecutionTraceBytes 限制单个任务或分片写入 Redis 和 Asynq 结果的处理量快照大小。
+	// 聚合计数始终保留，高基数明细按容量裁剪，避免分片数与保留窗口共同放大缓存。
+	maxTaskExecutionTraceBytes = 16 << 10
 	// maxTaskExecutionTraceDetails 限制单个任务保留的处理量明细数量。
 	maxTaskExecutionTraceDetails = 128
 	// maxTaskExecutionTraceTextBytes 限制处理量快照中单个文本字段的 UTF-8 字节数。
 	maxTaskExecutionTraceTextBytes = 256
+	// maxTaskRuntimeErrorRunes 限制失败运行快照中的错误摘要长度。
+	maxTaskRuntimeErrorRunes = 1000
 )
 
-// taskRuntimeReadFields 是任务列表和日报读取运行快照所需的最小字段集合。
+// taskRuntimeReadFields 是任务列表读取运行快照所需的最小字段集合。
 var taskRuntimeReadFields = []string{"startedAt", "durationMs", "executionTrace"}
 
 // taskRuntimeFinalFields 是任务再次开始或完成时必须先清除的上一轮可选终态字段。
@@ -75,25 +76,34 @@ func taskRuntimeNeedsWorkflowRetention(ctx context.Context) bool {
 }
 
 // taskRuntimeActiveRetention 返回任务执行中快照保留时间。
-// active 阶段尚不知道最终状态，先给足排查窗口；完成后会按最终状态收敛 TTL。
+// 心跳会持续续期；Worker 异常退出后按近期窗口回收，最终失败再延长到 archived 窗口。
 func (m *Manager) taskRuntimeActiveRetention() time.Duration {
-	retention := taskCompletedRetention
-	if archivedRetention := m.ArchivedRetention(); archivedRetention > retention {
-		retention = archivedRetention
-	}
-	return retention + time.Hour
+	return m.CompletedRetention() + time.Hour
 }
 
 // taskRuntimeFinalRetention 返回任务完成后运行耗时快照保留时间。
 func (m *Manager) taskRuntimeFinalRetention(ctx context.Context, runErr error) time.Duration {
 	if taskWillArchive(ctx, runErr) {
 		retention := m.ArchivedRetention()
-		if taskRuntimeNeedsWorkflowRetention(ctx) && taskCompletedRetention > retention {
-			retention = taskCompletedRetention
+		if completedRetention := m.CompletedRetention(); taskRuntimeNeedsWorkflowRetention(ctx) && completedRetention > retention {
+			retention = completedRetention
 		}
 		return retention + time.Hour
 	}
-	return taskCompletedRetention + time.Hour
+	return m.CompletedRetention() + time.Hour
+}
+
+// deleteSuccessfulTaskRuntime 删除成功任务的重复运行快照。
+// Asynq Result 已包含耗时和处理量后不再保留第二份 Hash；失败任务仍按归档窗口保留。
+func (m *Manager) deleteSuccessfulTaskRuntime(ctx context.Context, queue string, taskID string) error {
+	if m == nil || m.redis == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	key := m.taskRuntimeKey(queue, taskID)
+	if key == "" {
+		return nil
+	}
+	return errors.Tag(m.redis.Del(ctx, key).Err())
 }
 
 // taskWillArchive 判断本次失败是否会进入 archived 终态。
@@ -272,7 +282,7 @@ func (m *Manager) recordTaskRuntimeFinish(ctx context.Context, queue string, tas
 	statsSnapshot = boundedTaskStatsSnapshot(statsSnapshot)
 	addTaskRuntimeStatsValues(values, statsSnapshot)
 	if runErr != nil {
-		values["lastErr"] = runErr.Error()
+		values["lastErr"] = truncateTaskText(audit.SanitizeText(runErr.Error(), 4000), maxTaskRuntimeErrorRunes)
 	}
 	written, err := m.finishTaskRuntime(writeCtx, queue, taskID, attemptToken, values, m.taskRuntimeFinalRetention(ctx, runErr))
 	if err != nil {
@@ -435,92 +445,7 @@ func taskRuntimeRecordFromFieldValues(values []any) (taskRuntimeRecord, bool) {
 	}, true
 }
 
-// readTaskRuntimes 批量读取日报必需的运行快照字段，并在取值前执行字节预算预检。
-func (m *Manager) readTaskRuntimes(ctx context.Context, infos []*asynq.TaskInfo, byteBudget int64) (map[string]taskRuntimeRecord, int64, bool, error) {
-	result := make(map[string]taskRuntimeRecord, len(infos))
-	if m == nil || m.redis == nil || len(infos) == 0 {
-		return result, 0, false, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if byteBudget <= 0 {
-		return result, 0, true, nil
-	}
-	type runtimeSizeCommands struct {
-		identity string          // identity 是队列级任务标识
-		key      string          // key 是任务运行快照 Redis key
-		fields   []*redis.IntCmd // fields 是各日报字段的 HSTRLEN 命令
-	}
-	sizeCommands := make([]runtimeSizeCommands, 0, len(infos))
-	pipe := m.redis.Pipeline()
-	for _, info := range infos {
-		if info == nil || strings.TrimSpace(info.ID) == "" {
-			continue
-		}
-		identity := taskRuntimeIdentity(info.Queue, info.ID)
-		key := m.taskRuntimeKey(info.Queue, info.ID)
-		if key == "" {
-			continue
-		}
-		commands := runtimeSizeCommands{identity: identity, key: key, fields: make([]*redis.IntCmd, 0, len(taskRuntimeReadFields))}
-		for _, field := range taskRuntimeReadFields {
-			commands.fields = append(commands.fields, pipe.HStrLen(ctx, key, field))
-		}
-		sizeCommands = append(sizeCommands, commands)
-	}
-	_, execErr := pipe.Exec(ctx)
-	pipe.Discard()
-	if execErr != nil {
-		return nil, 0, false, errors.Wrap(execErr, "预检日报任务运行快照大小失败")
-	}
-	totalBytes := int64(0)
-	for _, commands := range sizeCommands {
-		entryBytes := int64(taskRuntimeReportEntryOverheadBytes)
-		for _, command := range commands.fields {
-			fieldBytes, err := command.Result()
-			if err != nil {
-				return nil, 0, false, errors.Wrapf(err, "读取日报任务运行快照大小失败 task=%s", commands.identity)
-			}
-			if fieldBytes < 0 || entryBytes > math.MaxInt64-fieldBytes {
-				return nil, 0, false, errors.Errorf("日报任务运行快照大小非法 task=%s", commands.identity)
-			}
-			entryBytes += fieldBytes
-		}
-		if totalBytes > math.MaxInt64-entryBytes {
-			return nil, 0, false, errors.Errorf("日报任务运行快照总大小溢出")
-		}
-		totalBytes += entryBytes
-		if totalBytes > byteBudget {
-			return result, 0, true, nil
-		}
-	}
-	pipe = m.redis.Pipeline()
-	valueCommands := make(map[string]*redis.SliceCmd, len(sizeCommands))
-	for _, commands := range sizeCommands {
-		valueCommands[commands.identity] = pipe.HMGet(ctx, commands.key, taskRuntimeReadFields...)
-	}
-	_, execErr = pipe.Exec(ctx)
-	pipe.Discard()
-	if execErr != nil {
-		return nil, 0, false, errors.Wrap(execErr, "批量读取日报任务运行快照失败")
-	}
-	for identity, command := range valueCommands {
-		values, err := command.Result()
-		if err != nil {
-			return nil, 0, false, errors.Wrapf(err, "读取日报任务运行快照失败 task=%s", identity)
-		}
-		if len(values) != len(taskRuntimeReadFields) {
-			return nil, 0, false, errors.Errorf("日报任务运行快照字段数量异常 task=%s got=%d want=%d", identity, len(values), len(taskRuntimeReadFields))
-		}
-		if record, ok := taskRuntimeRecordFromFieldValues(values); ok {
-			result[identity] = record
-		}
-	}
-	return result, totalBytes, false, nil
-}
-
-// boundedTaskStatsSnapshot 保留聚合计数并限制持久化明细大小，避免任务结果放大日报内存。
+// boundedTaskStatsSnapshot 保留聚合计数并限制持久化明细大小，避免任务结果放大缓存。
 func boundedTaskStatsSnapshot(snapshot *taskstats.Snapshot) *taskstats.Snapshot {
 	if snapshot == nil || snapshot.Empty() {
 		return nil

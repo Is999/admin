@@ -43,11 +43,35 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
+			Path:        "/api/tasks/workflows", // 查询短期工作流历史。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.TaskWorkflowStatus,
+			Description: shared.TaskWorkflowStatus.Describe,
+			Handler:     ListTaskWorkflowsHandler,
+		},
+		{
+			Method:      http.MethodGet,
 			Path:        "/api/tasks/workflows/:workflowId", // 查询工作流状态。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.TaskWorkflowStatus,
 			Description: shared.TaskWorkflowStatus.Describe,
 			Handler:     GetTaskWorkflowStatusHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/tasks/failures", // 查询最终失败任务历史。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.TaskItemsList,
+			Description: shared.TaskItemsList.Describe,
+			Handler:     ListTaskFailuresHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/tasks/observability", // 查询任务实时态与历史落库健康。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.TaskQueueList,
+			Description: shared.TaskQueueList.Describe,
+			Handler:     TaskObservabilityHandler,
 		},
 		{
 			Method:      http.MethodGet,

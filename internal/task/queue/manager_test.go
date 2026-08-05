@@ -388,6 +388,62 @@ func TestStartWorkflowRejectsShardTotalAboveSystemLimit(t *testing.T) {
 	}
 }
 
+// TestStartWorkflowRejectsOversizedTargets 校验内部工作流入口也不能绕过目标体积硬上限。
+func TestStartWorkflowRejectsOversizedTargets(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	definition := testWorkflowDefinition("oversized-targets")
+	if err := manager.RegisterWorkflow(definition); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	if _, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{
+		Name:    definition.Name,
+		Targets: []string{strings.Repeat("x", tasklimits.MaxWorkflowTargetsBytes+1)},
+	}); err == nil || !strings.Contains(err.Error(), "工作流目标") {
+		t.Fatalf("StartWorkflow() error = %v, want target limit", err)
+	}
+}
+
+// TestStartWorkflowRejectsOversizedNodePayload 校验工作流定义生成的异常大负载不会进入 Redis。
+func TestStartWorkflowRejectsOversizedNodePayload(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	definition := testWorkflowDefinition("oversized-node-payload")
+	definition.Nodes["root"].BuildPayload = func(WorkflowStartSpec, *WorkflowNodeDefinition, int, int) ([]byte, error) {
+		return make([]byte, tasklimits.MaxPayloadBytes+1), nil
+	}
+	if err := manager.RegisterWorkflow(definition); err != nil {
+		t.Fatalf("注册工作流失败: %v", err)
+	}
+	if _, err := manager.StartWorkflow(context.Background(), WorkflowStartSpec{Name: definition.Name}); err == nil || !strings.Contains(err.Error(), "节点负载超过上限") {
+		t.Fatalf("StartWorkflow() error = %v, want payload limit", err)
+	}
+}
+
+// TestEnqueueTaskRejectsUnsafeInternalOptions 校验内部投递入口同样遵守延迟、重试和负载硬上限。
+func TestEnqueueTaskRejectsUnsafeInternalOptions(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if err := manager.EnqueueTask(context.Background(), "demo:task", []byte(`{}`), svc.WithTaskDelay(time.Duration(tasklimits.MaxScheduleDelaySeconds+1)*time.Second)); err == nil {
+		t.Fatal("期望超长延迟任务被拒绝")
+	}
+	if err := manager.EnqueueTask(context.Background(), "demo:task", []byte(`{}`), svc.WithTaskRetry(tasklimits.MaxRetry+1)); err == nil {
+		t.Fatal("期望超限重试任务被拒绝")
+	}
+	if err := manager.EnqueueTask(context.Background(), "demo:task", make([]byte, tasklimits.MaxPayloadBytes+1)); err == nil {
+		t.Fatal("期望超限内部任务负载被拒绝")
+	}
+	if err := manager.EnqueueTask(context.Background(), "demo:task", []byte(`{}`), svc.WithTaskQueue("orphan")); err == nil {
+		t.Fatal("期望无人消费的任务队列被拒绝")
+	}
+	if err := manager.EnqueueCacheRefresh(context.Background(), "refresh", []string{strings.Repeat("x", tasklimits.MaxPayloadBytes)}); err == nil {
+		t.Fatal("期望超限缓存刷新负载被拒绝")
+	}
+}
+
 // TestEnrichTaskContextSetsModeField 验证任务 payload 中的 mode 会进入统一日志链路字段。
 func TestEnrichTaskContextSetsModeField(t *testing.T) {
 	manager := &Manager{}
@@ -456,71 +512,12 @@ func TestTaskItemWorkflowIDUsesPayloadOrTaskID(t *testing.T) {
 	}
 }
 
-// TestGetWorkflowStatusMissingPreservesRedisNil 验证日报可区分快照过期与 Redis 读取故障。
+// TestGetWorkflowStatusMissingPreservesRedisNil 验证历史兜底可区分快照过期与 Redis 读取故障。
 func TestGetWorkflowStatusMissingPreservesRedisNil(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 	if _, err := manager.GetWorkflowStatus(context.Background(), "missing-workflow"); !errors.Is(err, redis.Nil) {
 		t.Fatalf("缺失工作流错误=%v，期望保留 redis.Nil", err)
-	}
-}
-
-// TestGetWorkflowStatusSummariesBatchesLightweightMetadata 验证日报只批量读取工作流主记录并忽略缺失实例。
-func TestGetWorkflowStatusSummariesBatchesLightweightMetadata(t *testing.T) {
-	manager, cleanup := newTestManager(t)
-	defer cleanup()
-	ctx := context.Background()
-	if err := manager.redis.HSet(ctx, manager.workflowMetaKey("wf-1"), "workflowName", "archive.run", "status", WorkflowStatusSuccess).Err(); err != nil {
-		t.Fatalf("写入工作流主记录失败: %v", err)
-	}
-	if err := manager.redis.HSet(ctx, manager.workflowMetaKey("wf-2"), "workflowName", "archive.run", "status", WorkflowStatusRunning).Err(); err != nil {
-		t.Fatalf("写入工作流主记录失败: %v", err)
-	}
-	items, err := manager.GetWorkflowStatusSummaries(ctx, []string{"wf-2", "wf-1", "wf-2", "missing", ""})
-	if err != nil {
-		t.Fatalf("GetWorkflowStatusSummaries() error = %v", err)
-	}
-	if len(items) != 2 {
-		t.Fatalf("轻量工作流状态数量 = %d, want 2: %+v", len(items), items)
-	}
-	if items["wf-1"].WorkflowName != "archive.run" || items["wf-1"].Status != WorkflowStatusSuccess {
-		t.Fatalf("wf-1 轻量状态异常: %+v", items["wf-1"])
-	}
-	if items["wf-2"].Status != WorkflowStatusRunning {
-		t.Fatalf("wf-2 轻量状态异常: %+v", items["wf-2"])
-	}
-	if _, exists := items["missing"]; exists {
-		t.Fatalf("缺失工作流不应生成伪状态: %+v", items["missing"])
-	}
-}
-
-// TestGetWorkflowStatusSummariesChunksLargeInput 验证超过单 pipeline 上限时分批读取且结果完整。
-func TestGetWorkflowStatusSummariesChunksLargeInput(t *testing.T) {
-	manager, cleanup := newTestManager(t)
-	defer cleanup()
-	ctx := context.Background()
-	workflowIDs := make([]string, 0, workflowStatusBatchSize+1)
-	pipe := manager.redis.Pipeline()
-	for index := 0; index <= workflowStatusBatchSize; index++ {
-		workflowID := fmt.Sprintf("wf-batch-%04d", index)
-		workflowIDs = append(workflowIDs, workflowID)
-		pipe.HSet(ctx, manager.workflowMetaKey(workflowID), "workflowName", "archive.run", "status", WorkflowStatusSuccess)
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		t.Fatalf("批量写入工作流主记录失败: %v", err)
-	}
-	pipe.Discard()
-	items, err := manager.GetWorkflowStatusSummaries(ctx, workflowIDs)
-	if err != nil {
-		t.Fatalf("GetWorkflowStatusSummaries() error = %v", err)
-	}
-	if len(items) != len(workflowIDs) {
-		t.Fatalf("分批工作流状态数量=%d, want %d", len(items), len(workflowIDs))
-	}
-	for _, workflowID := range workflowIDs {
-		if item := items[workflowID]; item == nil || item.Status != WorkflowStatusSuccess {
-			t.Fatalf("分批工作流状态缺失 workflow_id=%s item=%+v", workflowID, item)
-		}
 	}
 }
 
@@ -1134,6 +1131,39 @@ func TestRecordTaskRuntimeFinishUsesDetachedContext(t *testing.T) {
 	}
 }
 
+// TestRecordTaskRuntimeFinishBoundsError 验证失败运行快照不会保留无界或敏感错误文本。
+func TestRecordTaskRuntimeFinishBoundsError(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	const taskID = "task-bounded-error"
+	attemptToken := manager.recordTaskRuntimeStart(context.Background(), QueueMaintenance, taskID, time.Now().Add(-time.Second))
+	runErr := errors.New(`{"password":"secret","message":"` + strings.Repeat("错", maxTaskRuntimeErrorRunes+100) + `"}`)
+	manager.recordTaskRuntimeFinish(context.Background(), QueueMaintenance, taskID, attemptToken, time.Now().Add(-time.Second), runErr, nil)
+
+	lastErr := manager.redis.HGet(context.Background(), manager.taskRuntimeKey(QueueMaintenance, taskID), "lastErr").Val()
+	if strings.Contains(lastErr, "secret") {
+		t.Fatalf("失败运行快照泄露敏感字段: %s", lastErr)
+	}
+	if count := len([]rune(lastErr)); count > maxTaskRuntimeErrorRunes {
+		t.Fatalf("失败运行快照错误长度=%d，期望不超过 %d", count, maxTaskRuntimeErrorRunes)
+	}
+}
+
+// TestTaskRuntimeActiveRetentionDoesNotUseArchiveWindow 验证孤儿 active 快照不会按失败归档窗口长期残留。
+func TestTaskRuntimeActiveRetentionDoesNotUseArchiveWindow(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	cfg := manager.CurrentConfig()
+	cfg.CompletedRetentionSeconds = 10 * 60
+	cfg.ArchivedRetentionSeconds = 7 * 24 * 60 * 60
+	manager.UpdateConfig(cfg)
+	if got, want := manager.taskRuntimeActiveRetention(), manager.CompletedRetention()+time.Hour; got != want {
+		t.Fatalf("active 运行快照保留时间=%s，期望=%s", got, want)
+	}
+}
+
 // TestRecordTaskRuntimeClearsPreviousFinalFields 验证同一任务 ID 再次运行不会继承旧错误和处理量。
 func TestRecordTaskRuntimeClearsPreviousFinalFields(t *testing.T) {
 	manager, cleanup := newTestManager(t)
@@ -1326,35 +1356,6 @@ func TestReadTaskRuntimeBatchPreservesQueueIdentity(t *testing.T) {
 	}
 	if maintenanceRecord.DurationMS != 2000 || maintenanceRecord.ExecutionTrace == nil || maintenanceRecord.ExecutionTrace.UpdateCount != 3 {
 		t.Fatalf("maintenance 批量运行快照异常: %+v", maintenanceRecord)
-	}
-}
-
-// TestReadTaskRuntimesUsesBoundedFields 验证日报只读取必要字段且把运行快照纳入字节预算。
-func TestReadTaskRuntimesUsesBoundedFields(t *testing.T) {
-	manager, cleanup := newTestManager(t)
-	defer cleanup()
-	ctx := context.Background()
-	key := manager.taskRuntimeKey(QueueMaintenance, "runtime-report")
-	if err := manager.redis.HSet(ctx, key, map[string]any{
-		"startedAt":      "2026-07-18T10:00:00Z",
-		"finishedAt":     "2026-07-18T10:00:01Z",
-		"durationMs":     "1000",
-		"executionTrace": `{"totalCount":2,"readCount":2}`,
-		"unused":         strings.Repeat("x", 2<<20),
-	}).Err(); err != nil {
-		t.Fatalf("写入日报运行快照测试数据失败: %v", err)
-	}
-	infos := []*asynq.TaskInfo{{ID: "runtime-report", Queue: manager.namespacedQueueName(QueueMaintenance)}}
-	records, usedBytes, limited, err := manager.readTaskRuntimes(ctx, infos, 1024)
-	if err != nil {
-		t.Fatalf("读取日报运行快照失败: %v", err)
-	}
-	record := records[taskRuntimeIdentity(infos[0].Queue, infos[0].ID)]
-	if limited || usedBytes <= 0 || usedBytes >= 1024 || record.DurationMS != 1000 || record.ExecutionTrace == nil || record.ExecutionTrace.ReadCount != 2 {
-		t.Fatalf("日报运行快照读取异常: limited=%t bytes=%d record=%+v", limited, usedBytes, record)
-	}
-	if records, usedBytes, limited, err = manager.readTaskRuntimes(ctx, infos, 1); err != nil || !limited || usedBytes != 0 || len(records) != 0 {
-		t.Fatalf("日报运行快照应受字节预算阻断: records=%+v bytes=%d limited=%t err=%v", records, usedBytes, limited, err)
 	}
 }
 
@@ -2592,7 +2593,7 @@ func TestWorkflowRunningStateOnlyExpiresAfterTerminal(t *testing.T) {
 			t.Fatalf("终态 key 应设置 TTL key=%s ttl=%s", key, ttl)
 		}
 	}
-	server.FastForward(taskCompletedRetention + time.Hour)
+	server.FastForward(manager.workflowTerminalRetention(WorkflowStatusFailed) + time.Hour)
 	for _, key := range stateKeys {
 		if exists := manager.redis.Exists(context.Background(), key).Val(); exists != 0 {
 			t.Fatalf("终态保留时间后 key 仍存在 key=%s", key)
@@ -3282,12 +3283,8 @@ func TestCompletedTaskWritesResult(t *testing.T) {
 		t.Fatalf("成功终态任务不应设置项目 task hash TTL，实际 TTL=%s", taskTTL)
 	}
 	runtimeTTL := manager.redis.TTL(context.Background(), manager.taskRuntimeKey(QueueDefault, resp.TaskID)).Val()
-	expectedRuntimeTTL := taskCompletedRetention + time.Hour
-	if runtimeTTL <= taskCompletedRetention || runtimeTTL > expectedRuntimeTTL+time.Second {
-		t.Fatalf("成功终态任务 runtime TTL = %s，期望约为 %s", runtimeTTL, expectedRuntimeTTL)
-	}
-	if err = manager.redis.Del(context.Background(), manager.taskRuntimeKey(QueueDefault, resp.TaskID)).Err(); err != nil {
-		t.Fatalf("删除 runtime 兜底测试 key 失败: %v", err)
+	if runtimeTTL != -2 {
+		t.Fatalf("成功终态任务应删除重复 runtime hash，实际 TTL=%s", runtimeTTL)
 	}
 	fallbackItem, err := manager.GetTaskInfo(context.Background(), &types.GetTaskInfoReq{
 		Queue:  QueueDefault,
@@ -3382,141 +3379,6 @@ func TestListCompletedTasksReturnsErrorForOrphanedZSetMember(t *testing.T) {
 	}
 }
 
-// TestListReportTasksUsesBatchedWindowOffset 验证日报按原生页推进时无重复、无漏项且预算可控。
-func TestListReportTasksUsesBatchedWindowOffset(t *testing.T) {
-	manager, server, cleanup := newTestManagerWithServer(t)
-	defer cleanup()
-	const (
-		taskCount                  = taskReportListBatchSize + 5
-		reportPageByteLimitForTest = int64(64 << 20)
-	)
-	if err := manager.RegisterHandler("demo:report-batch", asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
-		return nil
-	})); err != nil {
-		t.Fatalf("注册日报批量测试处理器失败: %v", err)
-	}
-	knownIDs := make(map[string]struct{}, taskCount)
-	windowStart := time.Now().Add(-time.Minute)
-	for index := 0; index < taskCount; index++ {
-		resp, err := manager.EnqueueRegisteredTask(context.Background(), &types.EnqueueTaskReq{
-			TaskType: "demo:report-batch",
-			Payload:  json.RawMessage(fmt.Sprintf(`{"index":%d}`, index)),
-		})
-		if err != nil {
-			t.Fatalf("投递日报批量测试任务失败 index=%d err=%v", index, err)
-		}
-		knownIDs[resp.TaskID] = struct{}{}
-	}
-	if err := manager.StartWorker(); err != nil {
-		t.Fatalf("启动日报批量测试 worker 失败: %v", err)
-	}
-	defer func() { _ = manager.Stop(context.Background()) }()
-	waitForCondition(t, 10*time.Second, func() bool {
-		info, infoErr := manager.inspector.GetQueueInfo(manager.namespacedQueueName(QueueDefault))
-		return infoErr == nil && info.Completed >= taskCount
-	})
-	if err := manager.Stop(context.Background()); err != nil {
-		t.Fatalf("停止日报批量测试 worker 失败: %v", err)
-	}
-	req := &types.ListTaskItemsReq{
-		Queue:     QueueDefault,
-		State:     asynq.TaskStateCompleted.String(),
-		StartTime: windowStart.Format(time.RFC3339),
-		EndTime:   time.Now().Add(time.Minute).Format(time.RFC3339),
-	}
-	limitedResp, limitedUsage, err := manager.ListReportTasks(context.Background(), req, 0, taskReportListBatchSize, 1)
-	if err != nil {
-		t.Fatalf("日报原生页字节预算预检失败: %v", err)
-	}
-	if limitedResp.Total != taskCount || len(limitedResp.Tasks) != 0 || !limitedUsage.ByteLimited || limitedUsage.Tasks != taskReportListBatchSize {
-		t.Fatalf("日报原生页应受字节预算阻断: resp=%+v usage=%+v", limitedResp, limitedUsage)
-	}
-	commandsBefore := server.CommandCount()
-	first, firstUsage, err := manager.ListReportTasks(context.Background(), req, 0, taskReportListBatchSize, reportPageByteLimitForTest)
-	if err != nil {
-		t.Fatalf("读取日报首个原生页片段失败: %v", err)
-	}
-	if first.Total != taskCount || len(first.Tasks) != 5 || firstUsage.Tasks != taskReportListBatchSize || firstUsage.ByteLimited {
-		t.Fatalf("日报首个原生页片段 total=%d len=%d usage=%+v, want total=%d len=5 scanned=%d", first.Total, len(first.Tasks), firstUsage, taskCount, taskReportListBatchSize)
-	}
-	batchCommandCount := server.CommandCount() - commandsBefore
-	legacyCommandsBefore := server.CommandCount()
-	legacy, err := manager.ListTasks(context.Background(), &types.ListTaskItemsReq{
-		Queue:     req.Queue,
-		State:     req.State,
-		Page:      1,
-		PageSize:  taskReportListBatchSize,
-		StartTime: req.StartTime,
-		EndTime:   req.EndTime,
-	})
-	if err != nil {
-		t.Fatalf("读取通用任务列表基准失败: %v", err)
-	}
-	if legacy.Total != taskCount || len(legacy.Tasks) != taskReportListBatchSize {
-		t.Fatalf("通用任务列表基准 total=%d len=%d, want total=%d len=%d", legacy.Total, len(legacy.Tasks), taskCount, taskReportListBatchSize)
-	}
-	legacyCommandCount := server.CommandCount() - legacyCommandsBefore
-	if batchCommandCount >= legacyCommandCount {
-		t.Fatalf("日报批量读取 Redis 命令数=%d，不应达到通用逐任务路径=%d", batchCommandCount, legacyCommandCount)
-	}
-	for index := range first.Tasks {
-		if first.Tasks[index].ID != legacy.Tasks[index].ID {
-			t.Fatalf("日报首段第 %d 条任务=%s，期望与通用倒序基准=%s 一致", index, first.Tasks[index].ID, legacy.Tasks[index].ID)
-		}
-	}
-	second, secondUsage, err := manager.ListReportTasks(context.Background(), req, len(first.Tasks), taskReportListBatchSize, reportPageByteLimitForTest)
-	if err != nil {
-		t.Fatalf("读取日报下一原生页失败: %v", err)
-	}
-	if second.Total != taskCount || len(second.Tasks) != taskReportListBatchSize || secondUsage.Tasks != taskReportListBatchSize || secondUsage.ByteLimited {
-		t.Fatalf("日报下一原生页 total=%d len=%d usage=%+v, want total=%d len=%d scanned=%d", second.Total, len(second.Tasks), secondUsage, taskCount, taskReportListBatchSize, taskReportListBatchSize)
-	}
-	combined := append(append([]types.TaskItem(nil), first.Tasks...), second.Tasks...)
-	seen := make(map[string]struct{}, len(combined))
-	for _, item := range combined {
-		if _, ok := knownIDs[item.ID]; !ok {
-			t.Fatalf("日报返回未知任务 ID: %s", item.ID)
-		}
-		if _, duplicated := seen[item.ID]; duplicated {
-			t.Fatalf("日报原生页拼接返回重复任务 ID: %s", item.ID)
-		}
-		seen[item.ID] = struct{}{}
-	}
-	legacyTail, err := manager.ListTasks(context.Background(), &types.ListTaskItemsReq{
-		Queue:     req.Queue,
-		State:     req.State,
-		Page:      2,
-		PageSize:  taskReportListBatchSize,
-		StartTime: req.StartTime,
-		EndTime:   req.EndTime,
-	})
-	if err != nil {
-		t.Fatalf("读取通用任务列表尾页基准失败: %v", err)
-	}
-	expected := append(append([]types.TaskItem(nil), legacy.Tasks...), legacyTail.Tasks...)
-	if len(combined) != len(expected) {
-		t.Fatalf("日报原生页拼接长度=%d，期望=%d", len(combined), len(expected))
-	}
-	for index := range combined {
-		if combined[index].ID != expected[index].ID {
-			t.Fatalf("日报拼接第 %d 条任务=%s，期望=%s", index, combined[index].ID, expected[index].ID)
-		}
-	}
-}
-
-// TestListReportNativePageHonorsContext 验证 Asynq 原生详情页不会绕过日报取消信号。
-func TestListReportNativePageHonorsContext(t *testing.T) {
-	manager, cleanup := newTestManager(t)
-	defer cleanup()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := manager.listReportNativePage(ctx, manager.namespacedQueueName(QueueDefault), asynq.TaskStateCompleted.String(), 1)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("日报原生详情页 error=%v, want context.Canceled", err)
-	}
-}
-
 // TestListReportQueuesUsesFixedMetadataLimit 验证日报队列入口只读取固定数量的队列元数据。
 func TestListReportQueuesUsesFixedMetadataLimit(t *testing.T) {
 	manager, server, cleanup := newTestManagerWithServer(t)
@@ -3552,8 +3414,8 @@ func TestListReportQueuesUsesFixedMetadataLimit(t *testing.T) {
 	if resp.Queues[0].Pending != 1 || resp.Queues[1].Active != 1 {
 		t.Fatalf("日报队列基础计数异常: %+v", resp.Queues)
 	}
-	if commands := server.CommandCount() - commandsBefore; commands != 12 {
-		t.Fatalf("日报两个队列应固定执行 12 条 O(1) 计数命令，实际=%d", commands)
+	if commands := server.CommandCount() - commandsBefore; commands != 25 {
+		t.Fatalf("日报两个队列应执行 20 条状态计数、4 条有界聚合组命令和 1 条延迟读取，实际=%d", commands)
 	}
 
 	canceledCtx, cancel := context.WithCancel(context.Background())
@@ -3581,6 +3443,16 @@ func TestListReportQueuesReadsDefaultQueues(t *testing.T) {
 	}).Err(); err != nil {
 		t.Fatalf("写入默认 maintenance 队列 scheduled 计数失败: %v", err)
 	}
+	internalDefault := manager.namespacedQueueName(QueueDefault)
+	if err := manager.redis.SAdd(ctx, keys.TaskAsynqGroupsKey(internalDefault), "refresh").Err(); err != nil {
+		t.Fatalf("写入默认 default 队列聚合组失败: %v", err)
+	}
+	if err := manager.redis.ZAdd(ctx, keys.TaskAsynqGroupKey(internalDefault, "refresh"),
+		redis.Z{Score: 1, Member: "aggregate-task-1"},
+		redis.Z{Score: 2, Member: "aggregate-task-2"},
+	).Err(); err != nil {
+		t.Fatalf("写入默认 default 队列聚合任务失败: %v", err)
+	}
 
 	resp, limited, err := manager.ListReportQueues(ctx, 3)
 	if err != nil {
@@ -3592,48 +3464,11 @@ func TestListReportQueuesReadsDefaultQueues(t *testing.T) {
 	if resp.Queues[0].Name != QueueCritical || resp.Queues[0].Pending != 1 {
 		t.Fatalf("默认 critical 队列计数异常: %+v", resp.Queues[0])
 	}
-	if resp.Queues[1].Name != QueueDefault {
+	if resp.Queues[1].Name != QueueDefault || resp.Queues[1].Aggregating != 2 {
 		t.Fatalf("默认 default 队列顺序异常: %+v", resp.Queues)
 	}
 	if resp.Queues[2].Name != QueueMaintenance || resp.Queues[2].Scheduled != 1 {
 		t.Fatalf("默认 maintenance 队列计数异常: %+v", resp.Queues[2])
-	}
-}
-
-// TestReportTaskSnapshotStableDetectsRankShift 验证终态清理移动绝对排名时快照复核会失败关闭。
-func TestReportTaskSnapshotStableDetectsRankShift(t *testing.T) {
-	manager, cleanup := newTestManager(t)
-	defer cleanup()
-	ctx := context.Background()
-	key, err := keys.TaskAsynqStateZSetKey(manager.namespacedQueueName(QueueDefault), asynq.TaskStateCompleted.String())
-	if err != nil {
-		t.Fatalf("生成 completed key 失败: %v", err)
-	}
-	for index, id := range []string{"task-a", "task-b", "task-c", "task-d"} {
-		if err = manager.redis.ZAdd(ctx, key, redis.Z{Score: float64(index + 1), Member: id}).Err(); err != nil {
-			t.Fatalf("写入 completed 排名失败: %v", err)
-		}
-	}
-	ranked := []reportRankedTask{
-		{rank: 1, info: &asynq.TaskInfo{ID: "task-b"}},
-		{rank: 2, info: &asynq.TaskInfo{ID: "task-c"}},
-	}
-	stable, err := manager.reportTaskSnapshotStable(ctx, key, "-inf", "+inf", 4, 4, 1, 2, ranked)
-	if err != nil {
-		t.Fatalf("复核稳定快照失败: %v", err)
-	}
-	if !stable {
-		t.Fatal("未发生变化的终态排名应判定稳定")
-	}
-	if err = manager.redis.ZRem(ctx, key, "task-a").Err(); err != nil {
-		t.Fatalf("删除低排名任务失败: %v", err)
-	}
-	stable, err = manager.reportTaskSnapshotStable(ctx, key, "-inf", "+inf", 4, 4, 1, 2, ranked)
-	if err != nil {
-		t.Fatalf("复核变化快照失败: %v", err)
-	}
-	if stable {
-		t.Fatal("低排名任务清理后不应继续接受已位移的快照")
 	}
 }
 
@@ -3931,19 +3766,17 @@ func TestPeriodicTaskCronspecRejectsTooSmallEverySeconds(t *testing.T) {
 	}
 }
 
-// TestQueueInfoBacklogIgnoresArchivedAndActive 验证调度背压只统计等待类积压，不把历史归档任务计入当前压力。
-func TestQueueInfoBacklogIgnoresArchivedAndActive(t *testing.T) {
-	info := &asynq.QueueInfo{
-		Pending:     3,
-		Active:      10,
-		Scheduled:   4,
-		Retry:       5,
-		Archived:    100,
-		Completed:   200,
-		Aggregating: 6,
+// TestValidatePeriodicCronspecRejectsTooFrequentSecondField 验证六段 cron 不能绕过固定间隔的五秒下限。
+func TestValidatePeriodicCronspecRejectsTooFrequentSecondField(t *testing.T) {
+	for _, cronspec := range []string{"* * * * * *", "0,1 * * * * *", "1,58 0 * * * *"} {
+		if err := validatePeriodicCronspec(cronspec); err == nil {
+			t.Fatalf("秒级 cron=%q 存在五秒内触发可能时应被拒绝", cronspec)
+		}
 	}
-	if got := queueInfoBacklog(info); got != 18 {
-		t.Fatalf("queueInfoBacklog = %d, want 18", got)
+	for _, cronspec := range []string{"*/5 * * * * *", "0 * * * * *", "* * * * *", "@every 5s"} {
+		if err := validatePeriodicCronspec(cronspec); err != nil {
+			t.Fatalf("cron=%q 应通过最小间隔校验: %v", cronspec, err)
+		}
 	}
 }
 
@@ -4092,8 +3925,48 @@ func TestListQueuesReturnsSchedulerStatus(t *testing.T) {
 	}
 }
 
-// TestListQueuesReturnsErrorForOrphanedCompletedMember 验证队列概览不吞掉 Asynq 巡检错误。
-func TestListQueuesReturnsErrorForOrphanedCompletedMember(t *testing.T) {
+// TestListQueuesBoundsHighCardinalityGroups 验证聚合组异常增多时跳过 Asynq 无界巡检并明确降级。
+func TestListQueuesBoundsHighCardinalityGroups(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	internalQueue := manager.namespacedQueueName(QueueDefault)
+	if err := manager.redis.SAdd(ctx, "asynq:queues", internalQueue).Err(); err != nil {
+		t.Fatalf("写入 Asynq 队列索引失败: %v", err)
+	}
+	groups := make([]any, 0, taskQueueGroupReadLimit+1)
+	for index := int64(0); index <= taskQueueGroupReadLimit; index++ {
+		groups = append(groups, fmt.Sprintf("group-%03d", index))
+	}
+	if err := manager.redis.SAdd(ctx, keys.TaskAsynqGroupsKey(internalQueue), groups...).Err(); err != nil {
+		t.Fatalf("写入高基数聚合组失败: %v", err)
+	}
+	if err := manager.redis.LPush(ctx, keys.TaskAsynqPendingKey(internalQueue), "pending-task").Err(); err != nil {
+		t.Fatalf("写入待执行任务失败: %v", err)
+	}
+
+	resp, err := manager.ListQueues(ctx)
+	if err != nil {
+		t.Fatalf("高基数聚合组应安全降级: %v", err)
+	}
+	if !resp.MetricsLimited {
+		t.Fatalf("高基数聚合组降级响应异常: %+v", resp)
+	}
+	var defaultQueue *types.TaskQueueItem
+	for index := range resp.Queues {
+		if resp.Queues[index].Name == QueueDefault {
+			defaultQueue = &resp.Queues[index]
+			break
+		}
+	}
+	if defaultQueue == nil || defaultQueue.Pending != 1 || defaultQueue.Aggregating != 0 {
+		t.Fatalf("高基数聚合组核心计数异常: %+v", resp.Queues)
+	}
+}
+
+// TestListQueuesKeepsCoreCountsForOrphanedCompletedMember 验证任务详情缺失只降级内存估算，不拖垮队列概览。
+func TestListQueuesKeepsCoreCountsForOrphanedCompletedMember(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -4114,8 +3987,20 @@ func TestListQueuesReturnsErrorForOrphanedCompletedMember(t *testing.T) {
 	}
 
 	resp, err := manager.ListQueues(ctx)
-	if err == nil {
-		t.Fatalf("查询包含孤儿成员的队列概览应失败，实际 resp=%+v", resp)
+	if err != nil {
+		t.Fatalf("孤儿 completed 成员不应拖垮队列概览: %v", err)
+	}
+	if !resp.MetricsLimited {
+		t.Fatalf("孤儿 completed 成员应标记内存估算降级: %+v", resp)
+	}
+	var completed int
+	for _, queue := range resp.Queues {
+		if queue.Name == QueueDefault {
+			completed = queue.Completed
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("孤儿 completed 核心计数应继续可见: %+v", resp.Queues)
 	}
 }
 
@@ -4155,6 +4040,33 @@ func TestEnqueueRegisteredTaskSupportsScheduling(t *testing.T) {
 	}
 	if resp.ProcessAt == "" {
 		t.Fatalf("期望回执中包含调度执行时间: %+v", resp)
+	}
+}
+
+// TestEnqueueRegisteredTaskKeepsExplicitZeroRetry 校验人工投递可显式关闭重试而不是回落到 Asynq 默认值。
+func TestEnqueueRegisteredTaskKeepsExplicitZeroRetry(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if err := manager.RegisterHandler("demo:no-retry", asynq.HandlerFunc(func(context.Context, *asynq.Task) error { return nil })); err != nil {
+		t.Fatalf("注册零重试测试处理器失败: %v", err)
+	}
+	retry := 0
+	resp, err := manager.EnqueueRegisteredTask(context.Background(), &types.EnqueueTaskReq{
+		TaskType:  "demo:no-retry",
+		Payload:   json.RawMessage(`{"demo":true}`),
+		Retry:     &retry,
+		ProcessAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("投递零重试任务失败: %v", err)
+	}
+	info, err := manager.inspector.GetTaskInfo(manager.namespacedQueueName(QueueDefault), resp.TaskID)
+	if err != nil {
+		t.Fatalf("读取零重试任务失败: %v", err)
+	}
+	if info.MaxRetry != 0 {
+		t.Fatalf("零重试任务 max_retry=%d，期望 0", info.MaxRetry)
 	}
 }
 
@@ -4785,8 +4697,8 @@ func TestDeleteTaskRemovesScheduledTask(t *testing.T) {
 	}
 }
 
-// TestTaskCompletedRetentionIsFixed 验证成功任务和工作流统一固定保留两天。
-func TestTaskCompletedRetentionIsFixed(t *testing.T) {
+// TestTaskCompletedRetentionUsesBoundedConfig 验证成功任务默认短留并允许在安全范围内调整。
+func TestTaskCompletedRetentionUsesBoundedConfig(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -4795,15 +4707,20 @@ func TestTaskCompletedRetentionIsFixed(t *testing.T) {
 		t.Fatalf("测试配置应模拟未配置归档保留时间，实际=%d", cfg.ArchivedRetentionSeconds)
 	}
 	if got := manager.CompletedRetention(); got != taskCompletedRetention {
-		t.Fatalf("成功任务固定保留时间 = %s，期望 %s", got, taskCompletedRetention)
+		t.Fatalf("成功任务默认保留时间 = %s，期望 %s", got, taskCompletedRetention)
+	}
+	cfg.CompletedRetentionSeconds = 600
+	manager.UpdateConfig(cfg)
+	if got := manager.CompletedRetention(); got != 10*time.Minute {
+		t.Fatalf("成功任务配置保留时间 = %s，期望 10m", got)
 	}
 	if got, want := manager.ArchivedRetention(), time.Duration(taskArchivedRetentionDefaultSeconds)*time.Second; got != want {
 		t.Fatalf("未配置 archived_retention_seconds 时默认值 = %s，期望 %s", got, want)
 	}
 }
 
-// TestCompletedScoreRangeUsesFixedRetention 验证 completed 索引查询使用固定两天保留期反推完成时间。
-func TestCompletedScoreRangeUsesFixedRetention(t *testing.T) {
+// TestCompletedScoreRangeUsesRetention 验证 completed 索引查询使用实际保留期反推完成时间。
+func TestCompletedScoreRangeUsesRetention(t *testing.T) {
 	start := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 	minScore, maxScore, ok := descZSetScoreRange("completed", taskListTimeRange{

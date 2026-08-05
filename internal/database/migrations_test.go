@@ -36,6 +36,29 @@ func TestAdminBaselineLastLoginIPUsesIPv6Length(t *testing.T) {
 	}
 }
 
+// TestArchiveControlBaselineUsesMicrosecondPrecision 确保归档控制表完整保留 MySQL 微秒时间。
+func TestArchiveControlBaselineUsesMicrosecondPrecision(t *testing.T) {
+	tests := []struct {
+		asset  string   // 归档控制表基线资产
+		fields []string // 必须使用 datetime(6) 的时间字段
+	}{
+		{asset: "archive_watermark.sql", fields: []string{"watermark_time", "updated_at"}},
+		{asset: "archive_segment.sql", fields: []string{
+			"range_start", "range_end", "lease_expires_at", "last_archived_time",
+			"created_at", "updated_at", "completed_at",
+		}},
+	}
+	for _, tt := range tests {
+		sql := strings.ToLower(migrationSQLByAsset(t, tt.asset))
+		for _, field := range tt.fields {
+			want := "`" + field + "` datetime(6)"
+			if !strings.Contains(sql, want) {
+				t.Fatalf("%s 的 %s 必须使用 datetime(6)", tt.asset, field)
+			}
+		}
+	}
+}
+
 // TestDefaultMigrationsCoverDatabaseSQLAssets 确保 database 下的 SQL 快照都纳入迁移治理。
 func TestDefaultMigrationsCoverDatabaseSQLAssets(t *testing.T) {
 	assets, err := MigrationAssetNames()

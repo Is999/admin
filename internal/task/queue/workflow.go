@@ -145,6 +145,7 @@ type WorkflowTaskMeta struct {
 type WorkflowMetaRecord struct {
 	WorkflowID   string   `json:"workflowId"`             // 工作流实例 ID
 	WorkflowName string   `json:"workflowName"`           // 工作流名称
+	PeriodicName string   `json:"periodicName,omitempty"` // 周期任务名称
 	Status       string   `json:"status"`                 // 当前整体状态
 	Source       string   `json:"source"`                 // 触发来源
 	Queue        string   `json:"queue"`                  // 默认执行队列
@@ -197,6 +198,21 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 
 	spec.Name = def.Name
 	spec.Targets = normalizeStrings(spec.Targets)
+	if err = tasklimits.ValidateWorkflowTargets(spec.Targets); err != nil {
+		return "", errors.Tag(err)
+	}
+	if len(spec.UniqueKey) > tasklimits.MaxUniqueKeyBytes {
+		return "", errors.Errorf("工作流 unique_key 不能超过 %d 字节", tasklimits.MaxUniqueKeyBytes)
+	}
+	if spec.RetryOverride != nil && (*spec.RetryOverride < 0 || *spec.RetryOverride > tasklimits.MaxRetry) {
+		return "", errors.Errorf("工作流 retry 必须在 0-%d 之间", tasklimits.MaxRetry)
+	}
+	if spec.TimeoutOverride < 0 || spec.TimeoutOverride > time.Duration(tasklimits.MaxTimeoutSeconds)*time.Second {
+		return "", errors.Errorf("工作流 timeout 不能超过 %d 秒", tasklimits.MaxTimeoutSeconds)
+	}
+	if spec.UniqueTTL < 0 || spec.UniqueTTL > time.Duration(tasklimits.MaxUniqueTTLSeconds)*time.Second {
+		return "", errors.Errorf("工作流 unique TTL 不能超过 %d 秒", tasklimits.MaxUniqueTTLSeconds)
+	}
 	if spec.ShardTotal <= 0 {
 		spec.ShardTotal = 1
 	}
@@ -212,6 +228,9 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 	}
 	if spec.Queue == "" {
 		spec.Queue = helper.FirstNonEmptyString(def.DefaultQueue, m.defaultWorkflowQueue())
+	}
+	if !m.isQueueConfigured(spec.Queue) {
+		return "", errors.Errorf("工作流队列未配置消费: %s", spec.Queue)
 	}
 	if spec.WorkflowID == "" {
 		spec.WorkflowID = newID()
@@ -399,6 +418,9 @@ func (m *Manager) scheduleNodeTasks(ctx context.Context, def *WorkflowDefinition
 	}
 
 	queue := helper.FirstNonEmptyString(node.Queue, spec.Queue, m.defaultWorkflowQueue())
+	if !m.isQueueConfigured(queue) {
+		return errors.Errorf("工作流节点队列未配置消费 node=%s queue=%s", nodeName, queue)
+	}
 	selectedShards := selectedShardIndexes(spec.WorkflowID, nodeName, effectiveShardTotal(node, spec), spec.GrayPercent, node.SupportsGray)
 	if status == "" || status == NodeStatusPending {
 		now := time.Now().Format(time.RFC3339)
@@ -439,6 +461,9 @@ func (m *Manager) scheduleNodeTasks(ctx context.Context, def *WorkflowDefinition
 		if buildErr != nil {
 			return errors.Wrapf(buildErr, "构建节点负载失败 node=%s shard=%d", nodeName, shardIndex)
 		}
+		if len(payload) > tasklimits.MaxPayloadBytes {
+			return errors.Errorf("工作流节点负载超过上限 node=%s shard=%d bytes=%d max=%d", nodeName, shardIndex, len(payload), tasklimits.MaxPayloadBytes)
+		}
 		headers := map[string]string{
 			headerTaskName:      workflowNodeTaskName(spec.Name, nodeName, node.TaskType),
 			headerWorkflowID:    spec.WorkflowID,
@@ -464,7 +489,7 @@ func (m *Manager) scheduleNodeTasks(ctx context.Context, def *WorkflowDefinition
 			asynq.Queue(m.namespacedQueueName(queue)),
 			asynq.MaxRetry(maxRetry),
 			asynq.TaskID(workflowNodeTaskID(spec.WorkflowID, nodeName, shardIndex)),
-			asynq.Retention(taskCompletedRetention),
+			asynq.Retention(m.CompletedRetention()),
 		}
 		if timeout := effectiveTimeout(node, spec); timeout > 0 {
 			opts = append(opts, asynq.Timeout(timeout))
@@ -765,7 +790,12 @@ func (m *Manager) completeWorkflow(ctx context.Context, workflowID string) error
 	if err != nil || transition < 0 {
 		return errors.Tag(err)
 	}
-	return m.expireWorkflowState(ctx, workflowID)
+	if err = m.expireWorkflowState(ctx, workflowID); err != nil {
+		return errors.Tag(err)
+	}
+	// 同终态重放也重复入缓冲；事件 ID 固定且 Redis 写入幂等，可补偿首次 TTL 设置后未完成的快照写入。
+	m.enqueueWorkflowHistory(ctx, workflowID)
+	return nil
 }
 
 // failWorkflow 把工作流整体标记为失败，并记录错误摘要。
@@ -774,7 +804,12 @@ func (m *Manager) failWorkflow(ctx context.Context, workflowID, message string) 
 	if err != nil || transition < 0 {
 		return errors.Tag(err)
 	}
-	return m.expireWorkflowState(ctx, workflowID)
+	if err = m.expireWorkflowState(ctx, workflowID); err != nil {
+		return errors.Tag(err)
+	}
+	// 同终态重放也重复入缓冲；事件 ID 固定且 Redis 写入幂等，可补偿首次 TTL 设置后未完成的快照写入。
+	m.enqueueWorkflowHistory(ctx, workflowID)
+	return nil
 }
 
 // failWorkflowDispatch 收口编排重试耗尽的实例，并仅释放仍由当前实例持有的唯一键。
@@ -857,9 +892,9 @@ func workflowStartSpecFromTriggerTask(task *asynq.Task) WorkflowStartSpec {
 
 // transitionWorkflowStatus 原子写入工作流终态，返回 1 表示首次迁移、0 表示同终态重放、负数表示已处于相反终态。
 func (m *Manager) transitionWorkflowStatus(ctx context.Context, workflowID, status, message string) (int, error) {
-	now := time.Now().Format(time.RFC3339)
+	now := time.Now().Format(time.RFC3339Nano)
 	result, err := transitionWorkflowStatusScript.Run(ctx, m.redis, []string{m.workflowMetaKey(workflowID)},
-		status, now, message, taskCompletedRetention.Milliseconds()).Int()
+		status, now, message, m.workflowTerminalRetention(status).Milliseconds()).Int()
 	if err != nil {
 		return 0, errors.Wrapf(err, "迁移工作流终态失败 workflow_id=%s status=%s", workflowID, status)
 	}
@@ -888,8 +923,13 @@ func (m *Manager) expireWorkflowState(ctx context.Context, workflowID string) er
 	if err != nil {
 		return errors.Tag(err)
 	}
+	status, err := m.redis.HGet(ctx, m.workflowMetaKey(workflowID), "status").Result()
+	if err != nil {
+		return errors.Wrapf(err, "读取工作流终态失败 workflow_id=%s", workflowID)
+	}
+	retention := m.workflowTerminalRetention(status)
 	for _, key := range keys {
-		if err = m.redis.Expire(ctx, key, taskCompletedRetention).Err(); err != nil {
+		if err = m.redis.Expire(ctx, key, retention).Err(); err != nil {
 			return errors.Wrapf(err, "设置工作流终态保留时间失败 workflow_id=%s key=%s", workflowID, key)
 		}
 	}
@@ -1179,6 +1219,7 @@ func (m *Manager) readWorkflowStatus(ctx context.Context, workflowID string) (*W
 	meta := &WorkflowMetaRecord{
 		WorkflowID:   metaMap["workflowId"],
 		WorkflowName: metaMap["workflowName"],
+		PeriodicName: metaMap["periodicName"],
 		Status:       metaMap["status"],
 		Source:       metaMap["source"],
 		Queue:        metaMap["queue"],

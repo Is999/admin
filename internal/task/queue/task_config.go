@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	// taskCompletedRetention 固定保留两天，避免配置误改导致日报缺数。
-	taskCompletedRetention = 48 * time.Hour
+	// taskCompletedRetentionDefaultSeconds 是成功任务近期明细的默认保留时间。
+	taskCompletedRetentionDefaultSeconds = 30 * 60
+	// taskCompletedRetention 是默认保留时间，保留该常量供边界测试复用。
+	taskCompletedRetention = time.Duration(taskCompletedRetentionDefaultSeconds) * time.Second
 	// taskArchivedRetentionDefaultSeconds 是失败归档任务未配置时的七天保留期。
 	taskArchivedRetentionDefaultSeconds = 7 * 24 * 60 * 60
 )
@@ -25,9 +27,22 @@ func (m *Manager) workflowUniqueLockTTL() time.Duration {
 	return 15 * time.Second
 }
 
+// workflowTerminalRetention 返回工作流终态热状态保留时间。
+// 失败实例需要和 archived 对齐以支持人工重跑，成功实例只保留近期观测窗口。
+func (m *Manager) workflowTerminalRetention(status string) time.Duration {
+	if strings.TrimSpace(status) == WorkflowStatusFailed {
+		return m.ArchivedRetention()
+	}
+	return m.CompletedRetention()
+}
+
 // CompletedRetention 返回成功任务交给 Asynq completed 队列保留的时长。
 func (m *Manager) CompletedRetention() time.Duration {
-	return taskCompletedRetention
+	seconds := m.CurrentConfig().CompletedRetentionSeconds
+	if seconds <= 0 {
+		seconds = taskCompletedRetentionDefaultSeconds
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // archivedRetention 返回归档失败任务在 Asynq 中的保留时长。
@@ -63,6 +78,16 @@ func (m *Manager) queueWeights() map[string]int {
 	result[m.namespacedQueueName(QueueDefault)] = 3
 	result[m.namespacedQueueName(QueueMaintenance)] = 1
 	return result
+}
+
+// isQueueConfigured 判断逻辑队列是否由当前 Worker 配置消费，避免任务进入无人监听的 Redis 队列。
+func (m *Manager) isQueueConfigured(queue string) bool {
+	internalQueue := m.namespacedQueueName(helper.FirstNonEmptyString(queue, m.defaultWorkflowQueue()))
+	if internalQueue == "" {
+		return false
+	}
+	_, ok := m.queueWeights()[internalQueue]
+	return ok
 }
 
 // concurrency 返回 Worker 并发度。
@@ -243,14 +268,14 @@ func (m *Manager) schedulerHeartbeatIntervalByConfig(cfg config.TaskQueueConfig)
 	return 10 * time.Second
 }
 
-// schedulerMaxQueueBacklog 返回周期任务投递前允许的队列积压上限，0 表示不启用背压。
+// schedulerMaxQueueBacklog 返回周期任务投递前允许的队列积压上限。
 func (m *Manager) schedulerMaxQueueBacklog() int64 {
 	if m == nil {
 		return 0
 	}
 	limit := m.CurrentConfig().Scheduler.MaxQueueBacklog
 	if limit <= 0 {
-		return 0
+		return 10_000
 	}
 	return int64(limit)
 }
@@ -281,6 +306,9 @@ func (m *Manager) workflowTriggerUniqueReservationTTL(req *types.TriggerTaskWork
 func periodicTaskKey(cfg config.TaskPeriodicConfig) (string, error) {
 	cron, err := periodicTaskCronspec(cfg)
 	if err != nil {
+		return "", errors.Tag(err)
+	}
+	if err = validatePeriodicCronspec(cron); err != nil {
 		return "", errors.Tag(err)
 	}
 	workflow := strings.TrimSpace(cfg.Workflow)

@@ -57,7 +57,7 @@ func (m *Manager) periodicConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 		opts := []asynq.Option{
 			asynq.Queue(m.namespacedQueueName(helper.FirstNonEmptyString(item.Queue, m.defaultWorkflowQueue()))),
 			asynq.MaxRetry(workflowTaskRetryBudget(m.defaultRetry(retryOverride))),
-			asynq.Retention(taskCompletedRetention),
+			asynq.Retention(m.CompletedRetention()),
 		}
 		if item.TimeoutSeconds > 0 {
 			opts = append(opts, asynq.Timeout(time.Duration(item.TimeoutSeconds)*time.Second))
@@ -116,8 +116,17 @@ func (m *Manager) validatePeriodicTaskConfig(item config.TaskPeriodicConfig) (co
 		return item, errors.Tag(err)
 	}
 	item.Queue = strings.TrimSpace(item.Queue)
+	if !m.isQueueConfigured(helper.FirstNonEmptyString(item.Queue, m.defaultWorkflowQueue())) {
+		return item, errors.Errorf("周期任务 queue 未配置消费: %s", helper.FirstNonEmptyString(item.Queue, m.defaultWorkflowQueue()))
+	}
 	item.Targets = normalizeStrings(item.Targets)
+	if err = tasklimits.ValidateWorkflowTargets(item.Targets); err != nil {
+		return item, errors.Tag(err)
+	}
 	item.UniqueKey = strings.TrimSpace(item.UniqueKey)
+	if len(item.UniqueKey) > tasklimits.MaxUniqueKeyBytes {
+		return item, errors.Errorf("周期任务 unique_key 不能超过 %d 字节", tasklimits.MaxUniqueKeyBytes)
+	}
 	item.Deadline = strings.TrimSpace(item.Deadline)
 	if item.ShardTotal < 0 {
 		return item, errors.Errorf("周期任务 shard_total 不能小于 0")
@@ -145,6 +154,9 @@ func (m *Manager) validatePeriodicTaskConfig(item config.TaskPeriodicConfig) (co
 	}
 	if item.UniqueTTLSeconds < 0 {
 		return item, errors.Errorf("周期任务 unique_ttl_seconds 不能小于 0")
+	}
+	if item.UniqueTTLSeconds > tasklimits.MaxUniqueTTLSeconds {
+		return item, errors.Errorf("周期任务 unique_ttl_seconds 不能超过 %d", tasklimits.MaxUniqueTTLSeconds)
 	}
 	if definition.PeriodicUniqueBySchedule {
 		if item.UniqueKey == "" {

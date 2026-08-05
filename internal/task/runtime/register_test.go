@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/Is999/go-utils/errors"
 
@@ -195,8 +194,8 @@ func TestAggregateCacheRefreshTasksKeepsCompletedRetention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取聚合缓存刷新任务失败: %v", err)
 	}
-	if taskInfo.Retention != 48*time.Hour {
-		t.Fatalf("聚合缓存刷新任务 retention = %s，期望 %s", taskInfo.Retention, 48*time.Hour)
+	if taskInfo.Retention != manager.CompletedRetention() {
+		t.Fatalf("聚合缓存刷新任务 retention = %s，期望 %s", taskInfo.Retention, manager.CompletedRetention())
 	}
 }
 

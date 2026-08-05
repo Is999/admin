@@ -19,6 +19,7 @@ import (
 	redislock "admin/internal/infra/redsync"
 	"admin/internal/requestctx"
 	"admin/internal/svc"
+	tasklimits "admin/internal/task/limits"
 	"admin/internal/task/stats"
 	"admin/internal/task/taskwire"
 	"admin/internal/types"
@@ -106,14 +107,13 @@ const (
 
 	taskExecutionStatusSuccess = "success" // 普通任务执行结果成功状态
 
-	taskFinalWriteTimeout   = 5 * time.Second          // 任务收尾写 Redis 的短超时，避免业务 ctx 超时后失败状态无法落库
-	taskListFilterPageSize  = 100                      // 任务列表二次过滤单批读取量，和接口最大页大小保持一致
-	taskListFilterMaxPages  = 50                       // 任务列表二次过滤最大扫描页数，避免无索引历史查询拖垮 Redis
-	taskRuntimeAlertTTL     = 5 * time.Minute          // 任务系统同一运行异常的告警限频窗口，避免后台循环刷屏
-	periodicConfigAlertTTL  = taskRuntimeAlertTTL      // 周期任务同一配置异常复用任务运行异常的告警限频窗口
-	workflowStatusBatchSize = 500                      // 日报批量读取工作流状态时单个 pipeline 的最大命令数
-	workerHealthInterval    = 5 * time.Second          // Worker 内部 Redis 健康检查间隔
-	workerHeartbeatMaxAge   = 3 * workerHealthInterval // Worker 心跳最大允许间隔
+	taskFinalWriteTimeout  = 5 * time.Second          // 任务收尾写 Redis 的短超时，避免业务 ctx 超时后失败状态无法落库
+	taskListFilterPageSize = 100                      // 任务列表二次过滤单批读取量，和接口最大页大小保持一致
+	taskListFilterMaxPages = 50                       // 任务列表二次过滤最大扫描页数，避免无索引历史查询拖垮 Redis
+	taskRuntimeAlertTTL    = 5 * time.Minute          // 任务系统同一运行异常的告警限频窗口，避免后台循环刷屏
+	periodicConfigAlertTTL = taskRuntimeAlertTTL      // 周期任务同一配置异常复用任务运行异常的告警限频窗口
+	workerHealthInterval   = 5 * time.Second          // Worker 内部 Redis 健康检查间隔
+	workerHeartbeatMaxAge  = 3 * workerHealthInterval // Worker 心跳最大允许间隔
 )
 
 // WorkflowTriggerPayload 是 workflow:trigger 任务的负载。
@@ -281,6 +281,8 @@ type Manager struct {
 	runtimeAlertHooks        []TaskRuntimeAlertHook              // 任务系统运行异常后的外部告警钩子
 	periodicConfigAlertedMap map[string]periodicConfigAlertState // 周期任务配置异常限频记录
 	runtimeAlertedMap        map[string]taskRuntimeAlertState    // 任务系统运行异常限频记录
+	historySink              HistorySink                         // 终态历史 DB 存储边界
+	historyStop              context.CancelFunc                  // 停止终态历史异步收集器
 }
 
 // New 创建任务管理器。
@@ -628,18 +630,20 @@ func displayLocale(ctx context.Context) string {
 }
 
 // writeTaskResult 把任务执行结果写回 Asynq，便于管理后台查看成功记录的结果摘要。
-func (m *Manager) writeTaskResult(ctx context.Context, task *asynq.Task, meta *requestctx.Meta, startedAt time.Time, statsSnapshot *taskstats.Snapshot) {
+func (m *Manager) writeTaskResult(ctx context.Context, task *asynq.Task, meta *requestctx.Meta, startedAt time.Time, statsSnapshot *taskstats.Snapshot) bool {
 	if task == nil || task.ResultWriter() == nil {
-		return
+		return false
 	}
 	resultBytes, err := json.Marshal(buildTaskExecutionResult(task, meta, startedAt, boundedTaskStatsSnapshot(statsSnapshot)))
 	if err != nil {
 		loggerx.Errorw(ctx, "任务结果 序列化失败", err, taskLogFields(task)...)
-		return
+		return false
 	}
 	if _, err = task.ResultWriter().Write(resultBytes); err != nil {
 		loggerx.Errorw(ctx, "任务结果 回写失败", err, taskLogFields(task)...)
+		return false
 	}
+	return true
 }
 
 // RegisterPeriodicTask 注册额外的周期工作流配置，供插件在启动期补充调度任务。
@@ -681,14 +685,18 @@ func (m *Manager) EnqueueWorkflowTrigger(ctx context.Context, req *types.Trigger
 	if req == nil {
 		return nil, errors.Errorf("工作流请求不能为空")
 	}
+	if err := req.Validate(); err != nil {
+		return nil, errors.Tag(err)
+	}
 
 	// 入参校验与工作流定义预检查（避免未知 workflow 入队后反复重试）。
 	workflowName := strings.TrimSpace(req.Name)
 	if _, err := m.workflowDefinition(workflowName); err != nil {
 		return nil, errors.Tag(err)
 	}
-	if req.ProcessAt != "" && req.ProcessInSeconds != nil && *req.ProcessInSeconds > 0 {
-		return nil, errors.Errorf("workflow 的 processAt 和 processInSeconds 不能同时设置")
+	queue := helper.FirstNonEmptyString(req.Queue, m.defaultWorkflowQueue())
+	if !m.isQueueConfigured(queue) {
+		return nil, errors.Errorf("工作流触发队列未配置消费: %s", queue)
 	}
 
 	// 幂等键预占：为延迟/定时触发预留唯一键窗口，避免并发重复触发。
@@ -751,6 +759,12 @@ func (m *Manager) EnqueueWorkflowTrigger(ctx context.Context, req *types.Trigger
 		}
 		return nil, errors.Tag(err)
 	}
+	if len(body) > tasklimits.MaxPayloadBytes {
+		if uniqueReserved {
+			_ = m.releaseWorkflowUniqueReservation(ctx, workflowName, uniqueKey, workflowID)
+		}
+		return nil, errors.Errorf("工作流触发负载超过上限 bytes=%d max=%d", len(body), tasklimits.MaxPayloadBytes)
+	}
 
 	// 组装 Asynq 入队选项（queue/taskID/retry/timeout/processAt/deadline/unique）。
 	task := m.newTask(ctx, TypeWorkflowTrigger, body, map[string]string{
@@ -759,12 +773,11 @@ func (m *Manager) EnqueueWorkflowTrigger(ctx context.Context, req *types.Trigger
 		headerWorkflowID:   workflowID,
 		headerWorkflowName: workflowName,
 	})
-	queue := helper.FirstNonEmptyString(req.Queue, m.defaultWorkflowQueue())
 	opts := []asynq.Option{
 		asynq.Queue(m.namespacedQueueName(queue)),
 		asynq.TaskID(workflowID),
 		asynq.MaxRetry(workflowTaskRetryBudget(m.defaultRetry(req.Retry))),
-		asynq.Retention(taskCompletedRetention),
+		asynq.Retention(m.CompletedRetention()),
 	}
 	if timeout := m.defaultTimeout(req.TimeoutSeconds); timeout > 0 {
 		opts = append(opts, asynq.Timeout(timeout))
@@ -819,8 +832,49 @@ func (m *Manager) EnqueueWorkflowTrigger(ctx context.Context, req *types.Trigger
 	return resp, nil
 }
 
-// GetWorkflowStatus 读取工作流实例的当前执行状态。
+// GetWorkflowStatus 优先读取 Redis 热状态，终态过期后回退 DB 历史快照。
+// Redis 终态仍保留时只用 DB 确认落库状态，不丢失已有分片级实时明细。
 func (m *Manager) GetWorkflowStatus(ctx context.Context, workflowID string) (*types.TaskWorkflowStatusResp, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resp, err := m.getWorkflowStatusFromRedis(ctx, workflowID)
+	if err == nil {
+		if resp.Status != WorkflowStatusSuccess && resp.Status != WorkflowStatusFailed {
+			return resp, nil
+		}
+		resp.HistoryStatus = "pending"
+		sink := m.historySinkSnapshot()
+		if sink == nil {
+			resp.HistoryStatus = ""
+			return resp, nil
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, taskHistoryObservationTimeout)
+		history, historyErr := sink.GetWorkflow(lookupCtx, workflowID)
+		cancel()
+		switch {
+		case historyErr == nil && history != nil:
+			resp.HistoryStatus = "persisted"
+			resp.PersistedAt = history.PersistedAt
+		case historyErr != nil && !errors.Is(historyErr, redis.Nil):
+			resp.HistoryStatus = "failed"
+		}
+		return resp, nil
+	}
+	if !errors.Is(err, redis.Nil) {
+		return nil, errors.Tag(err)
+	}
+	sink := m.historySinkSnapshot()
+	if sink == nil {
+		return nil, redis.Nil
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, taskHistoryObservationTimeout)
+	defer cancel()
+	return sink.GetWorkflow(lookupCtx, workflowID)
+}
+
+// getWorkflowStatusFromRedis 只读取工作流热状态，供异步落库快照使用。
+func (m *Manager) getWorkflowStatusFromRedis(ctx context.Context, workflowID string) (*types.TaskWorkflowStatusResp, error) {
 	if !m.IsEnabled() {
 		return nil, ErrTaskQueueDisabled
 	}
@@ -831,6 +885,7 @@ func (m *Manager) GetWorkflowStatus(ctx context.Context, workflowID string) (*ty
 	resp := &types.TaskWorkflowStatusResp{
 		WorkflowID:   meta.WorkflowID,
 		WorkflowName: meta.WorkflowName,
+		PeriodicName: meta.PeriodicName,
 		Status:       meta.Status,
 		Source:       meta.Source,
 		Queue:        m.displayQueueName(meta.Queue),
@@ -843,6 +898,8 @@ func (m *Manager) GetWorkflowStatus(ctx context.Context, workflowID string) (*ty
 		FinishedAt:   meta.FinishedAt,
 		DurationMS:   durationBetweenRFC3339(meta.CreatedAt, meta.FinishedAt),
 		Nodes:        make([]types.TaskWorkflowNodeItem, 0, len(nodes)),
+		DataSource:   "redis",
+		DetailLevel:  "shard",
 	}
 	workflowStatsSnapshots := make([]*taskstats.Snapshot, 0, len(nodes))
 	workflowProgressItems := make([]*taskstats.Progress, 0, len(nodes))
@@ -887,72 +944,6 @@ func (m *Manager) GetWorkflowStatus(ctx context.Context, workflowID string) (*ty
 	resp.Progress = taskstats.MergeProgress(taskstats.ProgressUnitNodeInstance, meta.Status, workflowProgressItems...)
 	resp.ExecutionTrace = taskstats.MergeSnapshots("workflow."+strings.TrimSpace(meta.WorkflowName), workflowStatsSnapshots...)
 	return resp, nil
-}
-
-// GetWorkflowStatusSummaries 批量读取工作流主记录中的名称和状态，避免日报加载全部节点与 trace。
-func (m *Manager) GetWorkflowStatusSummaries(ctx context.Context, workflowIDs []string) (map[string]*types.TaskWorkflowStatusResp, error) {
-	if !m.IsEnabled() {
-		return nil, ErrTaskQueueDisabled
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	unique := make(map[string]struct{}, len(workflowIDs))
-	ids := make([]string, 0, len(workflowIDs))
-	for _, workflowID := range workflowIDs {
-		workflowID = strings.TrimSpace(workflowID)
-		if workflowID == "" {
-			continue
-		}
-		if _, exists := unique[workflowID]; exists {
-			continue
-		}
-		unique[workflowID] = struct{}{}
-		ids = append(ids, workflowID)
-	}
-	sort.Strings(ids)
-	result := make(map[string]*types.TaskWorkflowStatusResp, len(ids))
-	if len(ids) == 0 {
-		return result, nil
-	}
-	for start := 0; start < len(ids); start += workflowStatusBatchSize {
-		if err := ctx.Err(); err != nil {
-			return nil, errors.Tag(err)
-		}
-		end := min(start+workflowStatusBatchSize, len(ids))
-		commands := make(map[string]*redis.SliceCmd, end-start)
-		pipe := m.redis.Pipeline()
-		for _, workflowID := range ids[start:end] {
-			key := m.workflowMetaKey(workflowID)
-			if key == "" {
-				pipe.Discard()
-				return nil, errors.Errorf("工作流主记录 key 为空 workflow_id=%s", workflowID)
-			}
-			commands[workflowID] = pipe.HMGet(ctx, key, "workflowName", "status")
-		}
-		_, execErr := pipe.Exec(ctx)
-		pipe.Discard()
-		if execErr != nil && !errors.Is(execErr, redis.Nil) {
-			return nil, errors.Wrap(execErr, "批量读取工作流主记录失败")
-		}
-		for _, workflowID := range ids[start:end] {
-			values, err := commands[workflowID].Result()
-			if err != nil && !errors.Is(err, redis.Nil) {
-				return nil, errors.Wrapf(err, "读取工作流主记录失败 workflow_id=%s", workflowID)
-			}
-			if len(values) != 2 || (values[0] == nil && values[1] == nil) {
-				continue
-			}
-			workflowName, _ := values[0].(string)
-			status, _ := values[1].(string)
-			result[workflowID] = &types.TaskWorkflowStatusResp{
-				WorkflowID:   workflowID,
-				WorkflowName: workflowName,
-				Status:       status,
-			}
-		}
-	}
-	return result, nil
 }
 
 // workflowMetaKey 返回工作流主记录在 Redis 中的 key。
@@ -1000,16 +991,38 @@ func (m *Manager) enqueueTaskWithOptions(ctx context.Context, task *asynq.Task, 
 	if task == nil {
 		return nil, errors.Errorf("任务不能为空")
 	}
+	if len(task.Payload()) > tasklimits.MaxPayloadBytes {
+		return nil, errors.Errorf("任务负载超过上限 bytes=%d max=%d", len(task.Payload()), tasklimits.MaxPayloadBytes)
+	}
 	if options == nil {
 		options = &svc.TaskOptions{}
+	}
+	if options.Retry != nil && (*options.Retry < 0 || *options.Retry > tasklimits.MaxRetry) {
+		return nil, errors.Errorf("任务 retry 必须在 0-%d 之间", tasklimits.MaxRetry)
+	}
+	if options.Timeout < 0 || options.Timeout > time.Duration(tasklimits.MaxTimeoutSeconds)*time.Second {
+		return nil, errors.Errorf("任务 timeout 不能超过 %d 秒", tasklimits.MaxTimeoutSeconds)
+	}
+	if options.UniqueTTL < 0 || options.UniqueTTL > time.Duration(tasklimits.MaxUniqueTTLSeconds)*time.Second {
+		return nil, errors.Errorf("任务 unique TTL 不能超过 %d 秒", tasklimits.MaxUniqueTTLSeconds)
+	}
+	if options.Delay < 0 || options.Delay > time.Duration(tasklimits.MaxScheduleDelaySeconds)*time.Second {
+		return nil, errors.Errorf("任务 delay 不能超过 %d 秒", tasklimits.MaxScheduleDelaySeconds)
+	}
+	if options.ProcessAt != nil && options.ProcessAt.After(time.Now().Add(time.Duration(tasklimits.MaxScheduleDelaySeconds)*time.Second)) {
+		return nil, errors.Errorf("任务 processAt 不能晚于当前时间 %d 秒", tasklimits.MaxScheduleDelaySeconds)
+	}
+	queue := helper.FirstNonEmptyString(options.Queue, m.defaultWorkflowQueue())
+	if !m.isQueueConfigured(queue) {
+		return nil, errors.Errorf("任务队列未配置消费: %s", queue)
 	}
 	if options.Delay > 0 && options.ProcessAt != nil {
 		return nil, errors.Errorf("任务 delay 和 processAt 不能同时设置")
 	}
 	var asynqOpts []asynq.Option
-	asynqOpts = append(asynqOpts, asynq.Queue(m.namespacedQueueName(helper.FirstNonEmptyString(options.Queue, m.defaultWorkflowQueue()))))
-	if options.Retry > 0 {
-		asynqOpts = append(asynqOpts, asynq.MaxRetry(options.Retry))
+	asynqOpts = append(asynqOpts, asynq.Queue(m.namespacedQueueName(queue)))
+	if options.Retry != nil {
+		asynqOpts = append(asynqOpts, asynq.MaxRetry(*options.Retry))
 	}
 	if options.Timeout > 0 {
 		asynqOpts = append(asynqOpts, asynq.Timeout(options.Timeout))
@@ -1029,7 +1042,7 @@ func (m *Manager) enqueueTaskWithOptions(ctx context.Context, task *asynq.Task, 
 	if group := strings.TrimSpace(options.Group); group != "" {
 		asynqOpts = append(asynqOpts, asynq.Group(m.namespacedGroup(group)))
 	}
-	asynqOpts = append(asynqOpts, asynq.Retention(taskCompletedRetention))
+	asynqOpts = append(asynqOpts, asynq.Retention(m.CompletedRetention()))
 	return m.client.EnqueueContext(ctx, task, asynqOpts...)
 }
 
@@ -1040,7 +1053,7 @@ func (m *Manager) taskOptionsFromRequest(req *types.EnqueueTaskReq) (*svc.TaskOp
 		Group: strings.TrimSpace(req.Group),
 	}
 	if req.Retry != nil {
-		options.Retry = *req.Retry
+		options.Retry = new(*req.Retry)
 	}
 	if req.TimeoutSeconds != nil {
 		options.Timeout = time.Duration(*req.TimeoutSeconds) * time.Second

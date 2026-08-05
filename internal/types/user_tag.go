@@ -75,6 +75,9 @@ func (r *RecalculateUserTagReq) Validate() error {
 	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds <= 0 {
 		return errors.Errorf("unique_ttl_seconds 必须大于 0")
 	}
+	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds > tasklimits.MaxUniqueTTLSeconds {
+		return errors.Errorf("unique_ttl_seconds 不能超过 %d", tasklimits.MaxUniqueTTLSeconds)
+	}
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")
 	}
@@ -213,6 +216,12 @@ func (r *TriggerUserTagWorkflowReq) Validate() error {
 	}
 	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds <= 0 {
 		return errors.Errorf("uniqueTTLSeconds 必须大于 0")
+	}
+	if len(strings.TrimSpace(r.UniqueKey)) > tasklimits.MaxUniqueKeyBytes {
+		return errors.Errorf("uniqueKey 不能超过 %d 字节", tasklimits.MaxUniqueKeyBytes)
+	}
+	if r.UniqueTTLSeconds != nil && *r.UniqueTTLSeconds > tasklimits.MaxUniqueTTLSeconds {
+		return errors.Errorf("uniqueTTLSeconds 不能超过 %d", tasklimits.MaxUniqueTTLSeconds)
 	}
 	if r.Retry != nil && *r.Retry < 0 {
 		return errors.Errorf("retry 不能小于 0")

@@ -139,7 +139,7 @@ func (n *Notifier) formatTaskDailyReportCard(report TaskDailyReport) messageCard
 		generatedAt = n.now()
 	}
 	elements := []messageCardElement{
-		cardMarkdown("**状态**：%s\n**窗口**：%s\n**口径**：periodic 来源的 completed/archived 任务；工作流为窗口任务涉及的去重实例，状态取生成时快照",
+		cardMarkdown("**状态**：%s\n**窗口**：%s\n**口径**：数据库中的 periodic 终态工作流汇总与最终失败摘要；队列积压取生成时 Redis 快照",
 			taskDailyReportStatus(report),
 			formatCardWindow(report.WindowStart, report.WindowEnd),
 		),

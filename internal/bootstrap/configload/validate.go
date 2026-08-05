@@ -15,13 +15,28 @@ import (
 )
 
 const (
-	minAdminJWTSecretLength     = 16      // JWT 密钥最小长度，避免明显弱配置启动
-	maxConfigKeySegmentBytes    = 64      // Redis key 配置片段最大长度
-	maxHotReloadIntervalSeconds = 3600    // 配置文件轮询最大间隔
-	maxVirusScanTimeoutSeconds  = 600     // 单文件病毒扫描最大超时秒数
-	defaultUserRouteShardCount  = 1       // 用户物理路由默认保持单表
-	defaultUserExportSplitRows  = 500000  // 用户导出默认单文件最大行数
-	maxUserExportSplitRows      = 1048575 // Excel 单 Sheet 扣除表头后的最大数据行数
+	minAdminJWTSecretLength          = 16      // JWT 密钥最小长度，避免明显弱配置启动
+	maxConfigKeySegmentBytes         = 64      // Redis key 配置片段最大长度
+	maxHotReloadIntervalSeconds      = 3600    // 配置文件轮询最大间隔
+	maxVirusScanTimeoutSeconds       = 600     // 单文件病毒扫描最大超时秒数
+	maxTaskConcurrency               = 256     // Worker 并发硬上限，避免误配置瞬间耗尽连接和 CPU
+	maxTaskQueueCount                = 32      // 单实例监听队列数量上限，限制巡检和 Worker 元数据规模
+	maxTaskQueueWeight               = 100     // 单队列权重上限，避免异常权重破坏消费公平性
+	maxTaskShutdownSeconds           = 300     // Worker 优雅停止最长等待时间
+	maxTaskPollSeconds               = 60      // 普通任务和延迟任务最长轮询间隔
+	maxTaskGroupGraceSeconds         = 300     // 聚合等待窗口最大五分钟
+	maxTaskGroupDelaySeconds         = 3600    // 聚合任务最大延迟一小时
+	maxTaskGroupSize                 = 1000    // 单次聚合任务数量硬上限
+	maxTaskHistoryRetentionDays      = 30      // 任务历史表最长保留三十天
+	maxTaskHistoryFlushSeconds       = 10      // 历史收集器最长刷新间隔，配合批量追赶保证吞吐余量
+	maxTaskHistoryCleanupSeconds     = 3600    // 历史清理最长间隔，避免高频表长期追不上保留边界
+	maxTaskSchedulerLeaseSeconds     = 300     // 调度 leader 最长租约时间
+	maxTaskSchedulerSyncSeconds      = 3600    // 周期配置最长同步间隔
+	maxTaskSchedulerHeartbeatSeconds = 300     // 调度器最长心跳间隔
+	maxTaskQueueBacklog              = 100000  // 周期投递积压硬上限，避免配置放大到事故规模
+	defaultUserRouteShardCount       = 1       // 用户物理路由默认保持单表
+	defaultUserExportSplitRows       = 500000  // 用户导出默认单文件最大行数
+	maxUserExportSplitRows           = 1048575 // Excel 单 Sheet 扣除表头后的最大数据行数
 )
 
 // Validate 校验启动与热加载阶段必须立即失败的基础配置。
@@ -141,18 +156,153 @@ func validateFileStorageConfig(cfg config.FileStorageConfig) error {
 
 // validateTaskLimits 校验任务默认值和周期任务覆盖值，避免配置绕过接口硬上限。
 func validateTaskLimits(cfg config.TaskQueueConfig) error {
+	if cfg.Concurrency < 0 || cfg.Concurrency > maxTaskConcurrency {
+		return errors.Errorf("task.concurrency 必须在 0-%d 之间", maxTaskConcurrency)
+	}
+	if len(cfg.Queues) > maxTaskQueueCount {
+		return errors.Errorf("task.queues 不能超过 %d 个", maxTaskQueueCount)
+	}
+	for queue, weight := range cfg.Queues {
+		if queue != strings.TrimSpace(queue) || !validConfigKeySegment(queue) {
+			return errors.Errorf("task.queues 队列名只能包含字母、数字、点、下划线或短横线，且长度不能超过 %d", maxConfigKeySegmentBytes)
+		}
+		if weight <= 0 || weight > maxTaskQueueWeight {
+			return errors.Errorf("task.queues[%s] 权重必须在 1-%d 之间", queue, maxTaskQueueWeight)
+		}
+	}
+	if queue := strings.TrimSpace(cfg.DefaultQueue); queue != "" && !validConfigKeySegment(queue) {
+		return errors.Errorf("task.default_queue 只能包含字母、数字、点、下划线或短横线，且长度不能超过 %d", maxConfigKeySegmentBytes)
+	}
+	defaultQueue := strings.TrimSpace(cfg.DefaultQueue)
+	if defaultQueue == "" {
+		defaultQueue = "default"
+	}
+	if len(cfg.Queues) > 0 {
+		if _, ok := cfg.Queues[defaultQueue]; !ok {
+			return errors.Errorf("task.default_queue=%s 未在 task.queues 中配置消费", defaultQueue)
+		}
+	}
 	if cfg.DefaultRetry < 0 || cfg.DefaultRetry > tasklimits.MaxRetry {
 		return errors.Errorf("task.default_retry 必须在 0-%d 之间", tasklimits.MaxRetry)
 	}
 	if cfg.DefaultTimeoutSeconds < 0 || cfg.DefaultTimeoutSeconds > tasklimits.MaxTimeoutSeconds {
 		return errors.Errorf("task.default_timeout_seconds 必须在 0-%d 之间", tasklimits.MaxTimeoutSeconds)
 	}
+	if seconds := cfg.DefaultUniqueTTLSeconds; seconds < 0 || seconds > tasklimits.MaxUniqueTTLSeconds {
+		return errors.Errorf("task.default_unique_ttl_seconds 必须在 0-%d 之间", tasklimits.MaxUniqueTTLSeconds)
+	}
+	if seconds := cfg.CompletedRetentionSeconds; seconds != 0 && (seconds < 600 || seconds > 7200) {
+		return errors.Errorf("task.completed_retention_seconds 必须为 0 或 600-7200")
+	}
+	if seconds := cfg.ArchivedRetentionSeconds; seconds != 0 && (seconds < 86400 || seconds > 30*86400) {
+		return errors.Errorf("task.archived_retention_seconds 必须为 0 或 86400-%d", 30*86400)
+	}
+	if seconds := cfg.ShutdownTimeoutSeconds; seconds < 0 || seconds > maxTaskShutdownSeconds {
+		return errors.Errorf("task.shutdown_timeout_seconds 必须在 0-%d 之间", maxTaskShutdownSeconds)
+	}
+	if seconds := cfg.TaskCheckSeconds; seconds < 0 || seconds > maxTaskPollSeconds {
+		return errors.Errorf("task.task_check_seconds 必须在 0-%d 之间", maxTaskPollSeconds)
+	}
+	if seconds := cfg.DelayedTaskCheckSeconds; seconds < 0 || seconds > maxTaskPollSeconds {
+		return errors.Errorf("task.delayed_task_check_seconds 必须在 0-%d 之间", maxTaskPollSeconds)
+	}
+	if seconds := cfg.GroupGracePeriodSeconds; seconds < 0 || seconds > maxTaskGroupGraceSeconds {
+		return errors.Errorf("task.group_grace_period_seconds 必须在 0-%d 之间", maxTaskGroupGraceSeconds)
+	}
+	if seconds := cfg.GroupMaxDelaySeconds; seconds < 0 || seconds > maxTaskGroupDelaySeconds {
+		return errors.Errorf("task.group_max_delay_seconds 必须在 0-%d 之间", maxTaskGroupDelaySeconds)
+	}
+	if size := cfg.GroupMaxSize; size < 0 || size > maxTaskGroupSize {
+		return errors.Errorf("task.group_max_size 必须在 0-%d 之间", maxTaskGroupSize)
+	}
+	graceSeconds := cfg.GroupGracePeriodSeconds
+	if graceSeconds == 0 {
+		graceSeconds = 5
+	}
+	delaySeconds := cfg.GroupMaxDelaySeconds
+	if delaySeconds == 0 {
+		delaySeconds = 20
+	}
+	if graceSeconds > delaySeconds {
+		return errors.Errorf("task.group_grace_period_seconds 不能大于 group_max_delay_seconds")
+	}
+	if days := cfg.History.WorkflowRetentionDays; days < 0 || days > maxTaskHistoryRetentionDays {
+		return errors.Errorf("task.history.workflow_retention_days 必须在 0-%d 之间", maxTaskHistoryRetentionDays)
+	}
+	if days := cfg.History.FailureRetentionDays; days < 0 || days > maxTaskHistoryRetentionDays {
+		return errors.Errorf("task.history.failure_retention_days 必须在 0-%d 之间", maxTaskHistoryRetentionDays)
+	}
+	if limit := cfg.History.PendingLimit; limit < 0 || limit > 10000 {
+		return errors.Errorf("task.history.pending_limit 必须在 0-10000 之间")
+	}
+	if seconds := cfg.History.FlushIntervalSeconds; seconds < 0 || seconds > maxTaskHistoryFlushSeconds {
+		return errors.Errorf("task.history.flush_interval_seconds 必须在 0-%d 之间", maxTaskHistoryFlushSeconds)
+	}
+	if seconds := cfg.History.CleanupIntervalSeconds; seconds != 0 && (seconds < 30 || seconds > maxTaskHistoryCleanupSeconds) {
+		return errors.Errorf("task.history.cleanup_interval_seconds 必须为 0 或 30-%d", maxTaskHistoryCleanupSeconds)
+	}
+	if seconds := cfg.Scheduler.LeaseTTLSeconds; seconds < 0 || seconds > maxTaskSchedulerLeaseSeconds {
+		return errors.Errorf("task.scheduler.lease_ttl_seconds 必须在 0-%d 之间", maxTaskSchedulerLeaseSeconds)
+	}
+	if seconds := cfg.Scheduler.RenewIntervalSeconds; seconds < 0 || seconds > maxTaskSchedulerHeartbeatSeconds {
+		return errors.Errorf("task.scheduler.renew_interval_seconds 必须在 0-%d 之间", maxTaskSchedulerHeartbeatSeconds)
+	}
+	leaseSeconds := cfg.Scheduler.LeaseTTLSeconds
+	if leaseSeconds == 0 {
+		leaseSeconds = 30
+	}
+	renewSeconds := cfg.Scheduler.RenewIntervalSeconds
+	if renewSeconds == 0 {
+		renewSeconds = 10
+	}
+	if renewSeconds >= leaseSeconds {
+		return errors.Errorf("task.scheduler.renew_interval_seconds 必须小于 lease_ttl_seconds")
+	}
+	if seconds := cfg.Scheduler.SyncIntervalSeconds; seconds < 0 || seconds > maxTaskSchedulerSyncSeconds {
+		return errors.Errorf("task.scheduler.sync_interval_seconds 必须在 0-%d 之间", maxTaskSchedulerSyncSeconds)
+	}
+	if seconds := cfg.Scheduler.HeartbeatIntervalSeconds; seconds < 0 || seconds > maxTaskSchedulerHeartbeatSeconds {
+		return errors.Errorf("task.scheduler.heartbeat_interval_seconds 必须在 0-%d 之间", maxTaskSchedulerHeartbeatSeconds)
+	}
+	if backlog := cfg.Scheduler.MaxQueueBacklog; backlog < 0 || backlog > maxTaskQueueBacklog {
+		return errors.Errorf("task.scheduler.max_queue_backlog 必须在 0-%d 之间", maxTaskQueueBacklog)
+	}
+	if len(cfg.Periodic) > tasklimits.MaxPeriodicCount {
+		return errors.Errorf("task.periodic 不能超过 %d 条", tasklimits.MaxPeriodicCount)
+	}
 	for index, item := range cfg.Periodic {
+		queue := strings.TrimSpace(item.Queue)
+		if queue == "" {
+			queue = defaultQueue
+		}
+		if len(cfg.Queues) > 0 {
+			if _, ok := cfg.Queues[queue]; !ok {
+				return errors.Errorf("task.periodic[%d].queue=%s 未在 task.queues 中配置消费", index, queue)
+			}
+		}
+		if err := tasklimits.ValidateWorkflowTargets(item.Targets); err != nil {
+			return errors.Wrapf(err, "task.periodic[%d].targets 非法", index)
+		}
+		if len(strings.TrimSpace(item.UniqueKey)) > tasklimits.MaxUniqueKeyBytes {
+			return errors.Errorf("task.periodic[%d].unique_key 不能超过 %d 字节", index, tasklimits.MaxUniqueKeyBytes)
+		}
 		if item.Retry < 0 || item.Retry > tasklimits.MaxRetry {
 			return errors.Errorf("task.periodic[%d].retry 必须在 0-%d 之间", index, tasklimits.MaxRetry)
 		}
 		if item.TimeoutSeconds < 0 || item.TimeoutSeconds > tasklimits.MaxTimeoutSeconds {
 			return errors.Errorf("task.periodic[%d].timeout_seconds 必须在 0-%d 之间", index, tasklimits.MaxTimeoutSeconds)
+		}
+		if item.ShardTotal < 0 || item.ShardTotal > tasklimits.MaxShardTotal {
+			return errors.Errorf("task.periodic[%d].shard_total 必须在 0-%d 之间", index, tasklimits.MaxShardTotal)
+		}
+		if item.GrayPercent < 0 || item.GrayPercent > 100 {
+			return errors.Errorf("task.periodic[%d].gray_percent 必须在 0-100 之间", index)
+		}
+		if item.UniqueTTLSeconds < 0 || item.UniqueTTLSeconds > tasklimits.MaxUniqueTTLSeconds {
+			return errors.Errorf("task.periodic[%d].unique_ttl_seconds 必须在 0-%d 之间", index, tasklimits.MaxUniqueTTLSeconds)
+		}
+		if item.EverySeconds < 0 || (item.EverySeconds > 0 && item.EverySeconds < tasklimits.MinPeriodicEverySeconds) {
+			return errors.Errorf("task.periodic[%d].every_seconds 必须为 0 或不小于 %d", index, tasklimits.MinPeriodicEverySeconds)
 		}
 	}
 	return nil

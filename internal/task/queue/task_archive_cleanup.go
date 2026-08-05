@@ -89,16 +89,12 @@ func (m *Manager) cleanupExpiredArchivedTasks(ctx context.Context) {
 	}
 }
 
-// archivedCleanupQueueNames 返回需要执行 archived 清理的逻辑队列名列表。
+// archivedCleanupQueueNames 返回 Worker 实际监听的逻辑队列，禁止为清理全量读取共享 Redis 队列集合。
 func (m *Manager) archivedCleanupQueueNames() []string {
-	if m == nil || m.inspector == nil {
+	if m == nil {
 		return nil
 	}
-	rawQueueNames, err := m.inspector.Queues()
-	if err != nil || len(rawQueueNames) == 0 {
-		return m.effectiveQueueNames()
-	}
-	return m.visibleQueueNames(rawQueueNames)
+	return normalizedQueueNames(m.effectiveQueueNames())
 }
 
 // cleanupExpiredArchivedQueue 分批清理单个队列中过期的 archived 任务。

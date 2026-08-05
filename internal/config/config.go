@@ -301,6 +301,21 @@ type TaskQueueSchedulerConfig struct {
 	MaxQueueBacklog          int    `json:"max_queue_backlog,optional"`          // 周期投递积压上限
 }
 
+// TaskQueueHistoryConfig 定义任务终态历史的异步落库与短期保留边界。
+type TaskQueueHistoryConfig struct {
+	Enabled                *bool `json:"enabled,optional"`                  // 是否启用终态历史落库；未配置时默认启用
+	WorkflowRetentionDays  int   `json:"workflow_retention_days,optional"`  // 工作流历史保留天数
+	FailureRetentionDays   int   `json:"failure_retention_days,optional"`   // 失败明细保留天数
+	PendingLimit           int   `json:"pending_limit,optional"`            // Redis 待落库事件硬上限
+	FlushIntervalSeconds   int   `json:"flush_interval_seconds,optional"`   // 收集器刷新间隔（秒）
+	CleanupIntervalSeconds int   `json:"cleanup_interval_seconds,optional"` // 历史清理间隔（秒）
+}
+
+// EnabledOrDefault 返回终态历史落库开关；未配置时默认启用。
+func (c TaskQueueHistoryConfig) EnabledOrDefault() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
 // TaskPeriodicConfig 定义一个周期性工作流触发配置。
 type TaskPeriodicConfig struct {
 	Enabled          *bool    `json:"enabled,optional"`            // 是否启用该周期任务；未配置时默认启用
@@ -326,25 +341,27 @@ func (c TaskPeriodicConfig) EnabledOrDefault() bool {
 
 // TaskQueueConfig 定义任务系统的 Worker、队列、聚合、独立 Redis 与失败归档参数。
 type TaskQueueConfig struct {
-	Enabled                  bool                     `json:"enabled,optional"`                    // 是否启用任务系统
-	AppID                    string                   `json:"-"`                                   // 任务系统站点命名空间
-	DefaultQueue             string                   `json:"default_queue,optional"`              // 默认工作流队列
-	Concurrency              int                      `json:"concurrency,optional"`                // Worker 并发度
-	StrictPriority           bool                     `json:"strict_priority,optional"`            // 是否启用严格优先级
-	Queues                   map[string]int           `json:"queues,optional"`                     // 队列权重配置
-	Redis                    RedisConfig              `json:"redis,optional"`                      // 任务系统独立 Redis 配置
-	DefaultRetry             int                      `json:"default_retry,optional"`              // 默认重试次数
-	DefaultTimeoutSeconds    int                      `json:"default_timeout_seconds,optional"`    // 默认任务超时（秒）
-	DefaultUniqueTTLSeconds  int                      `json:"default_unique_ttl_seconds,optional"` // 默认去重 TTL（秒）
-	ArchivedRetentionSeconds int                      `json:"archived_retention_seconds,optional"` // 归档失败任务保留时长（秒）
-	ShutdownTimeoutSeconds   int                      `json:"shutdown_timeout_seconds,optional"`   // Worker 关闭等待时间（秒）
-	TaskCheckSeconds         int                      `json:"task_check_seconds,optional"`         // 空队列轮询间隔（秒）
-	DelayedTaskCheckSeconds  int                      `json:"delayed_task_check_seconds,optional"` // 定时/重试任务检查间隔（秒）
-	GroupGracePeriodSeconds  int                      `json:"group_grace_period_seconds,optional"` // 聚合等待窗口（秒）
-	GroupMaxDelaySeconds     int                      `json:"group_max_delay_seconds,optional"`    // 聚合最大等待时间（秒）
-	GroupMaxSize             int                      `json:"group_max_size,optional"`             // 单次聚合最大任务数
-	Scheduler                TaskQueueSchedulerConfig `json:"scheduler,optional"`                  // 周期调度器配置
-	Periodic                 []TaskPeriodicConfig     `json:"periodic,optional"`                   // 周期任务列表
+	Enabled                   bool                     `json:"enabled,optional"`                     // 是否启用任务系统
+	AppID                     string                   `json:"-"`                                    // 任务系统站点命名空间
+	DefaultQueue              string                   `json:"default_queue,optional"`               // 默认工作流队列
+	Concurrency               int                      `json:"concurrency,optional"`                 // Worker 并发度
+	StrictPriority            bool                     `json:"strict_priority,optional"`             // 是否启用严格优先级
+	Queues                    map[string]int           `json:"queues,optional"`                      // 队列权重配置
+	Redis                     RedisConfig              `json:"redis,optional"`                       // 任务系统独立 Redis 配置
+	DefaultRetry              int                      `json:"default_retry,optional"`               // 默认重试次数
+	DefaultTimeoutSeconds     int                      `json:"default_timeout_seconds,optional"`     // 默认任务超时（秒）
+	DefaultUniqueTTLSeconds   int                      `json:"default_unique_ttl_seconds,optional"`  // 默认去重 TTL（秒）
+	CompletedRetentionSeconds int                      `json:"completed_retention_seconds,optional"` // 成功任务近期明细保留时长（秒）
+	ArchivedRetentionSeconds  int                      `json:"archived_retention_seconds,optional"`  // 归档失败任务保留时长（秒）
+	ShutdownTimeoutSeconds    int                      `json:"shutdown_timeout_seconds,optional"`    // Worker 关闭等待时间（秒）
+	TaskCheckSeconds          int                      `json:"task_check_seconds,optional"`          // 空队列轮询间隔（秒）
+	DelayedTaskCheckSeconds   int                      `json:"delayed_task_check_seconds,optional"`  // 定时/重试任务检查间隔（秒）
+	GroupGracePeriodSeconds   int                      `json:"group_grace_period_seconds,optional"`  // 聚合等待窗口（秒）
+	GroupMaxDelaySeconds      int                      `json:"group_max_delay_seconds,optional"`     // 聚合最大等待时间（秒）
+	GroupMaxSize              int                      `json:"group_max_size,optional"`              // 单次聚合最大任务数
+	Scheduler                 TaskQueueSchedulerConfig `json:"scheduler,optional"`                   // 周期调度器配置
+	History                   TaskQueueHistoryConfig   `json:"history,optional"`                     // 终态历史异步落库配置
+	Periodic                  []TaskPeriodicConfig     `json:"periodic,optional"`                    // 周期任务列表
 }
 
 // WorkflowsConfig 聚合工作流类配置。

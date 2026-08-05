@@ -145,6 +145,57 @@ func (l *TaskLogic) GetWorkflowStatus(req *types.GetTaskWorkflowReq) *types.BizR
 	}
 }
 
+// ListTaskWorkflows 查询短期工作流终态历史。
+func (l *TaskLogic) ListTaskWorkflows(req *types.ListTaskWorkflowsReq) *types.BizResult {
+	if l.Svc == nil || l.Svc.Task == nil {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled).
+			WithError(corelogic.WrapLogicError(taskqueue.ErrTaskQueueDisabled, "TaskLogic.ListTaskWorkflows 任务系统未启用"))
+	}
+	historyQueue, ok := l.Svc.Task.(svc.TaskHistoryQueue)
+	if !ok {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled)
+	}
+	resp, err := historyQueue.ListTaskWorkflows(l.Ctx, req)
+	if err != nil {
+		return types.ServerError(i18n.MsgKeyTaskQueryFail, err, "TaskLogic.ListTaskWorkflows").ToBizResult()
+	}
+	return types.NewBizResult(codes.Success).SetI18nMessage(i18n.MsgKeyQuerySuccess).WithData(resp)
+}
+
+// ListTaskFailures 查询最终失败任务历史和当前可重跑能力。
+func (l *TaskLogic) ListTaskFailures(req *types.ListTaskFailuresReq) *types.BizResult {
+	if l.Svc == nil || l.Svc.Task == nil {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled).
+			WithError(corelogic.WrapLogicError(taskqueue.ErrTaskQueueDisabled, "TaskLogic.ListTaskFailures 任务系统未启用"))
+	}
+	historyQueue, ok := l.Svc.Task.(svc.TaskHistoryQueue)
+	if !ok {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled)
+	}
+	resp, err := historyQueue.ListTaskFailures(l.Ctx, req)
+	if err != nil {
+		return types.ServerError(i18n.MsgKeyTaskQueryFail, err, "TaskLogic.ListTaskFailures").ToBizResult()
+	}
+	return types.NewBizResult(codes.Success).SetI18nMessage(i18n.MsgKeyQuerySuccess).WithData(resp)
+}
+
+// TaskObservability 查询任务系统实时与历史观测摘要。
+func (l *TaskLogic) TaskObservability() *types.BizResult {
+	if l.Svc == nil || l.Svc.Task == nil {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled).
+			WithError(corelogic.WrapLogicError(taskqueue.ErrTaskQueueDisabled, "TaskLogic.TaskObservability 任务系统未启用"))
+	}
+	historyQueue, ok := l.Svc.Task.(svc.TaskHistoryQueue)
+	if !ok {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled)
+	}
+	resp, err := historyQueue.TaskObservability(l.Ctx)
+	if err != nil {
+		return types.ServerError(i18n.MsgKeyTaskQueryFail, err, "TaskLogic.TaskObservability").ToBizResult()
+	}
+	return types.NewBizResult(codes.Success).SetI18nMessage(i18n.MsgKeyQuerySuccess).WithData(resp)
+}
+
 // GetTaskInfo 查询单个任务详情。
 func (l *TaskLogic) GetTaskInfo(req *types.GetTaskInfoReq) *types.BizResult {
 	if l.Svc == nil || l.Svc.Task == nil {

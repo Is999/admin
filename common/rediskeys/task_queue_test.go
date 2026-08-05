@@ -2,6 +2,7 @@ package keys_test
 
 import (
 	"testing"
+	"time"
 
 	keys "admin/common/rediskeys"
 )
@@ -124,6 +125,18 @@ func TestTaskRuntimeAndWorkflowKeys(t *testing.T) {
 	if keys.TaskRuntimeKey("a:b", "c") == keys.TaskRuntimeKey("a", "b:c") {
 		t.Fatal("含冒号的队列名和任务 ID 不应生成相同运行快照 key")
 	}
+	if got := keys.TaskHistoryPendingEventsKey(); got != "app:215:task:history:{app:215}:events" {
+		t.Fatalf("keys.TaskHistoryPendingEventsKey() = %q", got)
+	}
+	if got := keys.TaskHistoryPendingOrderKey(); got != "app:215:task:history:{app:215}:order" {
+		t.Fatalf("keys.TaskHistoryPendingOrderKey() = %q", got)
+	}
+	if got := keys.TaskHistoryStatusKey(); got != "app:215:task:history:{app:215}:status" {
+		t.Fatalf("keys.TaskHistoryStatusKey() = %q", got)
+	}
+	if got := keys.TaskHistoryCollectorLockKey(); got != "app:215:task:history:{app:215}:lock" {
+		t.Fatalf("keys.TaskHistoryCollectorLockKey() = %q", got)
+	}
 	if got := keys.TaskWorkflowPrefix(); got != "app:215:task:workflow" {
 		t.Fatalf("keys.TaskWorkflowPrefix() = %q", got)
 	}
@@ -186,6 +199,16 @@ func TestTaskAsynqKeys(t *testing.T) {
 	}
 	if got := keys.TaskAsynqScheduledKey(queue); got != "asynq:{app:215:maintenance}:scheduled" {
 		t.Fatalf("keys.TaskAsynqScheduledKey() = %q", got)
+	}
+	if got := keys.TaskAsynqPausedKey(queue); got != "asynq:{app:215:maintenance}:paused" {
+		t.Fatalf("keys.TaskAsynqPausedKey() = %q", got)
+	}
+	at := time.Date(2026, time.August, 5, 8, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	if got := keys.TaskAsynqDailyProcessedKey(queue, at); got != "asynq:{app:215:maintenance}:processed:2026-08-05" {
+		t.Fatalf("keys.TaskAsynqDailyProcessedKey() = %q", got)
+	}
+	if got := keys.TaskAsynqDailyFailedKey(queue, at); got != "asynq:{app:215:maintenance}:failed:2026-08-05" {
+		t.Fatalf("keys.TaskAsynqDailyFailedKey() = %q", got)
 	}
 	if got := keys.TaskAsynqTaskHashKeyPrefix(queue); got != "asynq:{app:215:maintenance}:t:" {
 		t.Fatalf("keys.TaskAsynqTaskHashKeyPrefix() = %q", got)

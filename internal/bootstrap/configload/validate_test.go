@@ -552,13 +552,20 @@ func TestValidateTaskRedisConfigAcceptsSupportedTopologies(t *testing.T) {
 	}
 }
 
-// TestValidateTaskLimitsRejectsUnboundedRetryAndTimeout 校验默认值和周期任务不能绕过任务资源硬上限。
-func TestValidateTaskLimitsRejectsUnboundedRetryAndTimeout(t *testing.T) {
+// TestValidateTaskLimitsRejectsUnboundedRuntimeResources 校验任务运行参数不能绕过资源硬上限。
+func TestValidateTaskLimitsRejectsUnboundedRuntimeResources(t *testing.T) {
 	tests := []config.TaskQueueConfig{
+		{Concurrency: maxTaskConcurrency + 1},
+		{Queues: map[string]int{"maintenance": maxTaskQueueWeight + 1}},
+		{DefaultUniqueTTLSeconds: tasklimits.MaxUniqueTTLSeconds + 1},
+		{GroupGracePeriodSeconds: 30, GroupMaxDelaySeconds: 20},
 		{DefaultRetry: tasklimits.MaxRetry + 1},
 		{DefaultTimeoutSeconds: tasklimits.MaxTimeoutSeconds + 1},
+		{Scheduler: config.TaskQueueSchedulerConfig{LeaseTTLSeconds: 10, RenewIntervalSeconds: 10}},
 		{Periodic: []config.TaskPeriodicConfig{{Retry: tasklimits.MaxRetry + 1}}},
 		{Periodic: []config.TaskPeriodicConfig{{TimeoutSeconds: tasklimits.MaxTimeoutSeconds + 1}}},
+		{Periodic: []config.TaskPeriodicConfig{{UniqueTTLSeconds: tasklimits.MaxUniqueTTLSeconds + 1}}},
+		{Periodic: []config.TaskPeriodicConfig{{EverySeconds: tasklimits.MinPeriodicEverySeconds - 1}}},
 	}
 	for index, taskCfg := range tests {
 		if err := validateTaskLimits(taskCfg); err == nil {

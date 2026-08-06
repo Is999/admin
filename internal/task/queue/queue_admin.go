@@ -497,7 +497,7 @@ func (m *Manager) prepareWorkflowArchivedTaskRerun(ctx context.Context, info *as
 	now := time.Now().Format(time.RFC3339)
 	reopenResult, err := reopenWorkflowForManualRerunScript.Run(ctx, m.redis, []string{
 		m.workflowMetaKey(meta.WorkflowID),
-	}, now).Int()
+	}, now, m.workflowManualRerunRetention().Milliseconds()).Int()
 	if err != nil {
 		return errors.Wrapf(err, "重开归档工作流失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
 	}
@@ -509,12 +509,12 @@ func (m *Manager) prepareWorkflowArchivedTaskRerun(ctx context.Context, info *as
 	case -1:
 		return errors.Errorf("成功工作流不允许手工重跑 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
 	}
-	if err = m.persistWorkflowManualRerunState(ctx, meta.WorkflowID); err != nil {
-		return errors.Wrapf(err, "持久化手工重跑工作流状态失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
+	if err = m.refreshWorkflowManualRerunRetention(ctx, meta.WorkflowID); err != nil {
+		return errors.Wrapf(err, "刷新手工重跑工作流状态失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
 	}
 	repairResult, err := workflowArchivedTaskRerunRepairScript.Run(ctx, m.redis, []string{
 		m.workflowNodeKey(meta.WorkflowID, meta.WorkflowNode),
-	}, workflowNodeInstanceField(meta.ShardIndex), workflowNodeBusinessFailureField(meta.ShardIndex), now).Int()
+	}, workflowNodeInstanceField(meta.ShardIndex), workflowNodeBusinessFailureField(meta.ShardIndex), now, m.workflowManualRerunRetention().Milliseconds()).Int()
 	if err != nil {
 		return errors.Wrapf(err, "修复归档工作流任务重跑状态失败 workflow_id=%s node=%s shard=%d", meta.WorkflowID, meta.WorkflowNode, meta.ShardIndex)
 	}
@@ -530,7 +530,7 @@ func (m *Manager) prepareWorkflowArchivedTaskRerun(ctx context.Context, info *as
 			m.restoreWorkflowTerminalRetention(ctx, meta.WorkflowID),
 		)
 	}
-	if err = m.persistWorkflowManualRerunState(ctx, meta.WorkflowID); err != nil {
+	if err = m.refreshWorkflowManualRerunRetention(ctx, meta.WorkflowID); err != nil {
 		return errors.Tag(err)
 	}
 	def, err := m.workflowDefinition(meta.WorkflowName)

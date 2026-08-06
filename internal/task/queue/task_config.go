@@ -27,6 +27,11 @@ func (m *Manager) workflowUniqueLockTTL() time.Duration {
 	return 15 * time.Second
 }
 
+// workflowManualRerunRetention 返回手工重跑运行态的安全保留时长，保证中断后状态最终可回收。
+func (m *Manager) workflowManualRerunRetention() time.Duration {
+	return max(m.CompletedRetention(), m.ArchivedRetention())
+}
+
 // workflowTerminalRetention 返回工作流终态热状态保留时间。
 // 失败实例需要和 archived 对齐以支持人工重跑，成功实例只保留近期观测窗口。
 func (m *Manager) workflowTerminalRetention(status string) time.Duration {

@@ -101,6 +101,26 @@ func ListTaskWorkflowsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	)(sCtx)
 }
 
+// ListTaskRunsHandler 查询全部实际任务的短期终态历史。
+func ListTaskRunsHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.ListTaskRunsReq](shared.TaskItemsList,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.ListTaskRunsReq) (shared.LogicObj, *types.BizResult) {
+			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
+			return logicObj, logicObj.ListTaskRuns(req)
+		},
+	)(sCtx)
+}
+
+// GetTaskRunHistoryHandler 查询任务终态历史详情。
+func GetTaskRunHistoryHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
+	return shared.ActionHandler[types.GetTaskRunHistoryReq](shared.TaskItemsList,
+		func(r *http.Request, svcCtx *svc.ServiceContext, req *types.GetTaskRunHistoryReq) (shared.LogicObj, *types.BizResult) {
+			logicObj := tasklogic.NewTaskLogic(r, svcCtx)
+			return logicObj, logicObj.GetTaskRunHistory(req)
+		},
+	)(sCtx)
+}
+
 // ListTaskFailuresHandler 查询最终失败任务历史。
 func ListTaskFailuresHandler(sCtx *svc.ServiceContext) http.HandlerFunc {
 	return shared.ActionHandler[types.ListTaskFailuresReq](shared.TaskItemsList,

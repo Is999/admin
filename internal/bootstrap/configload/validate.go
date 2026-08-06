@@ -229,6 +229,9 @@ func validateTaskLimits(cfg config.TaskQueueConfig) error {
 	if days := cfg.History.WorkflowRetentionDays; days < 0 || days > maxTaskHistoryRetentionDays {
 		return errors.Errorf("task.history.workflow_retention_days 必须在 0-%d 之间", maxTaskHistoryRetentionDays)
 	}
+	if days := cfg.History.TaskRetentionDays; days < 0 || days > maxTaskHistoryRetentionDays {
+		return errors.Errorf("task.history.task_retention_days 必须在 0-%d 之间", maxTaskHistoryRetentionDays)
+	}
 	if days := cfg.History.FailureRetentionDays; days < 0 || days > maxTaskHistoryRetentionDays {
 		return errors.Errorf("task.history.failure_retention_days 必须在 0-%d 之间", maxTaskHistoryRetentionDays)
 	}

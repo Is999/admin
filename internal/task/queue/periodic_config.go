@@ -34,7 +34,7 @@ func (m *Manager) periodicConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 			ShardTotal:       max(item.ShardTotal, 1),
 			GrayPercent:      item.GrayPercent,
 			Source:           WorkflowSourcePeriodic,
-			PeriodicName:     periodicTaskDisplayName(item),
+			PeriodicName:     item.Name,
 			TimeoutSeconds:   item.TimeoutSeconds,
 			UniqueKey:        item.UniqueKey,
 			UniqueTTLSeconds: item.UniqueTTLSeconds,
@@ -51,7 +51,7 @@ func (m *Manager) periodicConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 		task := asynq.NewTaskWithHeaders(TypeWorkflowTrigger, body, map[string]string{
 			headerTaskName:     periodicTaskDisplayName(item),
 			headerTaskSource:   WorkflowSourcePeriodic,
-			HeaderPeriodicName: periodicTaskDisplayName(item),
+			HeaderPeriodicName: item.Name,
 			headerWorkflowName: item.Workflow,
 		})
 		opts := []asynq.Option{
@@ -96,6 +96,22 @@ func (m *Manager) ValidatePeriodicTaskDefinitions() error {
 	return nil
 }
 
+// ValidatePeriodicTaskConfigs 校验即将发布的启用周期任务可由当前任务运行时执行。
+func (m *Manager) ValidatePeriodicTaskConfigs(items []config.TaskPeriodicConfig) error {
+	if m == nil || !m.IsEnabled() {
+		return ErrTaskQueueDisabled
+	}
+	for index, item := range items {
+		if !item.EnabledOrDefault() {
+			continue
+		}
+		if _, err := m.validatePeriodicTaskConfig(item); err != nil {
+			return errors.Wrapf(err, "周期任务配置无效 index=%d name=%s workflow=%s", index, strings.TrimSpace(item.Name), strings.TrimSpace(item.Workflow))
+		}
+	}
+	return nil
+}
+
 // validatePeriodicTaskConfig 校验并归一化单个周期任务配置，异常时仅跳过当前任务。
 func (m *Manager) validatePeriodicTaskConfig(item config.TaskPeriodicConfig) (config.TaskPeriodicConfig, error) {
 	cronspec, err := periodicTaskCronspec(item)
@@ -131,11 +147,8 @@ func (m *Manager) validatePeriodicTaskConfig(item config.TaskPeriodicConfig) (co
 	if item.ShardTotal < 0 {
 		return item, errors.Errorf("周期任务 shard_total 不能小于 0")
 	}
-	if item.ShardTotal > tasklimits.MaxShardTotal {
-		return item, errors.Errorf("周期任务 shard_total 不能超过 %d", tasklimits.MaxShardTotal)
-	}
-	if definition.MaxShardTotal > 0 && item.ShardTotal > definition.MaxShardTotal {
-		return item, errors.Errorf("周期任务 shard_total 不能超过工作流上限 %d", definition.MaxShardTotal)
+	if err = validateWorkflowShardTotal(definition, max(item.ShardTotal, 1)); err != nil {
+		return item, errors.Tag(err)
 	}
 	if item.GrayPercent < 0 || item.GrayPercent > 100 {
 		return item, errors.Errorf("周期任务 gray_percent 必须在 0 到 100 之间")

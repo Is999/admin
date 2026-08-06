@@ -18,7 +18,7 @@ import (
 
 // periodicNextRun 表示一个有效周期任务的下一次触发摘要。
 type periodicNextRun struct {
-	PeriodicName  string // 周期任务展示名，对应 x-app-periodic-name
+	PeriodicName  string // 周期任务原始名称，对应 x-app-periodic-name
 	WorkflowName  string // 关联工作流名称
 	NextProcessAt string // 下一次触发时间，RFC3339
 }
@@ -274,7 +274,7 @@ func (m *Manager) periodicNextRuns(now time.Time) []periodicNextRun {
 			continue
 		}
 		result = append(result, periodicNextRun{
-			PeriodicName:  periodicTaskDisplayName(normalized),
+			PeriodicName:  normalized.Name,
 			WorkflowName:  strings.TrimSpace(normalized.Workflow),
 			NextProcessAt: nextAt.Format(time.RFC3339),
 		})

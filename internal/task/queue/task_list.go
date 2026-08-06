@@ -359,13 +359,14 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 		}
 	}
 	if reachedScanLimit {
-		nextItems, err := m.listFilterTaskInfoPage(ctx, inspector, internalQueue, internalGroup, state, taskListFilterMaxPages+1, 1, timeRange)
+		// Page 使用当前 pageSize 计算偏移；单条分页需把页码设为最大扫描条数加一。
+		nextItems, err := m.listFilterTaskInfoPage(ctx, inspector, internalQueue, internalGroup, state, taskListFilterMaxRows+1, 1, timeRange)
 		if err != nil {
 			return nil, 0, errors.Tag(err)
 		}
 		if len(nextItems) > 0 {
 			return nil, 0, errors.Wrapf(ErrTaskListScanLimitExceeded,
-				"队列[%s]状态[%s]最多扫描%d条任务，请缩小筛选范围", internalQueue, state, taskListFilterPageSize*taskListFilterMaxPages)
+				"队列[%s]状态[%s]最多扫描%d条任务，请缩小筛选范围", internalQueue, state, taskListFilterMaxRows)
 		}
 	}
 	sortTaskItemsByTimeDesc(matchedTasks)

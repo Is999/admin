@@ -16,6 +16,7 @@ func TestValidateTaskLimitsRejectsUnsafeHistoryAndRetentionBounds(t *testing.T) 
 		{ArchivedRetentionSeconds: 86399},
 		{ArchivedRetentionSeconds: 30*86400 + 1},
 		{History: config.TaskQueueHistoryConfig{WorkflowRetentionDays: 31}},
+		{History: config.TaskQueueHistoryConfig{TaskRetentionDays: maxTaskHistoryRetentionDays + 1}},
 		{History: config.TaskQueueHistoryConfig{FailureRetentionDays: maxTaskHistoryRetentionDays + 1}},
 		{History: config.TaskQueueHistoryConfig{PendingLimit: 10001}},
 		{History: config.TaskQueueHistoryConfig{FlushIntervalSeconds: maxTaskHistoryFlushSeconds + 1}},
@@ -40,7 +41,7 @@ func TestValidateTaskLimitsAcceptsSafeHistoryDefaultsAndEdges(t *testing.T) {
 			CompletedRetentionSeconds: 600,
 			ArchivedRetentionSeconds:  86400,
 			History: config.TaskQueueHistoryConfig{
-				WorkflowRetentionDays: maxTaskHistoryRetentionDays, FailureRetentionDays: maxTaskHistoryRetentionDays, PendingLimit: 10000,
+				TaskRetentionDays: maxTaskHistoryRetentionDays, WorkflowRetentionDays: maxTaskHistoryRetentionDays, FailureRetentionDays: maxTaskHistoryRetentionDays, PendingLimit: 10000,
 				FlushIntervalSeconds: maxTaskHistoryFlushSeconds, CleanupIntervalSeconds: maxTaskHistoryCleanupSeconds,
 			},
 			Scheduler: config.TaskQueueSchedulerConfig{MaxQueueBacklog: maxTaskQueueBacklog},

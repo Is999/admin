@@ -107,13 +107,14 @@ const (
 
 	taskExecutionStatusSuccess = "success" // 普通任务执行结果成功状态
 
-	taskFinalWriteTimeout  = 5 * time.Second          // 任务收尾写 Redis 的短超时，避免业务 ctx 超时后失败状态无法落库
-	taskListFilterPageSize = 100                      // 任务列表二次过滤单批读取量，和接口最大页大小保持一致
-	taskListFilterMaxPages = 50                       // 任务列表二次过滤最大扫描页数，避免无索引历史查询拖垮 Redis
-	taskRuntimeAlertTTL    = 5 * time.Minute          // 任务系统同一运行异常的告警限频窗口，避免后台循环刷屏
-	periodicConfigAlertTTL = taskRuntimeAlertTTL      // 周期任务同一配置异常复用任务运行异常的告警限频窗口
-	workerHealthInterval   = 5 * time.Second          // Worker 内部 Redis 健康检查间隔
-	workerHeartbeatMaxAge  = 3 * workerHealthInterval // Worker 心跳最大允许间隔
+	taskFinalWriteTimeout  = 5 * time.Second                                 // 任务收尾写 Redis 的短超时，避免业务 ctx 超时后失败状态无法落库
+	taskListFilterPageSize = 100                                             // 任务列表二次过滤单批读取量，和接口最大页大小保持一致
+	taskListFilterMaxPages = 50                                              // 任务列表二次过滤最大扫描页数，避免无索引历史查询拖垮 Redis
+	taskListFilterMaxRows  = taskListFilterPageSize * taskListFilterMaxPages // 任务列表二次过滤最大扫描条数
+	taskRuntimeAlertTTL    = 5 * time.Minute                                 // 任务系统同一运行异常的告警限频窗口，避免后台循环刷屏
+	periodicConfigAlertTTL = taskRuntimeAlertTTL                             // 周期任务同一配置异常复用任务运行异常的告警限频窗口
+	workerHealthInterval   = 5 * time.Second                                 // Worker 内部 Redis 健康检查间隔
+	workerHeartbeatMaxAge  = 3 * workerHealthInterval                        // Worker 心跳最大允许间隔
 )
 
 // WorkflowTriggerPayload 是 workflow:trigger 任务的负载。
@@ -691,7 +692,11 @@ func (m *Manager) EnqueueWorkflowTrigger(ctx context.Context, req *types.Trigger
 
 	// 入参校验与工作流定义预检查（避免未知 workflow 入队后反复重试）。
 	workflowName := strings.TrimSpace(req.Name)
-	if _, err := m.workflowDefinition(workflowName); err != nil {
+	definition, err := m.workflowDefinition(workflowName)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	if err = validateWorkflowShardTotal(definition, req.ShardTotal); err != nil {
 		return nil, errors.Tag(err)
 	}
 	queue := helper.FirstNonEmptyString(req.Queue, m.defaultWorkflowQueue())
@@ -853,7 +858,7 @@ func (m *Manager) GetWorkflowStatus(ctx context.Context, workflowID string) (*ty
 		history, historyErr := sink.GetWorkflow(lookupCtx, workflowID)
 		cancel()
 		switch {
-		case historyErr == nil && history != nil:
+		case historyErr == nil && history != nil && history.Status == resp.Status && history.FinishedAt == resp.FinishedAt:
 			resp.HistoryStatus = "persisted"
 			resp.PersistedAt = history.PersistedAt
 		case historyErr != nil && !errors.Is(historyErr, redis.Nil):

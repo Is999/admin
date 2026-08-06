@@ -50,6 +50,12 @@ var ensureWorkflowUniqueScriptText string
 //go:embed assets/write_task_runtime_attempt.lua
 var writeTaskRuntimeAttemptScriptText string
 
+// deleteSuccessfulTaskRuntimeScriptText 保存成功任务运行快照删除 Lua 脚本源码。
+// 只有 hash 中 attemptToken 仍匹配时才删除，避免迟到实例误删新执行快照。
+//
+//go:embed assets/delete_successful_task_runtime.lua
+var deleteSuccessfulTaskRuntimeScriptText string
+
 // writeWorkflowTaskStatsAttemptScriptText 保存工作流分片 attempt 处理量回写 Lua 脚本源码。
 // 只有节点 hash 中的分片 attempt token 仍匹配时才会更新处理量。
 //
@@ -100,6 +106,8 @@ var (
 	ensureWorkflowUniqueScript = redis.NewScript(embedasset.StripLeadingLineComments(ensureWorkflowUniqueScriptText, "--"))
 	// writeTaskRuntimeAttemptScript 仅允许当前 attempt 原子更新运行快照。
 	writeTaskRuntimeAttemptScript = redis.NewScript(embedasset.StripLeadingLineComments(writeTaskRuntimeAttemptScriptText, "--"))
+	// deleteSuccessfulTaskRuntimeScript 仅删除当前 attempt 的成功运行快照。
+	deleteSuccessfulTaskRuntimeScript = redis.NewScript(embedasset.StripLeadingLineComments(deleteSuccessfulTaskRuntimeScriptText, "--"))
 	// writeWorkflowTaskStatsAttemptScript 仅允许当前分片 attempt 原子更新处理量。
 	writeWorkflowTaskStatsAttemptScript = redis.NewScript(embedasset.StripLeadingLineComments(writeWorkflowTaskStatsAttemptScriptText, "--"))
 	// renewLeaderScript 仅当当前实例仍持有 leader 锁时续租，避免误续租其他实例的锁。

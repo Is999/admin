@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"admin/internal/types"
 
 	"github.com/Is999/go-utils/errors"
+	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -157,6 +159,49 @@ func TestBoundWorkflowHistorySnapshotCompactsLargeShardSummary(t *testing.T) {
 	assertWorkflowHistorySnapshotBounded(t, status)
 }
 
+// TestBoundWorkflowHistorySnapshotTrimsNodeDetailsBeforeDroppingShards 验证超限时先保留代表性节点明细和分片指标。
+func TestBoundWorkflowHistorySnapshotTrimsNodeDetailsBeforeDroppingShards(t *testing.T) {
+	details := make([]taskstats.Detail, 256)
+	for index := range details {
+		details[index] = taskstats.Detail{
+			Action: "read",
+			Name:   strings.Repeat("node-detail-", 40) + strconv.Itoa(index),
+			Count:  1,
+		}
+	}
+	shards := make([]types.TaskWorkflowShardTraceItem, tasklimits.MaxShardTotal)
+	for index := range shards {
+		shards[index] = types.TaskWorkflowShardTraceItem{
+			ShardIndex: index,
+			ShardTotal: len(shards),
+			Status:     "success",
+			ExecutionTrace: &taskstats.Snapshot{
+				TotalCount: 1,
+				DurationMS: 10,
+			},
+		}
+	}
+	status := &types.TaskWorkflowStatusResp{
+		WorkflowID: "workflow-node-detail-with-shards",
+		Nodes: []types.TaskWorkflowNodeItem{{
+			Name:           "refresh",
+			ExecutionTrace: &taskstats.Snapshot{TotalCount: int64(len(shards)), Details: details},
+			ShardTraces:    shards,
+		}},
+	}
+
+	boundWorkflowHistorySnapshot(status)
+
+	kept := len(status.Nodes[0].ExecutionTrace.Details)
+	if status.DetailLevel != "shard" || !status.DetailTruncated || len(status.Nodes[0].ShardTraces) != len(shards) {
+		t.Fatalf("节点明细可裁剪时应继续保留分片指标: level=%s truncated=%v shards=%d", status.DetailLevel, status.DetailTruncated, len(status.Nodes[0].ShardTraces))
+	}
+	if kept < taskHistoryNodeDetailFloor || kept >= len(details) {
+		t.Fatalf("节点代表性明细保留数量异常: kept=%d floor=%d", kept, taskHistoryNodeDetailFloor)
+	}
+	assertWorkflowHistorySnapshotBounded(t, status)
+}
+
 // TestBoundWorkflowHistorySnapshotFallsBackToNodeDetails 验证极端分片量最终降级为节点聚合明细。
 func TestBoundWorkflowHistorySnapshotFallsBackToNodeDetails(t *testing.T) {
 	shards := make([]types.TaskWorkflowShardTraceItem, 4096)
@@ -239,6 +284,7 @@ func assertWorkflowHistorySnapshotBounded(t *testing.T, status *types.TaskWorkfl
 
 // historySinkStub 记录测试中的持久化事件，并可注入数据库故障或租约竞争。
 type historySinkStub struct {
+	mu               sync.Mutex                    // mu 保护异步收集器写入的测试事件
 	persistErr       error                         // persistErr 是持久化故障
 	onPersist        func(context.Context)         // onPersist 在事务期间模拟并发动作
 	events           []HistoryEvent                // events 保存已接收事件
@@ -246,15 +292,36 @@ type historySinkStub struct {
 	workflowErr      error                         // workflowErr 是 DB 查询故障
 	getWorkflowCalls int                           // getWorkflowCalls 记录终态落库确认次数
 	failures         *types.TaskFailureListResp    // failures 是 DB 失败历史查询结果
+	cleanupDeleted   int64                         // cleanupDeleted 模拟单批清理数量
+	cleanupCalls     int                           // cleanupCalls 记录单轮清理追赶次数
 }
 
 // Persist 实现终态历史批量落库测试桩。
 func (s *historySinkStub) Persist(ctx context.Context, events []HistoryEvent) error {
+	s.mu.Lock()
 	s.events = append(s.events, events...)
+	s.mu.Unlock()
 	if s.onPersist != nil {
 		s.onPersist(ctx)
 	}
 	return s.persistErr
+}
+
+// eventSnapshot 返回异步持久化事件的并发安全副本。
+func (s *historySinkStub) eventSnapshot() []HistoryEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]HistoryEvent(nil), s.events...)
+}
+
+// GetTaskRun 实现任务终态历史详情测试桩。
+func (*historySinkStub) GetTaskRun(context.Context, uint64) (*types.TaskRunHistoryItem, error) {
+	return nil, redis.Nil
+}
+
+// ListTaskRuns 实现全部任务终态历史列表测试桩。
+func (*historySinkStub) ListTaskRuns(context.Context, *types.ListTaskRunsReq) (*types.TaskRunHistoryListResp, error) {
+	return &types.TaskRunHistoryListResp{}, nil
 }
 
 // GetWorkflow 实现测试桩查询接口。
@@ -288,8 +355,140 @@ func (*historySinkStub) WindowSummary(context.Context, time.Time, time.Time) (ty
 }
 
 // Cleanup 实现测试桩清理接口。
-func (*historySinkStub) Cleanup(context.Context, time.Time, time.Time, int) (int64, error) {
-	return 0, nil
+func (s *historySinkStub) Cleanup(context.Context, time.Time, time.Time, time.Time, int) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupCalls++
+	return s.cleanupDeleted, nil
+}
+
+// TestStandaloneTaskHistoryPersistsTerminalSummary 验证普通任务成功后只异步保存有界终态摘要。
+func TestStandaloneTaskHistoryPersistsTerminalSummary(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	sink := &historySinkStub{}
+	manager.AttachHistorySink(sink)
+	if err := manager.RegisterHandler("history:standalone", asynq.HandlerFunc(func(ctx context.Context, _ *asynq.Task) error {
+		taskstats.RecordRead(ctx, "rows", 3)
+		return nil
+	})); err != nil {
+		t.Fatalf("注册普通任务历史测试处理器失败: %v", err)
+	}
+	if err := manager.StartWorker(); err != nil {
+		t.Fatalf("启动普通任务历史测试 Worker 失败: %v", err)
+	}
+	resp, err := manager.EnqueueRegisteredTask(context.Background(), &types.EnqueueTaskReq{
+		TaskType: "history:standalone",
+		Payload:  json.RawMessage(`{"ignored":"payload"}`),
+	})
+	if err != nil {
+		t.Fatalf("投递普通任务历史测试任务失败: %v", err)
+	}
+	waitForCondition(t, 8*time.Second, func() bool {
+		manager.flushHistory(context.Background(), sink)
+		for _, event := range sink.eventSnapshot() {
+			if event.Kind == "task" && event.Task != nil && event.Task.TaskID == resp.TaskID {
+				return true
+			}
+		}
+		return false
+	})
+	for _, event := range sink.eventSnapshot() {
+		if event.Kind != "task" || event.Task == nil || event.Task.TaskID != resp.TaskID {
+			continue
+		}
+		if event.Task.Status != taskExecutionStatusSuccess || event.Task.ExecutionTrace == nil || event.Task.ExecutionTrace.ReadCount != 3 {
+			t.Fatalf("普通任务终态摘要异常: %+v", event.Task)
+		}
+		raw, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			t.Fatalf("序列化普通任务终态事件失败: %v", marshalErr)
+		}
+		if strings.Contains(strings.ToLower(string(raw)), "ignored") {
+			t.Fatalf("普通任务终态历史不得复制原始 payload: %s", raw)
+		}
+		return
+	}
+	t.Fatal("未找到普通任务终态历史事件")
+}
+
+// TestWorkflowTaskHistoryPersistsCompactTerminalSummary 验证工作流实际任务会落紧凑摘要且不复制大明细。
+func TestWorkflowTaskHistoryPersistsCompactTerminalSummary(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	sink := &historySinkStub{}
+	manager.AttachHistorySink(sink)
+	const workflowName = "history.workflow"
+	if err := manager.RegisterHandler(TypeWorkflowNoop, asynq.HandlerFunc(func(context.Context, *asynq.Task) error {
+		return nil
+	})); err != nil {
+		t.Fatalf("注册工作流任务历史测试处理器失败: %v", err)
+	}
+	definition := testWorkflowDefinition(workflowName)
+	definition.Nodes["root"].SupportsSharding = true
+	if err := manager.RegisterWorkflow(definition); err != nil {
+		t.Fatalf("注册工作流历史测试定义失败: %v", err)
+	}
+	workflowID, err := manager.startWorkflow(context.Background(), WorkflowStartSpec{
+		WorkflowID: "workflow-1",
+		Name:       workflowName,
+		ShardTotal: 16,
+		Source:     WorkflowSourceAPI,
+	})
+	if err != nil {
+		t.Fatalf("启动工作流历史测试实例失败: %v", err)
+	}
+	if err = manager.StartWorker(); err != nil {
+		t.Fatalf("启动工作流历史测试 Worker 失败: %v", err)
+	}
+	waitForCondition(t, 8*time.Second, func() bool {
+		manager.flushHistory(context.Background(), sink)
+		for _, event := range sink.eventSnapshot() {
+			if event.Kind == "task" && event.Task != nil && event.Task.WorkflowID == workflowID && event.Task.WorkflowNode == "root" {
+				return true
+			}
+		}
+		return false
+	})
+	for _, event := range sink.eventSnapshot() {
+		if event.Kind != "task" || event.Task == nil || event.Task.WorkflowID != workflowID || event.Task.WorkflowNode != "root" {
+			continue
+		}
+		if event.Task.WorkflowName != workflowName || event.Task.ShardTotal != 16 || event.Task.Status != taskExecutionStatusSuccess || event.Task.ExecutionTrace != nil {
+			t.Fatalf("工作流任务紧凑终态摘要异常: %+v", event.Task)
+		}
+		return
+	}
+	t.Fatal("未找到工作流实际任务终态历史事件")
+}
+
+// TestTaskHistoryRetentionDefaultsToOneDay 验证高频任务终态表默认只保留一天。
+func TestTaskHistoryRetentionDefaultsToOneDay(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	if got := manager.historyTaskRetention(); got != 24*time.Hour {
+		t.Fatalf("全部任务终态默认保留期=%s，期望=%s", got, 24*time.Hour)
+	}
+	cfg := manager.CurrentConfig()
+	cfg.History.TaskRetentionDays = 3
+	manager.UpdateConfig(cfg)
+	if got := manager.historyTaskRetention(); got != 72*time.Hour {
+		t.Fatalf("全部任务终态配置保留期=%s，期望=%s", got, 72*time.Hour)
+	}
+}
+
+// TestTaskHistoryCleanupHasBoundedCatchUp 验证过期数据积压时按固定批数追赶而不是无界删除。
+func TestTaskHistoryCleanupHasBoundedCatchUp(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	sink := &historySinkStub{cleanupDeleted: taskHistoryCleanupBatchSize}
+	manager.cleanupHistory(context.Background(), sink)
+	sink.mu.Lock()
+	calls := sink.cleanupCalls
+	sink.mu.Unlock()
+	if calls != taskHistoryCleanupMaxBatches {
+		t.Fatalf("任务历史清理批次数=%d，期望=%d", calls, taskHistoryCleanupMaxBatches)
+	}
 }
 
 // TestHistoryPendingBufferDropsOldestAtHardLimit 验证待落库缓冲始终受硬上限约束。
@@ -459,7 +658,9 @@ func TestGetWorkflowStatusPreservesRedisDetailAndReportsHistoryState(t *testing.
 		t.Fatalf("写入工作流终态失败: %v", err)
 	}
 
-	sink := &historySinkStub{workflow: &types.TaskWorkflowStatusResp{PersistedAt: "2026-08-05T12:00:00Z"}}
+	sink := &historySinkStub{workflow: &types.TaskWorkflowStatusResp{
+		Status: WorkflowStatusSuccess, FinishedAt: now, PersistedAt: "2026-08-05T12:00:00Z",
+	}}
 	manager.AttachHistorySink(sink)
 	resp, err := manager.GetWorkflowStatus(ctx, workflowID)
 	if err != nil {
@@ -467,6 +668,14 @@ func TestGetWorkflowStatusPreservesRedisDetailAndReportsHistoryState(t *testing.
 	}
 	if resp.DataSource != "redis" || resp.DetailLevel != "shard" || resp.HistoryStatus != "persisted" || resp.PersistedAt != sink.workflow.PersistedAt {
 		t.Fatalf("终态数据源或落库状态异常: %+v", resp)
+	}
+
+	sink.workflow = &types.TaskWorkflowStatusResp{
+		Status: WorkflowStatusFailed, FinishedAt: now, PersistedAt: "2026-08-05T11:00:00Z",
+	}
+	resp, err = manager.GetWorkflowStatus(ctx, workflowID)
+	if err != nil || resp.HistoryStatus != "pending" || resp.PersistedAt != "" {
+		t.Fatalf("旧终态快照不应冒充当前终态已落库: resp=%+v err=%v", resp, err)
 	}
 
 	sink.workflow = nil

@@ -59,6 +59,22 @@ func RouteSpecs() []shared.RouteSpec {
 		},
 		{
 			Method:      http.MethodGet,
+			Path:        "/api/tasks/history", // 查询全部任务短期终态历史。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.TaskItemsList,
+			Description: shared.TaskItemsList.Describe,
+			Handler:     ListTaskRunsHandler,
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/api/tasks/history/:id", // 查询任务终态历史详情。
+			Access:      shared.RouteAccessAuth,
+			Meta:        shared.TaskItemsList,
+			Description: shared.TaskItemsList.Describe,
+			Handler:     GetTaskRunHistoryHandler,
+		},
+		{
+			Method:      http.MethodGet,
 			Path:        "/api/tasks/failures", // 查询最终失败任务历史。
 			Access:      shared.RouteAccessAuth,
 			Meta:        shared.TaskItemsList,

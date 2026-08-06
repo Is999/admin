@@ -142,6 +142,50 @@ func TestHookProcessHookPreservesSentinelError(t *testing.T) {
 	}
 }
 
+// TestHookProcessPipelineHookPreservesSentinelError 验证管道 hook 仅调整日志判定，不改写空值语义。
+func TestHookProcessPipelineHookPreservesSentinelError(t *testing.T) {
+	h := newHook(time.Second)
+	wrapped := h.ProcessPipelineHook(func(_ context.Context, cmds []redis.Cmder) error {
+		cmds[0].SetErr(redis.Nil)
+		return redis.Nil
+	})
+
+	cmd := redis.NewCmd(context.Background(), "get", "missing")
+	err := wrapped(context.Background(), []redis.Cmder{cmd})
+	if err != redis.Nil {
+		t.Fatalf("expected exact redis.Nil sentinel, got %v", err)
+	}
+}
+
+// TestPipelineLogError 验证管道空值不会误报，同时不隐藏后续真实命令错误。
+func TestPipelineLogError(t *testing.T) {
+	realErr := stderrors.New("connection reset")
+	nilCmd := redis.NewCmd(context.Background(), "get", "missing")
+	nilCmd.SetErr(redis.Nil)
+	failedCmd := redis.NewCmd(context.Background(), "get", "failed")
+	failedCmd.SetErr(realErr)
+
+	tests := []struct {
+		name string        // name 表示测试场景名称。
+		err  error         // err 表示管道返回的聚合错误。
+		cmds []redis.Cmder // cmds 表示管道内各命令及其执行结果。
+		want error         // want 表示应写入错误日志的错误；nil 表示不记录。
+	}{
+		{name: "nil result only", err: redis.Nil, cmds: []redis.Cmder{nilCmd}},
+		{name: "real command error after nil", err: redis.Nil, cmds: []redis.Cmder{nilCmd, failedCmd}, want: realErr},
+		{name: "real pipeline error", err: realErr, cmds: []redis.Cmder{failedCmd}, want: realErr},
+		{name: "success", cmds: []redis.Cmder{redis.NewCmd(context.Background(), "ping")}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pipelineLogError(tt.err, tt.cmds); !stderrors.Is(got, tt.want) {
+				t.Fatalf("expected %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
 // TestIsRedisScriptCacheMiss 验证 Redis 脚本缓存缺失只匹配 EVALSHA 类命令。
 func TestIsRedisScriptCacheMiss(t *testing.T) {
 	tests := []struct {

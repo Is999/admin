@@ -95,15 +95,26 @@ func (m *Manager) taskRuntimeFinalRetention(ctx context.Context, runErr error) t
 
 // deleteSuccessfulTaskRuntime 删除成功任务的重复运行快照。
 // Asynq Result 已包含耗时和处理量后不再保留第二份 Hash；失败任务仍按归档窗口保留。
-func (m *Manager) deleteSuccessfulTaskRuntime(ctx context.Context, queue string, taskID string) error {
+func (m *Manager) deleteSuccessfulTaskRuntime(ctx context.Context, queue string, taskID string, attemptToken string) error {
 	if m == nil || m.redis == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	attemptToken = strings.TrimSpace(attemptToken)
+	if attemptToken == "" {
 		return nil
 	}
 	key := m.taskRuntimeKey(queue, taskID)
 	if key == "" {
 		return nil
 	}
-	return errors.Tag(m.redis.Del(ctx, key).Err())
+	result, err := deleteSuccessfulTaskRuntimeScript.Run(ctx, m.redis, []string{key}, attemptToken).Int()
+	if err != nil {
+		return errors.Wrap(err, "原子删除成功任务运行快照失败")
+	}
+	if result != 0 && result != 1 {
+		return errors.Errorf("成功任务运行快照删除脚本返回非法结果: %d", result)
+	}
+	return nil
 }
 
 // taskWillArchive 判断本次失败是否会进入 archived 终态。

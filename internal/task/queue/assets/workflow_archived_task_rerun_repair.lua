@@ -4,6 +4,7 @@
 -- ARGV[1]：分片标记字段名，由 shardIndex 生成。
 -- ARGV[2]：分片业务失败次数字段名。
 -- ARGV[3]：更新时间文本，由调用方按 RFC3339 生成。
+-- ARGV[4]：运行态安全 TTL 毫秒，保证重跑链路中断后状态仍可自动回收。
 -- 原子性边界：success/skipped 节点不回滚；失败分片改为 rerun_prepared，使 RunTask 失败后可安全重试。
 local status = redis.call("HGET", KEYS[1], "status")
 if status == "success" or status == "skipped" then
@@ -25,7 +26,7 @@ if not prepared then
 end
 redis.call("HDEL", KEYS[1], ARGV[2])
 redis.call("HSET", KEYS[1], "status", "running", "errorMessage", "", "finishedAt", "", "updatedAt", ARGV[3])
-redis.call("PERSIST", KEYS[1])
+redis.call("PEXPIRE", KEYS[1], ARGV[4])
 if prepared then
     return 0
 end

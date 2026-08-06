@@ -281,11 +281,13 @@ func (h hook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessP
 		err := next(ctx, cmds)
 
 		if err != nil {
-			fields := []logx.LogField{
-				logx.Field("latency_ms", time.Since(begin).Milliseconds()),
-				logx.Field("commands", pipelineNames(cmds)),
+			if logErr := pipelineLogError(err, cmds); logErr != nil {
+				fields := []logx.LogField{
+					logx.Field("latency_ms", time.Since(begin).Milliseconds()),
+					logx.Field("commands", pipelineNames(cmds)),
+				}
+				loggerx.Errorw(ctx, "缓存 管道执行失败", logErr, fields...)
 			}
-			loggerx.Errorw(ctx, "缓存 管道执行失败", err, fields...)
 			// pipeline hook 不能改写原始错误语义，避免上层依赖的 errors.Is/直接比较失效。
 			return err
 		}
@@ -299,6 +301,19 @@ func (h hook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessP
 		}
 		return nil
 	}
+}
+
+// pipelineLogError 忽略管道内正常的空值；存在真实命令错误时仍返回该错误用于记录。
+func pipelineLogError(err error, cmds []redis.Cmder) error {
+	if err == nil || !errors.Is(err, redis.Nil) {
+		return err
+	}
+	for _, cmd := range cmds {
+		if cmdErr := cmd.Err(); cmdErr != nil && !errors.Is(cmdErr, redis.Nil) {
+			return cmdErr
+		}
+	}
+	return nil
 }
 
 // logProcess 根据耗时和错误情况输出 Redis 单命令日志。

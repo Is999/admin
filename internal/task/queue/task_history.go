@@ -28,6 +28,8 @@ const (
 	taskHistoryEventMaxBytes = 128 << 10
 	// taskHistoryWorkflowSnapshotMaxBytes 为事件元数据和落库状态预留空间。
 	taskHistoryWorkflowSnapshotMaxBytes = 120 << 10
+	// taskHistoryNodeDetailFloor 是保留分片指标时每个节点尽量保留的代表性明细数。
+	taskHistoryNodeDetailFloor = 16
 	// taskHistoryPendingMaxBytes 限制历史缓冲区总载荷，允许保留较完整快照但不放大 Redis 故障压力。
 	taskHistoryPendingMaxBytes = 64 << 20
 	// taskHistoryEnqueueTrimLimit 限制单次入队脚本最多裁剪的事件数，避免配置骤降时阻塞 Redis。
@@ -42,8 +44,8 @@ const (
 	taskHistoryCollectorLease = 20 * time.Second
 	// taskHistoryCleanupBatchSize 限制单表每次选取和删除的过期主键数。
 	taskHistoryCleanupBatchSize = 500
-	// taskHistoryCleanupMaxBatches 限制单轮追赶批次，兼顾高频写入和数据库压力。
-	taskHistoryCleanupMaxBatches = 4
+	// taskHistoryCleanupMaxBatches 允许高频任务过期积压在三秒超时内受控追赶。
+	taskHistoryCleanupMaxBatches = 20
 	// taskHistoryObservationTimeout 限制观测接口单个 Redis/DB 数据源的等待时间。
 	taskHistoryObservationTimeout = 2 * time.Second
 )
@@ -51,7 +53,8 @@ const (
 // HistoryEvent 是 Redis 缓冲区和 DB 落库器之间的紧凑终态事件。
 type HistoryEvent struct {
 	EventID  string                        `json:"eventId"`            // 幂等事件 ID
-	Kind     string                        `json:"kind"`               // 事件类型：workflow/failure
+	Kind     string                        `json:"kind"`               // 事件类型：task/workflow/failure
+	Task     *types.TaskRunHistoryItem     `json:"task,omitempty"`     // 单个实际任务终态摘要
 	Workflow *types.TaskWorkflowStatusResp `json:"workflow,omitempty"` // 工作流终态快照
 	Failure  *types.TaskFailureItem        `json:"failure,omitempty"`  // 最终失败任务摘要
 }
@@ -59,11 +62,13 @@ type HistoryEvent struct {
 // HistorySink 描述终态历史 DB 存储需要提供的最小能力。
 type HistorySink interface {
 	Persist(ctx context.Context, events []HistoryEvent) error
+	GetTaskRun(ctx context.Context, id uint64) (*types.TaskRunHistoryItem, error)
+	ListTaskRuns(ctx context.Context, req *types.ListTaskRunsReq) (*types.TaskRunHistoryListResp, error)
 	GetWorkflow(ctx context.Context, workflowID string) (*types.TaskWorkflowStatusResp, error)
 	ListWorkflows(ctx context.Context, req *types.ListTaskWorkflowsReq) (*types.TaskWorkflowHistoryListResp, error)
 	ListFailures(ctx context.Context, req *types.ListTaskFailuresReq) (*types.TaskFailureListResp, error)
 	WindowSummary(ctx context.Context, start time.Time, end time.Time) (types.TaskHistoryWindowSummary, error)
-	Cleanup(ctx context.Context, workflowBefore time.Time, failureBefore time.Time, limit int) (int64, error)
+	Cleanup(ctx context.Context, taskBefore time.Time, workflowBefore time.Time, failureBefore time.Time, limit int) (int64, error)
 }
 
 // AttachHistorySink 绑定 DB 历史存储；API 实例只提供查询，Worker 启动后才运行收集器。
@@ -128,11 +133,19 @@ func boundWorkflowHistorySnapshot(status *types.TaskWorkflowStatusResp) {
 		return
 	}
 
+	// 节点 details 通常由分片聚合而来，先缩减到代表性样本，尽量同时保留分片指标和节点明细。
+	for !workflowHistorySnapshotFits(status) && trimWorkflowNodeTraceDetails(status.Nodes, taskHistoryNodeDetailFloor) {
+	}
+	if workflowHistorySnapshotFits(status) {
+		return
+	}
+
 	for index := range status.Nodes {
 		status.Nodes[index].ShardTraces = nil
 	}
 	status.DetailLevel = "node"
-	for !workflowHistorySnapshotFits(status) && trimWorkflowNodeTraceDetails(status.Nodes) {
+	// 极端节点明细在移除分片后继续有界裁剪，保证完整事件不会因单个异常快照被拒绝。
+	for !workflowHistorySnapshotFits(status) && trimWorkflowNodeTraceDetails(status.Nodes, 0) {
 	}
 }
 
@@ -169,20 +182,19 @@ func workflowHistorySnapshotFits(status *types.TaskWorkflowStatusResp) bool {
 	return err == nil && len(raw) <= taskHistoryWorkflowSnapshotMaxBytes
 }
 
-// trimWorkflowNodeTraceDetails 每轮对半裁剪节点聚合明细，确保快速收敛且保留各节点代表信息。
-func trimWorkflowNodeTraceDetails(nodes []types.TaskWorkflowNodeItem) bool {
+// trimWorkflowNodeTraceDetails 每轮对半裁剪节点聚合明细，并保留指定数量的代表信息。
+func trimWorkflowNodeTraceDetails(nodes []types.TaskWorkflowNodeItem, floor int) bool {
 	trimmed := false
 	for index := range nodes {
 		trace := nodes[index].ExecutionTrace
-		if trace == nil || len(trace.Details) == 0 {
+		if trace == nil || len(trace.Details) <= floor {
 			continue
 		}
 		limit := len(trace.Details) / 2
-		if limit == 0 {
-			trace.Details = nil
-		} else {
-			trace.Details = trace.Details[:limit]
+		if limit < floor {
+			limit = floor
 		}
+		trace.Details = trace.Details[:limit]
 		trimmed = true
 	}
 	return trimmed
@@ -196,6 +208,82 @@ func historyTraceWithoutDetails(snapshot *taskstats.Snapshot) *taskstats.Snapsho
 	result := *snapshot
 	result.Details = nil
 	return &result
+}
+
+// enqueueTaskRunHistory 保存每个实际任务的终态摘要；工作流任务不重复保存大明细。
+func (m *Manager) enqueueTaskRunHistory(ctx context.Context, task *asynq.Task, attemptToken string, startedAt time.Time, snapshot *taskstats.Snapshot, runErr error) {
+	if !m.historyEnabled() || task == nil {
+		return
+	}
+	workflowMeta := workflowTaskMetaFromTask(task)
+	taskID, _ := asynq.GetTaskID(ctx)
+	if strings.TrimSpace(workflowMeta.WorkflowID) == "" && task.Type() == TypeWorkflowTrigger {
+		workflowMeta.WorkflowID = taskID
+	}
+	queue, _ := asynq.GetQueueName(ctx)
+	retried, _ := asynq.GetRetryCount(ctx)
+	maxRetry, _ := asynq.GetMaxRetry(ctx)
+	if startedAt.IsZero() || snapshot == nil {
+		runtime := m.readTaskRuntime(ctx, queue, taskID)
+		if startedAt.IsZero() {
+			startedAt, _ = time.Parse(time.RFC3339Nano, runtime.StartedAt)
+		}
+		if snapshot == nil {
+			snapshot = runtime.ExecutionTrace
+		}
+	}
+	finishedAt := time.Now()
+	if startedAt.IsZero() || startedAt.After(finishedAt) {
+		startedAt = finishedAt
+	}
+	status := taskExecutionStatusSuccess
+	errorMessage := ""
+	if runErr != nil {
+		status = "failed"
+		errorMessage = truncateTaskText(audit.SanitizeText(runErr.Error(), 4000), 1000)
+	}
+	traceID := ""
+	durationMS := finishedAt.Sub(startedAt).Milliseconds()
+	if requestMeta := requestctx.FromContext(ctx); requestMeta != nil {
+		traceID = strings.TrimSpace(requestMeta.TraceID)
+		if requestMeta.LatencyMS > 0 {
+			durationMS = requestMeta.LatencyMS
+		}
+	}
+	boundedSnapshot := boundedTaskStatsSnapshot(snapshot)
+	detailSnapshot := boundedSnapshot
+	if strings.TrimSpace(workflowMeta.WorkflowID) != "" {
+		detailSnapshot = nil
+	}
+	item := &types.TaskRunHistoryItem{
+		TaskID: taskID, TaskType: strings.TrimSpace(task.Type()), TaskName: taskNameFromTask(task),
+		Queue: m.displayQueueName(queue), Source: strings.TrimSpace(task.Headers()[headerTaskSource]),
+		PeriodicName: strings.TrimSpace(task.Headers()[HeaderPeriodicName]), Status: status,
+		WorkflowID: workflowMeta.WorkflowID, WorkflowName: workflowMeta.WorkflowName,
+		WorkflowNode: workflowMeta.WorkflowNode, ShardIndex: workflowMeta.ShardIndex, ShardTotal: workflowMeta.ShardTotal,
+		Retried: retried, MaxRetry: maxRetry, TraceID: traceID, DurationMS: max(durationMS, 0),
+		ErrorMessage: errorMessage, ExecutionTrace: detailSnapshot,
+		StartedAt: startedAt.Format(time.RFC3339Nano), FinishedAt: finishedAt.Format(time.RFC3339Nano), DataSource: "redis",
+	}
+	if boundedSnapshot != nil {
+		item.TraceTotal = boundedSnapshot.TotalCount
+		item.TraceRead = boundedSnapshot.ReadCount
+		item.TraceWrite = boundedSnapshot.InsertCount + boundedSnapshot.UpdateCount + boundedSnapshot.UpsertCount
+		item.TraceDelete = boundedSnapshot.DeleteCount
+		item.TraceError = boundedSnapshot.ErrorCount
+	}
+	if strings.TrimSpace(attemptToken) == "" {
+		attemptToken = m.taskFailureAttemptIdentity(ctx, queue, taskID, retried, maxRetry)
+	}
+	event := HistoryEvent{
+		EventID: taskHistoryEventID("task", item.Queue, item.TaskID, attemptToken, item.Status),
+		Kind:    "task", Task: item,
+	}
+	writeCtx, cancel := m.taskFinalWriteContext(ctx)
+	defer cancel()
+	if err := m.enqueueHistoryEvent(writeCtx, event); err != nil {
+		m.recordHistoryFailure(writeCtx, err, logx.Field("task_id", taskID))
+	}
 }
 
 // enqueueTaskFailureHistory 保存最终失败任务的最小排障信息，不复制原始 payload/result。
@@ -386,7 +474,7 @@ func (m *Manager) cleanupHistory(ctx context.Context, sink HistorySink) {
 	cleanupCtx, cancel := context.WithTimeout(ctx, taskHistoryPersistTimeout)
 	defer cancel()
 	for range taskHistoryCleanupMaxBatches {
-		deleted, err := sink.Cleanup(cleanupCtx, now.Add(-m.historyWorkflowRetention()), now.Add(-m.historyFailureRetention()), taskHistoryCleanupBatchSize)
+		deleted, err := sink.Cleanup(cleanupCtx, now.Add(-m.historyTaskRetention()), now.Add(-m.historyWorkflowRetention()), now.Add(-m.historyFailureRetention()), taskHistoryCleanupBatchSize)
 		if err != nil {
 			m.recordHistoryFailure(ctx, err)
 			return
@@ -395,6 +483,14 @@ func (m *Manager) cleanupHistory(ctx context.Context, sink HistorySink) {
 			return
 		}
 	}
+}
+
+// historyTaskRetention 返回全部任务终态摘要的短保留期。
+func (m *Manager) historyTaskRetention() time.Duration {
+	if days := m.CurrentConfig().History.TaskRetentionDays; days > 0 {
+		return time.Duration(days) * 24 * time.Hour
+	}
+	return 24 * time.Hour
 }
 
 // acquireHistoryLease 防止多 Worker 同时落库或清理同一批历史。
@@ -520,6 +616,34 @@ func (m *Manager) historySinkSnapshot() HistorySink {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.historySink
+}
+
+// GetTaskRunHistory 查询任务终态历史详情。
+func (m *Manager) GetTaskRunHistory(ctx context.Context, id uint64) (*types.TaskRunHistoryItem, error) {
+	sink := m.historySinkSnapshot()
+	if !m.historyEnabled() || sink == nil {
+		return nil, ErrTaskQueueDisabled
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, taskHistoryObservationTimeout)
+	defer cancel()
+	return sink.GetTaskRun(queryCtx, id)
+}
+
+// ListTaskRuns 查询 DB 中全部实际任务的短期终态历史。
+func (m *Manager) ListTaskRuns(ctx context.Context, req *types.ListTaskRunsReq) (*types.TaskRunHistoryListResp, error) {
+	if req == nil {
+		return nil, errors.Errorf("任务历史查询不能为空")
+	}
+	if err := req.Validate(); err != nil {
+		return nil, errors.Tag(err)
+	}
+	sink := m.historySinkSnapshot()
+	if !m.historyEnabled() || sink == nil {
+		return nil, ErrTaskQueueDisabled
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, taskHistoryObservationTimeout)
+	defer cancel()
+	return sink.ListTaskRuns(queryCtx, req)
 }
 
 // historyPendingHealth 读取 O(1) 缓冲区健康状态。

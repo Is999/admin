@@ -607,16 +607,112 @@ type TaskWorkflowHistoryListResp struct {
 	DataSource string                    `json:"dataSource"`           // 固定为 database
 }
 
+// GetTaskRunHistoryReq 表示任务终态历史详情路径参数。
+type GetTaskRunHistoryReq struct {
+	ID uint64 `json:"id,optional" form:"id,optional" path:"id"` // 历史主键
+}
+
+// Validate 校验任务终态历史详情参数。
+func (r *GetTaskRunHistoryReq) Validate() error {
+	if r == nil || r.ID == 0 {
+		return errors.Errorf("任务历史 ID 必须大于 0")
+	}
+	return nil
+}
+
+// ListTaskRunsReq 表示全部任务终态历史游标查询条件。
+type ListTaskRunsReq struct {
+	TaskID       string `json:"taskId,optional" form:"taskId,optional"`             // 任务 ID
+	WorkflowID   string `json:"workflowId,optional" form:"workflowId,optional"`     // 工作流实例 ID
+	TaskType     string `json:"taskType,optional" form:"taskType,optional"`         // 任务类型
+	TaskName     string `json:"taskName,optional" form:"taskName,optional"`         // 任务展示名
+	PeriodicName string `json:"periodicName,optional" form:"periodicName,optional"` // 周期任务名称
+	Queue        string `json:"queue,optional" form:"queue,optional"`               // 队列
+	Status       string `json:"status,optional" form:"status,optional"`             // 终态：success/failed
+	StartTime    string `json:"startTime,optional" form:"startTime,optional"`       // 查询开始时间
+	EndTime      string `json:"endTime,optional" form:"endTime,optional"`           // 查询结束时间
+	Cursor       string `json:"cursor,optional" form:"cursor,optional"`             // 下一页游标
+	PageSize     int    `json:"pageSize,optional" form:"pageSize,optional"`         // 每页条数，最大 100
+}
+
+// Validate 校验全部任务终态历史查询边界。
+func (r *ListTaskRunsReq) Validate() error {
+	if r == nil {
+		return errors.Errorf("任务历史查询不能为空")
+	}
+	if len([]rune(strings.TrimSpace(r.TaskID))) > 128 || len([]rune(strings.TrimSpace(r.WorkflowID))) > 128 || len([]rune(strings.TrimSpace(r.TaskType))) > 128 || len([]rune(strings.TrimSpace(r.TaskName))) > 128 || len([]rune(strings.TrimSpace(r.PeriodicName))) > 128 || len([]rune(strings.TrimSpace(r.Queue))) > 128 {
+		return errors.Errorf("任务历史查询关键字不能超过 128 个字符")
+	}
+	if len(strings.TrimSpace(r.Cursor)) > 256 {
+		return errors.Errorf("cursor 不能超过 256 个字符")
+	}
+	if status := strings.TrimSpace(r.Status); status != "" && status != "success" && status != "failed" {
+		return errors.Errorf("status 仅支持 success/failed")
+	}
+	if err := normalizeTaskHistoryRange(&r.StartTime, &r.EndTime); err != nil {
+		return errors.Tag(err)
+	}
+	if r.PageSize <= 0 {
+		r.PageSize = 20
+	}
+	if r.PageSize > 100 {
+		r.PageSize = 100
+	}
+	return nil
+}
+
+// TaskRunHistoryItem 表示单个实际任务的短期终态摘要。
+type TaskRunHistoryItem struct {
+	ID             uint64              `json:"id"`                       // 历史主键
+	TaskID         string              `json:"taskId"`                   // Asynq 任务 ID
+	TaskType       string              `json:"taskType"`                 // 任务类型
+	TaskName       string              `json:"taskName"`                 // 任务展示名
+	Queue          string              `json:"queue"`                    // 队列
+	Source         string              `json:"source,omitempty"`         // 触发来源
+	PeriodicName   string              `json:"periodicName,omitempty"`   // 周期任务名称
+	WorkflowID     string              `json:"workflowId,omitempty"`     // 工作流实例 ID
+	WorkflowName   string              `json:"workflowName,omitempty"`   // 工作流名称
+	WorkflowNode   string              `json:"workflowNode,omitempty"`   // 工作流节点
+	ShardIndex     int                 `json:"shardIndex"`               // 工作流分片下标；非分片任务为 0
+	ShardTotal     int                 `json:"shardTotal"`               // 工作流分片总数；非分片任务为 0
+	Status         string              `json:"status"`                   // 终态：success/failed
+	Retried        int                 `json:"retried"`                  // 已重试次数
+	MaxRetry       int                 `json:"maxRetry"`                 // 最大重试次数
+	TraceID        string              `json:"traceId,omitempty"`        // 链路追踪 ID
+	TraceTotal     int64               `json:"traceTotal"`               // 处理总量
+	TraceRead      int64               `json:"traceRead"`                // 读取数量
+	TraceWrite     int64               `json:"traceWrite"`               // 写入数量
+	TraceDelete    int64               `json:"traceDelete"`              // 删除数量
+	TraceError     int64               `json:"traceError"`               // 错误数量
+	DurationMS     int64               `json:"durationMs"`               // 执行耗时毫秒
+	ErrorMessage   string              `json:"errorMessage,omitempty"`   // 脱敏失败摘要
+	ExecutionTrace *taskstats.Snapshot `json:"executionTrace,omitempty"` // 有界处理明细，仅详情返回
+	StartedAt      string              `json:"startedAt"`                // 开始时间
+	FinishedAt     string              `json:"finishedAt"`               // 终态时间
+	PersistedAt    string              `json:"persistedAt,omitempty"`    // 落库时间
+	DataSource     string              `json:"dataSource"`               // 固定为 database
+}
+
+// TaskRunHistoryListResp 表示全部任务终态历史游标分页结果。
+type TaskRunHistoryListResp struct {
+	Items      []TaskRunHistoryItem `json:"items"`                // 当前页历史
+	NextCursor string               `json:"nextCursor,omitempty"` // 下一页游标
+	HasMore    bool                 `json:"hasMore"`              // 是否还有下一页
+	DataSource string               `json:"dataSource"`           // 固定为 database
+}
+
 // ListTaskFailuresReq 表示失败历史游标查询条件。
 type ListTaskFailuresReq struct {
-	TaskID     string `json:"taskId,optional" form:"taskId,optional"`         // 任务 ID
-	WorkflowID string `json:"workflowId,optional" form:"workflowId,optional"` // 工作流实例 ID
-	TaskType   string `json:"taskType,optional" form:"taskType,optional"`     // 任务类型
-	Queue      string `json:"queue,optional" form:"queue,optional"`           // 队列
-	StartTime  string `json:"startTime,optional" form:"startTime,optional"`   // 查询开始时间
-	EndTime    string `json:"endTime,optional" form:"endTime,optional"`       // 查询结束时间
-	Cursor     string `json:"cursor,optional" form:"cursor,optional"`         // 下一页游标
-	PageSize   int    `json:"pageSize,optional" form:"pageSize,optional"`     // 每页条数，最大 100
+	TaskID       string `json:"taskId,optional" form:"taskId,optional"`             // 任务 ID
+	WorkflowID   string `json:"workflowId,optional" form:"workflowId,optional"`     // 工作流实例 ID
+	TaskType     string `json:"taskType,optional" form:"taskType,optional"`         // 任务类型
+	TaskName     string `json:"taskName,optional" form:"taskName,optional"`         // 任务展示名
+	PeriodicName string `json:"periodicName,optional" form:"periodicName,optional"` // 周期任务名称
+	Queue        string `json:"queue,optional" form:"queue,optional"`               // 队列
+	StartTime    string `json:"startTime,optional" form:"startTime,optional"`       // 查询开始时间
+	EndTime      string `json:"endTime,optional" form:"endTime,optional"`           // 查询结束时间
+	Cursor       string `json:"cursor,optional" form:"cursor,optional"`             // 下一页游标
+	PageSize     int    `json:"pageSize,optional" form:"pageSize,optional"`         // 每页条数，最大 100
 }
 
 // Validate 校验失败历史查询边界。
@@ -624,7 +720,7 @@ func (r *ListTaskFailuresReq) Validate() error {
 	if r == nil {
 		return errors.Errorf("失败历史查询不能为空")
 	}
-	if len([]rune(strings.TrimSpace(r.TaskID))) > 128 || len([]rune(strings.TrimSpace(r.WorkflowID))) > 128 || len([]rune(strings.TrimSpace(r.TaskType))) > 128 || len([]rune(strings.TrimSpace(r.Queue))) > 128 {
+	if len([]rune(strings.TrimSpace(r.TaskID))) > 128 || len([]rune(strings.TrimSpace(r.WorkflowID))) > 128 || len([]rune(strings.TrimSpace(r.TaskType))) > 128 || len([]rune(strings.TrimSpace(r.TaskName))) > 128 || len([]rune(strings.TrimSpace(r.PeriodicName))) > 128 || len([]rune(strings.TrimSpace(r.Queue))) > 128 {
 		return errors.Errorf("失败历史查询关键字不能超过 128 个字符")
 	}
 	if len(strings.TrimSpace(r.Cursor)) > 256 {

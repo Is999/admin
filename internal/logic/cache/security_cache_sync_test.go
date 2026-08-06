@@ -53,6 +53,16 @@ func TestSecurityCacheSyncBackoff(t *testing.T) {
 	}
 }
 
+// TestSecurityCacheSyncWorkerIntervals 锁定阻断快速补偿和空闲数据库对账频率。
+func TestSecurityCacheSyncWorkerIntervals(t *testing.T) {
+	if securityCacheSyncPollInterval != time.Second {
+		t.Fatalf("poll interval = %s, want %s", securityCacheSyncPollInterval, time.Second)
+	}
+	if securityCacheSyncReconcileInterval != 30*time.Second {
+		t.Fatalf("reconcile interval = %s, want %s", securityCacheSyncReconcileInterval, 30*time.Second)
+	}
+}
+
 // TestSecurityCacheSyncErrorText 验证任务错误摘要按字符数截断。
 func TestSecurityCacheSyncErrorText(t *testing.T) {
 	message := strings.Repeat("错", securityCacheSyncMaxErrorRunes+1)
@@ -70,6 +80,38 @@ func TestSecurityCacheSyncWorkerStartFailsWithoutDatabase(t *testing.T) {
 	}
 	if worker.running.Load() {
 		t.Fatal("Start() failure must reset running state")
+	}
+}
+
+// TestRunPendingSecurityCacheSyncSkipsDatabaseWithoutSignal 验证空闲轮询只检查 Redis，不访问数据库。
+func TestRunPendingSecurityCacheSyncSkipsDatabaseWithoutSignal(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	worker := NewSecurityCacheSyncWorker(svc.NewServiceContext(
+		config.Config{AppID: "site-a"},
+		svc.Dependencies{Rds: client},
+	))
+	if err := worker.runPendingOnce(context.Background()); err != nil {
+		t.Fatalf("runPendingOnce() error = %v", err)
+	}
+}
+
+// TestRunPendingSecurityCacheSyncFailsClosedOnSignal 验证阻断信号会先关闭本进程鉴权再进入数据库补偿。
+func TestRunPendingSecurityCacheSyncFailsClosedOnSignal(t *testing.T) {
+	useRuntimeAppID(t, "site-a")
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	service := svc.NewServiceContext(config.Config{AppID: "site-a"}, svc.Dependencies{Rds: client})
+	worker := NewSecurityCacheSyncWorker(service)
+	if err := client.Set(context.Background(), keys.SecurityCacheSyncBarrierRedisKey(), "pending", 0).Err(); err != nil {
+		t.Fatalf("seed barrier error = %v", err)
+	}
+	if err := worker.runPendingOnce(context.Background()); err == nil {
+		t.Fatal("runPendingOnce() error = nil, want database unavailable error")
+	}
+	if !service.SecurityCacheSyncPending() {
+		t.Fatal("barrier signal must close local cache authentication")
 	}
 }
 

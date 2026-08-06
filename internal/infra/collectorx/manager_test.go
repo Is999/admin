@@ -464,6 +464,38 @@ func TestFailureSeedsFromResultsOnlyKeepsFailedEvents(t *testing.T) {
 	}
 }
 
+// TestNextFailureRetryInterval 验证失败账本空闲轮询有界退避且处理到任务后立即恢复。
+func TestNextFailureRetryInterval(t *testing.T) {
+	base := time.Second
+	maximum := 5 * time.Second
+	interval := base
+	for _, want := range []time.Duration{2 * time.Second, 4 * time.Second, maximum, maximum} {
+		interval = nextFailureRetryInterval(interval, base, maximum, false)
+		if interval != want {
+			t.Fatalf("nextFailureRetryInterval() = %s, want %s", interval, want)
+		}
+	}
+	if got := nextFailureRetryInterval(interval, base, maximum, true); got != base {
+		t.Fatalf("found task next interval = %s, want %s", got, base)
+	}
+}
+
+// TestFailureRecoveryInterval 验证运行租约回收固定限制在 30 至 60 秒。
+func TestFailureRecoveryInterval(t *testing.T) {
+	shortLease := &Manager{cfg: config.CollectorConfig{FailureRetry: config.CollectorFailureRetryConfig{RunningLeaseSeconds: 3}}}
+	if got := shortLease.failureRecoveryInterval(); got != minFailureRecoveryInterval {
+		t.Fatalf("short lease recovery interval = %s, want %s", got, minFailureRecoveryInterval)
+	}
+	defaultLease := &Manager{}
+	if got := defaultLease.failureRecoveryInterval(); got != maxFailureRecoveryInterval {
+		t.Fatalf("default recovery interval = %s, want %s", got, maxFailureRecoveryInterval)
+	}
+	midLease := &Manager{cfg: config.CollectorConfig{FailureRetry: config.CollectorFailureRetryConfig{RunningLeaseSeconds: 450}}}
+	if got := midLease.failureRecoveryInterval(); got != 45*time.Second {
+		t.Fatalf("mid lease recovery interval = %s, want %s", got, 45*time.Second)
+	}
+}
+
 // TestInvalidKafkaFailureCreatesDeadEvent 确保坏消息进入死信状态，不会进入业务 Processor。
 func TestInvalidKafkaFailureCreatesDeadEvent(t *testing.T) {
 	manager := &Manager{cfg: config.CollectorConfig{FailureRetry: config.CollectorFailureRetryConfig{MaxRetryTimes: 6}}}

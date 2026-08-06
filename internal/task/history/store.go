@@ -23,6 +23,8 @@ const (
 	historyCreateBatchSize = 50
 	// historySnapshotMaxBytes 与完整事件硬上限一致，并为落库元数据保留工作流快照预算之外的空间。
 	historySnapshotMaxBytes = 128 << 10
+	// legacyPeriodicPrefix 是旧版误写入周期名称字段的展示前缀，仅用于短期历史兼容读取。
+	legacyPeriodicPrefix = "周期任务触发:"
 )
 
 // Store 使用主库保存短期工作流汇总和最终失败明细。
@@ -46,10 +48,17 @@ func (s *Store) Persist(ctx context.Context, events []taskqueue.HistoryEvent) er
 	if s == nil || len(events) == 0 {
 		return nil
 	}
+	taskRows := make([]model.TaskRun, 0, len(events))
 	workflowRows := make([]model.TaskWorkflowRun, 0, len(events))
 	failureRows := make([]model.TaskFailure, 0, len(events))
 	for _, event := range events {
 		switch event.Kind {
+		case "task":
+			row, err := s.taskRow(event)
+			if err != nil {
+				return errors.Tag(err)
+			}
+			taskRows = append(taskRows, row)
 		case "workflow":
 			row, err := s.workflowRow(event)
 			if err != nil {
@@ -67,8 +76,13 @@ func (s *Store) Persist(ctx context.Context, events []taskqueue.HistoryEvent) er
 		}
 	}
 	return errors.Tag(s.writeDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if len(taskRows) > 0 {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&taskRows, historyCreateBatchSize).Error; err != nil {
+				return errors.Wrap(err, "批量写入任务终态历史失败")
+			}
+		}
 		if len(workflowRows) > 0 {
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&workflowRows, historyCreateBatchSize).Error; err != nil {
+			if err := tx.Clauses(workflowUpsertClause()).CreateInBatches(&workflowRows, historyCreateBatchSize).Error; err != nil {
 				return errors.Wrap(err, "批量写入工作流历史失败")
 			}
 		}
@@ -79,6 +93,59 @@ func (s *Store) Persist(ctx context.Context, events []taskqueue.HistoryEvent) er
 		}
 		return nil
 	}))
+}
+
+// taskRow 把单个任务终态事件转换为有界摘要行。
+func (s *Store) taskRow(event taskqueue.HistoryEvent) (model.TaskRun, error) {
+	if event.Task == nil || strings.TrimSpace(event.EventID) == "" {
+		return model.TaskRun{}, errors.Errorf("任务终态历史事件缺少快照或事件 ID")
+	}
+	snapshot := *event.Task
+	persistedAt := time.Now()
+	snapshot.DataSource = "database"
+	snapshot.PersistedAt = persistedAt.Format(time.RFC3339)
+	raw, err := json.Marshal(&snapshot)
+	if err != nil {
+		return model.TaskRun{}, errors.Wrap(err, "序列化任务终态历史快照失败")
+	}
+	if len(raw) > historySnapshotMaxBytes {
+		return model.TaskRun{}, errors.Errorf("任务终态历史快照超过上限 task_id=%s bytes=%d", snapshot.TaskID, len(raw))
+	}
+	startedAt, err := parseHistoryTime(snapshot.StartedAt)
+	if err != nil {
+		return model.TaskRun{}, errors.Wrap(err, "解析任务开始时间失败")
+	}
+	finishedAt, err := parseHistoryTime(snapshot.FinishedAt)
+	if err != nil {
+		return model.TaskRun{}, errors.Wrap(err, "解析任务完成时间失败")
+	}
+	return model.TaskRun{
+		AppID: s.appID, EventID: event.EventID, TaskID: truncateText(snapshot.TaskID, 128),
+		TaskType: truncateText(snapshot.TaskType, 128), TaskName: truncateText(snapshot.TaskName, 128),
+		Queue: truncateText(snapshot.Queue, 128), Source: truncateText(snapshot.Source, 32),
+		PeriodicName: truncateText(snapshot.PeriodicName, 128), Status: snapshot.Status,
+		WorkflowID: truncateText(snapshot.WorkflowID, 128), WorkflowName: truncateText(snapshot.WorkflowName, 128),
+		WorkflowNode: truncateText(snapshot.WorkflowNode, 128), ShardIndex: max(snapshot.ShardIndex, 0), ShardTotal: max(snapshot.ShardTotal, 0),
+		Retried: max(snapshot.Retried, 0), MaxRetry: max(snapshot.MaxRetry, 0),
+		TraceID: truncateText(snapshot.TraceID, 64), TraceTotal: snapshot.TraceTotal,
+		TraceRead: snapshot.TraceRead, TraceWrite: snapshot.TraceWrite, TraceDelete: snapshot.TraceDelete,
+		TraceError: snapshot.TraceError, DurationMS: max(snapshot.DurationMS, 0),
+		ErrorMessage: truncateText(snapshot.ErrorMessage, 1000), SnapshotJSON: string(raw),
+		StartedAt: startedAt, FinishedAt: finishedAt, CreatedAt: persistedAt,
+	}, nil
+}
+
+// workflowUpsertClause 让同一工作流的手工重跑覆盖旧终态，避免历史列表和日报重复计数。
+func workflowUpsertClause() clause.OnConflict {
+	return clause.OnConflict{
+		Columns: []clause.Column{{Name: "app_id"}, {Name: "workflow_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"event_id", "workflow_name", "periodic_name", "source", "queue", "status",
+			"node_total", "task_total", "succeeded", "failed", "skipped",
+			"trace_total", "trace_read", "trace_write", "trace_delete", "trace_error",
+			"duration_ms", "error_message", "snapshot_json", "workflow_created_at", "finished_at", "created_at",
+		}),
+	}
 }
 
 // workflowRow 把已经限流裁剪的工作流快照转换为终态汇总行。
@@ -170,6 +237,67 @@ func (s *Store) failureRow(event taskqueue.HistoryEvent) (model.TaskFailure, err
 	}, nil
 }
 
+// GetTaskRun 返回指定任务终态历史详情。
+func (s *Store) GetTaskRun(ctx context.Context, id uint64) (*types.TaskRunHistoryItem, error) {
+	if s == nil || id == 0 {
+		return nil, redis.Nil
+	}
+	var row model.TaskRun
+	err := s.readDB.WithContext(ctx).Model(&model.TaskRun{}).
+		Where("app_id = ? AND id = ?", s.appID, id).Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, redis.Nil
+	}
+	if err != nil {
+		return nil, errors.Wrap(err, "查询任务终态历史详情失败")
+	}
+	var snapshot types.TaskRunHistoryItem
+	if err = json.Unmarshal([]byte(row.SnapshotJSON), &snapshot); err != nil {
+		return nil, errors.Wrap(err, "解析任务终态历史快照失败")
+	}
+	snapshot.ID = row.ID
+	snapshot.DataSource = "database"
+	snapshot.PersistedAt = row.CreatedAt.Format(time.RFC3339)
+	return &snapshot, nil
+}
+
+// ListTaskRuns 使用 finished_at + id 游标查询全部任务终态历史。
+func (s *Store) ListTaskRuns(ctx context.Context, req *types.ListTaskRunsReq) (*types.TaskRunHistoryListResp, error) {
+	if s == nil || req == nil {
+		return nil, errors.Errorf("任务终态历史存储或请求为空")
+	}
+	start, end, err := parseHistoryRange(req.StartTime, req.EndTime)
+	if err != nil {
+		return nil, errors.Tag(err)
+	}
+	query := s.readDB.WithContext(ctx).Model(&model.TaskRun{}).
+		Where("app_id = ? AND finished_at >= ? AND finished_at < ?", s.appID, start, end)
+	query = applyTaskRunFilters(query, req)
+	if cursorAt, cursorID, ok := decodeHistoryCursor(req.Cursor); ok {
+		query = query.Where("(finished_at < ? OR (finished_at = ? AND id < ?))", cursorAt, cursorAt, cursorID)
+	} else if strings.TrimSpace(req.Cursor) != "" {
+		return nil, errors.Errorf("任务终态历史 cursor 非法")
+	}
+	rows := make([]model.TaskRun, 0, req.PageSize+1)
+	if err = query.Select("id, task_id, task_type, task_name, queue, source, periodic_name, workflow_id, workflow_name, workflow_node, shard_index, shard_total, status, retried, max_retry, trace_id, trace_total, trace_read, trace_write, trace_delete, trace_error, duration_ms, error_message, started_at, finished_at, created_at").
+		Order("finished_at DESC").Order("id DESC").Limit(req.PageSize + 1).Find(&rows).Error; err != nil {
+		return nil, errors.Wrap(err, "查询任务终态历史列表失败")
+	}
+	resp := &types.TaskRunHistoryListResp{Items: make([]types.TaskRunHistoryItem, 0, min(len(rows), req.PageSize)), DataSource: "database"}
+	if len(rows) > req.PageSize {
+		resp.HasMore = true
+		rows = rows[:req.PageSize]
+	}
+	for _, row := range rows {
+		resp.Items = append(resp.Items, taskRunHistoryItem(row))
+	}
+	if resp.HasMore && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		resp.NextCursor = encodeHistoryCursor(last.FinishedAt, last.ID)
+	}
+	return resp, nil
+}
+
 // GetWorkflow 返回指定工作流最新一次终态历史快照。
 func (s *Store) GetWorkflow(ctx context.Context, workflowID string) (*types.TaskWorkflowStatusResp, error) {
 	if s == nil {
@@ -189,6 +317,7 @@ func (s *Store) GetWorkflow(ctx context.Context, workflowID string) (*types.Task
 	if err = json.Unmarshal([]byte(row.SnapshotJSON), &snapshot); err != nil {
 		return nil, errors.Wrap(err, "解析工作流历史快照失败")
 	}
+	snapshot.PeriodicName = normalizePeriodicName(snapshot.PeriodicName)
 	snapshot.DataSource = "database"
 	snapshot.HistoryStatus = "persisted"
 	snapshot.PersistedAt = row.CreatedAt.Format(time.RFC3339)
@@ -243,18 +372,7 @@ func (s *Store) ListFailures(ctx context.Context, req *types.ListTaskFailuresReq
 	}
 	query := s.readDB.WithContext(ctx).Model(&model.TaskFailure{}).
 		Where("app_id = ? AND failed_at >= ? AND failed_at < ?", s.appID, start, end)
-	if value := strings.TrimSpace(req.TaskID); value != "" {
-		query = query.Where("task_id = ?", value)
-	}
-	if value := strings.TrimSpace(req.WorkflowID); value != "" {
-		query = query.Where("workflow_id = ?", value)
-	}
-	if value := strings.TrimSpace(req.TaskType); value != "" {
-		query = query.Where("task_type = ?", value)
-	}
-	if value := strings.TrimSpace(req.Queue); value != "" {
-		query = query.Where("queue = ?", value)
-	}
+	query = applyFailureFilters(query, req)
 	if cursorAt, cursorID, ok := decodeHistoryCursor(req.Cursor); ok {
 		query = query.Where("(failed_at < ? OR (failed_at = ? AND id < ?))", cursorAt, cursorAt, cursorID)
 	} else if strings.TrimSpace(req.Cursor) != "" {
@@ -272,7 +390,7 @@ func (s *Store) ListFailures(ctx context.Context, req *types.ListTaskFailuresReq
 	for _, row := range rows {
 		resp.Items = append(resp.Items, types.TaskFailureItem{
 			ID: row.ID, TaskID: row.TaskID, TaskType: row.TaskType, TaskName: row.TaskName,
-			Queue: row.Queue, Source: row.Source, PeriodicName: row.PeriodicName,
+			Queue: row.Queue, Source: row.Source, PeriodicName: normalizePeriodicName(row.PeriodicName),
 			WorkflowID: row.WorkflowID, WorkflowName: row.WorkflowName,
 			WorkflowNode: row.WorkflowNode, Retried: row.Retried, MaxRetry: row.MaxRetry,
 			ErrorMessage: row.ErrorMessage, TraceID: row.TraceID, FailedAt: row.FailedAt.Format(time.RFC3339),
@@ -284,6 +402,29 @@ func (s *Store) ListFailures(ctx context.Context, req *types.ListTaskFailuresReq
 		resp.NextCursor = encodeHistoryCursor(last.FailedAt, last.ID)
 	}
 	return resp, nil
+}
+
+// applyFailureFilters 使用组合索引等值过滤最终失败任务。
+func applyFailureFilters(query *gorm.DB, req *types.ListTaskFailuresReq) *gorm.DB {
+	if value := strings.TrimSpace(req.TaskID); value != "" {
+		query = query.Where("task_id = ?", value)
+	}
+	if value := strings.TrimSpace(req.WorkflowID); value != "" {
+		query = query.Where("workflow_id = ?", value)
+	}
+	if value := strings.TrimSpace(req.TaskType); value != "" {
+		query = query.Where("task_type = ?", value)
+	}
+	if value := strings.TrimSpace(req.TaskName); value != "" {
+		query = query.Where("task_name = ?", value)
+	}
+	if value := strings.TrimSpace(req.PeriodicName); value != "" {
+		query = query.Where("periodic_name = ?", value)
+	}
+	if value := strings.TrimSpace(req.Queue); value != "" {
+		query = query.Where("queue = ?", value)
+	}
+	return query
 }
 
 // WindowSummary 通过覆盖索引聚合指定窗口，避免读取工作流 JSON 明细。
@@ -317,7 +458,7 @@ func (s *Store) WindowSummary(ctx context.Context, start time.Time, end time.Tim
 }
 
 // Cleanup 按索引选取小批主键删除过期历史，不做大事务和无界 DELETE。
-func (s *Store) Cleanup(ctx context.Context, workflowBefore time.Time, failureBefore time.Time, limit int) (int64, error) {
+func (s *Store) Cleanup(ctx context.Context, taskBefore time.Time, workflowBefore time.Time, failureBefore time.Time, limit int) (int64, error) {
 	if s == nil || limit <= 0 || limit > 1000 {
 		return 0, errors.Errorf("任务历史清理批次必须在 1-1000 之间")
 	}
@@ -327,6 +468,7 @@ func (s *Store) Cleanup(ctx context.Context, workflowBefore time.Time, failureBe
 		before time.Time // 保留期截止时间
 		column string    // 命中索引的时间列
 	}{
+		{model: &model.TaskRun{}, before: taskBefore, column: "finished_at"},
 		{model: &model.TaskWorkflowRun{}, before: workflowBefore, column: "finished_at"},
 		{model: &model.TaskFailure{}, before: failureBefore, column: "failed_at"},
 	} {
@@ -348,6 +490,48 @@ func (s *Store) Cleanup(ctx context.Context, workflowBefore time.Time, failureBe
 	return deleted, nil
 }
 
+// taskRunHistoryItem 把任务终态行转换为不含快照 JSON 的列表项。
+func taskRunHistoryItem(row model.TaskRun) types.TaskRunHistoryItem {
+	return types.TaskRunHistoryItem{
+		ID: row.ID, TaskID: row.TaskID, TaskType: row.TaskType, TaskName: row.TaskName,
+		Queue: row.Queue, Source: row.Source, PeriodicName: row.PeriodicName, Status: row.Status,
+		WorkflowID: row.WorkflowID, WorkflowName: row.WorkflowName, WorkflowNode: row.WorkflowNode,
+		ShardIndex: row.ShardIndex, ShardTotal: row.ShardTotal,
+		Retried: row.Retried, MaxRetry: row.MaxRetry, TraceID: row.TraceID,
+		TraceTotal: row.TraceTotal, TraceRead: row.TraceRead, TraceWrite: row.TraceWrite,
+		TraceDelete: row.TraceDelete, TraceError: row.TraceError, DurationMS: row.DurationMS,
+		ErrorMessage: row.ErrorMessage, StartedAt: row.StartedAt.Format(time.RFC3339),
+		FinishedAt: row.FinishedAt.Format(time.RFC3339), PersistedAt: row.CreatedAt.Format(time.RFC3339),
+		DataSource: "database",
+	}
+}
+
+// applyTaskRunFilters 应用全部任务历史等值过滤，避免在线接口执行模糊扫描。
+func applyTaskRunFilters(query *gorm.DB, req *types.ListTaskRunsReq) *gorm.DB {
+	if value := strings.TrimSpace(req.TaskID); value != "" {
+		query = query.Where("task_id = ?", value)
+	}
+	if value := strings.TrimSpace(req.WorkflowID); value != "" {
+		query = query.Where("workflow_id = ?", value)
+	}
+	if value := strings.TrimSpace(req.TaskType); value != "" {
+		query = query.Where("task_type = ?", value)
+	}
+	if value := strings.TrimSpace(req.TaskName); value != "" {
+		query = query.Where("task_name = ?", value)
+	}
+	if value := strings.TrimSpace(req.PeriodicName); value != "" {
+		query = query.Where("periodic_name = ?", value)
+	}
+	if value := strings.TrimSpace(req.Queue); value != "" {
+		query = query.Where("queue = ?", value)
+	}
+	if value := strings.TrimSpace(req.Status); value != "" {
+		query = query.Where("status = ?", value)
+	}
+	return query
+}
+
 // applyWorkflowFilters 应用工作流列表等值过滤，确保命中组合索引。
 func applyWorkflowFilters(query *gorm.DB, req *types.ListTaskWorkflowsReq) *gorm.DB {
 	if value := strings.TrimSpace(req.WorkflowID); value != "" {
@@ -357,7 +541,10 @@ func applyWorkflowFilters(query *gorm.DB, req *types.ListTaskWorkflowsReq) *gorm
 		query = query.Where("workflow_name = ?", value)
 	}
 	if value := strings.TrimSpace(req.PeriodicName); value != "" {
-		query = query.Where("periodic_name = ?", value)
+		query = query.Where("periodic_name IN ?", []string{
+			value,
+			truncateText(legacyPeriodicPrefix+value, 128),
+		})
 	}
 	if value := strings.TrimSpace(req.Status); value != "" {
 		query = query.Where("status = ?", value)
@@ -375,13 +562,18 @@ func applyWorkflowFilters(query *gorm.DB, req *types.ListTaskWorkflowsReq) *gorm
 func workflowHistoryItem(row model.TaskWorkflowRun) types.TaskWorkflowHistoryItem {
 	return types.TaskWorkflowHistoryItem{
 		ID: row.ID, WorkflowID: row.WorkflowID, WorkflowName: row.WorkflowName,
-		PeriodicName: row.PeriodicName, Status: row.Status, Source: row.Source, Queue: row.Queue,
+		PeriodicName: normalizePeriodicName(row.PeriodicName), Status: row.Status, Source: row.Source, Queue: row.Queue,
 		NodeTotal: row.NodeTotal, TaskTotal: row.TaskTotal, Succeeded: row.Succeeded,
 		Failed: row.Failed, Skipped: row.Skipped, TraceTotal: row.TraceTotal, TraceError: row.TraceError,
 		DurationMS: row.DurationMS, ErrorMessage: row.ErrorMessage,
 		CreatedAt: row.WorkflowCreatedAt.Format(time.RFC3339), FinishedAt: row.FinishedAt.Format(time.RFC3339),
 		PersistedAt: row.CreatedAt.Format(time.RFC3339), DataSource: "database", HistoryStatus: "persisted",
 	}
+}
+
+// normalizePeriodicName 将旧版展示名称还原为周期任务原始名称。
+func normalizePeriodicName(name string) string {
+	return strings.TrimPrefix(strings.TrimSpace(name), legacyPeriodicPrefix)
 }
 
 // parseHistoryRange 解析调用层已校验的历史窗口。

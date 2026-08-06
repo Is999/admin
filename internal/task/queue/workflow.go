@@ -216,12 +216,8 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 	if spec.ShardTotal <= 0 {
 		spec.ShardTotal = 1
 	}
-	maxShardTotal := tasklimits.MaxShardTotal
-	if def.MaxShardTotal > 0 {
-		maxShardTotal = min(maxShardTotal, def.MaxShardTotal)
-	}
-	if spec.ShardTotal > maxShardTotal {
-		return "", errors.Errorf("工作流分片数超过上限 workflow=%s shard_total=%d max=%d", def.Name, spec.ShardTotal, maxShardTotal)
+	if err = validateWorkflowShardTotal(def, spec.ShardTotal); err != nil {
+		return "", errors.Tag(err)
 	}
 	if spec.GrayPercent <= 0 || spec.GrayPercent > 100 {
 		spec.GrayPercent = 100
@@ -354,6 +350,21 @@ func (m *Manager) startWorkflow(ctx context.Context, spec WorkflowStartSpec) (st
 		}
 	}
 	return spec.WorkflowID, nil
+}
+
+// validateWorkflowShardTotal 校验单次执行分片数同时满足系统和工作流定义上限。
+func validateWorkflowShardTotal(def *WorkflowDefinition, shardTotal int) error {
+	if def == nil {
+		return errors.Errorf("工作流定义不能为空")
+	}
+	maxShardTotal := tasklimits.MaxShardTotal
+	if def.MaxShardTotal > 0 {
+		maxShardTotal = min(maxShardTotal, def.MaxShardTotal)
+	}
+	if shardTotal > maxShardTotal {
+		return errors.Errorf("工作流分片数超过上限 workflow=%s shard_total=%d max=%d", def.Name, shardTotal, maxShardTotal)
+	}
+	return nil
 }
 
 // workflowUniqueKeyForSchedule 把周期实例的计划时刻加入幂等键，同一时刻防重、相邻周期互不吞任务。
@@ -928,31 +939,27 @@ func (m *Manager) expireWorkflowState(ctx context.Context, workflowID string) er
 		return errors.Wrapf(err, "读取工作流终态失败 workflow_id=%s", workflowID)
 	}
 	retention := m.workflowTerminalRetention(status)
+	pipe := m.redis.Pipeline()
 	for _, key := range keys {
-		if err = m.redis.Expire(ctx, key, retention).Err(); err != nil {
-			return errors.Wrapf(err, "设置工作流终态保留时间失败 workflow_id=%s key=%s", workflowID, key)
-		}
+		pipe.Expire(ctx, key, retention)
+	}
+	if _, err = pipe.Exec(ctx); err != nil {
+		return errors.Wrapf(err, "设置工作流终态保留时间失败 workflow_id=%s", workflowID)
 	}
 	return nil
 }
 
-// persistWorkflowState 在手工重开时清除全部精确状态 key 的终态 TTL。
-func (m *Manager) persistWorkflowState(ctx context.Context, workflowID string) error {
+// refreshWorkflowManualRerunRetention 刷新运行态安全 TTL，并校验重跑窗口未被并发终态覆盖。
+func (m *Manager) refreshWorkflowManualRerunRetention(ctx context.Context, workflowID string) error {
 	keys, err := m.workflowStateKeys(ctx, workflowID)
 	if err != nil {
 		return errors.Tag(err)
 	}
+	pipe := m.redis.Pipeline()
 	for _, key := range keys {
-		if err = m.redis.Persist(ctx, key).Err(); err != nil {
-			return errors.Wrapf(err, "清除运行态工作流过期时间失败 workflow_id=%s key=%s", workflowID, key)
-		}
+		pipe.Expire(ctx, key, m.workflowManualRerunRetention())
 	}
-	return nil
-}
-
-// persistWorkflowManualRerunState 清除运行态 TTL，并在并发终态覆盖时恢复统一保留时间。
-func (m *Manager) persistWorkflowManualRerunState(ctx context.Context, workflowID string) error {
-	if err := m.persistWorkflowState(ctx, workflowID); err != nil {
+	if _, err = pipe.Exec(ctx); err != nil {
 		return errors.Join(err, m.restoreWorkflowTerminalRetention(ctx, workflowID))
 	}
 	values, err := m.redis.HMGet(ctx, m.workflowMetaKey(workflowID), "status", "manualRerun").Result()

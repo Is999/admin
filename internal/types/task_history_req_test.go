@@ -15,6 +15,13 @@ func TestTaskHistoryRequestsApplyBoundedDefaults(t *testing.T) {
 	if workflowReq.PageSize != 100 || workflowReq.StartTime == "" || workflowReq.EndTime == "" {
 		t.Fatalf("工作流历史默认边界错误: %+v", workflowReq)
 	}
+	taskReq := &ListTaskRunsReq{PageSize: 1000}
+	if err := taskReq.Validate(); err != nil {
+		t.Fatalf("普通任务历史默认查询校验失败: %v", err)
+	}
+	if taskReq.PageSize != 100 || taskReq.StartTime == "" || taskReq.EndTime == "" {
+		t.Fatalf("普通任务历史默认边界错误: %+v", taskReq)
+	}
 	failureReq := &ListTaskFailuresReq{}
 	if err := failureReq.Validate(); err != nil {
 		t.Fatalf("失败历史默认查询校验失败: %v", err)
@@ -45,6 +52,7 @@ func TestTaskHistoryRequestsRejectUnboundedRange(t *testing.T) {
 	end := time.Now().UTC()
 	start := end.Add(-31*24*time.Hour - time.Second)
 	for _, request := range []interface{ Validate() error }{
+		&ListTaskRunsReq{StartTime: start.Format(time.RFC3339), EndTime: end.Format(time.RFC3339)},
 		&ListTaskWorkflowsReq{StartTime: start.Format(time.RFC3339), EndTime: end.Format(time.RFC3339)},
 		&ListTaskFailuresReq{StartTime: start.Format(time.RFC3339), EndTime: end.Format(time.RFC3339)},
 	} {
@@ -57,9 +65,15 @@ func TestTaskHistoryRequestsRejectUnboundedRange(t *testing.T) {
 // TestTaskHistoryRequestsRejectOversizedFilters 验证历史查询不接受无界过滤值和游标。
 func TestTaskHistoryRequestsRejectOversizedFilters(t *testing.T) {
 	for _, request := range []interface{ Validate() error }{
+		&ListTaskRunsReq{Queue: strings.Repeat("q", 129)},
+		&ListTaskRunsReq{WorkflowID: strings.Repeat("w", 129)},
+		&ListTaskRunsReq{Cursor: strings.Repeat("c", 257)},
+		&ListTaskRunsReq{Status: "completed"},
 		&ListTaskWorkflowsReq{Queue: strings.Repeat("q", 129)},
 		&ListTaskWorkflowsReq{Cursor: strings.Repeat("c", 257)},
 		&ListTaskFailuresReq{Queue: strings.Repeat("q", 129)},
+		&ListTaskFailuresReq{TaskName: strings.Repeat("n", 129)},
+		&ListTaskFailuresReq{PeriodicName: strings.Repeat("p", 129)},
 		&ListTaskFailuresReq{Cursor: strings.Repeat("c", 257)},
 	} {
 		if err := request.Validate(); err == nil {

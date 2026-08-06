@@ -11,6 +11,8 @@ import (
 	"admin/internal/config"
 	"admin/internal/svc"
 	"admin/internal/types"
+
+	"github.com/hibiken/asynq"
 )
 
 // testConfigReloader 表示测试使用的辅助结构。
@@ -25,6 +27,7 @@ type taskOverviewFakeQueue struct {
 	tasksByState map[string][]types.TaskItem // tasksByState 表示测试字段。
 	listCalls    []types.ListTaskItemsReq    // listCalls 表示测试字段。
 	emptyQueues  bool                        // emptyQueues 表示测试模拟当前没有可见队列。
+	listError    error                       // listError 表示任务列表读取错误。
 }
 
 // IsEnabled 表示测试辅助逻辑。
@@ -65,12 +68,20 @@ func (f *taskOverviewFakeQueue) ListRegisteredWorkflows(context.Context) []types
 	return nil
 }
 
+// ValidatePeriodicTaskConfigs 表示测试辅助逻辑。
+func (f *taskOverviewFakeQueue) ValidatePeriodicTaskConfigs([]config.TaskPeriodicConfig) error {
+	return nil
+}
+
 // ListTasks 表示测试辅助逻辑。
 func (f *taskOverviewFakeQueue) ListTasks(_ context.Context, req *types.ListTaskItemsReq) (*types.TaskListResp, error) {
 	if req == nil {
 		return &types.TaskListResp{Tasks: []types.TaskItem{}}, nil
 	}
 	f.listCalls = append(f.listCalls, *req)
+	if f.listError != nil {
+		return nil, f.listError
+	}
 	page := req.Page
 	if page <= 0 {
 		page = 1
@@ -181,6 +192,42 @@ func TestListTasksOverviewRejectsUnknownQueue(t *testing.T) {
 	}
 	if len(fakeQueue.listCalls) != 0 {
 		t.Fatalf("不存在队列不应查询任务，实际调用次数=%d", len(fakeQueue.listCalls))
+	}
+}
+
+// TestListTasksOverviewTreatsConfiguredQueueWithoutKeysAsEmpty 验证空配置队列不会拖垮总览。
+func TestListTasksOverviewTreatsConfiguredQueueWithoutKeysAsEmpty(t *testing.T) {
+	fakeQueue := &taskOverviewFakeQueue{listError: asynq.ErrQueueNotFound}
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	svcCtx.Task = fakeQueue
+
+	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?page=1&pageSize=20", nil), svcCtx)
+	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{Page: 1, PageSize: 20})
+	if resp == nil || !resp.IsSuccess() {
+		t.Fatalf("已配置空队列应按零任务返回，实际: %+v", resp)
+	}
+	data, ok := resp.Data.(*types.TaskListOverviewResp)
+	if !ok {
+		t.Fatalf("响应类型不符合预期: %#v", resp.Data)
+	}
+	if data.Total != 0 || len(data.Tasks) != 0 {
+		t.Fatalf("已配置空队列应返回空数据，实际 total=%d tasks=%d", data.Total, len(data.Tasks))
+	}
+	if len(fakeQueue.listCalls) == 0 {
+		t.Fatal("总览应尝试读取已配置队列")
+	}
+}
+
+// TestListTasksOverviewKeepsOtherQueueErrors 验证 Redis 等真实故障仍向上返回。
+func TestListTasksOverviewKeepsOtherQueueErrors(t *testing.T) {
+	fakeQueue := &taskOverviewFakeQueue{listError: context.DeadlineExceeded}
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	svcCtx.Task = fakeQueue
+
+	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?page=1&pageSize=20", nil), svcCtx)
+	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{Page: 1, PageSize: 20})
+	if resp == nil || resp.IsSuccess() {
+		t.Fatalf("队列真实故障不应降级为空结果，实际: %+v", resp)
 	}
 }
 

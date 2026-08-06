@@ -899,6 +899,25 @@ func TestEnqueueWorkflowTriggerRejectsUnknownWorkflowBeforeEnqueue(t *testing.T)
 	}
 }
 
+// TestEnqueueWorkflowTriggerRejectsWorkflowShardLimitBeforeEnqueue 验证手动触发不会把超过工作流上限的任务写入 Redis。
+func TestEnqueueWorkflowTriggerRejectsWorkflowShardLimitBeforeEnqueue(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	definition := testWorkflowDefinition("single-shard.workflow")
+	definition.MaxShardTotal = 1
+	if err := manager.RegisterWorkflow(definition); err != nil {
+		t.Fatalf("注册单分片工作流失败: %v", err)
+	}
+	_, err := manager.EnqueueWorkflowTrigger(context.Background(), &types.TriggerTaskWorkflowReq{
+		Name:       definition.Name,
+		ShardTotal: 2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "max=1") {
+		t.Fatalf("EnqueueWorkflowTrigger() error = %v, want workflow shard limit", err)
+	}
+}
+
 // TestEnqueueWorkflowTriggerRejectsConflictingScheduleOptions 验证 processAt 与 processInSeconds 不能同时设置。
 func TestEnqueueWorkflowTriggerRejectsConflictingScheduleOptions(t *testing.T) {
 	manager, cleanup := newTestManager(t)
@@ -1244,6 +1263,29 @@ func TestTaskRuntimeRejectsStaleAttemptFinish(t *testing.T) {
 	values = manager.redis.HGetAll(ctx, manager.taskRuntimeKey(QueueMaintenance, taskID)).Val()
 	if values["attemptToken"] != newToken || values["status"] != "success" || values["finishedAt"] == "" {
 		t.Fatalf("当前 attempt 未正确写入终态: %+v", values)
+	}
+}
+
+// TestDeleteSuccessfulTaskRuntimeRejectsStaleAttempt 验证迟到实例不能删除新 attempt 的运行快照。
+func TestDeleteSuccessfulTaskRuntimeRejectsStaleAttempt(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	taskID := "task-stale-success-cleanup"
+	oldToken := manager.recordTaskRuntimeStart(ctx, QueueMaintenance, taskID, time.Now().Add(-time.Second))
+	newToken := manager.recordTaskRuntimeStart(ctx, QueueMaintenance, taskID, time.Now())
+
+	if err := manager.deleteSuccessfulTaskRuntime(ctx, QueueMaintenance, taskID, oldToken); err != nil {
+		t.Fatalf("迟到实例删除运行快照失败: %v", err)
+	}
+	if token := manager.redis.HGet(ctx, manager.taskRuntimeKey(QueueMaintenance, taskID), "attemptToken").Val(); token != newToken {
+		t.Fatalf("迟到实例误删或覆盖新 attempt token=%q want=%q", token, newToken)
+	}
+	if err := manager.deleteSuccessfulTaskRuntime(ctx, QueueMaintenance, taskID, newToken); err != nil {
+		t.Fatalf("当前实例删除运行快照失败: %v", err)
+	}
+	if exists := manager.redis.Exists(ctx, manager.taskRuntimeKey(QueueMaintenance, taskID)).Val(); exists != 0 {
+		t.Fatalf("当前成功 attempt 的重复运行快照未删除 exists=%d", exists)
 	}
 }
 
@@ -2455,8 +2497,8 @@ func TestWorkflowArchivedRerunRepairsMultipleFailedShards(t *testing.T) {
 		t.Fatalf("读取手工重跑状态 key 失败: %v", err)
 	}
 	for _, key := range stateKeys {
-		if ttl := manager.redis.TTL(context.Background(), key).Val(); ttl >= 0 {
-			t.Fatalf("手工重跑运行态 key 不应保留终态 TTL key=%s ttl=%s", key, ttl)
+		if ttl := manager.redis.TTL(context.Background(), key).Val(); ttl <= 0 || ttl > manager.workflowManualRerunRetention() {
+			t.Fatalf("手工重跑运行态 key 应保留安全 TTL key=%s ttl=%s", key, ttl)
 		}
 	}
 	for shard := 0; shard < 2; shard++ {
@@ -2601,8 +2643,8 @@ func TestWorkflowRunningStateOnlyExpiresAfterTerminal(t *testing.T) {
 	}
 }
 
-// TestPersistWorkflowManualRerunStateRestoresConcurrentTerminalTTL 验证并发终态覆盖后不会被迟到 PERSIST 永久保留。
-func TestPersistWorkflowManualRerunStateRestoresConcurrentTerminalTTL(t *testing.T) {
+// TestRefreshWorkflowManualRerunRetentionRestoresConcurrentTerminalTTL 验证并发终态覆盖后不会被迟到刷新延长。
+func TestRefreshWorkflowManualRerunRetentionRestoresConcurrentTerminalTTL(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
 
@@ -2631,15 +2673,16 @@ func TestPersistWorkflowManualRerunStateRestoresConcurrentTerminalTTL(t *testing
 		manager.redis,
 		[]string{manager.workflowMetaKey(workflowID)},
 		time.Now().Format(time.RFC3339),
+		manager.workflowManualRerunRetention().Milliseconds(),
 	).Result(); err != nil {
 		t.Fatalf("构造并发手工重跑窗口失败: %v", err)
 	}
 	if err = manager.completeWorkflow(context.Background(), workflowID); err != nil {
 		t.Fatalf("构造并发成功终态失败: %v", err)
 	}
-	err = manager.persistWorkflowManualRerunState(context.Background(), workflowID)
+	err = manager.refreshWorkflowManualRerunRetention(context.Background(), workflowID)
 	if err == nil || !strings.Contains(err.Error(), "已进入终态") {
-		t.Fatalf("迟到 PERSIST 应识别并发终态，实际 err=%v", err)
+		t.Fatalf("迟到刷新应识别并发终态，实际 err=%v", err)
 	}
 	for _, key := range stateKeys {
 		if ttl := manager.redis.TTL(context.Background(), key).Val(); ttl <= 0 {
@@ -3627,6 +3670,81 @@ func TestPeriodicConfigsSkipsInvalidAndKeepsValid(t *testing.T) {
 	if got := configs[0].Cronspec; got != "*/5 * * * *" {
 		t.Fatalf("期望保留合法 cron，实际为 %s", got)
 	}
+	var payload WorkflowTriggerPayload
+	if err = json.Unmarshal(configs[0].Task.Payload(), &payload); err != nil {
+		t.Fatalf("解析周期工作流入口 payload 失败: %v", err)
+	}
+	if payload.PeriodicName != "valid-periodic" {
+		t.Fatalf("周期任务原始名称写入 payload 异常: %q", payload.PeriodicName)
+	}
+	headers := configs[0].Task.Headers()
+	if headers[HeaderPeriodicName] != "valid-periodic" {
+		t.Fatalf("周期任务原始名称写入 header 异常: %q", headers[HeaderPeriodicName])
+	}
+	if headers[headerTaskName] != "周期任务触发:valid-periodic" {
+		t.Fatalf("周期入口展示名称异常: %q", headers[headerTaskName])
+	}
+}
+
+// TestPeriodicNextRunsKeepsOriginalName 验证下一次执行时间使用周期任务原始名称关联历史任务。
+func TestPeriodicNextRunsKeepsOriginalName(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	if err := manager.RegisterWorkflow(testWorkflowDefinition("periodic.next.run")); err != nil {
+		t.Fatalf("注册周期工作流失败: %v", err)
+	}
+	manager.UpdateConfig(config.TaskQueueConfig{
+		Enabled: true,
+		AppID:   "1",
+		Periodic: []config.TaskPeriodicConfig{enabledTaskPeriodicConfig(config.TaskPeriodicConfig{
+			Name:     "periodic-next-run",
+			Cron:     "*/5 * * * *",
+			Workflow: "periodic.next.run",
+		})},
+	})
+
+	runs := manager.periodicNextRuns(time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC))
+	if len(runs) != 1 {
+		t.Fatalf("期望生成 1 条下一次执行时间，实际=%d", len(runs))
+	}
+	if runs[0].PeriodicName != "periodic-next-run" {
+		t.Fatalf("下一次执行时间的周期任务名称异常: %q", runs[0].PeriodicName)
+	}
+}
+
+// TestValidatePeriodicTaskConfigsRejectsWorkflowShardLimit 验证发布预检只接受当前运行时可执行的启用周期任务。
+func TestValidatePeriodicTaskConfigsRejectsWorkflowShardLimit(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+
+	definition := testWorkflowDefinition("single-shard.periodic.workflow")
+	definition.MaxShardTotal = 1
+	if err := manager.RegisterWorkflow(definition); err != nil {
+		t.Fatalf("注册单分片周期工作流失败: %v", err)
+	}
+	item := config.TaskPeriodicConfig{
+		Name:       "single-shard-periodic",
+		Cron:       "*/5 * * * *",
+		Workflow:   definition.Name,
+		Queue:      QueueMaintenance,
+		ShardTotal: 2,
+	}
+	if err := manager.ValidatePeriodicTaskConfigs([]config.TaskPeriodicConfig{item}); err == nil || !strings.Contains(err.Error(), "max=1") {
+		t.Fatalf("ValidatePeriodicTaskConfigs() error = %v, want workflow shard limit", err)
+	}
+
+	disabled := false
+	item.Enabled = &disabled
+	if err := manager.ValidatePeriodicTaskConfigs([]config.TaskPeriodicConfig{item}); err != nil {
+		t.Fatalf("停用的预置周期任务不应参与运行时校验: %v", err)
+	}
+
+	item.Enabled = nil
+	item.ShardTotal = 1
+	if err := manager.ValidatePeriodicTaskConfigs([]config.TaskPeriodicConfig{item}); err != nil {
+		t.Fatalf("合法单分片周期任务校验失败: %v", err)
+	}
 }
 
 // TestValidatePeriodicTaskConfigRequiresScheduledUnique 验证按计划时刻防重的工作流必须显式配置完整唯一键。
@@ -4279,6 +4397,51 @@ func TestListTasksFilterUsesBatchPage(t *testing.T) {
 	legacyCommandCount := server.CommandCount() - legacyCommandsBefore
 	if batchCommandCount >= legacyCommandCount {
 		t.Fatalf("批量筛选 Redis 命令数=%d，不应达到逐条读取基准=%d", batchCommandCount, legacyCommandCount)
+	}
+}
+
+// TestListTasksFilterDistinguishesScanLimit 验证恰好命中扫描上限仍返回完整结果，存在下一条时明确失败。
+func TestListTasksFilterDistinguishesScanLimit(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	queue := manager.namespacedQueueName(QueueDefault)
+	processAt := time.Now().Add(time.Hour)
+	enqueue := func(index int) {
+		t.Helper()
+		taskID := fmt.Sprintf("scan-limit-%05d", index)
+		_, err := manager.client.EnqueueContext(
+			ctx,
+			asynq.NewTask("demo:scan-limit", nil),
+			asynq.Queue(queue),
+			asynq.TaskID(taskID),
+			asynq.ProcessAt(processAt.Add(time.Duration(index)*time.Millisecond)),
+		)
+		if err != nil {
+			t.Fatalf("投递扫描边界测试任务失败 index=%d err=%v", index, err)
+		}
+	}
+	for index := 0; index < taskListFilterMaxRows; index++ {
+		enqueue(index)
+	}
+	req := &types.ListTaskItemsReq{
+		Queue:    QueueDefault,
+		State:    "scheduled",
+		TaskID:   "scan-limit-",
+		Page:     1,
+		PageSize: 1,
+	}
+	resp, err := manager.ListTasks(ctx, req)
+	if err != nil {
+		t.Fatalf("恰好命中扫描上限查询失败: %v", err)
+	}
+	if resp == nil || resp.Total != taskListFilterMaxRows || len(resp.Tasks) != 1 {
+		t.Fatalf("恰好命中扫描上限结果异常: %+v", resp)
+	}
+
+	enqueue(taskListFilterMaxRows)
+	if _, err = manager.ListTasks(ctx, req); !errors.Is(err, ErrTaskListScanLimitExceeded) {
+		t.Fatalf("存在第 %d 条任务时应返回扫描超限，实际 err=%v", taskListFilterMaxRows+1, err)
 	}
 }
 

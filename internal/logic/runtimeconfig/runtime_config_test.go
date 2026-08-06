@@ -1,6 +1,7 @@
 package runtimeconfig
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,22 @@ import (
 
 	"gorm.io/gorm"
 )
+
+// runtimeConfigTaskQueueStub 注入运行配置测试需要的周期任务校验结果。
+type runtimeConfigTaskQueueStub struct {
+	svc.TaskQueue       // 其它任务能力不参与当前测试
+	validationErr error // validationErr 是周期任务运行时校验错误
+	validateCalls int   // validateCalls 记录周期任务校验调用次数
+}
+
+// IsEnabled 返回测试任务系统启用状态。
+func (s *runtimeConfigTaskQueueStub) IsEnabled() bool { return true }
+
+// ValidatePeriodicTaskConfigs 返回注入的运行时校验结果。
+func (s *runtimeConfigTaskQueueStub) ValidatePeriodicTaskConfigs([]config.TaskPeriodicConfig) error {
+	s.validateCalls++
+	return s.validationErr
+}
 
 // TestCheckRuntimeConfigUpdatedRejectsMissingDraft 验证更新草稿不存在时返回明确错误。
 func TestCheckRuntimeConfigUpdatedRejectsMissingDraft(t *testing.T) {
@@ -159,6 +176,27 @@ func TestValidateSnapshotRejectsTooManyPeriodicTasks(t *testing.T) {
 	items := make([]config.TaskPeriodicConfig, tasklimits.MaxPeriodicCount+1)
 	if _, err := ValidateSnapshot(ReleaseSnapshot{TaskPeriodic: items}); err == nil || !strings.Contains(err.Error(), "周期任务不能超过") {
 		t.Fatalf("ValidateSnapshot() error = %v, want periodic count limit", err)
+	}
+}
+
+// TestPublishSnapshotRejectsRuntimeInvalidPeriodicConfig 验证发布写库前会执行任务运行时校验。
+func TestPublishSnapshotRejectsRuntimeInvalidPeriodicConfig(t *testing.T) {
+	validator := &runtimeConfigTaskQueueStub{validationErr: errors.New("workflow shard_total max=1")}
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	svcCtx.Task = validator
+	logicObj := NewRuntimeConfigLogicWithContext(context.Background(), svcCtx)
+	snapshot := ReleaseSnapshot{TaskPeriodic: []config.TaskPeriodicConfig{{
+		Name:       "single-shard-periodic",
+		Cron:       "*/5 * * * *",
+		Workflow:   "single-shard.workflow",
+		ShardTotal: 2,
+	}}}
+
+	if _, err := logicObj.publishSnapshot(snapshot, "test", 0); err == nil || !strings.Contains(err.Error(), "max=1") {
+		t.Fatalf("publishSnapshot() error = %v, want runtime validation error", err)
+	}
+	if validator.validateCalls != 1 {
+		t.Fatalf("运行时周期任务校验调用次数 = %d, want 1", validator.validateCalls)
 	}
 }
 

@@ -162,6 +162,43 @@ func (l *TaskLogic) ListTaskWorkflows(req *types.ListTaskWorkflowsReq) *types.Bi
 	return types.NewBizResult(codes.Success).SetI18nMessage(i18n.MsgKeyQuerySuccess).WithData(resp)
 }
 
+// ListTaskRuns 查询全部实际任务的短期终态历史。
+func (l *TaskLogic) ListTaskRuns(req *types.ListTaskRunsReq) *types.BizResult {
+	if l.Svc == nil || l.Svc.Task == nil {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled).
+			WithError(corelogic.WrapLogicError(taskqueue.ErrTaskQueueDisabled, "TaskLogic.ListTaskRuns 任务系统未启用"))
+	}
+	historyQueue, ok := l.Svc.Task.(svc.TaskHistoryQueue)
+	if !ok {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled)
+	}
+	resp, err := historyQueue.ListTaskRuns(l.Ctx, req)
+	if err != nil {
+		return types.ServerError(i18n.MsgKeyTaskQueryFail, err, "TaskLogic.ListTaskRuns").ToBizResult()
+	}
+	return types.NewBizResult(codes.Success).SetI18nMessage(i18n.MsgKeyQuerySuccess).WithData(resp)
+}
+
+// GetTaskRunHistory 查询任务终态历史详情。
+func (l *TaskLogic) GetTaskRunHistory(req *types.GetTaskRunHistoryReq) *types.BizResult {
+	if l.Svc == nil || l.Svc.Task == nil {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled).
+			WithError(corelogic.WrapLogicError(taskqueue.ErrTaskQueueDisabled, "TaskLogic.GetTaskRunHistory 任务系统未启用"))
+	}
+	historyQueue, ok := l.Svc.Task.(svc.TaskHistoryQueue)
+	if !ok {
+		return types.NewBizResult(codes.ServiceBusy).SetI18nMessage(i18n.MsgKeyTaskDisabled)
+	}
+	resp, err := historyQueue.GetTaskRunHistory(l.Ctx, req.ID)
+	if err == nil {
+		return types.NewBizResult(codes.Success).SetI18nMessage(i18n.MsgKeyQuerySuccess).WithData(resp)
+	}
+	if errors.Is(err, redis.Nil) {
+		return types.NotFound(i18n.MsgKeyTaskNotFound, err).ToBizResult()
+	}
+	return types.ServerError(i18n.MsgKeyTaskQueryFail, err, "TaskLogic.GetTaskRunHistory").ToBizResult()
+}
+
 // ListTaskFailures 查询最终失败任务历史和当前可重跑能力。
 func (l *TaskLogic) ListTaskFailures(req *types.ListTaskFailuresReq) *types.BizResult {
 	if l.Svc == nil || l.Svc.Task == nil {
@@ -390,7 +427,7 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 	}
 	// 单队列单状态直接使用 Asynq 原生分页，避免为了聚合扫描前置页。
 	if len(queueNames) == 1 && len(states) == 1 {
-		return l.Svc.Task.ListTasks(l.Ctx, &types.ListTaskItemsReq{
+		return l.listOverviewTasks(&types.ListTaskItemsReq{
 			Queue:      queueNames[0],
 			State:      states[0],
 			Group:      group,
@@ -411,7 +448,7 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 	for _, state := range states {
 		for _, queueName := range queueNames {
 			if needsWidePage {
-				currentResp, err := l.Svc.Task.ListTasks(l.Ctx, &types.ListTaskItemsReq{
+				currentResp, err := l.listOverviewTasks(&types.ListTaskItemsReq{
 					Queue:      queueName,
 					State:      state,
 					Group:      group,
@@ -435,7 +472,7 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 				continue
 			}
 			for currentPage := 1; currentPage <= maxPages; currentPage++ {
-				currentResp, err := l.Svc.Task.ListTasks(l.Ctx, &types.ListTaskItemsReq{
+				currentResp, err := l.listOverviewTasks(&types.ListTaskItemsReq{
 					Queue:      queueName,
 					State:      state,
 					Group:      group,
@@ -483,6 +520,31 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 		PageSize:  pageSize,
 		Total:     total,
 		Tasks:     mergedTasks,
+	}, nil
+}
+
+// listOverviewTasks 把已配置但尚未生成 Asynq Key 的空队列视为零任务。
+// 显式未知队列已在 resolveOverviewQueues 拒绝，这里不能吞掉其他 Redis 查询错误。
+func (l *TaskLogic) listOverviewTasks(req *types.ListTaskItemsReq) (*types.TaskListResp, error) {
+	resp, err := l.Svc.Task.ListTasks(l.Ctx, req)
+	if err == nil {
+		return resp, nil
+	}
+	if !errors.Is(err, asynq.ErrQueueNotFound) {
+		return nil, errors.Tag(err)
+	}
+	return &types.TaskListResp{
+		Queue:      req.Queue,
+		State:      req.State,
+		Group:      req.Group,
+		TaskID:     req.TaskID,
+		WorkflowID: req.WorkflowID,
+		TaskName:   req.TaskName,
+		StartTime:  req.StartTime,
+		EndTime:    req.EndTime,
+		Page:       req.Page,
+		PageSize:   req.PageSize,
+		Tasks:      make([]types.TaskItem, 0),
 	}, nil
 }
 

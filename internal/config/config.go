@@ -212,7 +212,7 @@ type CollectorTaskConfig struct {
 // CollectorFailureRetryConfig 定义通用收集器失败账本重试配置。
 type CollectorFailureRetryConfig struct {
 	RunnerBatchSize       int `json:"runner_batch_size,optional"`       // 失败账本 worker 单轮领取事件上限
-	RunnerIntervalSeconds int `json:"runner_interval_seconds,optional"` // 失败账本 worker 轮询间隔，单位秒
+	RunnerIntervalSeconds int `json:"runner_interval_seconds,optional"` // 失败账本 worker 活跃轮询间隔，空闲时有界退避
 	RunningLeaseSeconds   int `json:"running_lease_seconds,optional"`   // 重试中事件租约秒数，超时后自动回收重试
 	MaxRetryTimes         int `json:"max_retry_times,optional"`         // 最大失败重试次数，达到后进入死信
 }
@@ -303,6 +303,7 @@ type TaskQueueSchedulerConfig struct {
 // TaskQueueHistoryConfig 定义任务终态历史的异步落库与短期保留边界。
 type TaskQueueHistoryConfig struct {
 	Enabled                *bool `json:"enabled,optional"`                  // 是否启用终态历史落库；未配置时默认启用
+	TaskRetentionDays      int   `json:"task_retention_days,optional"`      // 全部实际任务终态摘要保留天数
 	WorkflowRetentionDays  int   `json:"workflow_retention_days,optional"`  // 工作流历史保留天数
 	FailureRetentionDays   int   `json:"failure_retention_days,optional"`   // 失败明细保留天数
 	PendingLimit           int   `json:"pending_limit,optional"`            // Redis 待落库事件硬上限

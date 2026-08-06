@@ -410,7 +410,7 @@ func (l *RuntimeConfigLogic) ValidateDraft() *types.BizResult {
 		return types.ServerError(i18n.MsgKeyQueryFail, err, "RuntimeConfigLogic.ValidateDraft 读取草稿失败").ToBizResult()
 	}
 	snapshot = normalizeReleaseSnapshot(snapshot)
-	messages, err := ValidateSnapshot(snapshot)
+	messages, err := l.validateSnapshot(snapshot)
 	if err != nil {
 		return types.NewBizResult(codes.Success).
 			WithData(&types.RuntimeConfigValidateResp{Valid: false, Messages: append(messages, err.Error())})
@@ -543,7 +543,7 @@ func (l *RuntimeConfigLogic) publishDraft(remark string, baseReleaseID uint64) (
 // publishSnapshot 校验并持久化发布快照，同时触发运行态热加载。
 func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark string, baseReleaseID uint64) (*types.RuntimeConfigPublishResp, error) {
 	snapshot = normalizeReleaseSnapshot(snapshot)
-	if _, err := ValidateSnapshot(snapshot); err != nil {
+	if _, err := l.validateSnapshot(snapshot); err != nil {
 		return nil, errors.Tag(err)
 	}
 	db, err := l.writeDB()
@@ -633,6 +633,21 @@ func (l *RuntimeConfigLogic) publishSnapshot(snapshot ReleaseSnapshot, remark st
 		}
 	}
 	return resp, nil
+}
+
+// validateSnapshot 校验快照结构及当前运行时可执行性；任务系统未启用时只校验静态边界。
+func (l *RuntimeConfigLogic) validateSnapshot(snapshot ReleaseSnapshot) ([]string, error) {
+	messages, err := ValidateSnapshot(snapshot)
+	if err != nil {
+		return messages, errors.Tag(err)
+	}
+	if l == nil || l.Svc == nil || l.Svc.Task == nil || !l.Svc.Task.IsEnabled() {
+		return messages, nil
+	}
+	if err = l.Svc.Task.ValidatePeriodicTaskConfigs(snapshot.TaskPeriodic); err != nil {
+		return messages, errors.Tag(err)
+	}
+	return messages, nil
 }
 
 // runtimeConfigReloadMatchesRelease 判断重载回执是否精确对应本次发布。

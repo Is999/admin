@@ -1629,6 +1629,28 @@
     {
       "alias": "task.items.list",
       "method": "GET",
+      "path": "/api/tasks/history",
+      "access": "auth",
+      "describe": "查询任务列表",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "task.items.list",
+      "method": "GET",
+      "path": "/api/tasks/history/:id",
+      "access": "auth",
+      "describe": "查询任务列表",
+      "requestSign": null,
+      "requestCipher": [],
+      "responseSign": null,
+      "responseCipher": []
+    },
+    {
+      "alias": "task.items.list",
+      "method": "GET",
       "path": "/api/tasks/failures",
       "access": "auth",
       "describe": "查询任务列表",

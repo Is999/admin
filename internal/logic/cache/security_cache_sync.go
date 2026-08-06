@@ -31,6 +31,8 @@ import (
 const (
 	// securityCacheSyncPollInterval 表示补偿任务轮询间隔。
 	securityCacheSyncPollInterval = time.Second
+	// securityCacheSyncReconcileInterval 表示无阻断信号时数据库兜底对账间隔。
+	securityCacheSyncReconcileInterval = 30 * time.Second
 	// securityCacheSyncPersistTimeout 限制请求结束后补偿任务落库时间。
 	securityCacheSyncPersistTimeout = 2 * time.Second
 	// securityCacheSyncLockRetryInterval 表示补偿任务写入后等待 worker 释放锁的重试间隔。
@@ -119,25 +121,49 @@ func (w *SecurityCacheSyncWorker) Stop(ctx context.Context) error {
 	}
 }
 
-// run 按固定间隔持续重试补偿任务。
+// run 每秒检查 Redis 阻断信号，并低频对账数据库中的漏信号任务。
 func (w *SecurityCacheSyncWorker) run(ctx context.Context) {
 	ticker := time.NewTicker(securityCacheSyncPollInterval)
 	defer ticker.Stop()
+	nextReconcileAt := time.Now().Add(securityCacheSyncReconcileInterval)
 	for {
 		select {
 		case <-ticker.C:
-			w.runAndLog(ctx)
+			now := time.Now()
+			reconcile := !now.Before(nextReconcileAt)
+			var err error
+			if reconcile {
+				// 对账失败也按固定周期重试，阻断信号仍由每秒快速路径处理。
+				nextReconcileAt = now.Add(securityCacheSyncReconcileInterval)
+				err = w.runOnce(ctx)
+			} else {
+				err = w.runPendingOnce(ctx)
+			}
+			if err != nil {
+				loggerx.Errorw(ctx, "安全缓存失效补偿失败", err)
+				continue
+			}
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-// runAndLog 在 worker 顶层记录单轮失败。
-func (w *SecurityCacheSyncWorker) runAndLog(ctx context.Context) {
-	if err := w.runOnce(ctx); err != nil {
-		loggerx.Errorw(ctx, "安全缓存失效补偿失败", err)
+// runPendingOnce 仅在进程或 Redis 已标记待补偿时查询数据库并执行补偿。
+func (w *SecurityCacheSyncWorker) runPendingOnce(ctx context.Context) error {
+	if w.svc.SecurityCacheSyncPending() {
+		return errors.Tag(w.runOnce(ctx))
 	}
+	snapshot, err := w.barrierSnapshot(ctx)
+	if err != nil {
+		return errors.Tag(err)
+	}
+	if !snapshot.Exists {
+		return nil
+	}
+	// 先关闭当前进程缓存鉴权，避免数据库检查期间继续使用待失效缓存。
+	w.svc.SetSecurityCacheSyncPending(true)
+	return errors.Tag(w.runOnce(ctx))
 }
 
 // runOnce 检查待补偿状态，并在分布式锁内处理一批到期任务。

@@ -158,23 +158,38 @@ func (m *Manager) saveFailureEvents(ctx context.Context, seeds []failureEventSee
 	return nil
 }
 
-// runFailureRetryWorker 定时从失败账本批量领取事件并投送给 Processor。
+// runFailureRetryWorker 从失败账本批量领取事件，空闲时有界退避并低频回收过期租约。
 func (m *Manager) runFailureRetryWorker() {
 	intervalSeconds := m.cfg.FailureRetry.RunnerIntervalSeconds
 	if intervalSeconds <= 0 {
 		intervalSeconds = defaultFailureRetryIntervalSeconds
 	}
-	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
-	defer ticker.Stop()
+	baseInterval := time.Duration(intervalSeconds) * time.Second
+	maxIdleInterval := maxFailureRetryIdleInterval
+	if baseInterval > maxIdleInterval {
+		maxIdleInterval = baseInterval
+	}
+	recoveryInterval := m.failureRecoveryInterval()
+	retryInterval := baseInterval
+	nextRecoveryAt := time.Time{}
+	timer := time.NewTimer(baseInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
-		case <-ticker.C:
-			if _, err := m.runFailureRetryOnce(m.ctx, 0); err != nil {
-				if strings.Contains(err.Error(), "collector 批量消费存在失败") {
-					continue
-				}
+		case <-timer.C:
+			now := time.Now()
+			limit := boundedPositiveInt(0, m.failureRetryBatchSize(), maxCollectorCarrierBatchSize)
+			var recoveryErr error
+			if nextRecoveryAt.IsZero() || !now.Before(nextRecoveryAt) {
+				// 无论本轮是否成功都推进检查时间，避免数据库异常时退化为高频空转。
+				nextRecoveryAt = now.Add(recoveryInterval)
+				recoveryErr = m.recoverExpiredRunning(m.ctx, limit, now)
+			}
+			_, found, retryErr := m.retryDueFailures(m.ctx, limit, now)
+			if recoveryErr != nil || (retryErr != nil && !strings.Contains(retryErr.Error(), "collector 批量消费存在失败")) {
+				err := errors.Join(recoveryErr, retryErr)
 				loggerx.Errorw(m.ctx, "采集器 失败账本重试失败", err)
 				m.reportRuntimeAlert(m.ctx, RuntimeAlert{
 					Kind:      RuntimeAlertKindWorkerFailed,
@@ -187,6 +202,8 @@ func (m *Manager) runFailureRetryWorker() {
 					Advice:    "请检查 collector_failed_event 查询、状态回写、Processor 业务依赖和数据库连接池；若失败持续出现，请查看 Collector 管理页积压与死信。",
 				})
 			}
+			retryInterval = nextFailureRetryInterval(retryInterval, baseInterval, maxIdleInterval, found)
+			timer.Reset(minFailureRetryWait(retryInterval, nextRecoveryAt))
 		}
 	}
 }
@@ -196,18 +213,24 @@ func (m *Manager) runFailureRetryOnce(ctx context.Context, limit int) (int, erro
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	beginAt := time.Now()
 	limit = boundedPositiveInt(limit, m.failureRetryBatchSize(), maxCollectorCarrierBatchSize)
 	now := time.Now()
 	if err := m.recoverExpiredRunning(ctx, limit, now); err != nil {
 		return 0, errors.Tag(err)
 	}
+	processed, _, err := m.retryDueFailures(ctx, limit, now)
+	return processed, errors.Tag(err)
+}
+
+// retryDueFailures 领取并处理一批到期失败事件，不重复扫描运行租约。
+func (m *Manager) retryDueFailures(ctx context.Context, limit int, now time.Time) (int, bool, error) {
+	beginAt := time.Now()
 	rows, err := m.claimDue(ctx, limit, now)
 	if err != nil {
-		return 0, errors.Tag(err)
+		return 0, false, errors.Tag(err)
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	processCtx, cancelProcess := context.WithCancel(ctx)
 	heartbeat := m.startFailureHeartbeat(ctx, rows, cancelProcess)
@@ -233,7 +256,7 @@ func (m *Manager) runFailureRetryOnce(ctx context.Context, limit int) (int, erro
 	if err := heartbeat.StopAndRenew(); err != nil {
 		cancelProcess()
 		m.reportLeaseRenewFailure(ctx, "failure_ledger", firstFailureBizType(rows), len(rows), err)
-		return 0, errors.Wrap(err, "collector 失败账本租约续期失败")
+		return 0, true, errors.Wrap(err, "collector 失败账本租约续期失败")
 	}
 	cancelProcess()
 	successRows := make([]model.CollectorFailedEvent, 0, len(success))
@@ -254,20 +277,59 @@ func (m *Manager) runFailureRetryOnce(ctx context.Context, limit int) (int, erro
 	}
 	if len(successRows) > 0 {
 		if err := m.markDone(ctx, successRows, time.Now()); err != nil {
-			return len(successRows), errors.Tag(err)
+			return len(successRows), true, errors.Tag(err)
 		}
 	}
 	if len(failRows) > 0 {
 		if err := m.markFailed(ctx, failRows, errors.Errorf("collector 批量消费存在失败"), time.Now()); err != nil {
-			return len(successRows), errors.Tag(err)
+			return len(successRows), true, errors.Tag(err)
 		}
 	}
 	if len(failRows) > 0 {
 		m.logSlowBatch(ctx, "failure_retry_failed", len(rows), beginAt)
-		return len(successRows), errors.Errorf("collector 批量消费存在失败 success=%d failed=%d", len(successRows), len(failRows))
+		return len(successRows), true, errors.Errorf("collector 批量消费存在失败 success=%d failed=%d", len(successRows), len(failRows))
 	}
 	m.logSlowBatch(ctx, "failure_retry_batch", len(rows), beginAt)
-	return len(successRows), nil
+	return len(successRows), true, nil
+}
+
+// nextFailureRetryInterval 根据本轮是否领取到任务计算下一次失败账本扫描间隔。
+func nextFailureRetryInterval(current, base, maximum time.Duration, found bool) time.Duration {
+	if found {
+		return base
+	}
+	if current < base {
+		current = base
+	}
+	next := current * 2
+	if next > maximum {
+		return maximum
+	}
+	return next
+}
+
+// minFailureRetryWait 同时满足到期任务退避和租约回收时限。
+func minFailureRetryWait(retryInterval time.Duration, nextRecoveryAt time.Time) time.Duration {
+	if nextRecoveryAt.IsZero() {
+		return retryInterval
+	}
+	recoveryWait := time.Until(nextRecoveryAt)
+	if recoveryWait > 0 && recoveryWait < retryInterval {
+		return recoveryWait
+	}
+	return retryInterval
+}
+
+// failureRecoveryInterval 按运行租约计算 30 至 60 秒的回收检查周期。
+func (m *Manager) failureRecoveryInterval() time.Duration {
+	interval := m.failureRunningLease() / 10
+	if interval < minFailureRecoveryInterval {
+		return minFailureRecoveryInterval
+	}
+	if interval > maxFailureRecoveryInterval {
+		return maxFailureRecoveryInterval
+	}
+	return interval
 }
 
 // startFailureHeartbeat 在失败账本 Processor 运行期间续期当前 claim_token。

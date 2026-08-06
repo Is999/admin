@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"admin/internal/config"
 	"admin/internal/types"
 )
 
@@ -169,6 +170,9 @@ type TaskQueue interface {
 	// ListRegisteredWorkflows 返回当前系统已注册的工作流清单。
 	ListRegisteredWorkflows(ctx context.Context) []types.WorkflowRegistryItem
 
+	// ValidatePeriodicTaskConfigs 校验启用的周期任务可由当前任务运行时执行。
+	ValidatePeriodicTaskConfigs(items []config.TaskPeriodicConfig) error
+
 	// ListTasks 按队列、状态和过滤条件查询任务列表。
 	ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*types.TaskListResp, error)
 
@@ -193,6 +197,8 @@ type TaskQueue interface {
 
 // TaskHistoryQueue 描述可选的任务终态历史和观测能力，避免扩大基础投递接口影响业务替身。
 type TaskHistoryQueue interface {
+	GetTaskRunHistory(ctx context.Context, id uint64) (*types.TaskRunHistoryItem, error)
+	ListTaskRuns(ctx context.Context, req *types.ListTaskRunsReq) (*types.TaskRunHistoryListResp, error)
 	ListTaskWorkflows(ctx context.Context, req *types.ListTaskWorkflowsReq) (*types.TaskWorkflowHistoryListResp, error)
 	ListTaskFailures(ctx context.Context, req *types.ListTaskFailuresReq) (*types.TaskFailureListResp, error)
 	TaskObservability(ctx context.Context) (*types.TaskObservabilityResp, error)

@@ -24,5 +24,7 @@ CREATE TABLE IF NOT EXISTS `task_failure` (
   KEY `idx_app_queue_failed` (`app_id`,`queue`,`failed_at`),
   KEY `idx_app_source_failed` (`app_id`,`source`,`failed_at`),
   KEY `idx_app_workflow_failed` (`app_id`,`workflow_id`,`failed_at`),
-  KEY `idx_app_type_failed` (`app_id`,`task_type`,`failed_at`)
+  KEY `idx_app_type_failed` (`app_id`,`task_type`,`failed_at`),
+  KEY `idx_app_name_failed` (`app_id`,`task_name`,`failed_at`),
+  KEY `idx_app_periodic_failed` (`app_id`,`periodic_name`,`failed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务终态失败明细';

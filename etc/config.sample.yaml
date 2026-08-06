@@ -334,9 +334,9 @@ collector:
   failure_retry:
     # 单轮领取失败事件上限。
     runner_batch_size: 500
-    # 失败重试轮询间隔，单位秒。
+    # 失败重试活跃轮询间隔，单位秒；空闲时自适应退避，默认最长 5 秒。
     runner_interval_seconds: 1
-    # running 失败事件租约时间，单位秒。
+    # running 失败事件租约时间，单位秒；过期租约每 30-60 秒批量回收。
     running_lease_seconds: 600
     # 最大失败重试次数。
     max_retry_times: 8
@@ -452,13 +452,21 @@ task:
   group_max_delay_seconds: 20
   # 单次聚合最大任务数。
   group_max_size: 100
-  # 任务终态历史异步落库；保存工作流汇总、容量受限的自适应明细和失败摘要，不长期保存普通成功任务明细。
+  # 任务终态历史异步落库；保存全部任务摘要、工作流汇总、自适应明细和失败摘要。
   history:
+    # 是否启用终态历史异步落库；未配置时默认启用。
     enabled: true
+    # 全部实际任务的紧凑终态摘要保留天数，范围 1-30；0 使用默认值 1。
+    task_retention_days: 1
+    # 工作流汇总和节点快照保留天数，范围 1-30；0 使用默认值 7。
     workflow_retention_days: 7
+    # 失败任务摘要保留天数，范围 1-30；0 使用默认值 14。
     failure_retention_days: 14
+    # Redis 待落库事件数量硬上限，范围 1-10000；0 使用默认值 2000，超限裁剪最旧事件。
     pending_limit: 2000
+    # 异步收集器刷新间隔，单位秒，范围 1-10；0 使用默认值 5。
     flush_interval_seconds: 5
+    # DB 过期历史清理间隔，单位秒，范围 30-3600；0 使用默认值 60。
     cleanup_interval_seconds: 60
   # 调度器配置。
   scheduler:

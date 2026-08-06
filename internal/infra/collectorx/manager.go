@@ -26,6 +26,9 @@ const (
 	defaultFailureRetryBatchSize        = 500                   // 失败账本单轮领取的默认事件数量
 	defaultFailureRetryIntervalSeconds  = 1                     // 失败账本空轮询后的默认等待秒数
 	defaultFailureRunningLeaseSeconds   = 600                   // 失败账本运行中事件的默认租约秒数
+	maxFailureRetryIdleInterval         = 5 * time.Second       // 失败账本空闲轮询最大等待时间
+	minFailureRecoveryInterval          = 30 * time.Second      // 失败账本运行租约最小回收检查间隔
+	maxFailureRecoveryInterval          = 60 * time.Second      // 失败账本运行租约最大回收检查间隔
 	defaultFailureMaxRetryTimes         = 8                     // 失败事件默认最大重试次数
 	defaultCollectorBatchSize           = 500                   // Collector 默认本地批量条数
 	defaultCollectorBatchWait           = 20 * time.Millisecond // Collector 默认本地聚合等待时长

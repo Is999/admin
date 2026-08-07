@@ -1,6 +1,7 @@
 package taskhistory
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -12,9 +13,23 @@ import (
 	taskstats "admin/internal/task/stats"
 	"admin/internal/types"
 
+	"github.com/Is999/go-utils/errors"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
+
+// TestPersistClassifiesInvalidEvent 验证存储层只把确定性事件错误标记为可隔离错误。
+func TestPersistClassifiesInvalidEvent(t *testing.T) {
+	store := &Store{appID: "app-1", writeDB: newHistoryDryRunDB(t)}
+	err := store.Persist(context.Background(), []taskqueue.HistoryEvent{{
+		EventID: "invalid-event",
+		Kind:    "unsupported",
+	}})
+	var validationErr *taskqueue.HistoryEventValidationError
+	if !errors.As(err, &validationErr) || validationErr.EventID != "invalid-event" {
+		t.Fatalf("非法事件未标记为可隔离错误: %v", err)
+	}
+}
 
 // TestWorkflowUpsertClauseUsesWorkflowIdentity 验证同一工作流的后续终态覆盖旧汇总并更新全部观测字段。
 func TestWorkflowUpsertClauseUsesWorkflowIdentity(t *testing.T) {

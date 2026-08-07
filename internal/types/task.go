@@ -204,6 +204,7 @@ type ListTaskItemsOverviewReq struct {
 	Page               int    `json:"page,optional" form:"page,optional"`                             // 页码，从 1 开始
 	PageSize           int    `json:"pageSize,optional" form:"pageSize,optional"`                     // 每页条数
 	IncludeAggregating bool   `json:"includeAggregating,optional" form:"includeAggregating,optional"` // 状态为空时，是否把 aggregating 纳入聚合范围
+	LiveOnly           bool   `json:"liveOnly,optional" form:"liveOnly,optional"`                     // 状态为空时，仅查询 Redis 调度生命周期内的热状态
 }
 
 // Validate 校验任务总览查询请求。
@@ -413,18 +414,19 @@ type TaskItem struct {
 
 // TaskListResp 表示任务列表响应。
 type TaskListResp struct {
-	Queue      string     `json:"queue"`                // 查询队列
-	State      string     `json:"state"`                // 查询状态
-	Group      string     `json:"group,omitempty"`      // 聚合分组
-	TaskID     string     `json:"taskId,omitempty"`     // 任务 ID 筛选条件
-	WorkflowID string     `json:"workflowId,omitempty"` // 工作流实例 ID 筛选条件
-	TaskName   string     `json:"taskName,omitempty"`   // 任务名称关键字筛选条件
-	StartTime  string     `json:"startTime,omitempty"`  // 时间范围开始
-	EndTime    string     `json:"endTime,omitempty"`    // 时间范围结束
-	Page       int        `json:"page"`                 // 当前页码
-	PageSize   int        `json:"pageSize"`             // 当前页大小
-	Total      int64      `json:"total"`                // 该状态任务总数
-	Tasks      []TaskItem `json:"tasks"`                // 任务列表
+	Queue       string     `json:"queue"`                 // 查询队列
+	State       string     `json:"state"`                 // 查询状态
+	Group       string     `json:"group,omitempty"`       // 聚合分组
+	TaskID      string     `json:"taskId,omitempty"`      // 任务 ID 筛选条件
+	WorkflowID  string     `json:"workflowId,omitempty"`  // 工作流实例 ID 筛选条件
+	TaskName    string     `json:"taskName,omitempty"`    // 任务名称关键字筛选条件
+	StartTime   string     `json:"startTime,omitempty"`   // 时间范围开始
+	EndTime     string     `json:"endTime,omitempty"`     // 时间范围结束
+	Page        int        `json:"page"`                  // 当前页码
+	PageSize    int        `json:"pageSize"`              // 当前页大小
+	Total       int64      `json:"total"`                 // 该状态任务总数
+	ScanLimited bool       `json:"scanLimited,omitempty"` // 是否仅返回受控扫描窗口内的匹配结果
+	Tasks       []TaskItem `json:"tasks"`                 // 任务列表
 }
 
 // TaskListOverviewResp 表示任务总览查询响应。
@@ -442,6 +444,7 @@ type TaskListOverviewResp struct {
 	PageSize       int              `json:"pageSize"`                 // 当前页大小
 	Total          int64            `json:"total"`                    // 当前结果总数
 	AggregateMode  bool             `json:"aggregateMode"`            // 是否为多队列聚合视图
+	ScanLimited    bool             `json:"scanLimited,omitempty"`    // 是否有状态仅返回受控扫描窗口内的匹配结果
 	Queues         []string         `json:"queues,omitempty"`         // 本次实际参与查询的队列列表
 	StateTotals    map[string]int64 `json:"stateTotals"`              // 各任务状态的队列级总数；用于前端展示可切换状态入口
 	Tasks          []TaskItem       `json:"tasks"`                    // 当前页任务列表

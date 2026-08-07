@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,6 +58,36 @@ type HistoryEvent struct {
 	Task     *types.TaskRunHistoryItem     `json:"task,omitempty"`     // 单个实际任务终态摘要
 	Workflow *types.TaskWorkflowStatusResp `json:"workflow,omitempty"` // 工作流终态快照
 	Failure  *types.TaskFailureItem        `json:"failure,omitempty"`  // 最终失败任务摘要
+}
+
+// HistoryEventValidationError 表示可安全隔离的确定性非法历史事件。
+type HistoryEventValidationError struct {
+	EventID string // EventID 是 Redis 缓冲区中的事件标识
+	err     error  // err 是事件校验失败原因
+}
+
+// NewHistoryEventValidationError 创建确定性历史事件校验错误。
+func NewHistoryEventValidationError(eventID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &HistoryEventValidationError{EventID: strings.TrimSpace(eventID), err: err}
+}
+
+// Error 返回历史事件校验错误文本。
+func (e *HistoryEventValidationError) Error() string {
+	if e == nil || e.err == nil {
+		return "任务历史事件校验失败"
+	}
+	return e.err.Error()
+}
+
+// Unwrap 返回原始校验错误。
+func (e *HistoryEventValidationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
 }
 
 // HistorySink 描述终态历史 DB 存储需要提供的最小能力。
@@ -418,15 +449,24 @@ func (m *Manager) flushHistory(ctx context.Context, sink HistorySink) {
 		persistErr := sink.Persist(persistCtx, events)
 		cancel()
 		if persistErr != nil {
+			var validationErr *HistoryEventValidationError
+			if errors.As(persistErr, &validationErr) && validationErr.EventID != "" && slices.Contains(ids, validationErr.EventID) {
+				if ackErr := m.acknowledgeHistoryEvents(ctx, []string{validationErr.EventID}, 1); ackErr != nil {
+					m.recordHistoryFailure(ctx, ackErr, logx.Field("event_id", validationErr.EventID))
+					return
+				}
+				m.recordHistoryDrop(ctx, persistErr, logx.Field("event_id", validationErr.EventID))
+				continue
+			}
 			m.recordHistoryFailure(ctx, persistErr)
 			return
 		}
-		if _, ackErr := taskHistoryAckScript.Run(ctx, m.redis, []string{m.historyEventsKey(), m.historyOrderKey(), m.historyStatusKey()}, stringSliceToAny(ids)...).Result(); ackErr != nil {
+		if ackErr := m.acknowledgeHistoryEvents(ctx, ids, len(ids)-len(events)); ackErr != nil {
 			m.recordHistoryFailure(ctx, ackErr)
 			return
 		}
 		_ = m.redis.HSet(ctx, m.historyStatusKey(), "lastPersistedAtMs", time.Now().UnixMilli(), "lastError", "").Err()
-		if len(events) < taskHistoryFlushBatchSize {
+		if len(ids) < taskHistoryFlushBatchSize {
 			return
 		}
 	}
@@ -443,25 +483,41 @@ func (m *Manager) readPendingHistoryBatch(ctx context.Context, limit int64) ([]H
 		return nil, nil, errors.Tag(err)
 	}
 	events := make([]HistoryEvent, 0, len(ids))
-	validIDs := make([]string, 0, len(ids))
+	ackIDs := make([]string, 0, len(ids))
 	for index, value := range values {
 		raw, ok := value.(string)
 		if !ok || strings.TrimSpace(raw) == "" {
-			validIDs = append(validIDs, ids[index])
+			ackIDs = append(ackIDs, ids[index])
 			continue
 		}
 		var event HistoryEvent
-		if json.Unmarshal([]byte(raw), &event) != nil {
-			validIDs = append(validIDs, ids[index])
+		if json.Unmarshal([]byte(raw), &event) != nil || event.EventID != ids[index] {
+			ackIDs = append(ackIDs, ids[index])
 			continue
 		}
 		events = append(events, event)
-		validIDs = append(validIDs, ids[index])
+		ackIDs = append(ackIDs, ids[index])
 	}
-	if len(events) == 0 && len(validIDs) > 0 {
-		_, _ = taskHistoryAckScript.Run(ctx, m.redis, []string{m.historyEventsKey(), m.historyOrderKey(), m.historyStatusKey()}, stringSliceToAny(validIDs)...).Result()
+	if len(events) == 0 && len(ackIDs) > 0 {
+		if err = m.acknowledgeHistoryEvents(ctx, ackIDs, len(ackIDs)); err != nil {
+			return nil, nil, errors.Tag(err)
+		}
 	}
-	return events, validIDs, nil
+	return events, ackIDs, nil
+}
+
+// acknowledgeHistoryEvents 原子确认事件并记录其中被隔离的坏数据数量。
+func (m *Manager) acknowledgeHistoryEvents(ctx context.Context, ids []string, dropped int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, max(dropped, 0))
+	args = append(args, stringSliceToAny(ids)...)
+	_, err := taskHistoryAckScript.Run(ctx, m.redis, []string{
+		m.historyEventsKey(), m.historyOrderKey(), m.historyStatusKey(),
+	}, args...).Result()
+	return errors.Tag(err)
 }
 
 // cleanupHistory 小批量清理超出保留期的 DB 历史，避免形成新的长期大表。
@@ -511,6 +567,12 @@ func (m *Manager) recordHistoryFailure(ctx context.Context, runErr error, fields
 	message := taskHistoryErrorText(runErr)
 	_ = m.redis.HSet(ctx, m.historyStatusKey(), "lastFailureAtMs", time.Now().UnixMilli(), "lastError", message).Err()
 	loggerx.Errorw(ctx, "任务历史异步落库失败", runErr, fields...)
+}
+
+// recordHistoryDrop 记录已成功隔离的非法事件；它不污染链路健康状态，也不掩盖既有基础设施故障。
+func (m *Manager) recordHistoryDrop(ctx context.Context, runErr error, fields ...logx.LogField) {
+	_ = m.redis.HSet(ctx, m.historyStatusKey(), "lastFailureAtMs", time.Now().UnixMilli()).Err()
+	loggerx.Errorw(ctx, "任务历史非法事件已隔离", runErr, fields...)
 }
 
 // taskHistoryErrorText 脱敏并截断落库链路异常，避免运维接口泄露连接信息。

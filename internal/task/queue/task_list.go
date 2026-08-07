@@ -73,11 +73,12 @@ func (m *Manager) ListTasks(ctx context.Context, req *types.ListTaskItemsReq) (*
 		}
 		return resp, nil
 	}
-	filteredTasks, total, err := m.listTaskItemsByFilters(ctx, internalQueue, internalGroup, state, taskID, workflowID, taskName, req.Page, req.PageSize, timeRange, periodicNextRuns)
+	filteredTasks, total, scanLimited, err := m.listTaskItemsByFilters(ctx, internalQueue, internalGroup, state, taskID, workflowID, taskName, req.Page, req.PageSize, timeRange, periodicNextRuns)
 	if err != nil {
 		return nil, errors.Tag(err)
 	}
 	resp.Total = total
+	resp.ScanLimited = scanLimited
 	resp.Tasks = filteredTasks
 	return resp, nil
 }
@@ -321,18 +322,18 @@ func taskListPageRange(page int, pageSize int) (int64, int64) {
 
 // listTaskItemsByFilters 在指定队列和状态下扫描任务，并按时间倒序过滤后分页。
 // 管理接口层补充倒序和时间段过滤，保证列表排序稳定。
-func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue string, internalGroup string, state string, taskID string, workflowID string, taskName string, page int, pageSize int, timeRange taskListTimeRange, periodicNextRuns []periodicNextRun) ([]types.TaskItem, int64, error) {
+func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue string, internalGroup string, state string, taskID string, workflowID string, taskName string, page int, pageSize int, timeRange taskListTimeRange, periodicNextRuns []periodicNextRun) ([]types.TaskItem, int64, bool, error) {
 	matchedTasks := make([]types.TaskItem, 0)
 	taskID = strings.TrimSpace(taskID)
 	workflowID = strings.TrimSpace(workflowID)
 	taskName = strings.TrimSpace(taskName)
 	inspector := m.newContextInspector(ctx)
-	// reachedScanLimit 标记是否完整读满受控扫描窗口；读满后必须确认没有下一页，禁止返回截断总数。
+	// reachedScanLimit 标记是否完整读满受控扫描窗口；读满后探测下一条并显式返回截断状态。
 	reachedScanLimit := true
 	for currentPage := 1; currentPage <= taskListFilterMaxPages; currentPage++ {
 		items, err := m.listFilterTaskInfoPage(ctx, inspector, internalQueue, internalGroup, state, currentPage, taskListFilterPageSize, timeRange)
 		if err != nil {
-			return nil, 0, errors.Tag(err)
+			return nil, 0, false, errors.Tag(err)
 		}
 		if len(items) == 0 {
 			reachedScanLimit = false
@@ -358,16 +359,14 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 			break
 		}
 	}
+	scanLimited := false
 	if reachedScanLimit {
 		// Page 使用当前 pageSize 计算偏移；单条分页需把页码设为最大扫描条数加一。
 		nextItems, err := m.listFilterTaskInfoPage(ctx, inspector, internalQueue, internalGroup, state, taskListFilterMaxRows+1, 1, timeRange)
 		if err != nil {
-			return nil, 0, errors.Tag(err)
+			return nil, 0, false, errors.Tag(err)
 		}
-		if len(nextItems) > 0 {
-			return nil, 0, errors.Wrapf(ErrTaskListScanLimitExceeded,
-				"队列[%s]状态[%s]最多扫描%d条任务，请缩小筛选范围", internalQueue, state, taskListFilterMaxRows)
-		}
+		scanLimited = len(nextItems) > 0
 	}
 	sortTaskItemsByTimeDesc(matchedTasks)
 	total := int64(len(matchedTasks))
@@ -376,10 +375,10 @@ func (m *Manager) listTaskItemsByFilters(ctx context.Context, internalQueue stri
 		start = 0
 	}
 	if start >= len(matchedTasks) {
-		return []types.TaskItem{}, total, nil
+		return []types.TaskItem{}, total, scanLimited, nil
 	}
 	end := min(start+pageSize, len(matchedTasks))
-	return matchedTasks[start:end], total, nil
+	return matchedTasks[start:end], total, scanLimited, nil
 }
 
 // listFilterTaskInfoPage 批量读取筛选扫描页；带时间范围时保留现有索引范围读取。

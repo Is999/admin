@@ -28,6 +28,7 @@ type taskOverviewFakeQueue struct {
 	listCalls    []types.ListTaskItemsReq    // listCalls 表示测试字段。
 	emptyQueues  bool                        // emptyQueues 表示测试模拟当前没有可见队列。
 	listError    error                       // listError 表示任务列表读取错误。
+	scanLimited  bool                        // scanLimited 表示测试模拟受控扫描窗口已截断。
 }
 
 // IsEnabled 表示测试辅助逻辑。
@@ -105,12 +106,13 @@ func (f *taskOverviewFakeQueue) ListTasks(_ context.Context, req *types.ListTask
 		items = items[start:end]
 	}
 	return &types.TaskListResp{
-		Queue:    req.Queue,
-		State:    req.State,
-		Page:     page,
-		PageSize: pageSize,
-		Total:    int64(len(f.tasksByState[req.State])),
-		Tasks:    items,
+		Queue:       req.Queue,
+		State:       req.State,
+		Page:        page,
+		PageSize:    pageSize,
+		Total:       int64(len(f.tasksByState[req.State])),
+		ScanLimited: f.scanLimited,
+		Tasks:       items,
 	}, nil
 }
 
@@ -408,6 +410,72 @@ func TestListTasksOverviewWithFiltersScansOncePerState(t *testing.T) {
 		if call.TaskID != "retry" {
 			t.Fatalf("期望总览聚合透传任务 ID 筛选，实际调用=%+v", call)
 		}
+	}
+}
+
+// TestListTasksOverviewLiveOnlySkipsTerminalStates 验证热状态查询不会扫描高基数 completed/archived 历史。
+func TestListTasksOverviewLiveOnlySkipsTerminalStates(t *testing.T) {
+	fakeQueue := &taskOverviewFakeQueue{
+		tasksByState: map[string][]types.TaskItem{
+			taskStateActive:    buildFakeTaskItems(taskStateActive, 1),
+			taskStateArchived:  buildFakeTaskItems(taskStateArchived, 1),
+			taskStateCompleted: buildFakeTaskItems(taskStateCompleted, 1),
+		},
+	}
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	svcCtx.Task = fakeQueue
+
+	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?liveOnly=true&taskName=periodic-demo", nil), svcCtx)
+	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{
+		LiveOnly: true,
+		TaskName: "periodic-demo",
+		Page:     1,
+		PageSize: 20,
+	})
+	if resp == nil || !resp.IsSuccess() {
+		t.Fatalf("热状态查询应成功，实际: %+v", resp)
+	}
+	if len(fakeQueue.listCalls) != len(taskLiveStateKeys) {
+		t.Fatalf("热状态查询次数=%d，期望=%d，调用=%+v", len(fakeQueue.listCalls), len(taskLiveStateKeys), fakeQueue.listCalls)
+	}
+	for _, call := range fakeQueue.listCalls {
+		if call.State == taskStateCompleted || call.State == taskStateArchived {
+			t.Fatalf("热状态查询不应访问终态历史，实际调用=%+v", call)
+		}
+	}
+}
+
+// TestBuildOverviewStatesExplicitStateOverridesLiveOnly 验证显式终态筛选不会被默认热状态边界覆盖。
+func TestBuildOverviewStatesExplicitStateOverridesLiveOnly(t *testing.T) {
+	states := buildOverviewStates(taskStateCompleted, "", false, true)
+	if len(states) != 1 || states[0] != taskStateCompleted {
+		t.Fatalf("显式 completed 筛选应保持不变，实际=%+v", states)
+	}
+}
+
+// TestListTasksOverviewPreservesScanLimited 验证聚合查询会向前端暴露受控扫描降级状态。
+func TestListTasksOverviewPreservesScanLimited(t *testing.T) {
+	fakeQueue := &taskOverviewFakeQueue{
+		scanLimited: true,
+		tasksByState: map[string][]types.TaskItem{
+			taskStateCompleted: buildFakeTaskItems(taskStateCompleted, 1),
+		},
+	}
+	svcCtx := svc.NewServiceContext(config.Config{}, svc.Dependencies{})
+	svcCtx.Task = fakeQueue
+
+	logicObj := NewTaskLogic(httptest.NewRequest("GET", "/api/tasks/overview?taskName=periodic-demo", nil), svcCtx)
+	resp := logicObj.ListTasksOverview(&types.ListTaskItemsOverviewReq{
+		TaskName: "periodic-demo",
+		Page:     1,
+		PageSize: 20,
+	})
+	if resp == nil || !resp.IsSuccess() {
+		t.Fatalf("受控扫描降级不应让总览查询失败，实际: %+v", resp)
+	}
+	data, ok := resp.Data.(*types.TaskListOverviewResp)
+	if !ok || !data.ScanLimited {
+		t.Fatalf("期望响应保留 scanLimited，实际: %#v", resp.Data)
 	}
 }
 

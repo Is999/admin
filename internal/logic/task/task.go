@@ -52,6 +52,14 @@ var taskExecutedStateKeys = []string{
 	taskStateCompleted,
 }
 
+// taskLiveStateKeys 定义周期详情等场景允许查询的 Redis 热状态，终态历史统一从 DB 读取。
+var taskLiveStateKeys = []string{
+	taskStateRetry,
+	taskStateActive,
+	taskStatePending,
+	taskStateScheduled,
+}
+
 // TaskLogic 封装任务系统的管理接口逻辑。
 type TaskLogic struct {
 	*corelogic.BaseLogic // 复用上下文、日志和任务依赖访问能力
@@ -322,7 +330,7 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 	}
 	startTime := strings.TrimSpace(req.StartTime)
 	endTime := strings.TrimSpace(req.EndTime)
-	stateCandidates := buildOverviewStates(strings.TrimSpace(req.State), strings.TrimSpace(req.Group), req.IncludeAggregating)
+	stateCandidates := buildOverviewStates(strings.TrimSpace(req.State), strings.TrimSpace(req.Group), req.IncludeAggregating, req.LiveOnly)
 	resp := &types.TaskListOverviewResp{
 		Queue:         strings.TrimSpace(req.Queue),
 		State:         strings.TrimSpace(req.State),
@@ -339,12 +347,13 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 		StateTotals:   stateTotals,
 		Tasks:         make([]types.TaskItem, 0),
 	}
-	if taskOverviewHasTimeRange(req) && strings.TrimSpace(req.State) == "" {
+	if taskOverviewHasTimeRange(req) && strings.TrimSpace(req.State) == "" && !req.LiveOnly {
 		currentResp, err := l.aggregateTasksByStates(queueNames, taskExecutedStateKeys, strings.TrimSpace(req.Group), strings.TrimSpace(req.TaskID), strings.TrimSpace(req.WorkflowID), strings.TrimSpace(req.TaskName), startTime, endTime, req.Page, req.PageSize)
 		if err != nil {
 			return nil, errors.Tag(err)
 		}
 		resp.Total = currentResp.Total
+		resp.ScanLimited = currentResp.ScanLimited
 		resp.Tasks = currentResp.Tasks
 		return resp, nil
 	}
@@ -354,6 +363,7 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 			return nil, errors.Tag(err)
 		}
 		resp.Total = currentResp.Total
+		resp.ScanLimited = currentResp.ScanLimited
 		resp.Tasks = currentResp.Tasks
 		return resp, nil
 	}
@@ -363,6 +373,7 @@ func (l *TaskLogic) listTasksOverview(req *types.ListTaskItemsOverviewReq) (*typ
 	}
 	resp.EffectiveState = stateCandidates[0]
 	resp.Total = currentResp.Total
+	resp.ScanLimited = currentResp.ScanLimited
 	resp.Tasks = currentResp.Tasks
 	return resp, nil
 }
@@ -420,6 +431,7 @@ func newTaskStateTotals() map[string]int64 {
 func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string, group string, taskID string, workflowID string, taskName string, startTime string, endTime string, page int, pageSize int) (*types.TaskListResp, error) {
 	mergedTasks := make([]types.TaskItem, 0)
 	var total int64
+	scanLimited := false
 	page, pageSize = normalizeTaskListPage(page, pageSize)
 	if page > taskListScanMaxRows/pageSize {
 		return nil, errors.Wrapf(taskqueue.ErrTaskListScanLimitExceeded,
@@ -464,8 +476,9 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 					return nil, errors.Tag(err)
 				}
 				total += currentResp.Total
+				scanLimited = scanLimited || currentResp.ScanLimited
 				mergedTasks = append(mergedTasks, currentResp.Tasks...)
-				if currentResp.Total > int64(len(currentResp.Tasks)) {
+				if !currentResp.ScanLimited && currentResp.Total > int64(len(currentResp.Tasks)) {
 					return nil, errors.Wrapf(taskqueue.ErrTaskListScanLimitExceeded,
 						"任务筛选结果超过 %d 条，请缩小筛选范围", taskListScanMaxRows)
 				}
@@ -489,6 +502,7 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 				}
 				if currentPage == 1 {
 					total += currentResp.Total
+					scanLimited = scanLimited || currentResp.ScanLimited
 				}
 				mergedTasks = append(mergedTasks, currentResp.Tasks...)
 				if len(currentResp.Tasks) < scanPageSize || int64(currentPage*scanPageSize) >= currentResp.Total {
@@ -511,15 +525,16 @@ func (l *TaskLogic) aggregateTasksByStates(queueNames []string, states []string,
 		mergedTasks = mergedTasks[start:end]
 	}
 	return &types.TaskListResp{
-		Group:     group,
-		TaskID:    taskID,
-		TaskName:  taskName,
-		StartTime: startTime,
-		EndTime:   endTime,
-		Page:      page,
-		PageSize:  pageSize,
-		Total:     total,
-		Tasks:     mergedTasks,
+		Group:       group,
+		TaskID:      taskID,
+		TaskName:    taskName,
+		StartTime:   startTime,
+		EndTime:     endTime,
+		Page:        page,
+		PageSize:    pageSize,
+		Total:       total,
+		ScanLimited: scanLimited,
+		Tasks:       mergedTasks,
 	}, nil
 }
 
@@ -572,9 +587,16 @@ func normalizeTaskListPage(page int, pageSize int) (int, int) {
 }
 
 // buildOverviewStates 返回任务总览页允许聚合或精确查询的状态顺序。
-func buildOverviewStates(state string, group string, includeAggregating bool) []string {
+func buildOverviewStates(state string, group string, includeAggregating bool, liveOnly bool) []string {
 	if strings.TrimSpace(state) != "" {
 		return []string{strings.TrimSpace(state)}
+	}
+	if liveOnly {
+		states := append([]string(nil), taskLiveStateKeys...)
+		if includeAggregating && strings.TrimSpace(group) != "" {
+			states = append(states, taskStateAggregating)
+		}
+		return states
 	}
 	states := []string{taskStateRetry, taskStateActive, taskStatePending, taskStateScheduled, taskStateArchived, taskStateCompleted}
 	if includeAggregating && strings.TrimSpace(group) != "" {

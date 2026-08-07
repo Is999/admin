@@ -286,6 +286,7 @@ func assertWorkflowHistorySnapshotBounded(t *testing.T, status *types.TaskWorkfl
 type historySinkStub struct {
 	mu               sync.Mutex                    // mu 保护异步收集器写入的测试事件
 	persistErr       error                         // persistErr 是持久化故障
+	invalidEventID   string                        // invalidEventID 是需要模拟隔离的坏事件
 	onPersist        func(context.Context)         // onPersist 在事务期间模拟并发动作
 	events           []HistoryEvent                // events 保存已接收事件
 	workflow         *types.TaskWorkflowStatusResp // workflow 是 DB 已落库快照
@@ -298,6 +299,11 @@ type historySinkStub struct {
 
 // Persist 实现终态历史批量落库测试桩。
 func (s *historySinkStub) Persist(ctx context.Context, events []HistoryEvent) error {
+	for _, event := range events {
+		if event.EventID == s.invalidEventID {
+			return NewHistoryEventValidationError(event.EventID, errors.New("invalid history event"))
+		}
+	}
 	s.mu.Lock()
 	s.events = append(s.events, events...)
 	s.mu.Unlock()
@@ -572,6 +578,40 @@ func TestHistoryFlushKeepsPendingEventsOnDatabaseFailure(t *testing.T) {
 	}
 	if lastError := manager.redis.HGet(context.Background(), manager.historyStatusKey(), "lastError").Val(); lastError == "" {
 		t.Fatal("数据库故障应写入收集器健康状态")
+	}
+}
+
+// TestHistoryFlushIsolatesInvalidEventAndContinues 验证单条确定性坏事件不会阻塞后续历史落库。
+func TestHistoryFlushIsolatesInvalidEventAndContinues(t *testing.T) {
+	manager, cleanup := newTestManager(t)
+	defer cleanup()
+	sink := &historySinkStub{invalidEventID: "event-invalid"}
+	manager.AttachHistorySink(sink)
+	for _, eventID := range []string{"event-invalid", "event-valid"} {
+		if err := manager.enqueueHistoryEvent(context.Background(), HistoryEvent{
+			EventID: eventID,
+			Kind:    "failure",
+			Failure: &types.TaskFailureItem{TaskID: eventID},
+		}); err != nil {
+			t.Fatalf("写入历史缓冲失败: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	manager.flushHistory(context.Background(), sink)
+
+	events := sink.eventSnapshot()
+	if len(events) != 1 || events[0].EventID != "event-valid" {
+		t.Fatalf("坏事件隔离后应继续持久化后续事件: %+v", events)
+	}
+	if pending := manager.redis.ZCard(context.Background(), manager.historyOrderKey()).Val(); pending != 0 {
+		t.Fatalf("坏事件隔离后不应残留待落库事件: %d", pending)
+	}
+	if dropped := manager.redis.HGet(context.Background(), manager.historyStatusKey(), "dropped").Val(); dropped != "1" {
+		t.Fatalf("坏事件隔离数量应可观测，实际=%s", dropped)
+	}
+	if lastError := manager.redis.HGet(context.Background(), manager.historyStatusKey(), "lastError").Val(); lastError != "" {
+		t.Fatalf("已隔离坏事件不应把健康状态永久标记为异常，实际=%q", lastError)
 	}
 }
 

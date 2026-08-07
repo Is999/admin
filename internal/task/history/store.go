@@ -56,23 +56,23 @@ func (s *Store) Persist(ctx context.Context, events []taskqueue.HistoryEvent) er
 		case "task":
 			row, err := s.taskRow(event)
 			if err != nil {
-				return errors.Tag(err)
+				return taskqueue.NewHistoryEventValidationError(event.EventID, err)
 			}
 			taskRows = append(taskRows, row)
 		case "workflow":
 			row, err := s.workflowRow(event)
 			if err != nil {
-				return errors.Tag(err)
+				return taskqueue.NewHistoryEventValidationError(event.EventID, err)
 			}
 			workflowRows = append(workflowRows, row)
 		case "failure":
 			row, err := s.failureRow(event)
 			if err != nil {
-				return errors.Tag(err)
+				return taskqueue.NewHistoryEventValidationError(event.EventID, err)
 			}
 			failureRows = append(failureRows, row)
 		default:
-			return errors.Errorf("不支持的任务历史事件类型: %s", event.Kind)
+			return taskqueue.NewHistoryEventValidationError(event.EventID, errors.Errorf("不支持的任务历史事件类型: %s", event.Kind))
 		}
 	}
 	return errors.Tag(s.writeDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

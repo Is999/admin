@@ -4400,7 +4400,7 @@ func TestListTasksFilterUsesBatchPage(t *testing.T) {
 	}
 }
 
-// TestListTasksFilterDistinguishesScanLimit 验证恰好命中扫描上限仍返回完整结果，存在下一条时明确失败。
+// TestListTasksFilterDistinguishesScanLimit 验证恰好命中扫描上限仍返回完整结果，存在下一条时返回受控窗口标记。
 func TestListTasksFilterDistinguishesScanLimit(t *testing.T) {
 	manager, cleanup := newTestManager(t)
 	defer cleanup()
@@ -4440,8 +4440,12 @@ func TestListTasksFilterDistinguishesScanLimit(t *testing.T) {
 	}
 
 	enqueue(taskListFilterMaxRows)
-	if _, err = manager.ListTasks(ctx, req); !errors.Is(err, ErrTaskListScanLimitExceeded) {
-		t.Fatalf("存在第 %d 条任务时应返回扫描超限，实际 err=%v", taskListFilterMaxRows+1, err)
+	resp, err = manager.ListTasks(ctx, req)
+	if err != nil {
+		t.Fatalf("存在第 %d 条任务时应有界返回，实际 err=%v", taskListFilterMaxRows+1, err)
+	}
+	if resp == nil || !resp.ScanLimited || resp.Total != taskListFilterMaxRows || len(resp.Tasks) != 1 {
+		t.Fatalf("扫描超限应返回受控窗口和显式标记，实际 resp=%+v", resp)
 	}
 }
 

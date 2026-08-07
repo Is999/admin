@@ -49,7 +49,7 @@ func TestListTaskItemsOverviewReqParse_AllowOptionalOverviewFields(t *testing.T)
 
 // TestListTaskItemsOverviewReqParse_TaskID 确保任务 ID 筛选参数可通过 GET 查询串绑定。
 func TestListTaskItemsOverviewReqParse_TaskID(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/tasks/overview?taskId=task-fragment&includeAggregating=false&page=1&pageSize=20", nil)
+	req := httptest.NewRequest("GET", "/api/tasks/overview?taskId=task-fragment&includeAggregating=false&liveOnly=true&page=1&pageSize=20", nil)
 
 	var bindReq ListTaskItemsOverviewReq
 	if err := httpx.Parse(req, &bindReq); err != nil {
@@ -57,5 +57,8 @@ func TestListTaskItemsOverviewReqParse_TaskID(t *testing.T) {
 	}
 	if bindReq.TaskID != "task-fragment" {
 		t.Fatalf("期望 taskId 正确绑定，实际为: %q", bindReq.TaskID)
+	}
+	if !bindReq.LiveOnly {
+		t.Fatal("期望 liveOnly 正确绑定为 true")
 	}
 }
